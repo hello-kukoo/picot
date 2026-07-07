@@ -17,8 +17,10 @@ run_step() {
   fi
 }
 
-run_step "lint:fix"   bun run lint:fix
-run_step "format:fix" bun run format:fix
-run_step "check"      bun run check
+BUN_CMD="npx bun"
+
+run_step "lint:fix"   $BUN_CMD run lint:fix
+run_step "format:fix" $BUN_CMD run format:fix
+run_step "check"      $BUN_CMD run check
 
 echo "✓ All tasks completed successfully!"

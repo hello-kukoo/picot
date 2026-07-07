@@ -48,7 +48,7 @@
     "ws": "^8.16.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "latest",
+    "@biomejs/biome": "^2.5.2",
     "@tauri-apps/cli": "^2.11.2",
     "esbuild": "^0.28.0",
     "jsdom": "^26.1.0",

@@ -1,5 +1,7 @@
 node_modules/
 .npm-cache/
+# npm lock file (this project uses bun exclusively; see AGENTS.md)
+package-lock.json
 .DS_Store
 
 # Tauri build artifacts
