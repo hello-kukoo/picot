@@ -114,6 +114,9 @@ The frontend (`public/`) is vanilla JS with **no framework**. Keep it modular:
 
 ## Architecture
 
+> **完整架构文档见 [`ARCHITECTURE.md`](ARCHITECTURE.md)。** 以下为快速概览；
+> 架构不变量、三层通讯路径、启动顺序、边界规则等细节以该文档为准。
+
 Picot is a Tauri v2 app. The three main layers:
 
 **1. Rust / Tauri (`src-tauri/`)** — process lifecycle and window management.
