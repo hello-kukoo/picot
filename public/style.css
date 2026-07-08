@@ -80,6 +80,24 @@ body {
   margin-left: calc(var(--sidebar-width) * -1);
 }
 
+.sidebar-resizer {
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  z-index: 101;
+  position: relative;
+  transition: background 0.15s var(--ease);
+}
+.sidebar-resizer:hover,
+.sidebar-resizer.dragging {
+  background: var(--border);
+}
+/* Hide handle when the adjacent sidebar is collapsed. */
+.sidebar.collapsed + .sidebar-resizer,
+.sidebar-resizer:has(+ .file-sidebar.collapsed) {
+  display: none;
+}
 .sidebar-header {
   display: flex;
   align-items: center;
@@ -4698,8 +4716,8 @@ body.hide-thinking .thinking-block {
    ═══════════════════════════════════════════════════════ */
 
 .file-sidebar {
-  width: 260px;
-  min-width: 260px;
+  width: var(--file-sidebar-width);
+  min-width: var(--file-sidebar-width);
   background: var(--bg-frosted);
   backdrop-filter: blur(var(--blur-heavy)) saturate(1.5);
   -webkit-backdrop-filter: blur(var(--blur-heavy)) saturate(1.5);
@@ -4714,7 +4732,7 @@ body.hide-thinking .thinking-block {
 }
 
 .file-sidebar.collapsed {
-  margin-right: -260px;
+  margin-right: calc(var(--file-sidebar-width) * -1);
   opacity: 0;
   pointer-events: none;
 }
@@ -5036,6 +5054,11 @@ body.hide-thinking .thinking-block {
   .input-icon-btn {
     width: 36px;
     height: 36px;
+  }
+
+  /* Sidebar handles are useless on mobile (sidebars slide over). */
+  .sidebar-resizer {
+    display: none !important;
   }
 }
 

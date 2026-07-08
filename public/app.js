@@ -10,6 +10,14 @@ import { setupVoiceInput } from "./app-voice-input.js";
 import { DialogHandler } from "./dialogs.js";
 import { FileBrowser } from "./file-browser.js";
 import { anchorHistoryToBottom } from "./history-scroll-anchor.js";
+import {
+  getLanguagePreference,
+  initI18n,
+  LANGUAGES,
+  onLocaleChange,
+  setLocale,
+  t,
+} from "./i18n.js";
 import { processImageFile, processImagePayload } from "./image-attachments.js";
 import { setupMessagesInsets } from "./layout-insets.js";
 import { MessageRenderer } from "./message-renderer.js";
@@ -24,6 +32,7 @@ import {
   showSettingsSaveError,
   showSettingsSaveSuccess,
 } from "./settings-save-status.js";
+import { createSidebarResizer } from "./sidebar-resizer.js";
 import { setupSidebarSearchControl } from "./sidebar-search-control.js";
 import { StateManager } from "./state.js";
 import { applyTheme, getCurrentTheme, themes } from "./themes.js";
@@ -576,6 +585,22 @@ if (localStorage.getItem("pi-studio-file-sidebar") === "open") {
   fileSidebar.classList.remove("collapsed");
   refreshFileBrowserForWorkspace(getCurrentWorkspacePath(), { force: true });
 }
+
+// Resizable sidebars — drag handle on inner edge, persisted to localStorage.
+createSidebarResizer({
+  sidebarEl,
+  side: "left",
+  storageKey: "picot-sidebar-width",
+  minWidth: 200,
+  maxWidth: 500,
+});
+createSidebarResizer({
+  sidebarEl: fileSidebar,
+  side: "right",
+  storageKey: "picot-file-sidebar-width",
+  minWidth: 200,
+  maxWidth: 500,
+});
 
 // ═══════════════════════════════════════
 // Focus tracking for tab title notifications
@@ -1330,6 +1355,10 @@ function sendMessage() {
 
   lastSentMessage = message;
   messageRenderer.renderUserMessage({ content: message, images: cmd.images });
+  if (!hasAnySessionsLoaded()) {
+    pendingNewSessionRefresh = true;
+  }
+
   trackPromptDelivery(wsClient.send(cmd), message);
   refreshSidebarAfterUserPrompt();
 }
@@ -1367,6 +1396,10 @@ function escapeHtml(text) {
 
 function flushQueue() {
   if (messageQueue.length > 0 && !state.isStreaming) {
+    if (!hasAnySessionsLoaded()) {
+      pendingNewSessionRefresh = true;
+    }
+
     const cmd = messageQueue.shift();
     messageRenderer.renderUserMessage({ content: cmd.message, images: cmd.images });
     renderQueuedMessages();
@@ -1461,19 +1494,19 @@ async function rpcCommand(cmd, statusMsg) {
     });
     const data = await resp.json();
     if (data.success) {
-      statusText.textContent = "Done";
+      statusText.textContent = t("status.done");
       setTimeout(() => {
-        statusText.textContent = "Connected";
+        statusText.textContent = t("status.connected");
       }, 2000);
     } else {
-      statusText.textContent = data.error || "Failed";
+      statusText.textContent = data.error || t("status.failed");
       setTimeout(() => {
         statusText.textContent = "Connected";
       }, 3000);
     }
     return data;
   } catch (_e) {
-    statusText.textContent = "Error";
+    statusText.textContent = t("status.error");
     setTimeout(() => {
       statusText.textContent = "Connected";
     }, 3000);
@@ -1516,17 +1549,17 @@ const modelDropdownLabel = document.getElementById("model-dropdown-label");
 const modelDropdownMenu = document.getElementById("model-dropdown-menu");
 const thinkingBtn = document.getElementById("thinking-btn");
 function formatThinkingLevelLabel(level) {
-  return `Thinking: ${level || "off"}`;
+  return t("settings.thinkingLevel", { level: level || t("settings.off") });
 }
 function formatCompactThinkingLevelLabel(level) {
-  return `Think ${level || "off"}`;
+  return t("settings.thinkingCompact", { level: level || t("settings.off") });
 }
 function updateThinkingBtn() {
   thinkingBtn.textContent = formatCompactThinkingLevelLabel(currentThinkingLevel);
-  thinkingBtn.title = "Thinking effort controls reasoning depth. Click to cycle.";
+  thinkingBtn.title = t("settings.thinkingTitle");
   thinkingBtn.setAttribute(
     "aria-label",
-    `Thinking effort: ${currentThinkingLevel}. Click to cycle reasoning depth.`,
+    t("settings.thinkingAriaLabel", { level: currentThinkingLevel || t("settings.off") }),
   );
   thinkingBtn.classList.toggle("off", currentThinkingLevel === "off");
 }
@@ -2699,8 +2732,8 @@ function showCompactButton() {
   const btn = document.createElement("button");
   btn.id = "compact-btn";
   btn.className = "compact-btn";
-  btn.textContent = "Compact";
-  btn.title = "Context is over 80% — compact to save tokens";
+  btn.textContent = t("misc.compact");
+  btn.title = t("misc.compactTitle");
   btn.addEventListener("click", () => {
     rpcCommand({ type: "compact" }, "Compacting...");
     hideCompactButton();
@@ -2762,7 +2795,7 @@ async function openLanQrModal() {
     }
     if (lanQrLoading) lanQrLoading.style.display = "none";
   } catch {
-    if (lanQrLoading) lanQrLoading.textContent = "QR code unavailable";
+    if (lanQrLoading) lanQrLoading.textContent = t("misc.qrUnavailable");
   }
 }
 
@@ -2797,10 +2830,10 @@ async function refreshLanUrl() {
     lanUrl = typeof data?.lanUrl === "string" ? data.lanUrl : "";
     if (!lanUrl && lanUrls.length > 0) lanUrl = lanUrls[0];
     if (tailscaleUrl) {
-      statusText.textContent = "Connected • TS";
+      statusText.textContent = t("status.connectedTS");
       statusText.title = tailscaleUrl;
     } else if (lanUrl) {
-      statusText.textContent = "Connected • LAN";
+      statusText.textContent = t("status.connectedLAN");
       statusText.title = lanUrl;
     }
     updateLanQrButton(lanUrl);
@@ -2828,7 +2861,7 @@ function updateConnectionStatus(status) {
       void refreshLanUrl();
     }
   } else if (status === "disconnected") {
-    statusText.textContent = "Disconnected";
+    statusText.textContent = t("status.disconnected");
   }
 }
 
@@ -2841,7 +2874,7 @@ function updateUI() {
   if (isStreaming) {
     statusIndicator.classList.add("streaming");
     statusIndicator.classList.remove("connected");
-    statusText.textContent = "Working...";
+    statusText.textContent = t("status.working");
   } else {
     statusIndicator.classList.remove("streaming");
     statusIndicator.classList.add("connected");
@@ -2891,6 +2924,7 @@ const settingsClose = document.getElementById("settings-close");
 const settingsNavItems = Array.from(document.querySelectorAll(".settings-nav-item"));
 const settingsTabs = Array.from(document.querySelectorAll(".settings-tab"));
 const themeGrid = document.getElementById("theme-grid");
+const languageOptions = document.getElementById("settings-language-options");
 
 const toggleAutoCompact = document.getElementById("toggle-auto-compact");
 const btnThinkingLevel = document.getElementById("btn-thinking-level");
@@ -2945,7 +2979,7 @@ async function loadPiVersion() {
           piVersionCache = version;
           piVersionValue.textContent = piVersionCache;
         } else {
-          piVersionValue.textContent = "Unavailable (empty version)";
+          piVersionValue.textContent = t("status.unavailableVersion");
         }
       } else {
         const data = await rpcCommand({ type: "get_pi_version" });
@@ -3019,8 +3053,7 @@ async function loadBrowsePackages(force = false) {
     return;
   }
   browseLoading = true;
-  browseListEl.innerHTML =
-    '<div class="settings-api-keys-loading pkg-browse-full-row">Loading packages...</div>';
+  browseListEl.innerHTML = `<div class="settings-api-keys-loading pkg-browse-full-row">${escapeHtml(t("extensions.loadingPackages"))}</div>`;
   try {
     const [packages, installed] = await Promise.all([
       fetchBrowsePackages(),
@@ -3031,8 +3064,8 @@ async function loadBrowsePackages(force = false) {
     browseLoaded = true;
     renderBrowsePackages();
   } catch (err) {
-    const message = String(err?.message || err || "Failed to load packages");
-    browseListEl.innerHTML = `<div class="settings-api-keys-empty pkg-browse-full-row">${escapeHtml(message)} <button type="button" class="settings-value-btn" id="pkg-browse-retry">Retry</button></div>`;
+    const message = String(err?.message || err || t("extensions.failedToLoadPackages"));
+    browseListEl.innerHTML = `<div class="settings-api-keys-empty pkg-browse-full-row">${escapeHtml(message)} <button type="button" class="settings-value-btn" id="pkg-browse-retry">${escapeHtml(t("actions.retry"))}</button></div>`;
     const retry = document.getElementById("pkg-browse-retry");
     if (retry) retry.addEventListener("click", () => loadBrowsePackages(true));
   } finally {
@@ -3200,8 +3233,7 @@ function renderBrowsePackages() {
 
   browseListEl.innerHTML = "";
   if (!results.length) {
-    browseListEl.innerHTML =
-      '<div class="settings-api-keys-empty pkg-browse-full-row">No packages match your filters.</div>';
+    browseListEl.innerHTML = `<div class="settings-api-keys-empty pkg-browse-full-row">${escapeHtml(t("extensions.noPackagesMatch"))}</div>`;
     renderBrowsePagination(totalPages);
     return;
   }
@@ -3316,17 +3348,21 @@ function createBrowseRow(pkg) {
   const canManage = nativeAvailable();
   if (!canManage) {
     button.disabled = true;
-    setExtensionActionButton(button, "Desktop only");
+    setExtensionActionButton(button, t("extensions.desktopOnly"));
   } else {
-    setExtensionActionButton(button, installed ? "Uninstall" : "Install");
+    setExtensionActionButton(button, installed ? t("actions.uninstall") : t("actions.install"));
     button.addEventListener("click", async () => {
       button.disabled = true;
       button.classList.add("loading");
-      const previous = installed ? "Uninstall" : "Install";
-      setExtensionActionButton(button, installed ? "Uninstalling..." : "Installing...", true);
+      const previous = installed ? t("actions.uninstall") : t("actions.install");
+      setExtensionActionButton(
+        button,
+        installed ? t("status.uninstalling") : t("status.installing"),
+        true,
+      );
       status.hidden = false;
       status.classList.remove("is-error");
-      status.textContent = installed ? "Removing..." : "Installing...";
+      status.textContent = installed ? t("status.removing") : t("status.installing");
       status.title = status.textContent;
       try {
         if (installed) {
@@ -3447,6 +3483,24 @@ function buildThemeGrid() {
   }
 }
 
+function buildLanguageSelector() {
+  if (!languageOptions) return;
+  languageOptions.innerHTML = "";
+  const current = getLanguagePreference();
+
+  for (const lang of LANGUAGES) {
+    const btn = document.createElement("button");
+    btn.className = `theme-swatch${current === lang.value ? " active" : ""}`;
+    btn.textContent = lang.nativeLabel ?? t(lang.labelKey);
+    btn.addEventListener("click", () => {
+      setLocale(lang.value).then(() => buildLanguageSelector());
+    });
+    languageOptions.appendChild(btn);
+  }
+}
+
+onLocaleChange(buildLanguageSelector);
+
 async function openSettings() {
   settingsPanel.classList.remove("hidden");
   messagesContainer.style.display = "none";
@@ -3454,8 +3508,9 @@ async function openSettings() {
   document.querySelector(".mode-link:first-child")?.classList.remove("active");
   selectSettingsTab("general");
   buildThemeGrid();
+  buildLanguageSelector();
   if (piVersionValue) {
-    piVersionValue.textContent = piVersionCache || "Loading...";
+    piVersionValue.textContent = piVersionCache || t("status.loading");
   }
   setTimeout(() => {
     if (!settingsPanel.classList.contains("hidden")) loadPiVersion();
@@ -3549,9 +3604,10 @@ setupSettingsToggles({
   showSettingsSaveSuccess,
 }));
 
-// Restore saved theme
+// Restore saved theme, then initialize i18n before any UI setup that calls t()
 const savedTheme = getCurrentTheme();
 applyTheme(savedTheme);
+await initI18n();
 
 setupContextViz({
   tokenUsageEl,
