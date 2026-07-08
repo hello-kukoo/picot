@@ -17,3 +17,5 @@ src-tauri/resources/pi/
 
 # Pi session exports
 pi-session-*.html
+# husky internal scripts (managed by `bun run prepare`)
+.husky/_/
