@@ -64,6 +64,7 @@ export class FileBrowser {
     this.pathEl = pathEl;
     this.messageInput = messageInput;
     this.currentPath = null;
+    this.workspaceRoot = "";
     this.loadSequence = 0;
     this.fileStatus = null;
     this.fileErrorText = null;
@@ -73,17 +74,16 @@ export class FileBrowser {
     // resolves the originating row (or null when the click missed any row).
     this.container.addEventListener("click", (e) => this.onItemClick(e));
     this.container.addEventListener("dblclick", (e) => this.onItemDoubleClick(e));
-    this.container.addEventListener("dragstart", (e) => this.onItemDragStart(e));
-    this.container.addEventListener("dragend", (e) => this.onItemDragEnd(e));
-
-    this.setupDropTarget();
+    this.container.addEventListener("mousedown", (e) => this.onItemMouseDown(e));
 
     onLocaleChange(() => {
       this.refreshStatusText();
     });
   }
+
   setWorkspaceRoot(path = "") {
     const normalized = typeof path === "string" ? path.trim() : "";
+    this.workspaceRoot = normalized;
     // Invalidate any in-flight load so a stale /api/files response can't
     // overwrite the workspace reset.
     this.loadSequence++;
@@ -145,7 +145,7 @@ export class FileBrowser {
     for (const item of items) {
       const el = document.createElement("div");
       el.className = `file-item${item.isDirectory ? " directory" : ""}`;
-      el.draggable = true;
+      el.draggable = false;
       el.dataset.path = item.path;
       el.dataset.name = item.name;
       el.dataset.isDirectory = item.isDirectory ? "true" : "false";
@@ -202,18 +202,72 @@ export class FileBrowser {
     }
   }
 
-  onItemDragStart(event) {
+  /**
+   * Custom drag-to-chat via mouse events. WKWebView does not fire
+   * dragover/dragend/drop — only dragstart — making HTML5 DnD unusable.
+   * We listen for mousedown on file rows, start a custom drag after a
+   * small movement threshold, and detect the drop target with
+   * elementFromPoint on mouseup.
+   */
+  onItemMouseDown(event) {
+    if (event.button !== 0) return;
     const item = this.itemFromEvent(event);
-    if (!item) return;
-    event.dataTransfer.setData("text/plain", item.dataset.path);
-    event.dataTransfer.effectAllowed = "copy";
-    item.classList.add("dragging");
-  }
+    if (!item || item.dataset.isDirectory === "true") return;
 
-  onItemDragEnd(event) {
-    const item = this.itemFromEvent(event);
-    if (!item) return;
-    item.classList.remove("dragging");
+    const filePath = item.dataset.path;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let dragging = false;
+    let ghost = null;
+    const input = this.messageInput;
+    const card = input.closest("#composer-card");
+
+    const onMove = (e) => {
+      if (!dragging) {
+        if (Math.abs(e.clientX - startX) < 4 && Math.abs(e.clientY - startY) < 4) return;
+        dragging = true;
+        item.classList.add("dragging");
+        ghost = document.createElement("div");
+        ghost.className = "file-drag-ghost";
+        ghost.textContent = item.dataset.name;
+        document.body.appendChild(ghost);
+      }
+      if (ghost) {
+        ghost.style.left = `${e.clientX}px`;
+        ghost.style.top = `${e.clientY}px`;
+      }
+      if (card) {
+        const el = document.elementFromPoint(e.clientX, e.clientY);
+        card.classList.toggle("file-drop-hover", !!el && (el === card || card.contains(el)));
+      }
+    };
+
+    const onUp = (e) => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      item.classList.remove("dragging");
+      if (ghost) ghost.remove();
+      if (card) card.classList.remove("file-drop-hover");
+
+      if (!dragging) return;
+
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      if (!el || !card) return;
+      const overComposer = el === card || card.contains(el);
+      if (!overComposer) return;
+
+      // Defer to the next tick: WKWebView's native mouseup handler
+      // runs after this callback and would override a synchronous
+      // focus(). setTimeout(0) lets the native focus cycle complete
+      // first, so our focus() sticks and the textarea repaints.
+      setTimeout(() => {
+        input.focus();
+        this.insertFileMention(filePath);
+      }, 0);
+    };
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
   }
   showFileStatus(status, errorText = null) {
     this.fileStatus = status;
@@ -259,38 +313,74 @@ export class FileBrowser {
     }
   }
 
-  setupDropTarget() {
+  /**
+   * Compute a workspace-relative mention token (`@<posix-relpath>`) for an
+   * absolute file path, or null when no workspace root is known or the file
+   * is not representable as a relative path. Segment-based (not startsWith)
+   * so trailing/double slashes fold cleanly, sibling prefixes are
+   * disambiguated, and different Windows drives are rejected.
+   */
+  toMentionPath(filePath) {
+    if (!this.workspaceRoot || typeof filePath !== "string" || filePath === "") return null;
+
+    const segs = (p) =>
+      p
+        .replace(/\\/g, "/")
+        .split("/")
+        .filter((s) => s !== "" && s !== ".");
+    const rootSegs = segs(this.workspaceRoot);
+    const fileSegs = segs(filePath);
+
+    if (rootSegs.length === 0) return null;
+    if (fileSegs.includes("..") || rootSegs.includes("..")) return null;
+
+    // Reject cross-drive Windows paths (e.g. root C: vs file D:)
+    const isDriveSeg = (s) => /^[A-Za-z]:$/.test(s);
+    if (rootSegs[0] !== fileSegs[0] && (isDriveSeg(rootSegs[0]) || isDriveSeg(fileSegs[0])))
+      return null;
+
+    // Find common prefix length
+    let i = 0;
+    while (i < rootSegs.length && i < fileSegs.length && rootSegs[i] === fileSegs[i]) {
+      i++;
+    }
+
+    const upCount = rootSegs.length - i;
+    const remaining = fileSegs.slice(i);
+    if (remaining.length === 0) return null; // file is an ancestor dir of root
+
+    const parts = [];
+    for (let j = 0; j < upCount; j++) parts.push("..");
+    parts.push(...remaining);
+    return `@${parts.join("/")}`;
+  }
+
+  /**
+   * Insert a file mention (`@<relative-path>`) at the textarea selection.
+   * Called by the composer-card drop handler in app.js. Returns true when
+   * a mention was inserted, false when the path is not a representable file.
+   */
+  insertFileMention(filePath) {
+    if (!filePath) return false;
+    const mention = this.toMentionPath(filePath);
+    if (!mention) return false;
+
     const input = this.messageInput;
-
-    input.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "copy";
-      input.classList.add("file-drop-hover");
-    });
-
-    input.addEventListener("dragleave", () => {
-      input.classList.remove("file-drop-hover");
-    });
-
-    input.addEventListener("drop", (e) => {
-      e.preventDefault();
-      input.classList.remove("file-drop-hover");
-
-      const filePath = e.dataTransfer.getData("text/plain");
-      if (filePath?.startsWith("/")) {
-        // Insert file path at cursor
-        const start = input.selectionStart;
-        const end = input.selectionEnd;
-        const before = input.value.substring(0, start);
-        const after = input.value.substring(end);
-        const insert = filePath;
-        input.value = before + insert + after;
-        input.selectionStart = input.selectionEnd = start + insert.length;
-        input.focus();
-
-        // Trigger input event for auto-resize
-        input.dispatchEvent(new Event("input"));
-      }
-    });
+    input.focus();
+    // setRangeText triggers WKWebView's native text-edit repaint,
+    // unlike direct .value assignment which may not visually update.
+    const start = input.selectionStart ?? 0;
+    const end = input.selectionEnd ?? 0;
+    try {
+      input.setRangeText(mention, start, end, "end");
+    } catch {
+      // Fallback for environments without setRangeText
+      const before = input.value.substring(0, start);
+      const after = input.value.substring(end);
+      input.value = before + mention + after;
+      input.selectionStart = input.selectionEnd = start + mention.length;
+    }
+    input.dispatchEvent(new Event("input"));
+    return true;
   }
 }

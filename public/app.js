@@ -393,6 +393,7 @@ function refreshFileBrowserForWorkspace(path = getCurrentWorkspacePath(), { forc
   const normalized = typeof path === "string" ? path.trim() : "";
   if (!force && normalized === fileBrowserWorkspacePath) return;
   fileBrowserWorkspacePath = normalized;
+  fileBrowser.workspaceRoot = normalized;
 
   const isCollapsed = fileSidebar.classList.contains("collapsed");
   if (isCollapsed && !force) {
@@ -1252,9 +1253,18 @@ imageInput.addEventListener("change", () => {
 const composerCard = document.getElementById("composer-card");
 composerCard.addEventListener("dragover", (e) => {
   e.preventDefault();
+  e.dataTransfer.dropEffect = "copy";
 });
 composerCard.addEventListener("drop", (e) => {
   e.preventDefault();
+
+  // File Tree drag: text/plain carries an absolute path.
+  const rawPath = e.dataTransfer.getData("text/plain");
+  if (rawPath?.startsWith("/")) {
+    if (fileBrowser.insertFileMention(rawPath)) return;
+  }
+
+  // OS file drag: image attachments.
   addImageFiles(e.dataTransfer.files);
 });
 

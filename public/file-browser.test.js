@@ -247,3 +247,203 @@ describe("FileBrowser locale change", () => {
     expect(container.querySelector(".file-size").textContent).toBe("2K");
   });
 });
+
+// ═══════════════════════════════════════════════════════
+// Drag-to-chat mention (@<workspace-relative-path>)
+// ═══════════════════════════════════════════════════════
+
+describe("FileBrowser.toMentionPath", () => {
+  test("root-level file", () => {
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
+    browser.workspaceRoot = "/tmp/proj";
+    expect(browser.toMentionPath("/tmp/proj/package.json")).toBe("@package.json");
+  });
+
+  test("nested file (contract example)", () => {
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
+    browser.workspaceRoot = "/tmp/proj";
+    expect(browser.toMentionPath("/tmp/proj/src-tauri/a.ts")).toBe("@src-tauri/a.ts");
+  });
+
+  test("deeply nested", () => {
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
+    browser.workspaceRoot = "/tmp/proj";
+    expect(browser.toMentionPath("/tmp/proj/src/util/helpers.js")).toBe("@src/util/helpers.js");
+  });
+
+  test("external sibling becomes ../ relative path", () => {
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
+    browser.workspaceRoot = "/tmp/proj";
+    expect(browser.toMentionPath("/tmp/proj-other/a.ts")).toBe("@../proj-other/a.ts");
+  });
+
+  test("parent traversal from nested workspace", () => {
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
+    browser.workspaceRoot = "/tmp/proj";
+    expect(browser.toMentionPath("/shared/a.ts")).toBe("@../../shared/a.ts");
+  });
+
+  test("workspace root directory itself is null", () => {
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
+    browser.workspaceRoot = "/tmp/proj";
+    expect(browser.toMentionPath("/tmp/proj")).toBe(null);
+  });
+
+  test("empty workspace root is null", () => {
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
+    expect(browser.toMentionPath("/tmp/proj/a.ts")).toBe(null);
+  });
+
+  test("non-string or empty path is null", () => {
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
+    browser.workspaceRoot = "/tmp/proj";
+    expect(browser.toMentionPath("")).toBe(null);
+    expect(browser.toMentionPath(null)).toBe(null);
+    expect(browser.toMentionPath(undefined)).toBe(null);
+  });
+
+  test("Windows separators normalize to POSIX output", () => {
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
+    browser.workspaceRoot = "C:\\proj";
+    expect(browser.toMentionPath("C:\\proj\\src\\a.ts")).toBe("@src/a.ts");
+  });
+
+  test("different Windows drive is null", () => {
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
+    browser.workspaceRoot = "C:\\proj";
+    expect(browser.toMentionPath("D:\\shared\\a.ts")).toBe(null);
+  });
+
+  test("trailing separator on root", () => {
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
+    browser.workspaceRoot = "/tmp/proj/";
+    expect(browser.toMentionPath("/tmp/proj/a.ts")).toBe("@a.ts");
+  });
+
+  test("embedded .. in source path is rejected", () => {
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
+    browser.workspaceRoot = "/tmp/proj";
+    expect(browser.toMentionPath("/tmp/proj/../other/a.ts")).toBe(null);
+  });
+
+  test("Unix root with Windows file path is null", () => {
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
+    browser.workspaceRoot = "/tmp/proj";
+    expect(browser.toMentionPath("C:\\proj\\a.ts")).toBe(null);
+  });
+});
+
+describe("FileBrowser.onItemMouseDown (custom drag)", () => {
+  test("registers mousedown listener on container", () => {
+    const container = makeContainer();
+    new FileBrowser(container, makePathEl(), makeMessageInput());
+    const mousedowns = container.addEventListener.mock.calls.filter((c) => c[0] === "mousedown");
+    expect(mousedowns.length).toBe(1);
+  });
+
+  test("ignores directory rows", () => {
+    const container = makeContainer();
+    const browser = new FileBrowser(container, makePathEl(), makeMessageInput());
+    browser.workspaceRoot = "/tmp/proj";
+
+    const row = {
+      dataset: { path: "/tmp/proj/src", name: "src", isDirectory: "true" },
+      classList: { add: vi.fn(), remove: vi.fn() },
+    };
+    const listener = container.addEventListener.mock.calls.find((c) => c[0] === "mousedown")[1];
+
+    // Should return early for directories — no document listeners attached
+    const addDocListener = vi.spyOn(document, "addEventListener");
+    listener({ button: 0, target: { closest: () => row }, clientX: 0, clientY: 0 });
+    expect(addDocListener).not.toHaveBeenCalled();
+    addDocListener.mockRestore();
+  });
+
+  test("ignores non-left-click", () => {
+    const container = makeContainer();
+    new FileBrowser(container, makePathEl(), makeMessageInput());
+
+    const row = {
+      dataset: { path: "/tmp/proj/a.ts", name: "a.ts", isDirectory: "false" },
+      classList: { add: vi.fn(), remove: vi.fn() },
+    };
+    const listener = container.addEventListener.mock.calls.find((c) => c[0] === "mousedown")[1];
+
+    const addDocListener = vi.spyOn(document, "addEventListener");
+    listener({ button: 2, target: { closest: () => row }, clientX: 0, clientY: 0 });
+    expect(addDocListener).not.toHaveBeenCalled();
+    addDocListener.mockRestore();
+  });
+});
+
+describe("FileBrowser.insertFileMention", () => {
+  function setup({ workspaceRoot = "/tmp/proj" } = {}) {
+    const messageInput = makeMessageInput();
+    const browser = new FileBrowser(makeContainer(), makePathEl(), messageInput);
+    if (workspaceRoot) browser.workspaceRoot = workspaceRoot;
+    return { messageInput, browser };
+  }
+
+  test("setWorkspaceRoot updates workspaceRoot field", () => {
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
+    browser.setWorkspaceRoot("/tmp/project");
+    expect(browser.workspaceRoot).toBe("/tmp/project");
+    browser.setWorkspaceRoot("");
+    expect(browser.workspaceRoot).toBe("");
+  });
+
+  test("valid nested file inserts @relative-path at selection", () => {
+    const { messageInput, browser } = setup();
+    messageInput.value = "Inspect OLD now";
+    messageInput.selectionStart = 8;
+    messageInput.selectionEnd = 11;
+
+    const inserted = browser.insertFileMention("/tmp/proj/src-tauri/a.ts");
+
+    expect(inserted).toBe(true);
+    expect(messageInput.value).toBe("Inspect @src-tauri/a.ts now");
+    const caret = 8 + "@src-tauri/a.ts".length;
+    expect(messageInput.selectionStart).toBe(caret);
+    expect(messageInput.selectionEnd).toBe(caret);
+    expect(messageInput.focus).toHaveBeenCalledTimes(1);
+    expect(messageInput.dispatchEvent).toHaveBeenCalledTimes(1);
+    expect(messageInput.dispatchEvent.mock.calls[0][0].type).toBe("input");
+  });
+
+  test("root-level file inserts @basename", () => {
+    const { messageInput, browser } = setup();
+    messageInput.value = "";
+    expect(browser.insertFileMention("/tmp/proj/package.json")).toBe(true);
+    expect(messageInput.value).toBe("@package.json");
+  });
+
+  test("external sibling file inserts @../relative-path", () => {
+    const { messageInput, browser } = setup();
+    messageInput.value = "";
+    expect(browser.insertFileMention("/tmp/proj-other/a.ts")).toBe(true);
+    expect(messageInput.value).toBe("@../proj-other/a.ts");
+  });
+
+  test("file outside workspace with no root is rejected", () => {
+    const { messageInput, browser } = setup({ workspaceRoot: "" });
+    messageInput.value = "hello";
+    expect(browser.insertFileMention("/tmp/proj/a.ts")).toBe(false);
+    expect(messageInput.value).toBe("hello");
+  });
+
+  test("cross-drive Windows file is rejected", () => {
+    const { messageInput, browser } = setup();
+    browser.workspaceRoot = "C:\\proj";
+    messageInput.value = "hello";
+    expect(browser.insertFileMention("D:\\shared\\a.ts")).toBe(false);
+    expect(messageInput.value).toBe("hello");
+  });
+
+  test("empty/null path is rejected", () => {
+    const { messageInput, browser } = setup();
+    messageInput.value = "hello";
+    expect(browser.insertFileMention("")).toBe(false);
+    expect(browser.insertFileMention(null)).toBe(false);
+    expect(messageInput.value).toBe("hello");
+  });
+});
