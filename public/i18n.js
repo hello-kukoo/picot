@@ -160,6 +160,9 @@ function applyTranslations(root = document) {
   root.querySelectorAll("[data-i18n-aria-label]").forEach((el) => {
     el.setAttribute("aria-label", t(el.dataset.i18nAriaLabel));
   });
+  root.querySelectorAll("[data-i18n-alt]").forEach((el) => {
+    el.setAttribute("alt", t(el.dataset.i18nAlt));
+  });
 }
 
 // ── Initialization ────────────────────────────────────────────────────

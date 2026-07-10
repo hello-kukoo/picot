@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Picot - Usage</title>
+  <title data-i18n="cost.documentTitle">Picot - Usage</title>
   <link rel="icon" type="image/svg+xml" href="icons/logo-dark.svg">
   <link rel="stylesheet" href="style-theme.css">
   <link rel="stylesheet" href="style.css">
@@ -15,12 +15,12 @@
     <section class="" id="infobar-cost-section">
       <div class="infobar-topbar">
         <div class="infobar-topbar-actions">
-          <fieldset class="infobar-quick-range" aria-label="Quick range">
+          <fieldset class="infobar-quick-range" aria-label="Quick range" data-i18n-aria-label="cost.quickRange">
             <button type="button" class="infobar-range-chip" data-range-chip="7d">7d</button>
             <button type="button" class="infobar-range-chip is-active" data-range-chip="30d">30d</button>
             <button type="button" class="infobar-range-chip" data-range-chip="90d">90d</button>
           </fieldset>
-          <span class="infobar-range-meta" id="infobar-range-meta">No data</span>
+          <span class="infobar-range-meta" id="infobar-range-meta" data-i18n="cost.noData">No data</span>
         </div>
       </div>
 
@@ -28,7 +28,7 @@
         <div class="infobar-panel is-active" id="usage-overview">
           <div class="infobar-cost-block">
             <div class="infobar-subsection-head">
-              <h3>Overview</h3>
+              <h3 data-i18n="cost.overview">Overview</h3>
             </div>
             <div class="infobar-overview-grid" id="infobar-overview-grid"></div>
             <div class="infobar-activity-wrap">
@@ -42,7 +42,7 @@
           <div class="infobar-panel is-active" id="usage-models">
             <div class="infobar-cost-block">
               <div class="infobar-subsection-head">
-                <h3>Models</h3>
+                <h3 data-i18n="cost.models">Models</h3>
               </div>
               <div class="infobar-rank-list" id="infobar-models-list"></div>
             </div>
@@ -52,7 +52,7 @@
             <div class="infobar-panel is-active" id="usage-tool-cost">
               <div class="infobar-cost-block">
                 <div class="infobar-subsection-head">
-                  <h3>Tool Cost</h3>
+                <h3 data-i18n="cost.toolCost">Tool Cost</h3>
                 </div>
                 <div id="infobar-tool-cost-panel"></div>
               </div>
@@ -61,7 +61,7 @@
             <div class="infobar-panel is-active" id="usage-projects">
               <div class="infobar-cost-block">
                 <div class="infobar-subsection-head">
-                  <h3>Projects</h3>
+                <h3 data-i18n="cost.projects">Projects</h3>
                 </div>
                 <div class="infobar-rank-list" id="infobar-projects-list"></div>
               </div>
@@ -72,8 +72,8 @@
         <div class="infobar-panel is-active" id="usage-sessions">
           <div class="infobar-cost-block">
             <div class="infobar-subsection-head">
-              <h3>Sessions</h3>
-              <span>Recent sessions in range</span>
+              <h3 data-i18n="cost.sessions">Sessions</h3>
+              <span data-i18n="cost.recentSessionsInRange">Recent sessions in range</span>
             </div>
             <div id="infobar-sessions-panel"></div>
           </div>

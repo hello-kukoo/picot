@@ -3125,7 +3125,7 @@ body {
   color: var(--text-dim);
 }
 
-.shortcuts-hint span {
+.shortcuts-hint > span {
   padding: 4px 10px;
   background: var(--bg-glass);
   border: 1px solid var(--border);

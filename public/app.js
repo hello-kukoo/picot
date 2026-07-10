@@ -2,7 +2,7 @@
  * Main App - Ties everything together
  */
 
-import { setupContextViz } from "./app-context-viz.js";
+import { repaintContextViz, setupContextViz } from "./app-context-viz.js";
 import { setupSettingsEditors } from "./app-settings-editors.js";
 import { setupSettingsToggles } from "./app-settings-toggles.js";
 import { createAppUpdater } from "./app-updater.js";
@@ -284,7 +284,7 @@ document
 const gitBranchEl = document.createElement("div");
 gitBranchEl.id = "git-branch-indicator";
 gitBranchEl.className = "pill git-branch-indicator hidden";
-gitBranchEl.title = "Current git branch";
+gitBranchEl.title = t("git.currentBranch");
 document
   .querySelector(".header-right")
   ?.insertBefore(gitBranchEl, document.querySelector("#context-viz"));
@@ -298,7 +298,7 @@ function updateGitBranchIndicator(branch = "") {
   }
   gitBranchEl.classList.remove("hidden");
   gitBranchEl.textContent = name;
-  gitBranchEl.title = `Branch: ${name}`;
+  gitBranchEl.title = t("git.branchName", { name });
 }
 
 async function refreshGitBranch() {
@@ -501,8 +501,11 @@ function refreshHeaderOpenAppButton() {
   }
   headerOpenApp.el.classList.remove("hidden");
   if (headerOpenApp.logo) headerOpenApp.logo.innerHTML = renderOpenAppLogo(selected);
-  headerOpenApp.btn.title = `Open ${path} in ${selected.label}`;
-  headerOpenApp.btn.setAttribute("aria-label", `Open workspace in ${selected.label}`);
+  headerOpenApp.btn.title = t("nav.openWorkspaceInNamedApp", { path, app: selected.label });
+  headerOpenApp.btn.setAttribute(
+    "aria-label",
+    t("nav.openWorkspaceInAppAria", { app: selected.label }),
+  );
 }
 
 async function openWorkspaceInApp(app) {
@@ -538,8 +541,8 @@ function toggleHeaderOpenAppMenu() {
     row.type = "button";
     row.className = "header-open-app-menu-item";
     if (app.id === headerOpenApp.selectedId) row.classList.add("active");
-    row.title = `Open in ${app.label}`;
-    row.setAttribute("aria-label", `Open in ${app.label}`);
+    row.title = t("nav.openInApp", { app: app.label });
+    row.setAttribute("aria-label", t("nav.openInApp", { app: app.label }));
     row.innerHTML = `<span class="header-open-app-logo" aria-hidden="true">${renderOpenAppLogo(app)}</span><span>${app.label}</span>`;
     row.addEventListener("click", (ev) => {
       ev.stopPropagation();
@@ -691,7 +694,7 @@ wsClient.addEventListener("disconnected", () => {
 
 wsClient.addEventListener("reconnectFailed", () => {
   updateConnectionStatus("disconnected");
-  messageRenderer.renderError("Connection lost. Please refresh the page.");
+  messageRenderer.renderError(t("errors.connectionLost"));
 });
 
 wsClient.addEventListener("rpcEvent", (e) => {
@@ -718,11 +721,9 @@ wsClient.addEventListener("commandUndeliverable", (e) => {
   showTypingIndicator(false);
   const detail =
     reason === "no_route"
-      ? "no running session to receive it"
-      : "the session process is no longer reachable";
-  messageRenderer.renderError(
-    `Message not delivered (${detail}). The session may have closed — start a new chat or try again.`,
-  );
+      ? t("errors.commandUndeliverableNoRoute")
+      : t("errors.commandUndeliverableUnreachable");
+  messageRenderer.renderError(t("errors.messageNotDelivered", { detail }));
   if (pending.message && !messageInput.value.trim()) {
     messageInput.value = pending.message;
     messageInput.style.height = "auto";
@@ -820,7 +821,7 @@ function handleRPCEvent(event) {
       handleExtensionUIRequest(event);
       break;
     case "extension_error":
-      messageRenderer.renderError(`Extension error: ${event.error}`);
+      messageRenderer.renderError(t("errors.extensionError", { error: event.error }));
       break;
     case "session_name":
       // Auto-title: update sidebar with new session name
@@ -853,7 +854,7 @@ function handleCompactionStart() {
   const el = document.createElement("div");
   el.className = "system-message compaction-message";
   el.id = "compaction-indicator";
-  el.innerHTML = '<span class="compaction-spinner">⟳</span> Compacting context…';
+  el.innerHTML = `<span class="compaction-spinner">⟳</span> ${escapeHtml(t("status.compacting"))}`;
   messagesContainer.appendChild(el);
   scrollToBottom();
 }
@@ -861,8 +862,13 @@ function handleCompactionStart() {
 function handleCompactionEnd(event) {
   const indicator = document.getElementById("compaction-indicator");
   if (indicator) {
-    const summary = event.summary ? ` — ${event.summary}` : "";
-    indicator.innerHTML = `✓ Context compacted${summary}`;
+    if (event.summary) {
+      indicator.innerHTML = escapeHtml(
+        t("status.compactedWithSummary", { summary: event.summary }),
+      );
+    } else {
+      indicator.innerHTML = escapeHtml(t("status.compacted"));
+    }
     indicator.classList.add("compaction-done");
   }
   // Reset token tracking — next message will update
@@ -941,7 +947,7 @@ function handleAgentEnd(event = null) {
     foregroundPort = findPortForSession(liveInstances, targetPath, foregroundPort);
     syncWorkspaceIndicatorFromInstances();
     transport.switchSession(targetPath, foregroundPort).catch((e) => {
-      messageRenderer.renderError(`Failed to switch session: ${e}`);
+      messageRenderer.renderError(t("errors.failedToSwitchSession", { error: e }));
     });
     return;
   }
@@ -1052,8 +1058,10 @@ function handleMessageEnd(message) {
     const model = message?.model ? String(message.model) : "unknown";
     const errorMessage = message?.errorMessage
       ? String(message.errorMessage)
-      : "Model request failed";
-    messageRenderer.renderError(`[${provider}/${model}] ${errorMessage}`);
+      : t("errors.modelRequestFailed");
+    messageRenderer.renderError(
+      t("errors.modelRequestFailedDetail", { provider, model, message: errorMessage }),
+    );
   }
   if (!currentStreamingElement && message?.role === "assistant") {
     ensureStreamingAssistantElement(message);
@@ -1231,7 +1239,7 @@ attachBtn.addEventListener("click", async () => {
     await addImagePayloads(result);
   } catch (err) {
     console.error("[Picot] Native image picker failed:", err);
-    messageRenderer.renderError(`Failed to attach image: ${err}`);
+    messageRenderer.renderError(t("errors.failedToAttachImage", { error: err }));
   }
 });
 
@@ -1376,9 +1384,9 @@ function renderQueuedMessages() {
     const el = document.createElement("div");
     el.className = "queued-msg";
     el.innerHTML = `
-      <span class="queued-msg-label">Queued</span>
+      <span class="queued-msg-label">${escapeHtml(t("queue.queued"))}</span>
       <span class="queued-msg-text">${escapeHtml(cmd.message)}</span>
-      <button class="queued-msg-cancel" title="Cancel">×</button>
+      <button class="queued-msg-cancel" title="${t("queue.cancelTitle")}">×</button>
     `;
     el.querySelector(".queued-msg-cancel").addEventListener("click", () => {
       messageQueue.splice(i, 1);
@@ -1424,32 +1432,32 @@ const commandList = document.getElementById("command-list");
 const commands = [
   {
     icon: "🗜️",
-    label: "Compact",
-    desc: "Compact context to save tokens",
-    action: () => rpcCommand({ type: "compact" }, "Compacting..."),
+    label: t("input.compact"),
+    desc: t("input.compactDesc"),
+    action: () => rpcCommand({ type: "compact" }, t("status.compacting")),
   },
   {
     icon: "📋",
-    label: "Export HTML",
-    desc: "Export session as HTML file",
+    label: t("input.exportHtml"),
+    desc: t("input.exportHtmlDesc"),
     action: () => rpcExportHtml(),
   },
   {
     icon: "📊",
-    label: "Session Stats",
-    desc: "Show session statistics",
+    label: t("input.sessionStats"),
+    desc: t("input.sessionStatsDesc"),
     action: () => showSessionStats(),
   },
   {
     icon: "⬇️",
-    label: "Expand All Tools",
-    desc: "Expand all tool cards",
+    label: t("input.expandAllTools"),
+    desc: t("input.expandAllToolsDesc"),
     action: () => toolCardRenderer.expandAll(),
   },
   {
     icon: "⬆️",
-    label: "Collapse All Tools",
-    desc: "Collapse all tool cards",
+    label: t("input.collapseAllTools"),
+    desc: t("input.collapseAllToolsDesc"),
     action: () => toolCardRenderer.collapseAll(),
   },
 ];
@@ -1501,39 +1509,43 @@ async function rpcCommand(cmd, statusMsg) {
     } else {
       statusText.textContent = data.error || t("status.failed");
       setTimeout(() => {
-        statusText.textContent = "Connected";
+        statusText.textContent = t("status.connected");
       }, 3000);
     }
     return data;
   } catch (_e) {
     statusText.textContent = t("status.error");
     setTimeout(() => {
-      statusText.textContent = "Connected";
+      statusText.textContent = t("status.connected");
     }, 3000);
   }
 }
 
 async function rpcExportHtml() {
-  const data = await rpcCommand({ type: "export_html" }, "Exporting...");
+  const data = await rpcCommand({ type: "export_html" }, t("status.exporting"));
   if (data?.success && data.data?.path) {
-    statusText.textContent = `Exported: ${data.data.path}`;
+    statusText.textContent = t("status.exported", { path: data.data.path });
     setTimeout(() => {
-      statusText.textContent = "Connected";
+      statusText.textContent = t("status.connected");
     }, 4000);
   }
 }
 
 async function showSessionStats() {
-  const data = await rpcCommand({ type: "get_session_stats" }, "Loading stats...");
+  const data = await rpcCommand({ type: "get_session_stats" }, t("status.loadingStats"));
   if (data?.success && data.data) {
     const s = data.data;
     const lines = [
-      `📊 Session Stats`,
-      `Messages: ${s.totalMessages} (${s.userMessages} user, ${s.assistantMessages} assistant)`,
-      `Tool calls: ${s.toolCalls}`,
+      t("status.sessionStatsTitle"),
+      t("status.sessionStatsMessages", {
+        total: s.totalMessages,
+        user: s.userMessages,
+        assistant: s.assistantMessages,
+      }),
+      t("status.sessionStatsToolCalls", { count: s.toolCalls }),
     ];
     if (s.tokens) {
-      lines.push(`Context: ~${(s.tokens.input / 1000).toFixed(1)}k tokens`);
+      lines.push(t("status.sessionStatsContext", { tokens: (s.tokens.input / 1000).toFixed(1) }));
     }
     messageRenderer.renderSystemMessage(lines.join("\n"));
   }
@@ -1653,7 +1665,7 @@ function maybeAutoOpenEmptyModelsDropdown() {
 
 function updateModelLabel() {
   const shortName = currentModelId.replace(/^claude-/, "").replace(/-\d{8}$/, "");
-  modelDropdownLabel.textContent = shortName || "model";
+  modelDropdownLabel.textContent = shortName || t("misc.model");
 }
 
 function toggleModelDropdown() {
@@ -1671,7 +1683,7 @@ function openModelDropdown() {
   // Search input
   const search = document.createElement("input");
   search.className = "model-dropdown-search";
-  search.placeholder = "Search models…";
+  search.placeholder = t("models.searchPlaceholder");
   search.type = "text";
   modelDropdownMenu.appendChild(search);
 
@@ -1691,9 +1703,9 @@ function openModelDropdown() {
       empty.className = "model-dropdown-empty";
       empty.innerHTML = `
         <div style="padding:14px;color:var(--text-dim);font-size:12px;line-height:1.5">
-          <div style="color:var(--text-primary);margin-bottom:6px">No models available</div>
-          <div>No API keys configured. Set a key in Settings &rarr; Configuration.</div>
-          <button type="button" class="btn-primary" style="margin-top:10px">Open Settings</button>
+          <div style="color:var(--text-primary);margin-bottom:6px">${escapeHtml(t("models.emptyTitle"))}</div>
+          <div>${escapeHtml(t("models.emptyHelp"))}</div>
+          <button type="button" class="btn-primary" style="margin-top:10px">${escapeHtml(t("settings.openSettings"))}</button>
         </div>`;
       empty.querySelector("button").addEventListener("click", () => {
         closeModelDropdown();
@@ -1725,7 +1737,7 @@ function openModelDropdown() {
         const display = m.id.replace(/^claude-/, "").replace(/-\d{8}$/, "");
         await rpcCommand(
           { type: "set_model", provider: m.provider, modelId: m.id },
-          `Switching to ${display}...`,
+          t("status.switchingModel", { model: display }),
         );
         currentModelId = m.id;
         updateModelLabel();
@@ -1821,8 +1833,8 @@ document.addEventListener("keydown", (e) => {
   // so we don't shadow Cmd+Shift+N (reserved for future "new window").
   if ((e.key === "n" || e.key === "N") && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
     e.preventDefault();
-    newSession().catch((err) => {
-      messageRenderer.renderError(`Failed to start new session: ${err}`);
+    newSession().catch((_err) => {
+      messageRenderer.renderError(t("errors.newSessionFailed"));
     });
   }
 
@@ -1831,7 +1843,7 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     if (nativeAvailable()) {
       transport.openDevtools().catch((err) => {
-        messageRenderer.renderError(`Failed to open inspector: ${err}`);
+        messageRenderer.renderError(t("errors.failedToOpenInspector", { error: err }));
       });
     }
   }
@@ -2020,8 +2032,8 @@ async function newSession() {
     try {
       await transport.newSession(getActivePort());
       await resetUiForNewSession();
-    } catch (err) {
-      messageRenderer.renderError(`Failed to start new session: ${err}`);
+    } catch (_err) {
+      messageRenderer.renderError(t("errors.newSessionFailed"));
       return;
     }
     if (isMobile()) {
@@ -2037,9 +2049,9 @@ async function newSession() {
   lastInputTokens = 0;
   updateCostDisplay();
   updateTokenUsage();
-  const data = await rpcCommand({ type: "new_session" }, "Starting new session...");
+  const data = await rpcCommand({ type: "new_session" }, t("status.startingNewSession"));
   if (data?.success === false || data?.data?.cancelled) {
-    messageRenderer.renderError(data?.error || "New session was cancelled");
+    messageRenderer.renderError(data?.error || t("errors.newSessionCancelled"));
     return;
   }
   await resetUiForNewSession();
@@ -2069,9 +2081,7 @@ async function handleNewProjectChat(project) {
       if (isCurrentProject) {
         await newSession();
       } else {
-        messageRenderer.renderError(
-          "Starting a new chat in another project requires the desktop broker. Reopen the mobile QR code.",
-        );
+        messageRenderer.renderError(t("errors.mobileBrokerRequired"));
       }
       if (isMobile()) {
         sidebarEl.classList.add("collapsed");
@@ -2249,7 +2259,7 @@ async function handleSessionSelectImpl(session, project) {
       await transport.switchSession(session.filePath, foregroundPort);
       wsClient.send({ type: "mirror_sync_request" });
     } catch (e) {
-      messageRenderer.renderError(`Failed to switch session: ${e}`);
+      messageRenderer.renderError(t("errors.failedToSwitchSession", { error: e }));
     }
     if (isMobile()) {
       sidebarEl.classList.add("collapsed");
@@ -2275,7 +2285,7 @@ async function renderSelectedSessionHistory(session, project) {
     return;
   }
 
-  messageRenderer.renderSystemMessage("Loading session…");
+  messageRenderer.renderSystemMessage(t("status.loadingSession"));
   const dirName = project?.dirName;
   const file = session.file;
   if (!dirName || !file) {
@@ -2313,7 +2323,7 @@ async function renderSelectedSessionHistory(session, project) {
       selectedSession: session?.filePath,
       error: e,
     });
-    messageRenderer.renderError(`Failed to load session: ${e}`);
+    messageRenderer.renderError(t("errors.failedToLoadSession", { error: e }));
   }
 }
 
@@ -2324,7 +2334,7 @@ async function switchSession(sessionFile, session = null, project = null) {
     toolCardRenderer.clear();
 
     if (sessionFile && session) {
-      messageRenderer.renderSystemMessage("Loading session...");
+      messageRenderer.renderSystemMessage(t("status.loadingSession"));
 
       const dirName = project?.dirName;
       const file = session.file;
@@ -2384,12 +2394,12 @@ async function switchSession(sessionFile, session = null, project = null) {
 
       if (!res.ok) {
         const err = await res.json();
-        messageRenderer.renderError(`Failed to switch session: ${err.error}`);
+        messageRenderer.renderError(t("errors.failedToSwitchSession", { error: err.error }));
       }
     }
   } catch (error) {
     console.error("[App] Failed to switch session:", error);
-    messageRenderer.renderError("Failed to switch session");
+    messageRenderer.renderError(t("errors.failedToSwitchSessionShort"));
   }
 }
 
@@ -2544,11 +2554,11 @@ function updateMirrorInputState() {
   const inputArea = document.querySelector(".input-area");
   if (viewingActiveSession) {
     messageInput.disabled = false;
-    messageInput.placeholder = "Message...";
+    messageInput.placeholder = t("input.messagePlaceholder");
     inputArea?.classList.remove("mirror-readonly");
   } else {
     messageInput.disabled = true;
-    messageInput.placeholder = "Viewing historical session (read-only)";
+    messageInput.placeholder = t("input.mirrorReadOnly");
     inputArea?.classList.add("mirror-readonly");
   }
 }
@@ -2686,7 +2696,7 @@ function showTypingIndicator(show) {
 
 function abortCurrentRun() {
   wsClient.send({ type: "abort" });
-  messageRenderer.renderError("Aborted by user");
+  messageRenderer.renderError(t("errors.abortedByUser"));
   showTypingIndicator(false);
 
   // In some abort paths, backend agent_end can be delayed or missing.
@@ -2702,7 +2712,7 @@ function abortCurrentRun() {
 
 function updateCostDisplay() {
   if (sessionTotalCost > 0) {
-    sessionCostEl.textContent = `$${sessionTotalCost.toFixed(4)} (sub)`;
+    sessionCostEl.textContent = t("usage.costSub", { amount: `$${sessionTotalCost.toFixed(4)}` });
     sessionCostEl.classList.add("visible");
   } else {
     sessionCostEl.classList.remove("visible");
@@ -2720,7 +2730,10 @@ function updateTokenUsage() {
     } else if (pct >= 60) {
       tokenUsageEl.classList.add("warning");
     }
-    tokenUsageEl.title = `Context: ${(lastInputTokens / 1000).toFixed(1)}k / ${(contextWindowSize / 1000).toFixed(0)}k tokens`;
+    tokenUsageEl.title = t("usage.contextTokens", {
+      used: (lastInputTokens / 1000).toFixed(1),
+      limit: (contextWindowSize / 1000).toFixed(0),
+    });
     if (pct >= 80) {
       showCompactButton();
     } else {
@@ -2742,7 +2755,7 @@ function showCompactButton() {
   btn.textContent = t("misc.compact");
   btn.title = t("misc.compactTitle");
   btn.addEventListener("click", () => {
-    rpcCommand({ type: "compact" }, "Compacting...");
+    rpcCommand({ type: "compact" }, t("status.compacting"));
     hideCompactButton();
   });
   // Insert next to token usage in header
@@ -2854,13 +2867,13 @@ function updateConnectionStatus(status) {
 
   if (status === "connected") {
     if (tailscaleUrl) {
-      statusText.textContent = "Connected • TS";
+      statusText.textContent = t("status.connectedTS");
       statusText.title = tailscaleUrl;
     } else if (lanUrl) {
-      statusText.textContent = "Connected • LAN";
+      statusText.textContent = t("status.connectedLAN");
       statusText.title = lanUrl;
     } else {
-      statusText.textContent = "Connected";
+      statusText.textContent = t("status.connected");
       statusText.title = "";
     }
     // Fetch network link metadata on first connect
@@ -2885,7 +2898,7 @@ function updateUI() {
   } else {
     statusIndicator.classList.remove("streaming");
     statusIndicator.classList.add("connected");
-    statusText.textContent = "Connected";
+    statusText.textContent = t("status.connected");
   }
 
   messageInput.disabled = !onboarding.canType;
@@ -2906,9 +2919,9 @@ function updateUI() {
     messageInput.disabled = true;
     sendBtn.disabled = true;
     abortBtn.classList.add("hidden");
-    messageInput.placeholder = "Waiting for current session to finish…";
+    messageInput.placeholder = t("input.waitingForSession");
   } else if (onboarding.canQuery) {
-    messageInput.placeholder = "Type a message...";
+    messageInput.placeholder = t("input.typeMessage");
   }
 }
 
@@ -2996,13 +3009,13 @@ async function loadPiVersion() {
         } else {
           const reason = formatPiVersionError(data?.error, "version missing in response");
           console.error("[settings] failed to load pi version:", data);
-          piVersionValue.textContent = `Unavailable (${reason})`;
+          piVersionValue.textContent = t("status.unavailableReason", { reason });
         }
       }
     } catch (err) {
       const reason = formatPiVersionError(err);
       console.error("[settings] failed to load pi version:", err);
-      piVersionValue.textContent = `Unavailable (${reason})`;
+      piVersionValue.textContent = t("status.unavailableReason", { reason });
     } finally {
       piVersionInflight = null;
     }
@@ -3230,11 +3243,15 @@ function renderBrowsePackages() {
 
   if (browseCountEl) {
     if (results.length === 0) {
-      browseCountEl.textContent = `0 of ${results.length}`;
+      browseCountEl.textContent = t("extensions.browseCountZero", { total: results.length });
     } else {
       const rangeStart = start + 1;
       const rangeEnd = start + pageResults.length;
-      browseCountEl.textContent = `${rangeStart}–${rangeEnd} of ${results.length}`;
+      browseCountEl.textContent = t("extensions.browseCountRange", {
+        start: rangeStart,
+        end: rangeEnd,
+        total: results.length,
+      });
     }
   }
 
@@ -3335,7 +3352,9 @@ function createBrowseRow(pkg) {
   }
   const downloads = document.createElement("span");
   downloads.className = "pkg-browse-meta";
-  downloads.textContent = `${(pkg.downloads || 0).toLocaleString()}/mo`;
+  downloads.textContent = t("extensions.downloadsPerMonth", {
+    count: (pkg.downloads || 0).toLocaleString(),
+  });
   badges.appendChild(downloads);
   info.appendChild(badges);
 
@@ -3490,6 +3509,12 @@ function buildThemeGrid() {
   }
 }
 
+function refreshUsageIframeLocale() {
+  const iframe = document.querySelector(".settings-usage-iframe");
+  if (!iframe?.contentWindow) return;
+  iframe.contentWindow.location.reload();
+}
+
 function buildLanguageSelector() {
   if (!languageOptions) return;
   languageOptions.innerHTML = "";
@@ -3500,13 +3525,25 @@ function buildLanguageSelector() {
     btn.className = `theme-swatch${current === lang.value ? " active" : ""}`;
     btn.textContent = lang.nativeLabel ?? t(lang.labelKey);
     btn.addEventListener("click", () => {
-      setLocale(lang.value).then(() => buildLanguageSelector());
+      setLocale(lang.value).then(() => {
+        buildLanguageSelector();
+        refreshUsageIframeLocale();
+      });
     });
     languageOptions.appendChild(btn);
   }
 }
 
 onLocaleChange(buildLanguageSelector);
+
+onLocaleChange(() => {
+  updateThinkingBtn();
+  renderQueuedMessages();
+  updateUI();
+  updateTokenUsage();
+  refreshGitBranch();
+  repaintContextViz();
+});
 
 async function openSettings() {
   settingsPanel.classList.remove("hidden");

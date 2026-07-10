@@ -1,7 +1,9 @@
 import { renderCostInfobar } from "./cost-infobar.js";
+import { initI18n, onLocaleChange, t } from "./i18n.js";
 
 const scopeSelect = document.getElementById("scope-select");
 let currentRange = "30d";
+let latestPayload = null;
 const infobarSectionEl = document.getElementById("infobar-cost-section");
 const rangeChips = Array.from(document.querySelectorAll("[data-range-chip]"));
 
@@ -106,8 +108,15 @@ function buildQuery() {
 }
 
 function renderAll(payload) {
+  latestPayload = payload;
+  document.title = t("cost.documentTitle");
   renderCostInfobar(infobarSectionEl, payload);
 }
+
+onLocaleChange(() => {
+  document.title = t("cost.documentTitle");
+  if (latestPayload) renderCostInfobar(infobarSectionEl, latestPayload);
+});
 
 async function loadDashboard() {
   saveFilters();
@@ -130,8 +139,14 @@ for (const chip of rangeChips) {
   });
 }
 
-loadSavedFilters();
-syncRangeChips();
-loadDashboard().catch((error) => {
+async function initCostPage() {
+  await initI18n();
+  document.title = t("cost.documentTitle");
+  loadSavedFilters();
+  syncRangeChips();
+  await loadDashboard();
+}
+
+initCostPage().catch((error) => {
   console.error("[Cost] Initial load failed:", error);
 });

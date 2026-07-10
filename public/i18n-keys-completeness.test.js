@@ -22,6 +22,24 @@ function flattenKeys(obj, prefix = "") {
   return keys;
 }
 
+function lookupValue(obj, dottedKey) {
+  const parts = dottedKey.split(".");
+  let current = obj;
+  for (const part of parts) {
+    if (current == null || typeof current !== "object") return undefined;
+    current = current[part];
+  }
+  return typeof current === "string" ? current : undefined;
+}
+
+function extractPlaceholders(str) {
+  const set = new Set();
+  const re = /\{(\w+)\}/g;
+  let m;
+  while ((m = re.exec(str)) !== null) set.add(m[1]);
+  return set;
+}
+
 const enKeys = new Set(flattenKeys(en));
 const zhKeys = new Set(flattenKeys(zh));
 
@@ -54,17 +72,46 @@ describe("locale key parity", () => {
     checkValues(en);
     checkValues(zh);
   });
+
+  it("en and zh have identical {placeholder} sets for every shared key", () => {
+    const enFlat = flattenKeys(en).reduce((acc, key) => {
+      const val = lookupValue(en, key);
+      if (typeof val === "string") acc.set(key, extractPlaceholders(val));
+      return acc;
+    }, new Map());
+    const mismatches = [];
+    for (const [key, enPlaceholders] of enFlat) {
+      const zhVal = lookupValue(zh, key);
+      if (typeof zhVal !== "string") continue;
+      const zhPlaceholders = extractPlaceholders(zhVal);
+      if (
+        enPlaceholders.size !== zhPlaceholders.size ||
+        [...enPlaceholders].some((p) => !zhPlaceholders.has(p))
+      ) {
+        mismatches.push(
+          `${key}: en={${[...enPlaceholders].join(",")}} zh={${[...zhPlaceholders].join(",")}}`,
+        );
+      }
+    }
+    expect(mismatches, `Placeholder mismatches:\n${mismatches.join("\n")}`).toEqual([]);
+  });
 });
 
 // ── HTML key references ───────────────────────────────────────────────
 
 describe("HTML data-i18n key references", () => {
-  const htmlFiles = ["index.html", "bootstrap.html"];
+  const htmlFiles = ["index.html", "bootstrap.html", "cost.html"];
 
   for (const file of htmlFiles) {
     it(`${file} references only keys that exist in en.json`, () => {
       const content = readFileSync(resolve(publicDir, file), "utf-8");
-      const attrs = ["data-i18n", "data-i18n-ph", "data-i18n-title", "data-i18n-aria-label"];
+      const attrs = [
+        "data-i18n",
+        "data-i18n-ph",
+        "data-i18n-title",
+        "data-i18n-aria-label",
+        "data-i18n-alt",
+      ];
       const referenced = new Set();
 
       for (const attr of attrs) {
@@ -90,6 +137,7 @@ describe("JS t() literal key references", () => {
   // Phase 1 JS files that should use t()
   const jsFiles = [
     "app.js",
+    "app-context-viz.js",
     "message-renderer.js",
     "markdown.js",
     "tool-card.js",
@@ -105,6 +153,8 @@ describe("JS t() literal key references", () => {
     "package-install-status.js",
     "workspace-actions.js",
     "onboarding-state.js",
+    "cost.js",
+    "cost-infobar.js",
   ];
 
   it("every literal t(\"...\") / t('...') key exists in en.json", () => {

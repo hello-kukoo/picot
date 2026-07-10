@@ -1,3 +1,5 @@
+import { t } from "./i18n.js";
+
 export function setupContextViz({
   tokenUsageEl,
   contextViz,
@@ -27,9 +29,9 @@ export function setupContextViz({
     const free = Math.max(0, total - totalUsed);
 
     const segments = [
-      { key: "cache", label: "Cached", tokens: cacheRead, color: "cache" },
-      { key: "messages", label: "Input", tokens: freshInput, color: "messages" },
-      { key: "free", label: "Available", tokens: free, color: "free" },
+      { key: "cache", label: t("context.cached"), tokens: cacheRead, color: "cache" },
+      { key: "messages", label: t("context.input"), tokens: freshInput, color: "messages" },
+      { key: "free", label: t("context.available"), tokens: free, color: "free" },
     ];
 
     contextBar.innerHTML = "";
@@ -39,7 +41,7 @@ export function setupContextViz({
       const el = document.createElement("div");
       el.className = `context-bar-segment ${seg.color}`;
       el.style.width = `${pct}%`;
-      el.title = `${seg.label}: ${formatTokens(seg.tokens)}`;
+      el.title = t("context.tooltip", { label: seg.label, tokens: formatTokens(seg.tokens) });
       contextBar.appendChild(el);
     }
 
@@ -58,7 +60,7 @@ export function setupContextViz({
     }
 
     const pct = Math.round((totalUsed / total) * 100);
-    contextVizUsed.textContent = `${pct}% used`;
+    contextVizUsed.textContent = t("context.used", { pct });
     contextVizTotal.textContent = `${formatTokens(totalUsed)} / ${formatTokens(total)}`;
   }
 
@@ -78,4 +80,12 @@ export function setupContextViz({
       contextViz.classList.add("hidden");
     }
   });
+
+  _updateFn = updateContextViz;
+}
+
+let _updateFn = null;
+
+export function repaintContextViz() {
+  _updateFn?.();
 }

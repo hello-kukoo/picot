@@ -194,11 +194,11 @@ export class SessionSidebar {
       const overlay = document.createElement("div");
       overlay.className = "sidebar-confirm-overlay";
       overlay.innerHTML = `
-        <div class="sidebar-confirm-dialog" role="dialog" aria-modal="true" aria-label="Delete archived sessions">
+        <div class="sidebar-confirm-dialog" role="dialog" aria-modal="true" aria-label="${this.escapeHtml(t("sidebar.deleteArchivedAriaLabel"))}">
           <div class="sidebar-confirm-message">${this.escapeHtml(message)}</div>
           <div class="sidebar-confirm-actions">
-            <button type="button" class="sidebar-confirm-no">Cancel</button>
-            <button type="button" class="sidebar-confirm-yes">Delete</button>
+            <button type="button" class="sidebar-confirm-no">${this.escapeHtml(t("actions.cancel"))}</button>
+            <button type="button" class="sidebar-confirm-yes">${this.escapeHtml(t("actions.delete"))}</button>
           </div>
         </div>
       `;
@@ -322,7 +322,7 @@ export class SessionSidebar {
 
     const header = document.createElement("div");
     header.className = "project-header search-results-header";
-    header.innerHTML = `<span>🔍</span> <span>Message matches</span> <span class="project-count">${this._searchResults.length}</span>`;
+    header.innerHTML = `<span>🔍</span> <span>${this.escapeHtml(t("sidebar.messageMatches"))}</span> <span class="project-count">${this._searchResults.length}</span>`;
     group.appendChild(header);
 
     const sessionsDiv = document.createElement("div");
@@ -347,7 +347,7 @@ export class SessionSidebar {
           <div class="session-title" title="${this.escapeHtml(title)}">${this.escapeHtml(title)}</div>
         </div>
         <div class="search-snippet">${this.highlightMatch(snippet, this.searchQuery)}</div>
-        <div class="session-meta">${time}${matchCount > 1 ? ` · ${matchCount} matches` : ""}</div>
+        <div class="session-meta">${time}${matchCount > 1 ? ` · ${this.escapeHtml(t("sidebar.matchCount", { count: matchCount }))}` : ""}</div>
       `;
 
       // Find the matching project/session to pass to onSessionSelect

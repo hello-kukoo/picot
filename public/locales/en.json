@@ -15,7 +15,37 @@
     "openWorkspace": "Open workspace",
     "openWorkspaceInApp": "Open workspace in app",
     "chooseApp": "Choose app to open workspace",
-    "files": "Files"
+    "files": "Files",
+    "openWorkspaceInNamedApp": "Open {path} in {app}",
+    "openWorkspaceInAppAria": "Open workspace in {app}",
+    "openInApp": "Open in {app}"
+  },
+  "git": {
+    "currentBranch": "Current git branch",
+    "branchName": "Branch: {name}"
+  },
+  "usage": {
+    "contextTokens": "Context: {used}k / {limit}k tokens",
+    "sessionCostTitle": "Session cost",
+    "contextTitle": "Context usage",
+    "costSub": "{amount} (sub)"
+  },
+  "context": {
+    "cached": "Cached",
+    "input": "Input",
+    "available": "Available",
+    "used": "{pct}% used",
+    "tooltip": "{label}: {tokens}"
+  },
+  "models": {
+    "searchPlaceholder": "Search models…",
+    "emptyTitle": "No models available",
+    "emptyHelp": "No API keys configured. Set a key in Settings → Configuration.",
+    "openSettings": "Open Settings"
+  },
+  "queue": {
+    "queued": "Queued",
+    "cancelTitle": "Cancel"
   },
   "input": {
     "typeMessage": "Type a message...",
@@ -23,7 +53,20 @@
     "commands": "Commands",
     "switchModel": "Switch model",
     "send": "Send message",
-    "abort": "Abort (Esc)"
+    "abort": "Abort (Esc)",
+    "messagePlaceholder": "Message...",
+    "mirrorReadOnly": "Viewing historical session (read-only)",
+    "waitingForSession": "Waiting for current session to finish…",
+    "compact": "Compact",
+    "compactDesc": "Compact context to save tokens",
+    "exportHtml": "Export HTML",
+    "exportHtmlDesc": "Export session as HTML file",
+    "sessionStats": "Session Stats",
+    "sessionStatsDesc": "Show session statistics",
+    "expandAllTools": "Expand All Tools",
+    "expandAllToolsDesc": "Expand all tool cards",
+    "collapseAllTools": "Collapse All Tools",
+    "collapseAllToolsDesc": "Collapse all tool cards"
   },
   "messages": {
     "attachedImage": "Attached image",
@@ -92,7 +135,10 @@
     "uninstallFailed": "Uninstall failed",
     "installFailedNote": "This extension requires npm. Make sure npm is installed and available to Picot, then try again.",
     "uninstallFailedNote": "Picot could not remove this extension package. Check the error details, then try again.",
-    "permissionDenied": "Permission denied in ~/.pi/agent/npm (check owner/permissions)."
+    "permissionDenied": "Permission denied in ~/.pi/agent/npm (check owner/permissions).",
+    "browseCountZero": "0 of {total}",
+    "browseCountRange": "{start}–{end} of {total}",
+    "downloadsPerMonth": "{count}/mo"
   },
   "actions": {
     "retry": "Retry",
@@ -105,7 +151,10 @@
     "submit": "Submit",
     "update": "Update",
     "setKey": "Set key",
-    "insertExample": "Insert example"
+    "insertExample": "Insert example",
+    "remove": "Remove",
+    "delete": "Delete",
+    "openLink": "Open Link"
   },
   "status": {
     "saving": "Saving...",
@@ -123,7 +172,23 @@
     "connectedLAN": "Connected • LAN",
     "connectedTS": "Connected • TS",
     "loading": "Loading...",
-    "unavailableVersion": "Unavailable (empty version)"
+    "unavailableVersion": "Unavailable (empty version)",
+    "compacting": "Compacting...",
+    "exporting": "Exporting...",
+    "loadingStats": "Loading stats...",
+    "exported": "Exported: {path}",
+    "switchingModel": "Switching to {model}...",
+    "savingKey": "Saving {provider} key...",
+    "removingKey": "Removing {provider} key...",
+    "unavailableReason": "Unavailable ({reason})",
+    "startingNewSession": "Starting new session…",
+    "loadingSession": "Loading session…",
+    "sessionStatsTitle": "📊 Session Stats",
+    "sessionStatsMessages": "Messages: {total} ({user} user, {assistant} assistant)",
+    "sessionStatsToolCalls": "Tool calls: {count}",
+    "sessionStatsContext": "Context: ~{tokens}k tokens",
+    "compacted": "✓ Context compacted",
+    "compactedWithSummary": "✓ Context compacted — {summary}"
   },
   "errors": {
     "newSessionOnlyNative": "New session is only supported with a native host.",
@@ -147,7 +212,25 @@
     "failedToSaveConfig": "Failed to save config",
     "failedToLoadModels": "Failed to load models.json",
     "failedToSaveModels": "Failed to save models.json",
-    "unknownError": "unknown error"
+    "unknownError": "unknown error",
+    "connectionLost": "Connection lost. Please refresh the page.",
+    "commandUndeliverableNoRoute": "no running session to receive it",
+    "commandUndeliverableUnreachable": "the session process is no longer reachable",
+    "messageNotDelivered": "Message not delivered ({detail}). The session may have closed — start a new chat or try again.",
+    "extensionError": "Extension error: {error}",
+    "failedToSwitchSession": "Failed to switch session: {error}",
+    "failedToSwitchSessionShort": "Failed to switch session",
+    "failedToLoadSession": "Failed to load session: {error}",
+    "failedToAttachImage": "Failed to attach image: {error}",
+    "failedToOpenInspector": "Failed to open inspector: {error}",
+    "modelRequestFailed": "Model request failed",
+    "modelRequestFailedDetail": "[{provider}/{model}] {message}",
+    "newSessionCancelled": "New session was cancelled",
+    "mobileBrokerRequired": "Starting a new chat in another project requires the desktop broker. Reopen the mobile QR code.",
+    "abortedByUser": "Aborted by user",
+    "invalidJson": "Invalid JSON: {detail}",
+    "modelsMustBeObject": "models.json must be a JSON object.",
+    "providersMustBeObject": "'providers' must be an object."
   },
   "onboarding": {
     "openProject": "Open a project to start chatting.",
@@ -185,7 +268,10 @@
     "hoursAgo": "{hours}h ago",
     "yesterday": "Yesterday",
     "startingSession": "Starting session…",
-    "retry": "Retry"
+    "retry": "Retry",
+    "messageMatches": "Message matches",
+    "matchCount": "{count} matches",
+    "deleteArchivedAriaLabel": "Delete archived sessions"
   },
   "updater": {
     "update": "Update",
@@ -267,6 +353,9 @@
     "off": "off",
     "thinkingTitle": "Thinking effort controls reasoning depth. Click to cycle.",
     "thinkingAriaLabel": "Thinking effort: {level}. Click to cycle reasoning depth.",
+    "agentConfiguration": "Agent Configuration",
+    "thinkingCycleTitle": "Click to cycle: off, minimal, low, medium, high",
+    "openSettings": "Open Settings",
     "language": {
       "title": "Language",
       "description": "Choose the interface language. System Default follows your operating system.",
@@ -287,7 +376,73 @@
       "docsLink": "models.json docs",
       "helpPost2": "for the full schema. Changes are picked up immediately — no restart needed.",
       "replaceConfirm": "Replace current content with the Ollama example?"
+    },
+    "apiKeys": {
+      "noProviders": "No providers known.",
+      "editorTitle": "{provider} API key",
+      "pastePlaceholder": "Paste API key…",
+      "removeConfirm": "Remove stored API key for {provider}?",
+      "fromEnvironment": "From environment ({label})",
+      "fromEnvironmentFallback": "From environment (env var)"
     }
+  },
+  "lanQr": {
+    "modalAriaLabel": "Mobile QR code",
+    "title": "Open on Mobile",
+    "closeAriaLabel": "Close",
+    "generating": "Generating QR code…",
+    "qrAlt": "QR code for mobile access",
+    "hint": "Scan with your phone to open Picot on the same network",
+    "openLink": "Open Link"
+  },
+  "cost": {
+    "documentTitle": "Picot - Usage",
+    "quickRange": "Quick range",
+    "noData": "No data",
+    "noDataInSelectedRange": "No data in selected range.",
+    "overview": "Overview",
+    "models": "Models",
+    "toolCost": "Tool Cost",
+    "projects": "Projects",
+    "sessions": "Sessions",
+    "recentSessionsInRange": "Recent sessions in range",
+    "stats": {
+      "totalCost": "Total cost",
+      "sessions": "Sessions",
+      "totalTokens": "Total tokens",
+      "activeDays": "Active days",
+      "currentStreak": "Current streak",
+      "longestStreak": "Longest streak",
+      "input": "Input",
+      "output": "Output",
+      "cacheRead": "Cache Read",
+      "cacheWrite": "Cache Write",
+      "toolCalls": "Tool Calls",
+      "messages": "Messages"
+    },
+    "table": {
+      "session": "Session",
+      "model": "Model",
+      "tokens": "Tokens",
+      "tools": "Tools",
+      "cost": "Cost",
+      "date": "Date"
+    },
+    "modelTokens": "{input} in · {output} out",
+    "projectSessions": "{count} sessions",
+    "toolSessions": "{count} sessions",
+    "trackedTools": "{count} tracked",
+    "noToolUsage": "No tool usage in selected range.",
+    "noRecentSessions": "No recent sessions in selected range.",
+    "overviewNote": "You've used ~{ratio}x more tokens than War and Peace.",
+    "activityCellTitle": "{date} · {tokens} tokens",
+    "chartTooltipTokens": "{label}: {tokens} tokens",
+    "chartTooltipCost": "{label}: {cost}",
+    "chartUnavailable": "Chart unavailable in this environment.",
+    "unknown": "unknown",
+    "notAvailable": "N/A",
+    "untitled": "Untitled",
+    "daysShort": "{count}d"
   },
   "misc": {
     "new": "New",
