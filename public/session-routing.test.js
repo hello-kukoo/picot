@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { findPortForSession, getWorkspacePathForPort } from "./session-routing.js";
+import {
+  findPortForSession,
+  getWorkspacePathForPort,
+  isForegroundMirrorSync,
+} from "./session-routing.js";
 
 describe("session routing helpers", () => {
   const instances = [
@@ -14,4 +18,11 @@ describe("session routing helpers", () => {
   test("resolves workspace path from the active pi process port", () => {
     expect(getWorkspacePathForPort(instances, 47822)).toBe("/tmp/b");
   });
+});
+
+test("recognizes only a different numeric source port as a background mirror sync", () => {
+  expect(isForegroundMirrorSync(3001, 3001)).toBe(true);
+  expect(isForegroundMirrorSync(3002, 3001)).toBe(false);
+  expect(isForegroundMirrorSync(null, 3001)).toBe(true);
+  expect(isForegroundMirrorSync(3002, null)).toBe(true);
 });

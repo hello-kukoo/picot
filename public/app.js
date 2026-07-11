@@ -24,7 +24,11 @@ import { MessageRenderer } from "./message-renderer.js";
 import { resolveNewSessionLiveFile } from "./new-session-refresh.js";
 import { getOnboardingState } from "./onboarding-state.js";
 import { renderPackageInstallFailure } from "./package-install-status.js";
-import { findPortForSession, getWorkspacePathForPort } from "./session-routing.js";
+import {
+  findPortForSession,
+  getWorkspacePathForPort,
+  isForegroundMirrorSync,
+} from "./session-routing.js";
 import { SessionSidebar } from "./session-sidebar.js";
 import {
   clearSettingsSaveMessage,
@@ -2439,7 +2443,7 @@ function handleMirrorSync(data) {
   // process's session/port, causing the user's next message to be sent into
   // that previous session instead of the one they're now viewing.
   const syncPort = typeof data.port === "number" ? data.port : null;
-  if (syncPort !== null && typeof foregroundPort === "number" && syncPort !== foregroundPort) {
+  if (!isForegroundMirrorSync(syncPort, foregroundPort)) {
     logSessionRoute("mirrorSync:ignored-background", {
       syncPort,
       foregroundPort,
@@ -2459,6 +2463,7 @@ function handleMirrorSync(data) {
 
   // Track the active session
   mirrorActiveSessionFile = data.sessionFile || null;
+  if (data.sessionFile) sidebar.setActive(data.sessionFile);
   if (data.sessionFile) portSessionMap.set(foregroundPort, data.sessionFile);
   const syncWorkspacePath = workspacePathFromId(data.workspaceId);
   if (syncWorkspacePath) {

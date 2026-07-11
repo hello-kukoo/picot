@@ -11,3 +11,11 @@ export function getWorkspacePathForPort(instances, port) {
     : null;
   return match?.cwd || "";
 }
+
+export function isForegroundMirrorSync(syncPort, foregroundPort) {
+  return !(
+    typeof syncPort === "number" &&
+    typeof foregroundPort === "number" &&
+    syncPort !== foregroundPort
+  );
+}
