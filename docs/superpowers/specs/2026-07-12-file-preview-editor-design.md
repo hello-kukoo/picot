@@ -1,7 +1,7 @@
 # Picot File Preview and Editor Design
 
 **Date:** 2026-07-12  
-**Status:** Approved for implementation planning  
+**Status:** Revised after technical review; awaiting confirmation  
 **Scope:** Desktop file preview/editor panel integrated with the existing File tree
 
 ## 1. Goal
@@ -29,7 +29,7 @@ The first implementation supports text, Markdown, images, PDFs, unknown text, an
 - Tabs and panel preferences persist per workspace root.
 - The File tree remains an independent right sidebar.
 - The implementation uses vanilla JavaScript and CodeMirror, not React.
-- The implementation uses a self-contained frontend bundle built with esbuild, not a CDN.
+- The application remains a native-module frontend. Only the CodeMirror and PDF.js dependency graphs are bundled as same-origin ESM vendor files with esbuild.
 
 ## 3. Layout
 
@@ -72,7 +72,6 @@ Owns tab identity, active-tab state, workspace-root isolation, persistence, and 
 
 The model reserves multiple content kinds:
 
-```js
 {
   workspaceRoot: "/workspace/project",
   tabs: [
@@ -80,14 +79,17 @@ The model reserves multiple content kinds:
       id: "file:/workspace/project/README.md",
       kind: "file",
       filePath: "/workspace/project/README.md",
-      mode: "preview"
+      mode: "preview",
+      content: null,
+      originalContent: null,
+      dirty: false
     }
   ],
   activeTabId: "file:/workspace/project/README.md"
 }
 ```
 
-Future Git diff tabs can use `kind: "diff"` without changing the tab bar or panel layout.
+Future Git diff tabs can use `kind: "diff"` without changing the tab bar or panel layout. `content` and `originalContent` are in-memory fields only; they are updated when a renderer is detached and restored when it is mounted again. They are never written to localStorage.
 
 ### 4.3 `public/code-editor.js`
 
@@ -104,6 +106,7 @@ Owns a single CodeMirror instance and its lifecycle:
 - destruction.
 
 Only the active tab needs a mounted CodeMirror instance. This limits memory use when many tabs are open.
+When the active renderer is detached, the panel reads the current CodeMirror document with `view.state.doc.toString()` before calling `destroy()`. It stores that value in the tab's in-memory `content` field, preserving dirty edits across tab switches. Reopening the tab recreates CodeMirror from that value. Closing or discarding a tab releases the in-memory content.
 
 ### 4.4 `public/file-preview-renderers.js`
 
@@ -141,19 +144,46 @@ renderer.destroy();
 
 ### 4.5 `public/file-preview-markdown.js`
 
-Wraps the existing `renderMarkdown()` export from `public/markdown.js` for file preview use. The wrapper sanitizes rendered output and restricts link/image protocols before insertion into the DOM.
+Wraps the existing `renderMarkdown()` export from `public/markdown.js` for file preview use. The wrapper uses DOM APIs, not a new sanitization dependency: it parses the generated HTML in a detached `<template>`, keeps an explicit element allowlist, removes all event-handler attributes, allows only safe `http:`, `https:`, `mailto:`, and fragment link protocols, allows only `http:`, `https:`, and `data:image/*` image protocols, and permits only `text-align` values (`left`, `center`, `right`) in table-cell styles. It installs copy-button event delegation after sanitization.
 
 ### 4.6 `public/file-browser.js`
 
 Keeps directory listing, navigation, native opening, and drag-to-chat behavior. It gains an `onFileSelect` callback but does not create CodeMirror or manipulate the preview panel directly.
 
-## 5. Frontend bundling
+## 5. Frontend dependency bundling
 
-Picot currently loads `public/app.js` as a browser module, but browser modules cannot resolve bare npm package imports such as `@codemirror/state`. The implementation therefore adds a frontend esbuild entry/build step.
+Picot continues to load `public/app.js` and feature modules as native browser ES modules. The application is not converted into one full frontend bundle, so edits to ordinary `public/*.js` files remain directly loadable by the existing development server.
 
-Source modules remain individually testable. The build generates a self-contained browser bundle that includes CodeMirror and its language/search dependencies. The packaged application loads that generated bundle. The dev and release paths must build the frontend bundle before the Tauri WebView loads it.
+Two source entries produce same-origin ESM vendor files:
 
-The initial dependency set is:
+```text
+public/codemirror-vendor-entry.js
+  → public/vendor/codemirror.js
+
+public/pdf-vendor-entry.js
+  → public/vendor/pdf.js
+  → public/vendor/pdf.worker.js
+```
+
+`public/code-editor.js` imports the named CodeMirror exports from `public/vendor/codemirror.js`. `public/file-pdf-preview.js` imports the PDF.js facade from `public/vendor/pdf.js` and configures its worker URL to the same-origin `public/vendor/pdf.worker.js` asset. `app.js`, `file-preview-panel.js`, and other application modules remain native ES modules.
+
+The build script uses esbuild with `bundle: true`, `format: "esm"`, and `platform: "browser"` only for these dependency entries. It writes all generated files below `public/vendor/`, which the embedded server serves from the same origin.
+
+Development behavior:
+
+- `bun run dev` performs one vendor build before `tauri dev` starts;
+- ordinary application-module edits remain unbundled and are loaded by the existing WebView reload flow;
+- `bun run build:frontend:watch` runs esbuild watch mode for changes to the vendor entry files or dependency imports;
+- the vendor watch process is needed only when changing CodeMirror/PDF.js entry configuration, not for normal panel, renderer, or app edits.
+
+Release behavior:
+
+- `prebuild` and the Tauri `beforeBuildCommand` run the vendor build;
+- `public/vendor/` is inside the existing `frontendDist` tree and is served by the embedded server;
+- the generated ESM files comply with the existing Tauri CSP because scripts come from the same localhost origin;
+- CodeMirror's runtime `<style>` injection is covered by the existing `style-src 'self' 'unsafe-inline'` policy.
+
+The dependency set is:
 
 ```text
 @codemirror/state
@@ -169,6 +199,7 @@ The initial dependency set is:
 @codemirror/lang-html
 @codemirror/lang-css
 @codemirror/legacy-modes
+pdfjs-dist
 ```
 
 R mode must not be assumed to exist. `.r` files remain openable, editable, and line-numbered; when no dedicated R mode is available, the language resolver falls back to plain text.
@@ -195,7 +226,7 @@ Reads a text file and returns:
 
 ### 6.2 `GET /api/files/raw`
 
-Serves approved image and PDF content with a safe MIME type. It supports `<img>`, `<iframe>`, and `<embed>` preview. Arbitrary HTML, JavaScript, and unknown binary content must not be served as executable resources.
+Serves approved image and PDF content with a safe MIME type. Images use the raw URL directly. PDF preview uses PDF.js and the raw URL as its document source. Arbitrary HTML, JavaScript, and unknown binary content must not be served as executable resources.
 
 ### 6.3 `PUT /api/files/content`
 
@@ -211,15 +242,21 @@ Accepts:
 
 The response includes the new file size and modification time. A modification-time mismatch returns HTTP 409 and leaves the file unchanged.
 
-### 6.4 Path safety
+### 6.4 Workspace root and path safety
 
-All new endpoints resolve and canonicalize the requested path, then verify that it remains inside the current pi instance's workspace root. The implementation rejects:
+The active workspace root is the canonical path of `latestCtx?.cwd || process.cwd()`. `latestCtx` is republished on every `session_start`, so a headless session or session switch uses the current session context. The process's instance registration also records `ctx.cwd || process.cwd()` for workspace routing.
+
+All new content/raw endpoints resolve and canonicalize the requested path, then verify that it remains inside this active workspace root. The existing `/api/files` directory endpoint adopts the same root check so directory navigation and file preview have one boundary. `FileBrowser.getParentPath()` stops at `workspaceRoot`, and the server rejects a directory request above that root.
+
+The implementation rejects:
 
 - `..` traversal;
 - symlink escapes;
 - directories passed as files;
 - writes to missing or non-regular files;
 - paths outside the active workspace.
+
+If a stale client requests a path outside the current session root, the server returns a structured `outsideWorkspace` error. The panel shows a localized “File is outside the active workspace” state with Open in desktop still available when the path came from an existing tree entry.
 
 ## 7. Renderer behavior
 
@@ -241,7 +278,7 @@ Images use an `<img>` renderer backed by `/api/files/raw`. Images are read-only.
 
 ### 7.4 PDF
 
-PDFs use a native WebView `<iframe>` or `<embed>` backed by `/api/files/raw`. PDFs are read-only. If native Tauri WebView PDF support proves unreliable, a PDF.js renderer can replace this implementation behind the same renderer interface.
+PDFs use PDF.js as the initial renderer. The PDF.js worker is bundled as a same-origin ESM asset, and pages render into canvases inside a scrollable tab container. The renderer is read-only and supports Open in desktop, Copy file path, Enlarge/Collapse, and Close tab. Native `<iframe>`/`<embed>` is not the primary path because nested PDF viewer support is inconsistent in WKWebView. A platform-specific native viewer can be considered later without changing the renderer interface.
 
 ### 7.5 Binary and unknown files
 
@@ -288,11 +325,13 @@ Copy file path
 Save file
 ```
 
-Auto-save defaults to enabled. It saves about 1.5 seconds after typing stops. Manual Save cancels the pending timer and writes immediately.
+Auto-save defaults to enabled. It saves about 1.5 seconds after typing stops. Manual Save cancels the pending timer and writes immediately. If auto-save receives HTTP 409, it pauses further auto-save for that tab, keeps the tab dirty, marks the tab as conflicted, and does not open a modal dialog. The conflict action appears in the tab state and toolbar. The next user-initiated tab switch, close, reload, or panel close opens Reload/Overwrite/Cancel. An explicit `Save file` action opens the conflict choice immediately.
 
 ## 9. Dirty state and conflicts
 
-A tab becomes dirty when its editor content differs from the last loaded or saved content. The following actions require Save/Discard/Cancel when a tab is dirty:
+A tab becomes dirty when its editor content differs from the last loaded or saved content. Dirty content is preserved in memory when CodeMirror is detached and is released only after save, discard, or tab close.
+
+The following actions require Save/Discard/Cancel when a tab is dirty:
 
 - switching tabs;
 - closing a tab;
@@ -301,7 +340,7 @@ A tab becomes dirty when its editor content differs from the last loaded or save
 - reloading a file;
 - responding to an external modification conflict.
 
-The server returns the loaded `mtimeMs`. Save includes `expectedMtimeMs`. A 409 response enters conflict state and offers Reload, Overwrite, or Cancel.
+The server returns the loaded `mtimeMs`. Save includes `expectedMtimeMs`. A 409 response from an explicit save enters conflict state and immediately offers Reload, Overwrite, or Cancel. A 409 from auto-save enters conflict state without a modal dialog, pauses auto-save, and defers the choice until a user-initiated action.
 
 ## 10. Persistence
 
@@ -315,6 +354,8 @@ Persist per workspace root:
 - line-wrap preference;
 - auto-save preference.
 
+Picot's embedded server gives each workspace instance its own localhost port, so per-port localStorage naturally isolates persisted tabs by workspace. Cross-workspace global preferences continue to use the existing project convention when needed.
+
 Do not persist unsaved full file content, CodeMirror instances, transient selections, search state, loading state, or errors. Dirty content remains in memory until the user saves or discards it.
 
 ## 11. Localization and accessibility
@@ -325,17 +366,19 @@ Every icon button has a localized `title` and `aria-label`. SVG icons are `aria-
 
 ## 12. Testing and verification
 
-### State tests
-
 Add `public/file-tab-state.test.js` and `public/file-preview-panel.test.js` covering:
 
 - duplicate prevention;
 - active-tab selection;
 - neighboring-tab selection after close;
 - dirty Save/Discard/Cancel behavior;
+- dirty content preservation when a CodeMirror renderer is detached and remounted;
 - open/close/enlarge/collapse;
 - workspace isolation;
-- localStorage restoration and invalid-data cleanup.
+- localStorage restoration and invalid-data cleanup;
+- auto-save debounce timing;
+- auto-save 409 conflict state, pause, and deferred resolution;
+- explicit-save 409 immediate conflict flow.
 
 ### Renderer tests
 
@@ -360,8 +403,6 @@ Extend `public/file-browser.test.js` to cover:
 - unchanged directory navigation;
 - unchanged drag-to-chat behavior.
 
-### Embedded server tests
-
 Add `extensions/embedded-server-files.test.ts` covering:
 
 - text read;
@@ -373,7 +414,9 @@ Add `extensions/embedded-server-files.test.ts` covering:
 - binary detection;
 - missing-file errors;
 - 409 modification conflicts;
-- size limits.
+- size limits;
+- workspace-root resolution from `ctx.cwd` and `process.cwd()`;
+- `/api/files` rejection of paths above the workspace root.
 
 ### Required checks after implementation
 
@@ -384,10 +427,11 @@ bun run vitest run public/file-preview-panel.test.js
 bun run vitest run public/file-preview-renderers.test.js
 bun run vitest run public/file-browser.test.js
 bun run vitest run extensions/embedded-server-files.test.ts
+bun run build:frontend
 bun run build:extensions
 ```
 
-The frontend bundle build must also be exercised by a focused smoke test.
+The vendor build and same-origin CSP loading must also be exercised by a focused frontend smoke test.
 
 ## 13. Acceptance criteria
 
