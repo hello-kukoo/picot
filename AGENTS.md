@@ -113,6 +113,10 @@ The frontend (`public/`) is vanilla JS with **no framework**. Keep it modular:
 - **No shared-state side-effects at import time.** Modules should export functions/classes; side-effects that mutate global state should be triggered explicitly by the caller, not at module load.
 - **Naming.** Use kebab-case filenames that match the single responsibility (`session-sidebar.js`, `file-browser.js`, `workspace-actions.js`).
 
+## Custom drag interactions
+
+Before modifying custom mouse/pointer drag behavior, read [`docs/custom-drag-interactions.md`](docs/custom-drag-interactions.md). It defines the WebKit native-drag exclusion rule, lifecycle cleanup requirements, cursor feedback, and desktop WebView acceptance checks.
+
 ## Localization (i18n)
 
 Picot ships bilingual UI (English + Chinese, first release). All user-visible text MUST go through `t()` from `public/i18n.js`; do not hardcode English strings, and do not bypass `t()` and write `innerHTML` directly. Full design lives in [`ARCHITECTURE.md`](ARCHITECTURE.md) (§Internationalization) and the spec at [`docs/superpowers/specs/2026-07-08-i18n-design.md`](docs/superpowers/specs/2026-07-08-i18n-design.md).
@@ -152,7 +156,8 @@ Picot is a Tauri v2 app. The three main layers:
 - `state.js` — shared app state
 - `tauri-bridge.js` — wraps Tauri IPC (`window.tauriNative.*`)
 - `message-renderer.js`, `tool-card.js`, `markdown.js` — chat message rendering
-- `session-sidebar.js` — session history list
+- `session-sidebar.js` — session history list (includes the RECENT sessions section)
+- `recent-sessions.js` — RECENT sessions MRU cookie persistence (spec: [`docs/superpowers/specs/2026-07-11-recent-sessions-design.md`](docs/superpowers/specs/2026-07-11-recent-sessions-design.md))
 - `file-browser.js` — lazy-loaded file tree sidebar
 - `dialogs.js`, `workspace-actions.js` — modal dialogs and workspace actions
 - `themes.js` — theme switching (6 built-in themes)
