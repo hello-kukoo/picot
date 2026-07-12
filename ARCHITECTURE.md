@@ -36,6 +36,133 @@ Rust 宿主还承担第二个角色 —— **broker WebSocket**。它坐在 WebV
 
 ---
 
+## 进程模型：内嵌 server 与 pi 同进程
+
+理解 Picot 的一个关键点是：`extensions/embedded-server.ts` **不是一个独立的
+后端服务，而是被 pi 当作扩展加载进自己进程里的一个模块**。它起的 HTTP+WS
+服务器，就是 pi 进程本身在监听端口。这个设计决策贯穿了“在哪写代码”的所有
+判断，值得单独解释。
+
+### pi 扩展机制（`--extension`）
+
+`pi` 支持加载扩展：`--extension <某个 .mjs 文件>`。一个扩展就是一个 ES
+模块，约定 `export default` 一个工厂函数。pi 启动时找到这个文件、执行它、
+调用这个工厂函数，**把代表 pi 自身的 `pi` 对象（`ExtensionAPI`）当作
+参数传进来**：
+
+```ts
+// extensions/embedded-server.ts（约 line 500）
+export default function (pi: ExtensionAPI) {
+  // pi 就是 pi 自己——可以直接订阅事件、调用方法
+  pi.on("session_start", async (_event, ctx) => { ... });
+  pi.on("turn_start",  ...);
+  ...
+}
+```
+
+拿到这个 `pi` 对象后，扩展就能：
+
+- **订阅 pi 的全部生命周期事件**：`session_start` / `turn_start` /
+  `message_start` / `turn_end` …（embedded-server.ts 约第 632 行起的
+  `pi.on(...)` 块）。
+- **直接调用 pi 的方法**：发消息、切模型、abort、设 thinking level …
+  全是同一进程内的函数调用，不走网络。
+
+### `--mode rpc` 的角色
+
+`pi` 有多种运行模式。正常模式在终端跑 TUI；**`--mode rpc` 让 pi 无头
+（headless）运行** —— 不开 TUI，全部能力通过 API 暴露出来等待调用。
+Rust 宿主正是用这两个参数一起派生 pi
+（`src-tauri/src/pi_manager.rs::spawn`，约第 514 行）：
+
+```rust
+let mut args = vec![
+    "--extension".to_string(), extension_path,    // ← 让 pi 加载我们的 server
+    "--mode".to_string(),      "rpc".to_string(), // ← 让 pi 无头运行
+];
+```
+
+`--mode rpc` 让 pi 变成引擎；`--extension` 让我们的 server 成为这个引擎
+的“脑袋”——由它来接收外部请求、驱动 pi。
+
+### “跑在进程内部” 的真实含义
+
+扩展**不是 pi 派生的子进程，而是被 pi `import` 进来的一个模块**。它和
+pi 共享：
+
+- 同一个 Node/Bun 运行时
+- 同一个事件循环（event loop）
+- 同一块内存、同一个文件系统句柄
+
+因此扩展在工厂函数里调用 `Bun.serve(...)` / `http.createServer(...)`
+起 HTTP+WS 服务器时，**这个服务器就是 pi 进程本身在监听那个端口**。
+
+```
+Rust spawn
+   │
+   ▼
+┌─────────────── 一个 pi 进程（一个 pid）──────────────┐
+│                                                     │
+│   pi 核心引擎 (mode=rpc，无头)                        │
+│        ▲                                            │
+│        │ 直接调用 pi 对象（同进程，零序列化）          │
+│        │                                            │
+│   embedded-server.mjs ← 被 --extension import 进来   │
+│        │                                            │
+│        │ Bun.serve() 监听 port 47821                │
+│        ▼                                            │
+│   HTTP GET /index.html   ──► 返回 public/ 静态文件    │
+│   HTTP GET /api/cost-... ──► 算好数据返回 JSON        │
+│   WS   /ws               ──► 双向聊天流              │
+└────────────────────┬────────────────────────────────┘
+                     │ TCP / localhost
+                     ▼
+                Tauri WebView（加载 public/，渲染 UI）
+```
+
+### 为什么是 in-process，而不是独立后端
+
+这是本设计最值得理解的地方。常规思路会写成**两个进程**：
+
+```
+WebView ──► 独立后端 server ──(pi 的 RPC 协议)──► pi 进程
+```
+
+中间的独立后端就得用 pi 的 stdin/stdout RPC 协议跟 pi 通信，每次发消息都
+要序列化、转发、再反序列化。
+
+Picot 选择把后端**直接塞进 pi 进程**：
+
+```
+WebView ──HTTP/WS──► (server 和 pi 同进程，直接拿 pi 对象调)
+```
+
+收益：
+
+- **零跳调用** —— server 拿到的是 `pi: ExtensionAPI` 的直接引用，
+  `pi.sendUserMessage()` 就是函数调用，没有跨进程序列化、没有 IPC 开销。
+- **少一个进程** —— 不用维护第二个进程的生命周期、端口、崩溃恢复。
+- **事件天然可达** —— pi 一产生 `message_start` 事件，扩展回调里直接
+  `broadcast()` 推给浏览器，无需中转。
+- **session 上下文共享** —— 扩展的 `ExtensionContext` 就是 pi 的活动
+  session 上下文，`/api/sessions`、`/api/cost-dashboard` 等端点直接访问
+  pi 的内存数据，不用再开一条导出通道。
+
+### 一个推论：HTTP/WS 命令与 stdin RPC 天然分离
+
+因为 server 在进程内，它能同时用**两种方式**跟 pi 打交道：
+
+- **直接函数调用**（同进程）——WebSocket 命令、session 事件订阅、REST
+  查询全部走这条。这是 server 的默认路径。
+- **stdin RPC**（`PiManager::send_rpc`）——只有那些**必须改变 broker
+  路由**的操作（`new_session` / `switch_session` / `stop_instance` /
+  `spawn_session_process`）才走这条，因为它们要被 Rust 宿主立即感知。
+
+这就是为什么下方 §RPC 架构的“三层通讯”里，路径 ③（stdin RPC）只用于路由
+变更，其他一切都在进程内完成。
+
+---
+
 ## 代码地图
 
 ### `src-tauri/` —— Rust 宿主
@@ -340,6 +467,13 @@ Tauri command handler（`new_session_core`、`switch_session_core`、
 这些是支撑整个系统的结构性规则。大多数是关于**绝不能**发生的事。
 
 - **Rust 不重新实现 pi。** Rust 只管进程和消息转发；session 逻辑归 pi。
+- **内嵌 server 与 pi 同进程（in-process）。** `embedded-server.ts` 通过
+  `--extension` 被 import 进 pi 进程，持有 `ExtensionAPI` 的直接引用，
+  起的 HTTP/WS 服务器就是 pi 进程本身在监听端口。**绝不要**把
+  embedded-server 改写成对 pi 开 stdin/stdout RPC 的独立后端进程——那
+  会失去零跳调用和事件直达，并被迫重新引入 RPC 转发层。新增“驱动 pi”
+  的逻辑应放进 extension 的 `handleCommand` / 事件订阅里，而不是新建
+  一个外部服务去调用 pi。
 - **内嵌 server 是进程作用域，不是 session 作用域。** `session_shutdown`
   不得关闭 HTTP/WS server。
 - **pi 用 stdin RPC 改路由，embedded extension 负责其他一切。** 改 broker
