@@ -140,7 +140,9 @@ export class FolderPicker {
     this._setStatus(t("folderPicker.loading"));
 
     try {
-      const url = dirPath ? `/api/files?path=${encodeURIComponent(dirPath)}` : "/api/files";
+      const url = dirPath
+        ? `/api/files?path=${encodeURIComponent(dirPath)}&scope=picker`
+        : "/api/files?scope=picker";
       const res = await fetch(url);
       const data = await res.json();
 

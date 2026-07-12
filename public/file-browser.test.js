@@ -100,7 +100,7 @@ describe("FileBrowser.load", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const url = fetchMock.mock.calls[0][0];
-    expect(url).toBe("/api/files?path=%2Ftmp%2Fproject");
+    expect(url).toBe("/api/files?path=%2Ftmp%2Fproject&scope=workspace");
     expect(browser.currentPath).toBe("/tmp/project");
     expect(pathEl.textContent).toBe("/tmp/project");
   });
@@ -123,7 +123,7 @@ describe("FileBrowser.load", () => {
     await browser.load();
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toBe("/api/files");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/files?scope=workspace");
     expect(browser.currentPath).toBe("/home/user/project");
   });
 

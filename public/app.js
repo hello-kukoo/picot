@@ -9,6 +9,7 @@ import { createAppUpdater } from "./app-updater.js";
 import { setupVoiceInput } from "./app-voice-input.js";
 import { DialogHandler } from "./dialogs.js";
 import { FileBrowser } from "./file-browser.js";
+import { FilePreviewPanel } from "./file-preview-panel.js";
 import { anchorHistoryToBottom } from "./history-scroll-anchor.js";
 import {
   getLanguagePreference,
@@ -389,8 +390,25 @@ const fileSidebarToggle = document.getElementById("file-sidebar-toggle");
 const fileSidebarClose = document.getElementById("file-sidebar-close");
 const fileSidebarUp = document.getElementById("file-sidebar-up");
 const fileList = document.getElementById("file-list");
-const fileSidebarPath = document.getElementById("file-sidebar-path");
-const fileBrowser = new FileBrowser(fileList, fileSidebarPath, messageInput);
+const fileBrowser = new FileBrowser(fileList, fileSidebarPath, messageInput, {
+  onFileSelect: (filePath, metadata) => {
+    void filePreviewPanel.openFile(filePath, metadata);
+  },
+});
+const filePreviewPanel = new FilePreviewPanel({
+  panel: document.getElementById("file-preview-panel"),
+  resizer: document.getElementById("file-preview-resizer"),
+  tabBar: document.getElementById("file-preview-tabs"),
+  content: document.getElementById("file-preview-content"),
+  mainContainer: document.querySelector(".main"),
+  onOpenDesktop: (filePath) => {
+    fetch("/api/open", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filePath }),
+    });
+  },
+});
 let fileBrowserWorkspacePath = null;
 
 function refreshFileBrowserForWorkspace(path = getCurrentWorkspacePath(), { force = false } = {}) {
@@ -398,6 +416,7 @@ function refreshFileBrowserForWorkspace(path = getCurrentWorkspacePath(), { forc
   if (!force && normalized === fileBrowserWorkspacePath) return;
   fileBrowserWorkspacePath = normalized;
   fileBrowser.workspaceRoot = normalized;
+  filePreviewPanel.setWorkspaceRoot(normalized);
 
   const isCollapsed = fileSidebar.classList.contains("collapsed");
   if (isCollapsed && !force) {

@@ -59,10 +59,11 @@ function formatSize(bytes) {
 }
 
 export class FileBrowser {
-  constructor(container, pathEl, messageInput) {
+  constructor(container, pathEl, messageInput, options = {}) {
     this.container = container;
     this.pathEl = pathEl;
     this.messageInput = messageInput;
+    this.onFileSelect = options.onFileSelect || null;
     this.currentPath = null;
     this.workspaceRoot = "";
     this.loadSequence = 0;
@@ -98,34 +99,46 @@ export class FileBrowser {
     const sequence = ++this.loadSequence;
     this.showFileStatus("loading");
 
-    try {
-      const url = dirPath ? `/api/files?path=${encodeURIComponent(dirPath)}` : "/api/files";
-      const res = await fetch(url);
-      const data = await res.json();
+    const url = dirPath
+      ? `/api/files?path=${encodeURIComponent(dirPath)}&scope=workspace`
+      : "/api/files?scope=workspace";
+    const res = await fetch(url);
+    const data = await res.json();
 
-      // A newer load() or setWorkspaceRoot() has superseded this request.
-      if (sequence !== this.loadSequence) return;
+    // A newer load() or setWorkspaceRoot() has superseded this request.
+    if (sequence !== this.loadSequence) return;
 
-      if (data.error) {
-        this.showFileStatus("error", data.error);
-        return;
-      }
-
-      this.currentPath = data.path;
-      this.pathEl.textContent = data.path;
-      this.pathEl.title = data.path;
-      this.render(data.items);
-    } catch (_err) {
-      if (sequence !== this.loadSequence) return;
-      this.showFileStatus("failed");
+    if (data.error) {
+      this.showFileStatus("error", data.error);
+      return;
     }
-  }
 
+    this.currentPath = data.path;
+    this.pathEl.textContent = data.path;
+    this.pathEl.title = data.path;
+    this.render(data.items);
+  }
+  catch(_err) {
+    if (sequence !== this.loadSequence) return;
+    this.showFileStatus("failed");
+  }
   getParentPath() {
     if (!this.currentPath) return null;
-    const parts = this.currentPath.split("/");
+    const parts = this.currentPath.split("/").filter(Boolean);
     parts.pop();
-    return parts.join("/") || "/";
+    const parent = parts.join("/") || "/";
+
+    // Clamp to workspace root: do not navigate above it.
+    if (this.workspaceRoot && parent !== this.workspaceRoot) {
+      // Normalize both paths for comparison.
+      const normalizedParent = parent.replace(/\/+$/, "");
+      const normalizedRoot = this.workspaceRoot.replace(/\/+$/, "");
+      // If parent is shorter than root, we're above workspace.
+      if (normalizedParent.length < normalizedRoot.length) {
+        return null;
+      }
+    }
+    return parent;
   }
 
   render(items) {
@@ -176,11 +189,6 @@ export class FileBrowser {
     this.container.appendChild(fragment);
   }
 
-  /**
-   * Locate the originating `.file-item` for a delegated event. Returns
-   * `null` when the event target is outside any row (e.g. clicks on empty
-   * space inside the file list).
-   */
   itemFromEvent(event) {
     return event.target?.closest?.(".file-item") || null;
   }
@@ -190,6 +198,14 @@ export class FileBrowser {
     if (!item) return;
     if (item.dataset.isDirectory === "true") {
       this.load(item.dataset.path);
+    } else {
+      // Single-click on a file → trigger onFileSelect callback for preview.
+      if (this.onFileSelect) {
+        this.onFileSelect(item.dataset.path, {
+          name: item.dataset.name,
+          path: item.dataset.path,
+        });
+      }
     }
   }
 
