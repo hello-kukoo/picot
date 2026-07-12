@@ -29,6 +29,7 @@ export function createCodeEditor({
   if (!container) throw new Error("container is required");
 
   const editableCompartment = new Compartment();
+  const readOnlyCompartment = new Compartment();
   const wrapCompartment = new Compartment();
   const languageCompartment = new Compartment();
 
@@ -40,7 +41,7 @@ export function createCodeEditor({
     search(),
     keymap.of(searchKeymap),
     editableCompartment.of(EditorView.editable.of(!readOnly)),
-    EditorState.readOnly.of(readOnly),
+    readOnlyCompartment.of(EditorState.readOnly.of(readOnly)),
     wrapCompartment.of(wrapLines ? EditorView.lineWrapping : []),
     languageCompartment.of(languageExt ? [languageExt] : []),
     EditorView.updateListener.of((update) => {
@@ -108,7 +109,10 @@ export function createCodeEditor({
 
     setReadOnly(newReadOnly) {
       view.dispatch({
-        effects: editableCompartment.reconfigure(EditorView.editable.of(!newReadOnly)),
+        effects: [
+          editableCompartment.reconfigure(EditorView.editable.of(!newReadOnly)),
+          readOnlyCompartment.reconfigure(EditorState.readOnly.of(newReadOnly)),
+        ],
       });
     },
 

@@ -216,6 +216,12 @@
       <div class="file-preview-tabs-bar" id="file-preview-tabs-bar">
         <div class="file-preview-tabs" id="file-preview-tabs"></div>
         <div class="file-preview-panel-controls">
+          <button type="button" class="icon-btn" id="file-preview-toolbar-toggle" title="Editor controls" data-i18n-title="files.preview.showControls" aria-label="Editor controls" data-i18n-aria-label="files.preview.showControls" aria-expanded="false" aria-controls="file-preview-toolbar">
+            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="8" cy="6" r="2" fill="currentColor"/><circle cx="16" cy="12" r="2" fill="currentColor"/><circle cx="10" cy="18" r="2" fill="currentColor"/></svg>
+          </button>
+          <button type="button" class="icon-btn" id="file-preview-open" title="Open in desktop app" data-i18n-title="files.preview.openDesktop" aria-label="Open in desktop app" data-i18n-aria-label="files.preview.openDesktop">
+            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg>
+          </button>
           <button class="icon-btn file-preview-enlarge-btn" id="file-preview-enlarge" title="Enlarge panel" data-i18n-title="files.preview.enlarge" aria-label="Enlarge panel" data-i18n-aria-label="files.preview.enlarge">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
           </button>
@@ -226,6 +232,20 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
+      </div>
+      <div class="file-preview-toolbar hidden" id="file-preview-toolbar" role="toolbar" aria-label="Editor controls" data-i18n-aria-label="files.preview.showControls">
+        <fieldset class="file-preview-mode" aria-label="View mode" data-i18n-aria-label="files.preview.mode">
+          <button type="button" id="file-preview-mode-preview" data-i18n="files.preview.preview">Preview</button>
+          <button type="button" id="file-preview-mode-edit" data-i18n="files.preview.edit">Edit</button>
+        </fieldset>
+        <button type="button" id="file-preview-save" title="Save" data-i18n-title="files.preview.save" aria-label="Save" data-i18n-aria-label="files.preview.save" data-i18n="files.preview.save">Save</button>
+        <button type="button" id="file-preview-reload" title="Reload from disk" data-i18n-title="files.preview.conflictReload" aria-label="Reload from disk" data-i18n-aria-label="files.preview.conflictReload" data-i18n="files.preview.conflictReload">Reload</button>
+        <button type="button" id="file-preview-search" title="Search" data-i18n-title="files.preview.find" aria-label="Search" data-i18n-aria-label="files.preview.find" data-i18n="files.preview.find">Search</button>
+        <button type="button" id="file-preview-go-to-line" title="Go to line" data-i18n-title="files.preview.goToLine" aria-label="Go to line" data-i18n-aria-label="files.preview.goToLine" data-i18n="files.preview.goToLine">Line</button>
+        <button type="button" id="file-preview-copy" title="Copy all" data-i18n-title="files.preview.copyContent" aria-label="Copy all" data-i18n-aria-label="files.preview.copyContent" data-i18n="files.preview.copyContent">Copy</button>
+        <label class="file-preview-toolbar-check"><input type="checkbox" id="file-preview-wrap"><span data-i18n="files.preview.lineWrap">Wrap</span></label>
+        <label class="file-preview-toolbar-check"><input type="checkbox" id="file-preview-autosave"><span data-i18n="files.preview.autoSave">Auto-save</span></label>
+        <span class="file-preview-status" id="file-preview-status" aria-live="polite"></span>
       </div>
       <div class="file-preview-content" id="file-preview-content"></div>
     </section>
@@ -478,6 +498,7 @@
         "@codemirror/lang-yaml": "./vendor/codemirror.js",
         "@codemirror/lang-css": "./vendor/codemirror.js",
         "@codemirror/lang-html": "./vendor/codemirror.js",
+        "@codemirror/legacy-modes/mode/r": "./vendor/codemirror.js",
         "@codemirror/legacy-modes/mode/shell": "./vendor/codemirror.js",
         "pdfjs-dist/legacy/build/pdf.mjs": "./vendor/pdf.js"
       }

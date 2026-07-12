@@ -7,6 +7,7 @@
  * Markdown parsing, or CodeMirror configuration.
  */
 
+import { classifyFilePath } from "./file-language.js";
 import { createFileRenderer } from "./file-preview-renderers.js";
 import { FileTabState } from "./file-tab-state.js";
 import { onLocaleChange, t } from "./i18n.js";
@@ -16,7 +17,18 @@ const DEFAULT_PANEL_RATIO = 0.42;
 const MIN_PANEL_WIDTH = 320;
 
 export class FilePreviewPanel {
-  constructor({ panel, resizer, tabBar, content, mainContainer, onOpenDesktop, onCopyText } = {}) {
+  constructor({
+    panel,
+    resizer,
+    tabBar,
+    content,
+    mainContainer,
+    onOpenDesktop,
+    onCopyText,
+    confirmDirty,
+    resolveConflict,
+    storage,
+  } = {}) {
     this.panel = panel;
     this.resizer = resizer;
     this.tabBar = tabBar;
@@ -24,10 +36,23 @@ export class FilePreviewPanel {
     this.mainContainer = mainContainer;
     this.onOpenDesktop = onOpenDesktop || (() => {});
     this.onCopyText = onCopyText || ((text) => navigator.clipboard?.writeText(text));
+    this.confirmDirty = confirmDirty || ((tabs, reason) => this._showDirtyDialog(tabs, reason));
+    this.resolveConflict = resolveConflict || ((tab) => this._showConflictDialog(tab));
 
-    this.state = new FileTabState();
+    if (storage !== undefined) {
+      this.storage = storage;
+    } else {
+      try {
+        this.storage = globalThis.window?.localStorage ?? null;
+      } catch {
+        this.storage = null;
+      }
+    }
+    this.state = new FileTabState({ storage: this.storage });
     this.currentRenderer = null;
-    this.loadSequence = 0;
+    this.workspaceRoot = "";
+    this.loadTokens = new Map();
+    this.savePromises = new Map();
     this.autoSaveTimers = new Map();
     this.autoSaveEnabled = true;
     this.wrapLines = false;
@@ -35,48 +60,82 @@ export class FilePreviewPanel {
     this.enlarged = false;
     this.panelRatio = DEFAULT_PANEL_RATIO;
     this.toolbarOpen = false;
+    this.transientStatus = "";
+    this.cleanupListeners = [];
+    this.activeDialogCancel = null;
 
-    // Restore preferences
     this._restorePreferences();
-
-    // Set up listeners
     this._setupListeners();
     this._setupResizer();
     this._setupControls();
-
-    // i18n
-    this._unsubscribeLocale = onLocaleChange(() => this._renderTabBar());
+    this._unsubscribeLocale = onLocaleChange(() => {
+      this._renderTabBar();
+      this._renderToolbar();
+    });
   }
 
-  setWorkspaceRoot(root) {
-    this.workspaceRoot = root || "";
-    this.state.load(this.workspaceRoot);
-    this._renderTabBar();
+  async setWorkspaceRoot(root) {
+    const normalized = typeof root === "string" ? root.replace(/\/+$/, "").trim() || "/" : "";
+    if (normalized === this.workspaceRoot) return true;
 
-    // Restore tabs from persisted state.
-    if (this.state.getTabs().length > 0 && !this.panelOpen) {
-      this._openPanel();
-      const activeTab = this.state.getActiveTab();
-      if (activeTab) {
-        void this._loadTabContent(activeTab);
-      }
+    this._captureActiveRenderer();
+    const dirtyTabs = this.state.getTabs().filter((tab) => tab.dirty);
+    if (dirtyTabs.length > 0) {
+      const settled = await this._settleDirtyTabs(dirtyTabs, "workspace");
+      if (!settled) return false;
     }
+
+    this._destroyRenderer();
+    this.workspaceRoot = normalized;
+    this.state.load(normalized);
+    this._renderTabBar();
+    this._renderToolbar();
+
+    if (this.state.getTabs().length === 0) {
+      this._closePanel();
+      return true;
+    }
+
+    this._openPanel();
+    const activeTab = this.state.getActiveTab();
+    if (activeTab) await this._loadTabContent(activeTab);
+    return true;
   }
 
   async openFile(filePath, metadata = {}) {
-    const tab = this.state.openFile(filePath, metadata);
+    const normalizedPath = typeof filePath === "string" ? filePath.replace(/\/+$/, "") : "";
+    const existing = this.state.getTabs().find((tab) => tab.filePath === normalizedPath);
+    const currentTab = this.state.getActiveTab();
+
+    if (existing) {
+      if (currentTab?.id !== existing.id) {
+        this._captureActiveRenderer();
+        this.state.selectTab(existing.id);
+      }
+      this._openPanel();
+      this._renderTabBar();
+      if (existing.content === null && !existing.loading) {
+        await this._loadTabContent(existing);
+      } else if (currentTab?.id !== existing.id || !this.currentRenderer) {
+        await this._mountRenderer(this.state.getTab(existing.id));
+      }
+      return existing;
+    }
+
+    this._captureActiveRenderer();
+    const tab = this.state.openFile(normalizedPath, metadata);
     this._openPanel();
     this._renderTabBar();
     await this._loadTabContent(tab);
+    return tab;
   }
 
-  closePanel() {
-    // Check for dirty tabs.
-    const dirtyTabs = this.state.getTabs().filter((t) => t.dirty);
+  async closePanel() {
+    this._captureActiveRenderer();
+    const dirtyTabs = this.state.getTabs().filter((tab) => tab.dirty);
     if (dirtyTabs.length > 0) {
-      // For now, just confirm the first dirty tab.
-      // A full implementation would show a dialog.
-      return false;
+      const settled = await this._settleDirtyTabs(dirtyTabs, "panel");
+      if (!settled) return false;
     }
     this._closePanel();
     return true;
@@ -97,63 +156,88 @@ export class FilePreviewPanel {
     if (this.mainContainer) this.mainContainer.classList.remove("preview-enlarged");
     this._savePreferences();
     this._updateControlButtons();
+    this._updatePanelWidth();
   }
 
   destroy() {
-    // Flush all pending auto-saves.
-    for (const timer of this.autoSaveTimers.values()) {
-      clearTimeout(timer);
-    }
+    for (const timer of this.autoSaveTimers.values()) clearTimeout(timer);
     this.autoSaveTimers.clear();
+    this.loadTokens.clear();
+    this._destroyRenderer();
+    this.activeDialogCancel?.();
+    this.activeDialogCancel = null;
 
-    if (this.currentRenderer) {
-      this.currentRenderer.destroy();
-      this.currentRenderer = null;
-    }
-
-    if (this._unsubscribeLocale) {
-      this._unsubscribeLocale();
-    }
+    for (const cleanup of this.cleanupListeners.splice(0)) cleanup();
+    this._unsubscribeState?.();
+    this._unsubscribeLocale?.();
   }
-
-  // ─── Private: panel state ────────────────────────────────────────────
 
   _openPanel() {
     this.panelOpen = true;
-    this.panel.classList.remove("collapsed");
-    this.resizer.classList.remove("collapsed");
+    this.panel?.classList.remove("collapsed");
+    this.resizer?.classList.remove("collapsed");
     this._updatePanelWidth();
     this._updateControlButtons();
+    this._renderToolbar();
   }
 
   _closePanel() {
     this.panelOpen = false;
-    this.panel.classList.add("collapsed");
-    this.resizer.classList.add("collapsed");
-    if (this.currentRenderer) {
-      this.currentRenderer.destroy();
-      this.currentRenderer = null;
-    }
-    this.content.innerHTML = "";
+    this.enlarged = false;
+    this.panel?.classList.add("collapsed");
+    this.panel?.classList.remove("enlarged");
+    this.resizer?.classList.add("collapsed");
+    this.mainContainer?.classList.remove("preview-enlarged");
+    this._destroyRenderer();
+    if (this.content) this.content.innerHTML = "";
     this._updateControlButtons();
+    this._renderToolbar();
+  }
+
+  _destroyRenderer() {
+    if (!this.currentRenderer) return;
+    this.currentRenderer.destroy();
+    this.currentRenderer = null;
+  }
+
+  _captureActiveRenderer() {
+    const tab = this.state.getActiveTab();
+    const value = this.currentRenderer?.getValue?.();
+    if (!tab || typeof value !== "string" || value === tab.content) return;
+    this.state.updateTab(tab.id, {
+      content: value,
+      dirty: value !== (tab.originalContent ?? ""),
+    });
   }
 
   _updateControlButtons() {
     const enlargeBtn = document.getElementById("file-preview-enlarge");
     const collapseBtn = document.getElementById("file-preview-collapse");
-    if (enlargeBtn) enlargeBtn.classList.toggle("hidden", this.enlarged);
-    if (collapseBtn) collapseBtn.classList.toggle("hidden", !this.enlarged);
+    enlargeBtn?.classList.toggle("hidden", this.enlarged);
+    collapseBtn?.classList.toggle("hidden", !this.enlarged);
+  }
+
+  _availableWidth() {
+    const layoutWidth = this.panel?.parentElement?.offsetWidth || 0;
+    const combinedWidth = (this.mainContainer?.offsetWidth || 0) + (this.panel?.offsetWidth || 0);
+    return layoutWidth || combinedWidth || this.mainContainer?.offsetWidth || 800;
+  }
+
+  _applyPanelWidth(width) {
+    const totalWidth = this._availableWidth();
+    const maxWidth = Math.max(1, totalWidth * 0.7);
+    const minWidth = Math.min(MIN_PANEL_WIDTH, maxWidth);
+    const clampedWidth = Math.max(minWidth, Math.min(maxWidth, width));
+    this.panelRatio = clampedWidth / totalWidth;
+    this.panel.style.width = `${Math.round(clampedWidth)}px`;
+    this.panel.style.flexBasis = `${Math.round(clampedWidth)}px`;
+    this.resizer?.setAttribute("aria-valuenow", String(Math.round(this.panelRatio * 100)));
   }
 
   _updatePanelWidth() {
-    if (!this.panel || !this.mainContainer) return;
-    const totalWidth = this.mainContainer.offsetWidth || 800;
-    const panelWidth = Math.max(MIN_PANEL_WIDTH, Math.round(totalWidth * this.panelRatio));
-    this.panel.style.width = `${panelWidth}px`;
-    this.panel.style.flexBasis = `${panelWidth}px`;
+    if (!this.panel || this.enlarged) return;
+    this._applyPanelWidth(this._availableWidth() * this.panelRatio);
   }
-
-  // ─── Private: tab bar rendering ──────────────────────────────────────
 
   _renderTabBar() {
     if (!this.tabBar) return;
@@ -161,54 +245,62 @@ export class FilePreviewPanel {
 
     for (const tab of this.state.getTabs()) {
       const tabEl = document.createElement("div");
-      tabEl.className = `file-preview-tab${tab.id === this.state.activeTabId ? " active" : ""}`;
+      const isActive = tab.id === this.state.activeTabId;
+      tabEl.className = `file-preview-tab${isActive ? " active" : ""}`;
       tabEl.dataset.tabId = tab.id;
+      tabEl.setAttribute("role", "tab");
+      tabEl.setAttribute("tabindex", "0");
+      tabEl.setAttribute("aria-selected", String(isActive));
 
-      // File icon
       const icon = document.createElement("span");
       icon.className = "file-preview-tab-icon";
       icon.textContent = this._getFileIcon(tab.fileName);
+      icon.setAttribute("aria-hidden", "true");
       tabEl.appendChild(icon);
 
-      // File name
       const name = document.createElement("span");
       name.className = "file-preview-tab-name";
       name.textContent = tab.fileName;
       name.title = tab.filePath;
       tabEl.appendChild(name);
 
-      // Dirty/conflict markers
       if (tab.dirty) {
         const dot = document.createElement("span");
         dot.className = "file-preview-tab-dirty";
         dot.textContent = "●";
+        dot.title = t("files.unsaved.title");
+        dot.setAttribute("aria-label", t("files.unsaved.title"));
         tabEl.appendChild(dot);
       }
       if (tab.conflict) {
-        const warn = document.createElement("span");
-        warn.className = "file-preview-tab-conflict";
-        warn.textContent = "⚠";
-        warn.title = t("files.preview.conflict");
-        tabEl.appendChild(warn);
+        const warning = document.createElement("span");
+        warning.className = "file-preview-tab-conflict";
+        warning.textContent = "⚠";
+        warning.title = t("files.preview.conflict");
+        warning.setAttribute("aria-label", t("files.preview.conflict"));
+        tabEl.appendChild(warning);
       }
 
-      // Close button
       const closeBtn = document.createElement("button");
       closeBtn.className = "file-preview-tab-close";
+      closeBtn.type = "button";
+      closeBtn.title = t("files.preview.close");
       closeBtn.setAttribute("aria-label", t("files.preview.close"));
       closeBtn.innerHTML =
-        '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
-      closeBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this._closeTab(tab.id);
+        '<svg aria-hidden="true" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+      closeBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void this._closeTab(tab.id);
       });
       tabEl.appendChild(closeBtn);
 
-      // Tab click selects it.
-      tabEl.addEventListener("click", () => {
-        this._selectTab(tab.id);
+      tabEl.addEventListener("click", () => void this._selectTab(tab.id));
+      tabEl.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          void this._selectTab(tab.id);
+        }
       });
-
       this.tabBar.appendChild(tabEl);
     }
   }
@@ -222,7 +314,6 @@ export class FilePreviewPanel {
       tsx: "📄",
       py: "🐍",
       r: "📊",
-      R: "📊",
       json: "📋",
       yaml: "📋",
       yml: "📋",
@@ -240,123 +331,146 @@ export class FilePreviewPanel {
     return iconMap[ext] || "📄";
   }
 
-  // ─── Private: tab selection ──────────────────────────────────────────
-
   async _selectTab(tabId) {
-    // Check if current tab is dirty before switching.
     const currentTab = this.state.getActiveTab();
-    if (currentTab?.dirty && currentTab.id !== tabId) {
-      // In a full implementation, this would show a confirm dialog.
-      // For now, proceed (the dirty content is preserved in memory).
-    }
-
-    // Save current editor content before switching.
-    if (this.currentRenderer && currentTab) {
-      const content = this.currentRenderer.getValue?.();
-      if (typeof content === "string") {
-        this.state.updateTab(currentTab.id, { content });
-      }
-    }
-
-    this.state.selectTab(tabId);
-    this._renderTabBar();
+    if (currentTab?.id === tabId) return true;
+    this._captureActiveRenderer();
+    if (!this.state.selectTab(tabId)) return false;
 
     const tab = this.state.getTab(tabId);
-    if (tab) {
+    if (!tab) return false;
+    if (tab.content === null && !tab.loading) {
+      await this._loadTabContent(tab);
+    } else {
       await this._mountRenderer(tab);
     }
+    return true;
   }
 
-  _closeTab(tabId) {
+  async _closeTab(tabId) {
     const tab = this.state.getTab(tabId);
-    if (tab?.dirty) {
-      // In a full implementation, this would show a confirm dialog.
+    if (!tab) return false;
+    if (tab.id === this.state.activeTabId) this._captureActiveRenderer();
+
+    const freshTab = this.state.getTab(tabId);
+    if (freshTab?.dirty) {
+      const settled = await this._settleDirtyTabs([freshTab], "tab");
+      if (!settled) return false;
     }
 
-    // Clear pending auto-save timer for this tab.
-    const timer = this.autoSaveTimers.get(tabId);
-    if (timer) {
-      clearTimeout(timer);
-      this.autoSaveTimers.delete(tabId);
-    }
-
+    this._clearAutoSave(tabId);
+    this.loadTokens.delete(tabId);
+    const wasActive = this.state.activeTabId === tabId;
+    if (wasActive) this._destroyRenderer();
     const result = this.state.closeTab(tabId);
-    this._renderTabBar();
+    if (!result.closed) return false;
 
     if (result.nextTabId) {
-      this._selectTab(result.nextTabId);
-    } else if (this.state.getTabs().length === 0) {
+      const nextTab = this.state.getTab(result.nextTabId);
+      if (nextTab?.content === null && !nextTab.loading) {
+        await this._loadTabContent(nextTab);
+      } else if (wasActive && nextTab) {
+        await this._mountRenderer(nextTab);
+      }
+    } else {
       this._closePanel();
     }
+    return true;
   }
 
-  // ─── Private: content loading ────────────────────────────────────────
-
   async _loadTabContent(tab) {
-    const sequence = ++this.loadSequence;
-    this.state.updateTab(tab.id, { loading: true, error: null });
+    const token = (this.loadTokens.get(tab.id) || 0) + 1;
+    this.loadTokens.set(tab.id, token);
+    this.state.updateTab(tab.id, { loading: true, error: null, errorDetail: null });
 
     try {
       const res = await fetch(`/api/files/content?path=${encodeURIComponent(tab.filePath)}`);
-      if (sequence !== this.loadSequence) return; // stale response
-
+      if (this.loadTokens.get(tab.id) !== token || !this.state.getTab(tab.id)) return false;
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
         this.state.updateTab(tab.id, {
           loading: false,
-          error: errorData.error || `HTTP ${res.status}`,
+          error: t("files.preview.loadError"),
+          errorDetail: errorData.error || `HTTP ${res.status}`,
         });
-        this._renderTabBar();
-        await this._mountRenderer(tab);
-        return;
+        await this._mountIfActive(tab.id);
+        return false;
       }
 
       const data = await res.json();
-      if (sequence !== this.loadSequence) return;
+      if (this.loadTokens.get(tab.id) !== token || !this.state.getTab(tab.id)) return false;
+      const classification = classifyFilePath(tab.filePath);
+      if (data.isBinary && classification.contentType === "text") {
+        this.state.updateTab(tab.id, {
+          loading: false,
+          error: t("files.preview.unsupportedBinary"),
+          errorDetail: null,
+          isBinary: true,
+          editable: false,
+        });
+        await this._mountIfActive(tab.id);
+        return false;
+      }
 
+      const editable =
+        data.editable !== false && classification.editable && !data.truncated && !data.isBinary;
       this.state.updateTab(tab.id, {
         loading: false,
-        content: data.content,
-        originalContent: data.content,
+        content: data.content ?? "",
+        originalContent: data.content ?? "",
         mtimeMs: data.mtimeMs,
+        mimeType: data.mimeType,
+        size: data.size,
+        truncated: Boolean(data.truncated),
+        isBinary: Boolean(data.isBinary),
+        editable,
         dirty: false,
+        conflict: false,
+        saveError: null,
+        error: null,
+        errorDetail: null,
+        mode: editable ? tab.mode : "preview",
       });
-
-      this._renderTabBar();
-      const freshTab = this.state.getTab(tab.id);
-      if (freshTab) await this._mountRenderer(freshTab);
-    } catch (err) {
-      if (sequence !== this.loadSequence) return;
-      this.state.updateTab(tab.id, { loading: false, error: err.message });
-      this._renderTabBar();
-      await this._mountRenderer(tab);
+      this.state.persist();
+      await this._mountIfActive(tab.id);
+      return true;
+    } catch (error) {
+      if (this.loadTokens.get(tab.id) !== token || !this.state.getTab(tab.id)) return false;
+      this.state.updateTab(tab.id, {
+        loading: false,
+        error: t("files.preview.loadError"),
+        errorDetail: error instanceof Error ? error.message : String(error),
+      });
+      await this._mountIfActive(tab.id);
+      return false;
     }
   }
 
-  async _mountRenderer(tab) {
-    // Destroy previous renderer.
-    if (this.currentRenderer) {
-      this.currentRenderer.destroy();
-      this.currentRenderer = null;
-    }
+  async _mountIfActive(tabId) {
+    if (this.state.activeTabId !== tabId) return;
+    const tab = this.state.getTab(tabId);
+    if (tab) await this._mountRenderer(tab);
+  }
 
+  async _mountRenderer(tab) {
+    if (!tab || tab.id !== this.state.activeTabId || !this.content) return;
+    this._destroyRenderer();
     this.content.innerHTML = "";
 
-    // Show loading state.
     if (tab.loading) {
       const loadingEl = document.createElement("div");
       loadingEl.className = "file-preview-loading";
       loadingEl.textContent = t("files.preview.loading");
       this.content.appendChild(loadingEl);
+      this._renderToolbar();
       return;
     }
-
-    // Show error state.
     if (tab.error) {
       const errorEl = document.createElement("div");
       errorEl.className = "file-preview-error";
       errorEl.textContent = tab.error;
       this.content.appendChild(errorEl);
+      this._renderToolbar();
       return;
     }
 
@@ -366,49 +480,89 @@ export class FilePreviewPanel {
       content: tab.content || "",
       mimeType: tab.mimeType,
       mode: tab.mode || "preview",
-      readOnly: tab.mode === "preview",
+      readOnly: tab.mode !== "edit" || !this._isEditable(tab),
       wrapLines: this.wrapLines,
       onChange: (newContent) => {
         const freshTab = this.state.getTab(tab.id);
+        if (!freshTab) return;
+        const dirty = newContent !== (freshTab.originalContent ?? "");
         this.state.updateTab(tab.id, {
           content: newContent,
-          dirty: newContent !== (freshTab?.originalContent ?? tab.originalContent),
+          dirty,
+          saveError: null,
         });
-        this._renderTabBar();
-        this._scheduleAutoSave(tab.id);
+        if (dirty) this._scheduleAutoSave(tab.id);
       },
-      onError: (err) => {
-        this.state.updateTab(tab.id, { error: err.message });
-        this._renderTabBar();
+      onModeChange: (mode) => {
+        this.state.updateTab(tab.id, { mode });
+        this.state.persist();
+      },
+      onError: (error) => {
+        this.state.updateTab(tab.id, {
+          error: t("files.preview.loadError"),
+          errorDetail: error instanceof Error ? error.message : String(error),
+        });
       },
     });
-
     this.currentRenderer.mount(this.content);
+    this._renderToolbar();
   }
 
-  // ─── Private: auto-save ──────────────────────────────────────────────
+  _isEditable(tab) {
+    if (!tab || tab.content === null || tab.editable === false || tab.truncated || tab.isBinary) {
+      return false;
+    }
+    return classifyFilePath(tab.filePath).editable;
+  }
 
   _scheduleAutoSave(tabId) {
-    if (!this.autoSaveEnabled) return;
-
-    // Clear existing timer.
-    const existing = this.autoSaveTimers.get(tabId);
-    if (existing) clearTimeout(existing);
-
+    const tab = this.state.getTab(tabId);
+    if (!this.autoSaveEnabled || !tab?.dirty || tab.conflict || !this._isEditable(tab)) return;
+    this._clearAutoSave(tabId);
     const timer = setTimeout(() => {
       this.autoSaveTimers.delete(tabId);
       void this._saveTab(tabId, { autoSave: true });
     }, AUTO_SAVE_DELAY);
-
     this.autoSaveTimers.set(tabId, timer);
   }
 
-  async _saveTab(tabId, { autoSave = false } = {}) {
-    const tab = this.state.getTab(tabId);
-    if (!tab?.dirty) return;
+  _clearAutoSave(tabId) {
+    const timer = this.autoSaveTimers.get(tabId);
+    clearTimeout(timer);
+    this.autoSaveTimers.delete(tabId);
+  }
 
-    this.state.updateTab(tabId, { saving: true });
-    this._renderTabBar();
+  async _saveTab(tabId, options = {}) {
+    const inFlight = this.savePromises.get(tabId);
+    if (inFlight) {
+      await inFlight;
+      const tab = this.state.getTab(tabId);
+      if (tab?.dirty && !tab.conflict) return this._saveTab(tabId, options);
+      return Boolean(tab && !tab.dirty);
+    }
+
+    const operation = this._performSave(tabId, options);
+    this.savePromises.set(tabId, operation);
+    try {
+      return await operation;
+    } finally {
+      if (this.savePromises.get(tabId) === operation) this.savePromises.delete(tabId);
+    }
+  }
+
+  async _performSave(tabId, { autoSave = false, force = false } = {}) {
+    const tab = this.state.getTab(tabId);
+    if (!tab?.dirty) return true;
+    if (!this._isEditable(tab)) return false;
+
+    if (tab.conflict && !force) {
+      if (autoSave) return false;
+      return this._resolveSaveConflict(tabId);
+    }
+
+    const savedContent = tab.content;
+    const expectedMtimeMs = tab.mtimeMs;
+    this.state.updateTab(tabId, { saving: true, saveError: null });
 
     try {
       const res = await fetch("/api/files/content", {
@@ -416,136 +570,425 @@ export class FilePreviewPanel {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           path: tab.filePath,
-          content: tab.content,
-          expectedMtimeMs: tab.mtimeMs,
+          content: savedContent,
+          expectedMtimeMs,
+          force,
         }),
       });
 
       if (res.status === 409) {
-        // Conflict.
         this.state.updateTab(tabId, { saving: false, conflict: true });
-        this._renderTabBar();
-        if (!autoSave) {
-          // Show conflict UI for explicit saves.
-        }
-        // For auto-save, just mark conflict and wait.
-        return;
+        if (autoSave) return false;
+        return this._resolveSaveConflict(tabId);
       }
-
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
         this.state.updateTab(tabId, {
           saving: false,
-          error: errorData.error || `HTTP ${res.status}`,
+          saveError: t("files.preview.saveError"),
+          errorDetail: errorData.error || `HTTP ${res.status}`,
         });
-        this._renderTabBar();
-        return;
+        return false;
       }
 
       const data = await res.json();
+      const current = this.state.getTab(tabId);
+      if (!current) return false;
       this.state.updateTab(tabId, {
         saving: false,
-        dirty: false,
+        dirty: current.content !== savedContent,
         conflict: false,
         mtimeMs: data.mtimeMs,
-        originalContent: tab.content,
+        originalContent: savedContent,
+        saveError: null,
+        errorDetail: null,
       });
-      this._renderTabBar();
-    } catch (err) {
-      this.state.updateTab(tabId, { saving: false, error: err.message });
-      this._renderTabBar();
+      return true;
+    } catch (error) {
+      this.state.updateTab(tabId, {
+        saving: false,
+        saveError: t("files.preview.saveError"),
+        errorDetail: error instanceof Error ? error.message : String(error),
+      });
+      return false;
     }
   }
 
-  // ─── Private: toolbar ────────────────────────────────────────────────
+  async _resolveSaveConflict(tabId) {
+    const tab = this.state.getTab(tabId);
+    if (!tab) return false;
+    const action = await this.resolveConflict(tab);
+    if (action === "overwrite") {
+      this.state.updateTab(tabId, { conflict: false });
+      return this._performSave(tabId, { force: true });
+    }
+    if (action === "reload") {
+      return this._reloadTab(tabId, { skipConfirmation: true });
+    }
+    return false;
+  }
+
+  async _reloadTab(tabId, { skipConfirmation = false } = {}) {
+    this._captureActiveRenderer();
+    const tab = this.state.getTab(tabId);
+    if (!tab) return false;
+    if (tab.dirty && !skipConfirmation) {
+      const settled = await this._settleDirtyTabs([tab], "reload");
+      if (!settled) return false;
+    }
+    this._clearAutoSave(tabId);
+    this.state.updateTab(tabId, {
+      conflict: false,
+      dirty: false,
+      saveError: null,
+    });
+    return this._loadTabContent(this.state.getTab(tabId));
+  }
+
+  async _settleDirtyTabs(tabs, reason) {
+    const action = await this.confirmDirty(tabs, reason);
+    if (action === "cancel" || !action) return false;
+    if (action === "save") {
+      for (const tab of tabs) {
+        const saved = await this._saveTab(tab.id);
+        if (!saved || this.state.getTab(tab.id)?.dirty) return false;
+      }
+      return true;
+    }
+    if (action === "discard") {
+      for (const tab of tabs) {
+        this._clearAutoSave(tab.id);
+        this.state.updateTab(tab.id, {
+          content: tab.originalContent ?? "",
+          dirty: false,
+          conflict: false,
+          saveError: null,
+        });
+      }
+      return true;
+    }
+    return false;
+  }
+
+  async _setMode(mode) {
+    const tab = this.state.getActiveTab();
+    if (!tab || !["preview", "edit"].includes(mode)) return false;
+    if (mode === "edit" && !this._isEditable(tab)) return false;
+    if (tab.mode === mode) return true;
+    this._captureActiveRenderer();
+    this.state.updateTab(tab.id, { mode });
+    this.state.persist();
+    await this._mountRenderer(this.state.getTab(tab.id));
+    return true;
+  }
 
   _setupControls() {
-    const enlargeBtn = document.getElementById("file-preview-enlarge");
-    const collapseBtn = document.getElementById("file-preview-collapse");
-    const closeBtn = document.getElementById("file-preview-close");
+    this.controls = {
+      toolbar: document.getElementById("file-preview-toolbar"),
+      toolbarToggle: document.getElementById("file-preview-toolbar-toggle"),
+      preview: document.getElementById("file-preview-mode-preview"),
+      edit: document.getElementById("file-preview-mode-edit"),
+      save: document.getElementById("file-preview-save"),
+      reload: document.getElementById("file-preview-reload"),
+      search: document.getElementById("file-preview-search"),
+      goToLine: document.getElementById("file-preview-go-to-line"),
+      copy: document.getElementById("file-preview-copy"),
+      openDesktop: document.getElementById("file-preview-open"),
+      wrap: document.getElementById("file-preview-wrap"),
+      autoSave: document.getElementById("file-preview-autosave"),
+      status: document.getElementById("file-preview-status"),
+    };
 
-    if (enlargeBtn) {
-      enlargeBtn.addEventListener("click", () => this.enlarge());
+    this._listen(document.getElementById("file-preview-enlarge"), "click", () => this.enlarge());
+    this._listen(document.getElementById("file-preview-collapse"), "click", () => this.collapse());
+    this._listen(document.getElementById("file-preview-close"), "click", () => {
+      void this.closePanel();
+    });
+    this._listen(this.controls.toolbarToggle, "click", () => {
+      this.toolbarOpen = !this.toolbarOpen;
+      this._renderToolbar();
+    });
+    this._listen(this.controls.preview, "click", () => void this._setMode("preview"));
+    this._listen(this.controls.edit, "click", () => void this._setMode("edit"));
+    this._listen(this.controls.save, "click", () => {
+      const tab = this.state.getActiveTab();
+      if (tab) void this._saveTab(tab.id);
+    });
+    this._listen(this.controls.reload, "click", () => {
+      const tab = this.state.getActiveTab();
+      if (tab) void this._reloadTab(tab.id);
+    });
+    this._listen(this.controls.search, "click", () => this.currentRenderer?.openSearch?.());
+    this._listen(this.controls.goToLine, "click", () => {
+      const raw = window.prompt?.(t("files.preview.goToLinePrompt"));
+      const lineNumber = Number.parseInt(raw || "", 10);
+      if (Number.isInteger(lineNumber)) this.currentRenderer?.goToLine?.(lineNumber);
+    });
+    this._listen(this.controls.copy, "click", () => void this._copyActiveContent());
+    this._listen(this.controls.openDesktop, "click", () => {
+      const tab = this.state.getActiveTab();
+      if (tab) this.onOpenDesktop(tab.filePath);
+    });
+    this._listen(this.controls.wrap, "change", (event) => {
+      this.wrapLines = Boolean(event.target.checked);
+      this.currentRenderer?.setWrapLines?.(this.wrapLines);
+      this._savePreferences();
+      this._renderToolbar();
+    });
+    this._listen(this.controls.autoSave, "change", (event) => {
+      this.autoSaveEnabled = Boolean(event.target.checked);
+      if (!this.autoSaveEnabled) {
+        for (const tabId of this.autoSaveTimers.keys()) this._clearAutoSave(tabId);
+      } else {
+        const tab = this.state.getActiveTab();
+        if (tab?.dirty) this._scheduleAutoSave(tab.id);
+      }
+      this._savePreferences();
+      this._renderToolbar();
+    });
+    this._renderToolbar();
+  }
+
+  _listen(target, eventName, listener) {
+    if (!target) return;
+    target.addEventListener(eventName, listener);
+    this.cleanupListeners.push(() => target.removeEventListener(eventName, listener));
+  }
+
+  async _copyActiveContent() {
+    this._captureActiveRenderer();
+    const tab = this.state.getActiveTab();
+    if (!tab || typeof tab.content !== "string") return;
+    try {
+      await this.onCopyText(tab.content);
+      this.transientStatus = t("messages.copied");
+    } catch {
+      this.transientStatus = t("files.preview.copyFailed");
     }
-    if (collapseBtn) {
-      collapseBtn.addEventListener("click", () => this.collapse());
+    this._renderToolbar();
+    setTimeout(() => {
+      this.transientStatus = "";
+      this._renderToolbar();
+    }, 1200);
+  }
+
+  _renderToolbar() {
+    const controls = this.controls;
+    if (!controls) return;
+    controls.toolbar?.classList.toggle("hidden", !this.toolbarOpen);
+    controls.toolbarToggle?.setAttribute("aria-expanded", String(this.toolbarOpen));
+
+    const tab = this.state.getActiveTab();
+    const editable = this._isEditable(tab);
+    const hasText = typeof tab?.content === "string" && !tab?.isBinary;
+    const hasEditor = hasText && classifyFilePath(tab.filePath).contentType !== "image";
+
+    if (controls.preview) {
+      controls.preview.disabled = !hasText;
+      controls.preview.classList.toggle("active", tab?.mode !== "edit");
+      controls.preview.setAttribute("aria-pressed", String(tab?.mode !== "edit"));
     }
-    if (closeBtn) {
-      closeBtn.addEventListener("click", () => this.closePanel());
+    if (controls.edit) {
+      controls.edit.disabled = !editable;
+      controls.edit.classList.toggle("active", tab?.mode === "edit");
+      controls.edit.setAttribute("aria-pressed", String(tab?.mode === "edit"));
+    }
+    if (controls.save) controls.save.disabled = !tab?.dirty || !editable || tab.saving;
+    if (controls.reload) controls.reload.disabled = !tab || tab.loading;
+    if (controls.search) controls.search.disabled = !hasEditor;
+    if (controls.goToLine) controls.goToLine.disabled = !hasEditor;
+    if (controls.copy) controls.copy.disabled = !hasText;
+    if (controls.openDesktop) controls.openDesktop.disabled = !tab;
+    if (controls.wrap) controls.wrap.checked = this.wrapLines;
+    if (controls.autoSave) controls.autoSave.checked = this.autoSaveEnabled;
+    if (controls.status) {
+      controls.status.textContent = this._toolbarStatus(tab, editable);
     }
   }
 
-  // ─── Private: resizer ────────────────────────────────────────────────
+  _toolbarStatus(tab, editable) {
+    if (this.transientStatus) return this.transientStatus;
+    if (!tab) return "";
+    if (tab.loading) return t("files.preview.loading");
+    if (tab.saving) return t("files.preview.saving");
+    if (tab.conflict) return t("files.preview.conflict");
+    if (tab.saveError) return tab.saveError;
+    if (tab.dirty) return t("files.unsaved.title");
+    if (!editable) return t("files.preview.readOnly");
+    return t("files.preview.saved");
+  }
 
   _setupResizer() {
     if (!this.resizer) return;
-
     let dragging = false;
     let startX = 0;
     let startWidth = 0;
 
-    const onMouseDown = (e) => {
-      if (e.button !== 0) return;
+    const onMouseDown = (event) => {
+      if (event.button !== 0) return;
       dragging = true;
-      startX = e.clientX;
+      startX = event.clientX;
       startWidth = this.panel.offsetWidth;
       this.resizer.classList.add("dragging");
       document.body.classList.add("file-preview-resizing");
-      e.preventDefault();
+      event.preventDefault();
     };
-
-    const onMouseMove = (e) => {
+    const onMouseMove = (event) => {
       if (!dragging) return;
-      const delta = startX - e.clientX; // right side: drag left = wider
-      const newWidth = startWidth + delta;
-      const totalWidth = this.mainContainer?.offsetWidth || 800;
-      const minWidth = MIN_PANEL_WIDTH;
-      const maxWidth = totalWidth * 0.7;
-      const clampedWidth = Math.max(minWidth, Math.min(maxWidth, newWidth));
-      this.panel.style.width = `${clampedWidth}px`;
-      this.panel.style.flexBasis = `${clampedWidth}px`;
-      this.panelRatio = clampedWidth / totalWidth;
+      this._applyPanelWidth(startWidth + startX - event.clientX);
     };
-
-    const onMouseUp = () => {
+    const finishDrag = () => {
       if (!dragging) return;
       dragging = false;
       this.resizer.classList.remove("dragging");
       document.body.classList.remove("file-preview-resizing");
       this._savePreferences();
     };
+    const onKeyDown = (event) => {
+      const currentWidth = this.panel.offsetWidth || this._availableWidth() * this.panelRatio;
+      let nextWidth = currentWidth;
+      if (event.key === "ArrowLeft") nextWidth += 16;
+      else if (event.key === "ArrowRight") nextWidth -= 16;
+      else if (event.key === "Home") nextWidth = MIN_PANEL_WIDTH;
+      else if (event.key === "End") nextWidth = this._availableWidth() * 0.7;
+      else return;
+      event.preventDefault();
+      this._applyPanelWidth(nextWidth);
+      this._savePreferences();
+    };
+    const onResize = () => this._updatePanelWidth();
 
-    this.resizer.addEventListener("mousedown", onMouseDown);
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
+    this._listen(this.resizer, "mousedown", onMouseDown);
+    this._listen(document, "mousemove", onMouseMove);
+    this._listen(document, "mouseup", finishDrag);
+    this._listen(this.resizer, "keydown", onKeyDown);
+    this._listen(window, "resize", onResize);
+    this.cleanupListeners.push(() => {
+      dragging = false;
+      this.resizer.classList.remove("dragging");
+      document.body.classList.remove("file-preview-resizing");
+    });
   }
-
-  // ─── Private: listeners ──────────────────────────────────────────────
 
   _setupListeners() {
-    this.state.subscribe(() => this._renderTabBar());
+    this._unsubscribeState = this.state.subscribe(() => {
+      this._renderTabBar();
+      this._renderToolbar();
+    });
+    const onBeforeUnload = (event) => {
+      if (!this.state.getTabs().some((tab) => tab.dirty)) return;
+      event.preventDefault();
+      event.returnValue = true;
+    };
+    this._listen(window, "beforeunload", onBeforeUnload);
   }
 
-  // ─── Private: preferences ────────────────────────────────────────────
+  _showDirtyDialog(tabs) {
+    const message =
+      tabs.length === 1
+        ? t("files.unsaved.description")
+        : t("files.unsaved.descriptionMultiple", { count: tabs.length });
+    return this._showChoiceDialog({
+      title: t("files.unsaved.title"),
+      message,
+      choices: [
+        { action: "save", label: t("files.unsaved.save"), primary: true },
+        { action: "discard", label: t("files.unsaved.discard") },
+        { action: "cancel", label: t("files.unsaved.cancel") },
+      ],
+      cancelAction: "cancel",
+    });
+  }
+
+  _showConflictDialog(tab) {
+    return this._showChoiceDialog({
+      title: t("files.preview.conflict"),
+      message: t("files.preview.conflictMessage", { name: tab.fileName }),
+      choices: [
+        { action: "reload", label: t("files.preview.conflictReload") },
+        {
+          action: "overwrite",
+          label: t("files.preview.conflictOverwrite"),
+          primary: true,
+        },
+        { action: "cancel", label: t("files.unsaved.cancel") },
+      ],
+      cancelAction: "cancel",
+    });
+  }
+
+  _showChoiceDialog({ title, message, choices, cancelAction }) {
+    this.activeDialogCancel?.();
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "file-preview-dialog-overlay";
+      const dialog = document.createElement("div");
+      dialog.className = "file-preview-dialog";
+      dialog.setAttribute("role", "alertdialog");
+      dialog.setAttribute("aria-modal", "true");
+
+      const heading = document.createElement("h3");
+      heading.textContent = title;
+      const body = document.createElement("p");
+      body.textContent = message;
+      const actions = document.createElement("div");
+      actions.className = "file-preview-dialog-actions";
+      dialog.append(heading, body, actions);
+      overlay.appendChild(dialog);
+      document.body.appendChild(overlay);
+
+      let settled = false;
+      const finish = (action) => {
+        if (settled) return;
+        settled = true;
+        document.removeEventListener("keydown", onKeyDown);
+        overlay.remove();
+        this.activeDialogCancel = null;
+        resolve(action);
+      };
+      const onKeyDown = (event) => {
+        if (event.key === "Escape") finish(cancelAction);
+      };
+      document.addEventListener("keydown", onKeyDown);
+
+      for (const choice of choices) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `file-preview-dialog-button${choice.primary ? " primary" : ""}`;
+        button.textContent = choice.label;
+        button.addEventListener("click", () => finish(choice.action));
+        actions.appendChild(button);
+      }
+
+      this.activeDialogCancel = () => finish(cancelAction);
+      actions.querySelector(".primary")?.focus();
+    });
+  }
 
   _restorePreferences() {
     try {
-      this.panelRatio =
-        Number.parseFloat(localStorage.getItem("picot-preview-panel-ratio")) || DEFAULT_PANEL_RATIO;
-      this.wrapLines = localStorage.getItem("picot-preview-wrap") === "true";
-      this.autoSaveEnabled = localStorage.getItem("picot-preview-autosave") !== "false";
+      const storage = this.storage;
+      if (!storage) return;
+      const storedRatio = Number.parseFloat(storage.getItem("picot-preview-panel-ratio"));
+      this.panelRatio = Number.isFinite(storedRatio)
+        ? Math.max(0.2, Math.min(0.7, storedRatio))
+        : DEFAULT_PANEL_RATIO;
+      this.wrapLines = storage.getItem("picot-preview-wrap") === "true";
+      this.autoSaveEnabled = storage.getItem("picot-preview-autosave") !== "false";
     } catch {
-      // localStorage unavailable — use defaults.
+      this.panelRatio = DEFAULT_PANEL_RATIO;
     }
   }
 
   _savePreferences() {
     try {
-      localStorage.setItem("picot-preview-panel-ratio", String(this.panelRatio));
-      localStorage.setItem("picot-preview-wrap", String(this.wrapLines));
-      localStorage.setItem("picot-preview-autosave", String(this.autoSaveEnabled));
+      const storage = this.storage;
+      if (!storage) return;
+      storage.setItem("picot-preview-panel-ratio", String(this.panelRatio));
+      storage.setItem("picot-preview-wrap", String(this.wrapLines));
+      storage.setItem("picot-preview-autosave", String(this.autoSaveEnabled));
     } catch {
-      // non-fatal
+      // Storage is optional in opaque WebView origins and private browsing.
     }
   }
 }

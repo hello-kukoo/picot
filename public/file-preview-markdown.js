@@ -11,6 +11,8 @@
  * Copy-button onclick attributes from renderMarkdown() are stripped;
  * event delegation is installed when the fragment is mounted.
  */
+
+import { t } from "./i18n.js";
 import { renderMarkdown } from "./markdown.js";
 
 const ELEMENT_ALLOWLIST = new Set([
@@ -48,6 +50,26 @@ const ELEMENT_ALLOWLIST = new Set([
 
 const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 const SAFE_IMAGE_PROTOCOLS = new Set(["http:", "https:"]);
+
+const ALLOWED_CLASSES = new Map([
+  ["button", new Set(["copy-btn"])],
+  ["div", new Set(["code-block-wrapper", "code-block-header", "table-wrapper"])],
+  ["img", new Set(["inline-image"])],
+  ["li", new Set(["task-list-item"])],
+  ["ul", new Set(["task-list"])],
+]);
+
+const ALLOWED_ATTRIBUTES = new Map([
+  ["a", new Set(["href"])],
+  ["button", new Set(["class"])],
+  ["div", new Set(["class"])],
+  ["img", new Set(["alt", "class", "src"])],
+  ["input", new Set(["checked", "disabled", "type"])],
+  ["li", new Set(["class"])],
+  ["td", new Set(["style"])],
+  ["th", new Set(["style"])],
+  ["ul", new Set(["class"])],
+]);
 
 function isSafeLink(href) {
   if (!href) return true; // allow empty href (e.g. fragment-only)
@@ -87,86 +109,77 @@ function isSafeTextAlign(value) {
 function sanitizeNode(node) {
   const children = [...node.childNodes];
   for (const child of children) {
-    if (child.nodeType === Node.ELEMENT_NODE) {
-      const tagName = child.tagName.toLowerCase();
+    if (child.nodeType !== Node.ELEMENT_NODE) continue;
 
-      if (!ELEMENT_ALLOWLIST.has(tagName)) {
-        // Replace non-allowlisted element with its text content.
-        const textNode = document.createTextNode(child.textContent || "");
-        child.replaceWith(textNode);
+    const tagName = child.tagName.toLowerCase();
+    if (!ELEMENT_ALLOWLIST.has(tagName)) {
+      child.replaceWith(document.createTextNode(child.textContent || ""));
+      continue;
+    }
+
+    if (tagName === "button" && !child.classList.contains("copy-btn")) {
+      child.replaceWith(document.createTextNode(child.textContent || ""));
+      continue;
+    }
+    if (tagName === "input" && child.getAttribute("type")?.toLowerCase() !== "checkbox") {
+      child.remove();
+      continue;
+    }
+
+    const allowedAttributes = ALLOWED_ATTRIBUTES.get(tagName) || new Set();
+    for (const attr of [...child.attributes]) {
+      const attrName = attr.name.toLowerCase();
+      if (!allowedAttributes.has(attrName)) {
+        child.removeAttribute(attr.name);
         continue;
       }
 
-      // Remove all event-handler attributes (on*).
-      for (const attr of [...child.attributes]) {
-        const attrName = attr.name.toLowerCase();
-
-        // Strip all on* attributes.
-        if (attrName.startsWith("on")) {
-          child.removeAttribute(attr.name);
-          continue;
+      if (attrName === "class") {
+        const allowedClasses = ALLOWED_CLASSES.get(tagName) || new Set();
+        const safeClasses = [...child.classList].filter((className) =>
+          allowedClasses.has(className),
+        );
+        if (safeClasses.length > 0) {
+          child.className = safeClasses.join(" ");
+        } else {
+          child.removeAttribute("class");
         }
-
-        // Validate href on <a> elements.
-        if (tagName === "a" && attrName === "href") {
-          if (!isSafeLink(attr.value)) {
-            child.removeAttribute("href");
-          }
-          continue;
-        }
-
-        // Validate src on <img> elements.
-        if (tagName === "img" && attrName === "src") {
-          if (!isSafeImageSrc(attr.value)) {
-            child.removeAttribute("src");
-          }
-          continue;
-        }
-
-        // Validate style attributes — only allow safe text-align.
-        if (attrName === "style") {
-          const styleText = attr.value;
-          const textAlignMatch = styleText.match(/text-align\s*:\s*([^;]+)/i);
-          if (textAlignMatch && isSafeTextAlign(textAlignMatch[1])) {
-            child.setAttribute("style", `text-align: ${textAlignMatch[1].trim().toLowerCase()}`);
-          } else {
-            child.removeAttribute("style");
-          }
-          continue;
-        }
-
-        // Validate class on input — only allow task-list checkboxes.
-        if (tagName === "input" && attrName === "class") {
-          continue; // keep class for task-list styling
-        }
-
-        // For input elements, only allow type, checked, disabled, class.
-        if (tagName === "input") {
-          if (!["type", "checked", "disabled", "class"].includes(attrName)) {
-            child.removeAttribute(attr.name);
-          }
-          continue;
-        }
-
-        // Remove class from copy buttons (they get event delegation).
-        if (tagName === "button" && attrName === "class") {
-          // Keep class but it will be styled via CSS.
-        }
+        continue;
       }
 
-      // Ensure <input> checkboxes are always disabled.
-      if (tagName === "input") {
-        child.setAttribute("disabled", "");
+      if (tagName === "a" && attrName === "href" && !isSafeLink(attr.value)) {
+        child.removeAttribute("href");
+        continue;
       }
-
-      // Ensure external links have rel="noopener noreferrer" to prevent tabnabbing.
-      if (tagName === "a" && child.hasAttribute("href")) {
-        child.setAttribute("rel", "noopener noreferrer");
+      if (tagName === "img" && attrName === "src" && !isSafeImageSrc(attr.value)) {
+        child.removeAttribute("src");
+        continue;
       }
-
-      // Recurse into children.
-      sanitizeNode(child);
+      if (
+        attrName === "style" &&
+        (!["td", "th"].includes(tagName) || !isSafeTextAlign(child.style.textAlign))
+      ) {
+        child.removeAttribute("style");
+      } else if (attrName === "style") {
+        child.setAttribute("style", `text-align: ${child.style.textAlign.toLowerCase()}`);
+      }
     }
+
+    if (tagName === "input") {
+      child.setAttribute("type", "checkbox");
+      child.setAttribute("disabled", "");
+    }
+    if (tagName === "button") {
+      child.setAttribute("type", "button");
+    }
+    if (tagName === "a" && child.hasAttribute("href")) {
+      child.setAttribute("rel", "noopener noreferrer");
+      if (!child.getAttribute("href").trim().startsWith("#")) {
+        child.setAttribute("target", "_blank");
+      }
+    }
+
+    sanitizeNode(child);
   }
 }
 
@@ -188,6 +201,7 @@ export function renderFileMarkdown(markdownText) {
  * into the DOM. The returned cleanup function removes the listener.
  */
 export function attachCopyButtonDelegation(container) {
+  let feedbackTimer = null;
   function handleClick(event) {
     const btn = event.target.closest(".copy-btn");
     if (!btn || !container.contains(btn)) return;
@@ -199,19 +213,30 @@ export function attachCopyButtonDelegation(container) {
     if (!codeEl) return;
 
     const text = codeEl.textContent || "";
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(text).then(() => {
-        const original = btn.textContent;
-        btn.textContent = "Copied!";
-        btn.classList.add("copied");
-        setTimeout(() => {
-          btn.textContent = original;
-          btn.classList.remove("copied");
-        }, 1200);
-      });
+    const original = btn.textContent;
+    const showFeedback = (label, className) => {
+      clearTimeout(feedbackTimer);
+      btn.textContent = label;
+      btn.classList.add(className);
+      feedbackTimer = setTimeout(() => {
+        btn.textContent = original;
+        btn.classList.remove(className);
+      }, 1200);
+    };
+
+    if (!navigator.clipboard) {
+      showFeedback(t("files.preview.copyFailed"), "copy-failed");
+      return;
     }
+    navigator.clipboard.writeText(text).then(
+      () => showFeedback(t("messages.copied"), "copied"),
+      () => showFeedback(t("files.preview.copyFailed"), "copy-failed"),
+    );
   }
 
   container.addEventListener("click", handleClick);
-  return () => container.removeEventListener("click", handleClick);
+  return () => {
+    clearTimeout(feedbackTimer);
+    container.removeEventListener("click", handleClick);
+  };
 }

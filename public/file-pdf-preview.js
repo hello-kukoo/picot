@@ -14,26 +14,32 @@ if (typeof window !== "undefined" && GlobalWorkerOptions) {
   GlobalWorkerOptions.workerSrc = "/vendor/pdf.worker.js";
 }
 
-export function createPdfRenderer({ filePath, onError }) {
+export function createPdfRenderer({ filePath, onError, getDocumentImpl = getDocument }) {
   let container = null;
   let pdfDoc = null;
+  let loadingTask = null;
   let renderTask = null;
-  let _rendering = false;
+  let destroyed = false;
 
   async function loadDocument() {
-    if (!container) return;
-    _rendering = true;
+    if (!container || destroyed) return;
     try {
       const url = `/api/files/raw?path=${encodeURIComponent(filePath)}`;
-      const loadingTask = getDocument({ url });
-      pdfDoc = await loadingTask.promise;
+      const task = getDocumentImpl({ url });
+      loadingTask = task;
+      const loadedDocument = await task.promise;
+      if (loadingTask === task) loadingTask = null;
 
-      if (!container) return; // destroyed during load
+      if (destroyed || !container) {
+        void loadedDocument.destroy?.();
+        return;
+      }
+      pdfDoc = loadedDocument;
 
-      const numPages = pdfDoc.numPages;
-      for (let pageNum = 1; pageNum <= numPages; pageNum++) {
-        if (!container) return;
+      for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
+        if (destroyed || !container) return;
         const page = await pdfDoc.getPage(pageNum);
+        if (destroyed || !container) return;
         const viewport = page.getViewport({ scale: 1.5 });
 
         const canvas = document.createElement("canvas");
@@ -42,22 +48,22 @@ export function createPdfRenderer({ filePath, onError }) {
         canvas.height = viewport.height;
         container.appendChild(canvas);
 
-        const ctx = canvas.getContext("2d");
-        renderTask = page.render({ canvasContext: ctx, viewport });
+        const context = canvas.getContext("2d");
+        if (!context) throw new Error("Canvas 2D context is unavailable");
+        renderTask = page.render({ canvasContext: context, viewport });
         await renderTask.promise;
         renderTask = null;
       }
-    } catch (err) {
-      if (typeof onError === "function") {
-        onError(err);
-      }
+    } catch (error) {
+      if (!destroyed && typeof onError === "function") onError(error);
     } finally {
-      _rendering = false;
+      loadingTask = null;
     }
   }
 
   return {
     mount(parent) {
+      destroyed = false;
       container = document.createElement("div");
       container.className = "file-pdf-container";
       parent.appendChild(container);
@@ -69,18 +75,16 @@ export function createPdfRenderer({ filePath, onError }) {
     },
 
     destroy() {
-      if (renderTask) {
-        try {
-          renderTask.cancel();
-        } catch {
-          // ignore
-        }
-        renderTask = null;
-      }
+      destroyed = true;
+      renderTask?.cancel();
+      renderTask = null;
+      const activeLoadingTask = loadingTask;
+      loadingTask = null;
+      void activeLoadingTask?.destroy?.();
+      const activeDocument = pdfDoc;
       pdfDoc = null;
-      if (container?.parentNode) {
-        container.parentNode.removeChild(container);
-      }
+      void activeDocument?.destroy?.();
+      container?.remove();
       container = null;
     },
   };

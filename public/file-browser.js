@@ -99,28 +99,33 @@ export class FileBrowser {
     const sequence = ++this.loadSequence;
     this.showFileStatus("loading");
 
-    const url = dirPath
-      ? `/api/files?path=${encodeURIComponent(dirPath)}&scope=workspace`
-      : "/api/files?scope=workspace";
-    const res = await fetch(url);
-    const data = await res.json();
+    try {
+      const url = dirPath
+        ? `/api/files?path=${encodeURIComponent(dirPath)}&scope=workspace`
+        : "/api/files?scope=workspace";
+      const res = await fetch(url);
+      const data = await res.json();
 
-    // A newer load() or setWorkspaceRoot() has superseded this request.
-    if (sequence !== this.loadSequence) return;
+      // A newer load() or setWorkspaceRoot() has superseded this request.
+      if (sequence !== this.loadSequence) return;
+      if (res.ok === false || data.error) {
+        this.showFileStatus("failed", data.error || `HTTP ${res.status}`);
+        return;
+      }
 
-    if (data.error) {
-      this.showFileStatus("error", data.error);
-      return;
+      const normalizedRoot = this.workspaceRoot.replace(/\/+$/, "");
+      const normalizedRequest = typeof dirPath === "string" ? dirPath.replace(/\/+$/, "") : "";
+      if (!dirPath || (normalizedRoot && normalizedRequest === normalizedRoot)) {
+        this.workspaceRoot = data.path;
+      }
+      this.currentPath = data.path;
+      this.pathEl.textContent = data.path;
+      this.pathEl.title = data.path;
+      this.render(data.items);
+    } catch (error) {
+      if (sequence !== this.loadSequence) return;
+      this.showFileStatus("failed", error instanceof Error ? error.message : String(error));
     }
-
-    this.currentPath = data.path;
-    this.pathEl.textContent = data.path;
-    this.pathEl.title = data.path;
-    this.render(data.items);
-  }
-  catch(_err) {
-    if (sequence !== this.loadSequence) return;
-    this.showFileStatus("failed");
   }
   getParentPath() {
     if (!this.currentPath) return null;
@@ -293,11 +298,12 @@ export class FileBrowser {
   }
   showFileStatus(status, errorText = null) {
     this.fileStatus = status;
-    this.fileErrorText = status === "error" ? errorText : null;
+    this.fileErrorText = errorText;
     this.container.innerHTML = "";
     const el = document.createElement("div");
     el.className = "file-loading";
     el.textContent = this.statusText();
+    if (errorText) el.title = errorText;
     this.container.appendChild(el);
   }
 

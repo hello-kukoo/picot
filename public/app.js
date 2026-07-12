@@ -411,19 +411,24 @@ const filePreviewPanel = new FilePreviewPanel({
 });
 let fileBrowserWorkspacePath = null;
 
-function refreshFileBrowserForWorkspace(path = getCurrentWorkspacePath(), { force = false } = {}) {
+async function refreshFileBrowserForWorkspace(
+  path = getCurrentWorkspacePath(),
+  { force = false } = {},
+) {
   const normalized = typeof path === "string" ? path.trim() : "";
-  if (!force && normalized === fileBrowserWorkspacePath) return;
+  if (!force && normalized === fileBrowserWorkspacePath) return true;
+  const switched = await filePreviewPanel.setWorkspaceRoot(normalized);
+  if (!switched) return false;
+
   fileBrowserWorkspacePath = normalized;
   fileBrowser.workspaceRoot = normalized;
-  filePreviewPanel.setWorkspaceRoot(normalized);
-
   const isCollapsed = fileSidebar.classList.contains("collapsed");
   if (isCollapsed && !force) {
     fileBrowser.setWorkspaceRoot(normalized);
-    return;
+    return true;
   }
-  fileBrowser.load(normalized || undefined);
+  await fileBrowser.load(normalized || undefined);
+  return true;
 }
 
 fileSidebarToggle.addEventListener("click", () => {
@@ -3680,7 +3685,6 @@ setupSettingsToggles({
 
 ({ loadApiKeysPanel, loadInlineConfigEditor, loadInlineModelsEditor } = setupSettingsEditors({
   rpcCommand,
-  closeSettings,
   onModelConfigurationChanged: async () => {
     await fetchModelInfo();
     updateUI();

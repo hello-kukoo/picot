@@ -120,11 +120,19 @@
       "tooLarge": "此文件过大，无法预览。",
       "pickFile": "从文件树中选择文件进行预览。",
       "copySuccess": "已复制！",
-      "copyFailed": "复制失败"
+      "copyFailed": "复制失败",
+      "mode": "查看模式",
+      "lineWrap": "自动换行",
+      "autoSave": "自动保存",
+      "loadError": "文件加载失败",
+      "saveError": "文件保存失败",
+      "readOnly": "只读",
+      "conflictMessage": "{name} 的磁盘内容已更改。要重新加载还是覆盖磁盘版本？"
     },
     "unsaved": {
       "title": "未保存的更改",
       "description": "此文件有未保存的更改。要保存还是丢弃？",
+      "descriptionMultiple": "{count} 个文件有未保存的更改。要保存还是丢弃？",
       "save": "保存更改",
       "discard": "丢弃",
       "cancel": "取消"

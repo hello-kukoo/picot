@@ -44,15 +44,14 @@ describe("classifyFilePath", () => {
     const result = classifyFilePath("analysis.R");
     expect(result.contentType).toBe("text");
     expect(result.editable).toBe(true);
-    // R has no dedicated language mode — languageId is null
-    expect(result.languageId).toBeNull();
+    expect(result.languageId).toBe("r");
   });
 
   test("classifies lowercase .r as editable text", () => {
     const result = classifyFilePath("analysis.r");
     expect(result.contentType).toBe("text");
     expect(result.editable).toBe(true);
-    expect(result.languageId).toBeNull();
+    expect(result.languageId).toBe("r");
   });
 
   test("classifies shell scripts", () => {
@@ -137,9 +136,9 @@ describe("languageExtensionForPath", () => {
     expect(languageExtensionForPath("deploy.sh")).not.toBeNull();
   });
 
-  test("returns null for R (no dedicated mode)", () => {
-    expect(languageExtensionForPath("analysis.R")).toBeNull();
-    expect(languageExtensionForPath("analysis.r")).toBeNull();
+  test("returns an extension for R", () => {
+    expect(languageExtensionForPath("analysis.R")).not.toBeNull();
+    expect(languageExtensionForPath("analysis.r")).not.toBeNull();
   });
 
   test("returns null for unknown extensions", () => {

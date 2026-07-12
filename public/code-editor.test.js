@@ -1,3 +1,4 @@
+import { EditorState } from "@codemirror/state";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { createCodeEditor } from "./code-editor.js";
 
@@ -121,16 +122,17 @@ describe("createCodeEditor", () => {
     expect(destroyCalled).toBe(true);
   });
 
-  test("setReadOnly toggles editable state without recreating editor", () => {
+  test("setReadOnly reconfigures both editable and read-only facets", () => {
     const editor = createCodeEditor({
       container,
       value: "test\n",
       readOnly: true,
     });
-    // Should not throw
+    expect(editor.view.state.facet(EditorState.readOnly)).toBe(true);
     editor.setReadOnly(false);
+    expect(editor.view.state.facet(EditorState.readOnly)).toBe(false);
     editor.setReadOnly(true);
-    expect(editor.getValue()).toBe("test\n");
+    expect(editor.view.state.facet(EditorState.readOnly)).toBe(true);
     editor.destroy();
   });
 

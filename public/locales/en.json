@@ -120,11 +120,19 @@
       "tooLarge": "This file is too large to preview.",
       "pickFile": "Select a file from the tree to preview.",
       "copySuccess": "Copied!",
-      "copyFailed": "Copy failed"
+      "copyFailed": "Copy failed",
+      "mode": "View mode",
+      "lineWrap": "Wrap",
+      "autoSave": "Auto-save",
+      "loadError": "Failed to load file",
+      "saveError": "Failed to save file",
+      "readOnly": "Read-only",
+      "conflictMessage": "{name} changed on disk. Reload it or overwrite the disk version?"
     },
     "unsaved": {
       "title": "Unsaved changes",
       "description": "This file has unsaved changes. Do you want to save or discard them?",
+      "descriptionMultiple": "{count} files have unsaved changes. Save or discard them?",
       "save": "Save changes",
       "discard": "Discard",
       "cancel": "Cancel"

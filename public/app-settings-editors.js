@@ -8,7 +8,6 @@ function escapeHtml(text) {
 
 export function setupSettingsEditors({
   rpcCommand,
-  closeSettings,
   onModelConfigurationChanged,
   clearSettingsSaveMessage,
   setSettingsSaveButtonSaving,

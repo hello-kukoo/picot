@@ -60,7 +60,6 @@ describe("settings API key model refresh", () => {
     const { loadApiKeysPanel } = setupSettingsEditors({
       rpcCommand,
       fetchModelInfo,
-      closeSettings: vi.fn(),
       onModelConfigurationChanged,
       clearSettingsSaveMessage: vi.fn(),
       setSettingsSaveButtonSaving: vi.fn(),

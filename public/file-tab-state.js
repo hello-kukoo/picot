@@ -4,7 +4,15 @@ export class FileTabState {
    * @param opts.storageKey — key under which tab snapshots are persisted
    */
   constructor({ storage, storageKey = "picot-file-tabs" } = {}) {
-    this.storage = storage || (typeof localStorage !== "undefined" ? localStorage : null);
+    if (storage !== undefined) {
+      this.storage = storage;
+    } else {
+      try {
+        this.storage = globalThis.document?.defaultView?.localStorage ?? null;
+      } catch {
+        this.storage = null;
+      }
+    }
     this.storageKey = storageKey;
     this.workspaceRoot = null;
     this.tabs = [];
@@ -44,6 +52,13 @@ export class FileTabState {
         conflict: false,
         error: null,
         mtimeMs: null,
+        editable: null,
+        truncated: false,
+        isBinary: false,
+        mimeType: null,
+        size: null,
+        saveError: null,
+        errorDetail: null,
       }));
     this.activeTabId = rootState.activeTabId || (this.tabs.length > 0 ? this.tabs[0].id : null);
   }
@@ -59,6 +74,7 @@ export class FileTabState {
     const existing = this.tabs.find((tab) => tab.id === tabId);
     if (existing) {
       this.activeTabId = tabId;
+      this.persist();
       this._notify();
       return existing;
     }
@@ -77,6 +93,13 @@ export class FileTabState {
       conflict: false,
       error: null,
       mtimeMs: null,
+      editable: metadata.editable ?? null,
+      truncated: Boolean(metadata.truncated),
+      isBinary: Boolean(metadata.isBinary),
+      mimeType: metadata.mimeType || null,
+      size: metadata.size ?? null,
+      saveError: null,
+      errorDetail: null,
     };
 
     this.tabs.push(tab);
@@ -93,6 +116,7 @@ export class FileTabState {
     const tab = this.tabs.find((t) => t.id === tabId);
     if (!tab) return false;
     this.activeTabId = tabId;
+    this.persist();
     this._notify();
     return true;
   }

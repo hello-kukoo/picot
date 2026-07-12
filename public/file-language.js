@@ -15,9 +15,11 @@ import { markdown } from "@codemirror/lang-markdown";
 import { python } from "@codemirror/lang-python";
 import { yaml } from "@codemirror/lang-yaml";
 import { StreamLanguage } from "@codemirror/language";
+import { r } from "@codemirror/legacy-modes/mode/r";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
 
 const shellLanguage = StreamLanguage.define(shell);
+const rLanguage = StreamLanguage.define(r);
 
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp"]);
 
@@ -85,6 +87,8 @@ function getLanguageId(ext) {
     case "fish":
     case "env":
       return "shell";
+    case "r":
+      return "r";
     default:
       return null;
   }
@@ -139,6 +143,8 @@ export function languageExtensionForPath(filePath) {
     case "fish":
     case "env":
       return shellLanguage;
+    case "r":
+      return rLanguage;
     default:
       return null;
   }

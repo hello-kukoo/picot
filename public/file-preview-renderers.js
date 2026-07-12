@@ -151,6 +151,19 @@ function createMarkdownRenderer({
       }
     },
 
+    openSearch() {
+      editor?.openSearch();
+    },
+
+    goToLine(lineNumber) {
+      return editor?.goToLine(lineNumber) ?? false;
+    },
+
+    setWrapLines(enabled) {
+      currentWrap = enabled;
+      editor?.setWrapLines(enabled);
+    },
+
     get contentType() {
       return "markdown";
     },
@@ -250,6 +263,19 @@ function createTextRenderer({
 
     getEditor() {
       return editor;
+    },
+
+    openSearch() {
+      editor?.openSearch();
+    },
+
+    goToLine(lineNumber) {
+      return editor?.goToLine(lineNumber) ?? false;
+    },
+
+    setWrapLines(enabled) {
+      currentWrap = enabled;
+      editor?.setWrapLines(enabled);
     },
 
     get contentType() {

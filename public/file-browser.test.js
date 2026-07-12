@@ -73,8 +73,25 @@ describe("FileBrowser.setWorkspaceRoot", () => {
 describe("FileBrowser.load", () => {
   let originalFetch;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        files: {
+          loading: "Loading…",
+          empty: "Empty directory",
+          failedLoad: "Failed to load",
+        },
+      }),
+    }));
+    document.cookie.split(";").forEach((cookie) => {
+      const name = cookie.split("=")[0].trim();
+      if (name) document.cookie = `${name}=; Max-Age=0; Path=/`;
+    });
+    await initI18n();
+    globalThis.fetch = originalFetch;
   });
 
   afterEach(() => {
@@ -125,6 +142,16 @@ describe("FileBrowser.load", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][0]).toBe("/api/files?scope=workspace");
     expect(browser.currentPath).toBe("/home/user/project");
+  });
+
+  test("renders a localized failure state when the request rejects", async () => {
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error("offline"));
+
+    await expect(browser.load("/tmp/project")).resolves.toBeUndefined();
+
+    expect(browser.fileStatus).toBe("failed");
+    expect(browser.statusText()).toBe("Failed to load");
   });
 
   test("stale load response does not overwrite newer workspace", async () => {

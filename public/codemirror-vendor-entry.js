@@ -19,6 +19,7 @@ export {
   StreamLanguage,
   syntaxHighlighting,
 } from "@codemirror/language";
+export { r } from "@codemirror/legacy-modes/mode/r";
 export { shell } from "@codemirror/legacy-modes/mode/shell";
 export {
   closeSearchPanel,

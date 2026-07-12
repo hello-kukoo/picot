@@ -145,6 +145,18 @@ describe("FileTabState", () => {
       expect(state2.getTabs()[0].filePath).toBe("/workspace/projectA/a.js");
     });
 
+    test("persists the selected tab without an explicit persist call", () => {
+      const state1 = new FileTabState({ storage });
+      state1.load("/workspace/project");
+      const first = state1.openFile("/workspace/project/a.js");
+      state1.openFile("/workspace/project/b.js");
+      state1.selectTab(first.id);
+
+      const state2 = new FileTabState({ storage });
+      state2.load("/workspace/project");
+      expect(state2.getActiveTab()?.filePath).toBe("/workspace/project/a.js");
+    });
+
     test("isolates tabs between different workspaces", () => {
       const state1 = new FileTabState({ storage });
       state1.load("/workspace/projectA");
