@@ -1,7 +1,7 @@
 # Picot File Preview and Editor Design
 
 **Date:** 2026-07-12  
-**Status:** Revised after technical review; awaiting confirmation  
+**Status:** Revised after follow-up technical review; awaiting confirmation  
 **Scope:** Desktop file preview/editor panel integrated with the existing File tree
 
 ## 1. Goal
@@ -29,7 +29,7 @@ The first implementation supports text, Markdown, images, PDFs, unknown text, an
 - Tabs and panel preferences persist per workspace root.
 - The File tree remains an independent right sidebar.
 - The implementation uses vanilla JavaScript and CodeMirror, not React.
-- The application remains a native-module frontend. Only the CodeMirror and PDF.js dependency graphs are bundled as same-origin ESM vendor files with esbuild.
+- The application remains a native-module frontend. CodeMirror and PDF.js are imported directly by source modules for Vitest and are mapped to same-origin ESM vendor bundles by the browser import map.
 
 ## 3. Layout
 
@@ -144,7 +144,7 @@ renderer.destroy();
 
 ### 4.5 `public/file-preview-markdown.js`
 
-Wraps the existing `renderMarkdown()` export from `public/markdown.js` for file preview use. The wrapper uses DOM APIs, not a new sanitization dependency: it parses the generated HTML in a detached `<template>`, keeps an explicit element allowlist, removes all event-handler attributes, allows only safe `http:`, `https:`, `mailto:`, and fragment link protocols, allows only `http:`, `https:`, and `data:image/*` image protocols, and permits only `text-align` values (`left`, `center`, `right`) in table-cell styles. It installs copy-button event delegation after sanitization.
+Wraps the existing `renderMarkdown()` export from `public/markdown.js` for file preview use. The wrapper uses DOM APIs, not a new sanitization dependency: it parses generated HTML in a detached `<template>`, keeps this explicit element allowlist—`p`, `br`, `hr`, `h1` through `h6`, `strong`, `em`, `del`, `code`, `pre`, `blockquote`, `ul`, `ol`, `li`, `table`, `thead`, `tbody`, `tr`, `th`, `td`, `a`, `img`, `div`, `span`, and `input`—and removes every other element. It removes all event-handler attributes, allows only safe `http:`, `https:`, `mailto:`, and fragment link protocols, allows only `http:`, `https:`, and `data:image/*` image protocols, allows `input` only for disabled task-list checkboxes, and permits only `text-align` values (`left`, `center`, `right`) in table-cell styles. It removes the renderer's inline copy-button `onclick` attribute and installs copy-button event delegation after sanitization.
 
 ### 4.6 `public/file-browser.js`
 
@@ -152,33 +152,62 @@ Keeps directory listing, navigation, native opening, and drag-to-chat behavior. 
 
 ## 5. Frontend dependency bundling
 
-Picot continues to load `public/app.js` and feature modules as native browser ES modules. The application is not converted into one full frontend bundle, so edits to ordinary `public/*.js` files remain directly loadable by the existing development server.
+Picot continues to load `public/app.js` and feature modules as native browser ES modules. The application is not converted into one full frontend bundle, so ordinary application-module edits remain directly loadable by the existing development server.
 
-Two source entries produce same-origin ESM vendor files:
+Source modules import CodeMirror and PDF.js from their normal npm package specifiers:
 
-```text
-public/codemirror-vendor-entry.js
-  → public/vendor/codemirror.js
-
-public/pdf-vendor-entry.js
-  → public/vendor/pdf.js
-  → public/vendor/pdf.worker.js
+```js
+import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 ```
 
-`public/code-editor.js` imports the named CodeMirror exports from `public/vendor/codemirror.js`. `public/file-pdf-preview.js` imports the PDF.js facade from `public/vendor/pdf.js` and configures its worker URL to the same-origin `public/vendor/pdf.worker.js` asset. `app.js`, `file-preview-panel.js`, and other application modules remain native ES modules.
+Vitest resolves these imports from `node_modules`, so tests do not depend on generated files.
 
-The build script uses esbuild with `bundle: true`, `format: "esm"`, and `platform: "browser"` only for these dependency entries. It writes all generated files below `public/vendor/`, which the embedded server serves from the same origin.
+For the browser, `index.html` contains an import map that maps each runtime package specifier used by the application to same-origin generated ESM files:
+
+```text
+@codemirror/state
+@codemirror/view
+@codemirror/commands
+@codemirror/language
+@codemirror/search
+@codemirror/lang-javascript
+@codemirror/lang-json
+@codemirror/lang-markdown
+@codemirror/lang-python
+@codemirror/lang-yaml
+@codemirror/lang-html
+@codemirror/lang-css
+@codemirror/legacy-modes/mode/shell
+pdfjs-dist/legacy/build/pdf.mjs
+```
+
+The CodeMirror entry exports the named runtime APIs used by the application from one browser bundle. The PDF.js entry exports the PDF facade separately, and the PDF.js worker is emitted as a separate same-origin asset. The import map is browser-only; Vitest never reads it.
+
+`scripts/build-frontend.js` is a new build script parallel to `scripts/build-extensions.js`:
+
+```json
+{
+  "build:frontend": "node scripts/build-frontend.js",
+  "build:frontend:watch": "node scripts/build-frontend.js --watch"
+}
+```
+
+The script uses esbuild with `bundle: true`, `format: "esm"`, and `platform: "browser"` for the CodeMirror and PDF.js entries. It writes generated files below `public/vendor/`. `public/vendor/` is added to `.gitignore`; the directory is a build artifact and is never imported by tests.
 
 Development behavior:
 
-- `bun run dev` performs one vendor build before `tauri dev` starts;
+- `bun run dev` performs one `bun run build:frontend` before `tauri dev` starts;
 - ordinary application-module edits remain unbundled and are loaded by the existing WebView reload flow;
-- `bun run build:frontend:watch` runs esbuild watch mode for changes to the vendor entry files or dependency imports;
-- the vendor watch process is needed only when changing CodeMirror/PDF.js entry configuration, not for normal panel, renderer, or app edits.
+- `bun run build:frontend:watch` runs esbuild watch mode when changing vendor entry configuration or dependency exports;
+- the vendor watch process is not needed for ordinary panel, renderer, or app edits.
 
 Release behavior:
 
-- `prebuild` and the Tauri `beforeBuildCommand` run the vendor build;
+- `prebuild` runs `fetch:pi`, `build:extensions`, and `build:frontend`;
+- the Tauri `beforeDevCommand` runs `fetch:pi` and `build:frontend`;
+- the Tauri `beforeBuildCommand` runs `fetch:pi`, `build:extensions`, and `build:frontend`;
 - `public/vendor/` is inside the existing `frontendDist` tree and is served by the embedded server;
 - the generated ESM files comply with the existing Tauri CSP because scripts come from the same localhost origin;
 - CodeMirror's runtime `<style>` injection is covered by the existing `style-src 'self' 'unsafe-inline'` policy.
@@ -246,9 +275,14 @@ The response includes the new file size and modification time. A modification-ti
 
 The active workspace root is the canonical path of `latestCtx?.cwd || process.cwd()`. `latestCtx` is republished on every `session_start`, so a headless session or session switch uses the current session context. The process's instance registration also records `ctx.cwd || process.cwd()` for workspace routing.
 
-All new content/raw endpoints resolve and canonicalize the requested path, then verify that it remains inside this active workspace root. The existing `/api/files` directory endpoint adopts the same root check so directory navigation and file preview have one boundary. `FileBrowser.getParentPath()` stops at `workspaceRoot`, and the server rejects a directory request above that root.
+The `/api/files` endpoint has two explicit scopes:
 
-The implementation rejects:
+- `scope=workspace` is used by FileBrowser and applies the active workspace-root boundary;
+- `scope=picker` is used by FolderPicker and retains unrestricted read-only directory browsing so a user can choose an initial workspace.
+
+The default scope is `workspace`. FileBrowser sends `scope=workspace` on every directory request, and `FileBrowser.getParentPath()` stops at `workspaceRoot`. FolderPicker sends `scope=picker` and remains able to browse from the filesystem root. Content and raw endpoints always use the active workspace boundary and never accept picker scope.
+
+All content/raw endpoints and workspace-scoped directory requests resolve and canonicalize the requested path, then verify that it remains inside the active workspace root. The implementation rejects:
 
 - `..` traversal;
 - symlink escapes;
@@ -256,7 +290,7 @@ The implementation rejects:
 - writes to missing or non-regular files;
 - paths outside the active workspace.
 
-If a stale client requests a path outside the current session root, the server returns a structured `outsideWorkspace` error. The panel shows a localized “File is outside the active workspace” state with Open in desktop still available when the path came from an existing tree entry.
+If a stale client requests a path outside the current session root, the server returns a structured `outsideWorkspace` error. In normal browsing this is prevented by `scope=workspace`; the panel state is primarily for persisted tabs from a previous workspace or session-root change. The panel shows a localized outside-workspace state and keeps Close tab and Copy file path available.
 
 ## 7. Renderer behavior
 
@@ -416,7 +450,8 @@ Add `extensions/embedded-server-files.test.ts` covering:
 - 409 modification conflicts;
 - size limits;
 - workspace-root resolution from `ctx.cwd` and `process.cwd()`;
-- `/api/files` rejection of paths above the workspace root.
+- workspace-scoped `/api/files` rejection of paths above the workspace root;
+- picker-scoped `/api/files` access from the filesystem root.
 
 ### Required checks after implementation
 
