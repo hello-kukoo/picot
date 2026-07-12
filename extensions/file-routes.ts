@@ -11,7 +11,7 @@ import * as path from "node:path";
 
 // ─── Types ──────────────────────────────────────────────────────────────
 
-type CtxLike = { cwd?: string } | null;
+type CtxLike = { cwd?: string } | null | undefined;
 
 export type Scope = "workspace" | "picker";
 
@@ -112,23 +112,13 @@ const TEXT_MIME_BY_EXT: Record<string, string> = {
 
 // ─── Workspace root resolution ──────────────────────────────────────────
 
-export function resolveWorkspaceRoot(ctx: CtxLike, fallbackCwd: string): string {
-  const cwd = ctx?.cwd || fallbackCwd;
+export function resolveWorkspaceRoot(ctx: CtxLike): string | null {
+  const cwd = ctx?.cwd;
+  if (typeof cwd !== "string" || cwd.trim() === "") return null;
   try {
     return fs.realpathSync(cwd);
   } catch {
-    return path.resolve(cwd);
-  }
-}
-
-/**
- * Canonicalize a workspace root path via realpath for consistent comparison.
- */
-function canonicalizeRoot(workspaceRoot: string): string {
-  try {
-    return fs.realpathSync(workspaceRoot);
-  } catch {
-    return path.resolve(workspaceRoot);
+    return null;
   }
 }
 
@@ -167,11 +157,16 @@ export function resolveScopedFilePath(
     return { ok: false, code: "invalidPath" };
   }
 
-  const normalizedRoot = canonicalizeRoot(workspaceRoot);
+  let normalizedRoot: string;
+  try {
+    normalizedRoot = fs.realpathSync(workspaceRoot);
+  } catch {
+    return { ok: false, code: "outsideWorkspace" };
+  }
   const sep = path.sep;
 
   if (realPath === normalizedRoot || realPath.startsWith(`${normalizedRoot}${sep}`)) {
-    return { ok: true, path: resolved };
+    return { ok: true, path: realPath };
   }
 
   return { ok: false, code: "outsideWorkspace" };
@@ -226,15 +221,46 @@ export function isEditableBySize(size: number): boolean {
   return size <= EDIT_SIZE_LIMIT;
 }
 
+type OpenedCanonicalFile = { fd: number; stat: fs.Stats };
+
+function openCanonicalRegularFile(filePath: string, flags: number): OpenedCanonicalFile {
+  const expectedRealPath = fs.realpathSync(filePath);
+  if (expectedRealPath !== filePath || fs.lstatSync(filePath).isSymbolicLink()) {
+    throw new Error("File path is not canonical");
+  }
+
+  const noFollow = fs.constants.O_NOFOLLOW ?? 0;
+  const fd = fs.openSync(filePath, flags | noFollow);
+  try {
+    const openedStat = fs.fstatSync(fd);
+    const currentRealPath = fs.realpathSync(filePath);
+    const currentStat = fs.statSync(currentRealPath);
+    if (
+      !openedStat.isFile() ||
+      currentRealPath !== expectedRealPath ||
+      openedStat.dev !== currentStat.dev ||
+      openedStat.ino !== currentStat.ino
+    ) {
+      throw new Error("File changed while opening");
+    }
+    return { fd, stat: openedStat };
+  } catch (error) {
+    fs.closeSync(fd);
+    throw error;
+  }
+}
+
+export function openCanonicalFileForRead(filePath: string): OpenedCanonicalFile {
+  return openCanonicalRegularFile(filePath, fs.constants.O_RDONLY);
+}
+
 // ─── Text file reading ──────────────────────────────────────────────────
 
 export function readTextFileForPreview(filePath: string): ReadResult {
-  const stat = fs.statSync(filePath);
-  const size = stat.size;
-
-  const readLen = Math.min(size, TEXT_READ_LIMIT);
-  const fd = fs.openSync(filePath, "r");
+  const { fd, stat } = openCanonicalFileForRead(filePath);
   try {
+    const size = stat.size;
+    const readLen = Math.min(size, TEXT_READ_LIMIT);
     const buf = Buffer.alloc(readLen);
     const bytesRead = fs.readSync(fd, buf, 0, readLen, 0);
     const actualBuf = buf.subarray(0, bytesRead);
@@ -263,31 +289,37 @@ export function writeTextFileIfUnchanged(
   filePath: string,
   content: string,
   expectedMtimeMs: number,
+  force = false,
 ): WriteResult {
-  let stat: fs.Stats;
+  let opened: OpenedCanonicalFile;
   try {
-    stat = fs.statSync(filePath);
+    opened = openCanonicalRegularFile(filePath, fs.constants.O_WRONLY);
   } catch {
     return { success: false, code: "invalid" };
   }
 
-  if (!stat.isFile()) {
-    return { success: false, code: "invalid" };
+  const { fd, stat } = opened;
+  try {
+    if (
+      !force &&
+      Number.isFinite(expectedMtimeMs) &&
+      Math.abs(stat.mtimeMs - expectedMtimeMs) > 1
+    ) {
+      return { success: false, code: "conflict" };
+    }
+
+    fs.ftruncateSync(fd, 0);
+    fs.writeFileSync(fd, content, "utf-8");
+    fs.fsyncSync(fd);
+    const newStat = fs.fstatSync(fd);
+    return {
+      success: true,
+      size: newStat.size,
+      mtimeMs: newStat.mtimeMs,
+    };
+  } finally {
+    fs.closeSync(fd);
   }
-
-  // mtime conflict check (allow 1ms tolerance for filesystem precision)
-  if (Number.isFinite(expectedMtimeMs) && Math.abs(stat.mtimeMs - expectedMtimeMs) > 1) {
-    return { success: false, code: "conflict" };
-  }
-
-  fs.writeFileSync(filePath, content, "utf-8");
-
-  const newStat = fs.statSync(filePath);
-  return {
-    success: true,
-    size: newStat.size,
-    mtimeMs: newStat.mtimeMs,
-  };
 }
 
 // ─── HTTP response helpers ──────────────────────────────────────────────
