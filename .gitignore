@@ -19,3 +19,6 @@ src-tauri/resources/pi/
 pi-session-*.html
 # husky internal scripts (managed by `bun run prepare`)
 .husky/_/
+
+# Superpowers plans
+docs/superpowers/plans
