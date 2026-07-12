@@ -210,6 +210,26 @@
       </div>
     </div>
 
+    <!-- File Preview Panel (between chat and file tree) -->
+    <hr class="file-preview-resizer collapsed" id="file-preview-resizer" aria-orientation="vertical" tabindex="0" aria-valuenow="42" aria-valuemin="20" aria-valuemax="70">
+    <section class="file-preview-panel collapsed" id="file-preview-panel" aria-label="File preview" data-i18n-aria-label="files.preview.title">
+      <div class="file-preview-tabs-bar" id="file-preview-tabs-bar">
+        <div class="file-preview-tabs" id="file-preview-tabs"></div>
+        <div class="file-preview-panel-controls">
+          <button class="icon-btn file-preview-enlarge-btn" id="file-preview-enlarge" title="Enlarge panel" data-i18n-title="files.preview.enlarge" aria-label="Enlarge panel" data-i18n-aria-label="files.preview.enlarge">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+          </button>
+          <button class="icon-btn file-preview-collapse-btn hidden" id="file-preview-collapse" title="Collapse panel" data-i18n-title="files.preview.collapse" aria-label="Collapse panel" data-i18n-aria-label="files.preview.collapse">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>
+          </button>
+          <button class="icon-btn" id="file-preview-close" title="Close panel" data-i18n-title="files.preview.close" aria-label="Close panel" data-i18n-aria-label="files.preview.close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="file-preview-content" id="file-preview-content"></div>
+    </section>
+
     <!-- File Browser (right sidebar) -->
     <div class="file-sidebar collapsed" id="file-sidebar">
       <div class="file-sidebar-header">
