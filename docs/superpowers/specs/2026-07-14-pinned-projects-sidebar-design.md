@@ -284,7 +284,8 @@ in lexical order. Unsupported remote formats and repositories without remotes
 fall back to the repository-root folder name.
 
 On detached HEAD, `branch` is `null` and `detachedAt` contains the short commit
-SHA. Quick info displays the localized equivalent of `Detached at {sha}`.
+SHA. The API retains those values for Git classification, but the compact
+quick-info card deliberately omits branch and detached-HEAD rows.
 
 Non-Git workspaces return `isGit: false` with a successful HTTP response. Unknown
 workspace identifiers return a client error. Unexpected Git or filesystem
@@ -292,9 +293,11 @@ failures return a bounded error without command output, environment details, or
 unrelated paths.
 
 Closing or replacing a quick-info card cancels its frontend request. The route
-observes request closure and aborts the active Git child; the overall deadline
-is the fallback. Rapid traversal therefore does not accumulate abandoned Git
-processes.
+MUST support the standard Fetch `AbortSignal` supplied by Bun's adapter; Node
+EventEmitter lifecycle events are optional compatibility behavior, never a
+requirement of the adapter contract. Closing a request aborts the active Git
+child; the overall deadline is the fallback. Rapid traversal therefore does not
+accumulate abandoned Git processes.
 
 The route stays separate from `/api/sessions`. Listing many workspaces must not
 spawn Git processes or delay the main session response.
@@ -398,10 +401,14 @@ Quick-info and extension tests use temporary real Git repositories and linked
 worktrees. They cover remote parsing, missing remotes, branches, worktree
 detection, detached HEAD, timeouts, output bounds, non-Git directories,
 unknown-ID rejection, inert rendering of HTML-like metadata, cached failures,
-stale responses, hover intent, request abort, viewport clamping, focus, and
-Escape.
+stale responses, hover intent, viewport clamping, focus, Escape, and an open
+card surviving a Pin-triggered sidebar rerender. Route tests exercise both the
+Node EventEmitter path and the Bun Fetch-adapter `AbortSignal` path, including an
+already-aborted request.
 
 Final verification runs focused Vitest files, `bun run test`, and `bun run check`.
 Manual verification covers light and dark themes, long workspace lists, large
 session groups, cross-window Pin updates, a full-cookie failure, narrow desktop
-windows, popup boundaries, keyboard operation, and live locale switching.
+windows, popup boundaries, keyboard operation, and live locale switching. When a
+prototype image defines the popup, capture the real card and compare its visible
+rows, icons, separators, labels, truncation, and Pin state against that image.
