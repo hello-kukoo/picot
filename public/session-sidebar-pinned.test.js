@@ -147,7 +147,7 @@ describe("SessionSidebar PINNED integration", () => {
       "/sessions/missing.jsonl",
     );
     expect(document.querySelector(".projects-group").textContent).toContain("live");
-    expect(quickInfo.bindHeader).toHaveBeenCalledTimes(2);
+    expect(quickInfo.bindHeader).toHaveBeenCalledTimes(3);
   });
 
   test("pins and unpins a session through its context menu", () => {
@@ -162,6 +162,29 @@ describe("SessionSidebar PINNED integration", () => {
     item.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }));
     document.querySelector(".context-menu-item").click();
     expect(pinStore.pinSession).toHaveBeenCalledWith("/sessions/alpha.jsonl");
+  });
+
+  test("uses the shared disclosure builder for PINNED workspace groups", () => {
+    const pinStore = makePinStore({
+      workspaces: [{ id: "history:alpha", path: "/work/alpha" }],
+      sessions: [],
+    });
+    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
+      pinStore,
+      quickInfo: makeQuickInfo(),
+    });
+    sidebar.projects = createProjects();
+    sidebar.render();
+
+    const header = document.querySelector(".pinned-group .sidebar-section-header");
+    const body = document.querySelector(".pinned-group .sidebar-section-sessions");
+    expect(header.getAttribute("role")).toBe("button");
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    expect(document.querySelector(".pinned-group .workspace-group")).not.toBeNull();
+
+    header.dispatchEvent(new KeyboardEvent("keydown", { key: " " }));
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    expect(body.classList.contains("collapsed")).toBe(true);
   });
 
   test("reconciles a provisional pinned workspace when session history supplies its ID", async () => {

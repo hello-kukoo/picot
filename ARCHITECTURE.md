@@ -201,9 +201,9 @@ HTTP+WS server。该 server 是**进程作用域**的 —— 它在 `new_session
 - **HTTP REST** 在 `/api/*` 下 —— `/api/health`、`/api/sessions`、
   `/api/files`、`/api/files/content`（读 / 条件写）、
   `/api/files/raw`（图片 / PDF）、`/api/search`、`/api/cost-dashboard`、
-  `/api/lan-qr`、`/api/instances`、`/api/open`、`/api/agent-config`、
-  `/api/models-config`、`/api/git-branch`，加 `POST /api/rpc` 透传。
-  `public/` 下的静态资源在 `/` 下分发。
+  `/api/lan-qr`、`/api/instances`、`/api/workspace-info`、`/api/open`、
+  `/api/agent-config`、`/api/models-config`、`/api/git-branch`，加
+  `POST /api/rpc` 透传。`public/` 下的静态资源在 `/` 下分发。
 - **WebSocket** 在 `/ws` —— 命令分发器。每个连接的客户端发 JSON 命令
   （`send_user_message`、`abort`、`set_model`、`set_thinking_level`、
   `switch_session`、`new_session`、`fork`、`list_models`、`list_auth`、
@@ -239,10 +239,13 @@ HTTP+WS server 有两条运行时路径：`Bun.serve`（生产环境，pi 通过
 - **聊天渲染** —— `message-renderer.js`、`tool-card.js`、`markdown.js`、
   `public/vendor/remend.js`（第三方流式 markdown 修复）。
 - **侧栏 / 文件工作区** —— `session-sidebar.js`、`recent-sessions.js`、
-  `file-browser.js`、`file-preview-panel.js`、`file-tab-state.js`、
-  `file-preview-renderers.js`、`file-preview-markdown.js`、
-  `file-pdf-preview.js`、`code-editor.js`、`file-language.js`、
-  `sidebar-search-control.js`。
+  `pinned-items.js`（跨端口 Pin cookie）、`workspace-projects.js`
+  （history/live workspace 合并）、`workspace-quick-info.js`
+  （按需 Git quick-info）和 `sidebar-workspace-group.js`（安全、可访问的
+  region/workspace DOM builder）；以及 `file-browser.js`、
+  `file-preview-panel.js`、`file-tab-state.js`、`file-preview-renderers.js`、
+  `file-preview-markdown.js`、`file-pdf-preview.js`、`code-editor.js`、
+  `file-language.js`、`sidebar-search-control.js`。
 - **用量 / 设置 / 更新器** —— `cost-infobar.js`、`cost.html`、`cost.js`、
   `app-settings-editors.js`、`app-settings-toggles.js`、
   `settings-save-status.js`、`app-updater.js`。
@@ -568,19 +571,31 @@ Tauri command handler（`new_session_core`、`switch_session_core`、
 每个 workspace 窗口加载自不同端口的 `http://localhost:<port>`，
 而 `localStorage` 按 origin（端口）隔离。需要跨所有本地 workspace
 窗口一致的浏览器侧状态，用 `Path=/` 的 cookie 持久化 —— `localhost`
-的 cookie 跨端口共享。目前三个消费者：
+的 cookie 跨端口共享。目前四个消费者：
 
 | Cookie key              | 模块                 | 用途                          |
 | ----------------------- | -------------------- | ----------------------------- |
 | `pi-studio-theme`       | `themes.js`          | 主题选择                      |
 | `picot-language`        | `i18n.js`            | 语言偏好（en / zh / system）  |
 | `picot-recent-sessions` | `recent-sessions.js` | RECENT 会话 MRU 列表（≤5 条） |
+| `picot-pinned-items`    | `pinned-items.js`    | 有序 workspace / session Pins |
 
 RECENT 会话的完整设计见
 [`docs/superpowers/specs/2026-07-11-recent-sessions-design.md`](docs/superpowers/specs/2026-07-11-recent-sessions-design.md)。
 该 cookie 存百分编码的 JSON 数组（session `filePath`），同步读写，
 last-write-wins 语义；并发窗口可能丢失中间 MRU 排序，下一次访问
 重写完整的五条列表。`SessionSidebar.setActive()` 是唯一记录入口。
+
+Pin cookie 使用版本化 JSON；每次变更先重读 cookie，再执行有序去重写入。编码后
+超过 3,800 字节的变更必须拒绝而不能淘汰已有 Pin；无法解析的 Pin 保留为
+unavailable。旧 `pi-studio-favourites` 仅在当前 origin 尽力迁移。
+
+`GET /api/workspace-info?workspaceId=` 只接受 `/api/sessions` 历史记录或
+运行实例登记表中已知的 `history:` / `path:` ID，绝不接收任意文件系统路径。
+它按需以参数数组的 `execFile` 读取本地 Git 元数据：无 shell、无网络操作、
+3 秒总 deadline、64 KiB 输出上限，并固定 `GIT_OPTIONAL_LOCKS=0` 和
+`GIT_TERMINAL_PROMPT=0`。Git 输出和所有 Pin 文本均是不可信数据，前端只能
+用 `textContent` 渲染。
 
 ### 文件浏览、预览与编辑
 
@@ -766,75 +781,19 @@ renderError(message);
 
 ### 聊天历史导航 (Chat History Navigator)
 
-聊天历史导航器是一个纯前端的 pointer-only overlay，让用户在一个长会话
-里按 user turn 快速跳转。完整交互设计见
+聊天历史导航器是纯前端、pointer-only 的长会话 user-turn overlay；交互细节见
 [`docs/superpowers/specs/2026-07-14-chat-history-navigation-design.md`](docs/superpowers/specs/2026-07-14-chat-history-navigation-design.md)。
-本节描述它的模块边界、数据流、生命周期、安全和验证约束。
 
-**模块边界与所有权**
-
-- `public/chat-history-navigation.js` 拥有：turn 索引、rail 和 preview DOM、
-  tick 布局与放大、active-turn 滚动追踪、点击导航、流式摘要更新和生命
-  周期清理。它导出一个工厂函数（带 fallback），通过
-  `addUserTurn` / `beginAssistantMessage` / `updateAssistantMessage` /
-  `completeAssistantMessage` / `invalidateLayout` / `reset` / `destroy`
-  七个方法暴露公共 API。
-- `public/app.js` 是编排器：它创建导航器，转发现有的聊天生命周期事件
-  （用户消息渲染、流式开始 / 更新 / 完成、布局失效、会话切换）。**严禁**
-  在 `app.js` 内放 tick 计算、preview 渲染或 turn 索引逻辑。
-- `message-renderer.js` 暴露窄回调或返回值，提供已渲染的 DOM 元素和
-  可见源文本（user 渲染返回 `HTMLElement`）。它不拥有导航器 UI。
-- 样式在 `public/style.css` 的 `Chat History Navigator` 段落，使用现有
-  design token（`--text-ghost` / `--text-secondary` / `--border-bright` /
-  `--bg-frosted` / `--blur-heavy` / `--radius-md` / `--ease` / `--duration`
-  等），不引入新 token。
-
-**数据流**
-
-渲染管道直接供给 turn 数据。导航器**不得**通过抓取已渲染的 Markdown
-恢复源内容 —— 直接数据保留了可见响应文本与隐藏 thinking / tool 内容
-之间的边界。一个 turn 从一条可渲染的 user message 开始，在下一条
-可渲染 user message 之前结束。该区间内每条 assistant message 的可见
-文本被拼接（中间空一行）；tool call 和 tool result 可以出现在 assistant
-message 之间，但永远不会拆分一个 turn。
-
-导航器只存储 prompt 的前 2,000 个 Unicode code point 和 response 的前
-4,000 个。聊天渲染器保留完整源文本；这些有界副本足够两到三行预览，
-并防止导航器在内存中复制无界的会话。
-
-**生命周期**
-
-- 用户提交 prompt 时，导航器以 `waiting` 状态添加一个 turn。
-- assistant 生成开始时，状态变为 `streaming`；可见文本 delta 更新
-  `assistantText`，thinking 和 tool 事件不更新。
-- 生成结束（finalization）时，状态变为 `complete`。
-- 历史会话渲染从传给聊天渲染器的 session entries 构建完整的 turn 索引。
-- 切换会话、新建会话、清空渲染器或加载历史失败时，先清空旧索引再显示
-  新内容（`reset()`）。这会取消所有 pending animation frame、observer
-  和 preview 状态。
-
-**安全：预览文本始终惰性**
-
-预览把 user prompt 和 assistant response 当作**不可信文本**。它创建
-text node 或赋值 `textContent`，**绝不**用 `innerHTML` 插入任何一个值。
-HTML-like payload 和事件处理器字符串在预览中始终是惰性文本。测试用
-HTML-like 和 event-handler payload 强制这条边界。这与 i18n 的
-`t()` 返回纯文本约束一致（见 AGENTS.md §Localization）。
-
-**验证约束**
-
-- 缺失或畸形的 message 内容产生空摘要，不抛异常。
-- 一条没有可见 assistant 文本的完成 turn 保留其状态标签（本地化的
-  no-visible-response 文本）。
-- 缺失的目标元素在导航前移除 stale turn。
-- 导航器故障不得阻塞聊天渲染或滚动。
-- 少于两个 user turn 时导航器隐藏；触摸优先和移动布局（`hover: none`
-  或 `pointer: coarse` 或 `max-width: 768px`）下也隐藏。
-- rail 是 `aria-hidden` 的 pointer-only 增强，不在 Tab 序列中；键盘和
-  辅助技术用户通过现有的可滚动聊天面板获得等价的历史浏览路径。
-- `chatNavigation.*` i18n key 共四个：`imageMessage`（图片消息）、
-  `waiting`（等待回复）、`generating`（生成中）、`noVisibleResponse`
-  （无可见响应），en / zh 必须对等。
+- `public/chat-history-navigation.js` 拥有 turn 索引、rail / preview DOM、
+  流式摘要、滚动追踪和清理；仅导出对象参数工厂
+  `createChatHistoryNavigation({ host, messages, ... })`。
+- `app.js` 只创建该模块并转发既有聊天生命周期事件；`message-renderer.js`
+  只提供已渲染节点和可见源文本。
+- prompt / response 摘要必须有界（2,000 / 4,000 Unicode code points），
+  排除 thinking 与 tool 内容；所有预览文本使用 `textContent`。
+- 重置、历史加载失败和会话切换必须销毁旧状态。少于两个 user turn、粗指针和
+  reduced-motion 场景保持非干扰式行为；`chatNavigation.*` 翻译在 en / zh
+  中必须对等。
 
 ---
 

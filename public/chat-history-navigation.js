@@ -108,15 +108,6 @@ export function binarySearchActiveTurn(offsets, anchor) {
 
 export class ChatHistoryNavigator {
   constructor(chatPanel, options = {}) {
-    if (chatPanel && !chatPanel.appendChild && chatPanel.host) {
-      options = {
-        ...chatPanel,
-        messagesContainer: chatPanel.messages,
-        requestAnimationFrame: chatPanel.requestFrame,
-        cancelAnimationFrame: chatPanel.cancelFrame,
-      };
-      chatPanel = chatPanel.host;
-    }
     this.chatPanel = chatPanel || null;
     this.messagesContainer = options.messagesContainer || null;
     this.transport = options.transport || null;
@@ -764,31 +755,23 @@ export class ChatHistoryNavigator {
   }
 }
 
-export const ChatHistoryNavigation = ChatHistoryNavigator;
-export function createChatHistoryNavigation(options = {}) {
+export function createChatHistoryNavigation({
+  host = null,
+  messages = null,
+  requestFrame,
+  cancelFrame,
+  ...options
+} = {}) {
+  if (!host) return createNoOpNavigator();
   try {
-    return new ChatHistoryNavigator(options.host, {
+    return new ChatHistoryNavigator(host, {
       ...options,
-      messagesContainer: options.messages,
-      requestAnimationFrame: options.requestFrame,
-      cancelAnimationFrame: options.cancelFrame,
+      messagesContainer: messages,
+      requestAnimationFrame: requestFrame,
+      cancelAnimationFrame: cancelFrame,
     });
   } catch {
     console.warn("[Picot] Chat history navigation disabled");
-    return createNoOpNavigator();
-  }
-}
-/**
- * Factory used by app.js. Returns a real navigator when the chat panel is
- * available, or a no-op stub otherwise so callers never throw.
- */
-export function createChatHistoryNavigator(chatPanel, options = {}) {
-  if (!chatPanel) {
-    return createNoOpNavigator();
-  }
-  try {
-    return new ChatHistoryNavigator(chatPanel, options);
-  } catch {
     return createNoOpNavigator();
   }
 }

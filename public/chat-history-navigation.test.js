@@ -6,7 +6,7 @@ import {
   ChatHistoryNavigator,
   computeActiveTurn,
   computeTickPositions,
-  createChatHistoryNavigator,
+  createChatHistoryNavigation,
   createNoOpNavigator,
 } from "./chat-history-navigation.js";
 
@@ -634,8 +634,8 @@ describe("computeTickPositions", () => {
 // ── Factory fallback ─────────────────────────────────────────────────
 
 describe("factory", () => {
-  test("returns no-op stub when chatPanel is null", () => {
-    const nav = createChatHistoryNavigator(null);
+  test("returns no-op stub when the factory host is null", () => {
+    const nav = createChatHistoryNavigation({ host: null });
     expect(typeof nav.addUserTurn).toBe("function");
     expect(() => nav.addUserTurn({ text: "x" })).not.toThrow();
     expect(() => nav.reset()).not.toThrow();
@@ -658,11 +658,15 @@ describe("factory", () => {
     }
   });
 
-  test("returns real navigator when chatPanel provided", () => {
+  test("returns real navigator when the factory receives a host and message container", () => {
     const chatPanel = document.createElement("div");
-    const nav = createChatHistoryNavigator(chatPanel, {
-      requestAnimationFrame: () => 0,
-      cancelAnimationFrame: () => {},
+    const messages = document.createElement("div");
+    chatPanel.appendChild(messages);
+    const nav = createChatHistoryNavigation({
+      host: chatPanel,
+      messages,
+      requestFrame: () => 0,
+      cancelFrame: () => {},
       setTimeout: () => 0,
       clearTimeout: () => {},
     });

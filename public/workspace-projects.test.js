@@ -33,6 +33,18 @@ test("merges live zero-session workspaces and orders by activity", () => {
   ]);
   expect(result.projects[0].sessions).toEqual([]);
 });
+test("aggregates activity without spreading a large session list", () => {
+  const sessions = Array.from({ length: 150_000 }, (_, index) => ({
+    filePath: `/sessions/${index}.jsonl`,
+    ctime: index,
+  }));
+  const result = mergeWorkspaceProjects(
+    [{ path: "/work/large", dirName: "large", sessions }],
+    [],
+    [],
+  );
+  expect(result.projects[0].activityAt).toBe(149_999);
+});
 test("reconciles provisional identity without duplicate", () => {
   const result = mergeWorkspaceProjects(
     [

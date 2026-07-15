@@ -25,6 +25,12 @@ const time = (value) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 const sessionTime = (s) => Math.max(time(s?.timestamp), Number(s?.ctime) || 0);
+function latestActivity(sessions, instances) {
+  let latest = 0;
+  for (const session of sessions) latest = Math.max(latest, sessionTime(session));
+  for (const instance of instances) latest = Math.max(latest, time(instance?.startedAt));
+  return latest;
+}
 function folderName(path) {
   const parts = String(path || "")
     .split("/")
@@ -52,11 +58,7 @@ export function mergeWorkspaceProjects(
     if (!path || !workspaceId) continue;
     const sessions = Array.isArray(project.sessions) ? project.sessions : [];
     const instances = liveByPath.get(path) || [];
-    const activityAt = Math.max(
-      ...sessions.map(sessionTime),
-      ...instances.map((i) => time(i.startedAt)),
-      0,
-    );
+    const activityAt = latestActivity(sessions, instances);
     byPath.set(path, {
       workspaceId,
       path: project.path,
@@ -72,7 +74,7 @@ export function mergeWorkspaceProjects(
   }
   for (const [path, instances] of liveByPath) {
     if (byPath.has(path)) continue;
-    const activityAt = Math.max(...instances.map((i) => time(i.startedAt)), 0);
+    const activityAt = latestActivity([], instances);
     byPath.set(path, {
       workspaceId: provisionalWorkspaceId(path),
       path,

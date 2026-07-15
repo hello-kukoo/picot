@@ -5,7 +5,7 @@
 import { onLocaleChange, t } from "./i18n.js";
 import { createPinnedItemsStore } from "./pinned-items.js";
 import { readRecentSessions, recordRecentSession, writeRecentSessions } from "./recent-sessions.js";
-import { buildSidebarWorkspaceGroup } from "./sidebar-workspace-group.js";
+import { buildSidebarSection, buildSidebarWorkspaceGroup } from "./sidebar-workspace-group.js";
 import { mergeWorkspaceProjects, resolvePinnedWorkspaceGroups } from "./workspace-projects.js";
 import { WorkspaceQuickInfo } from "./workspace-quick-info.js";
 
@@ -732,67 +732,79 @@ export class SessionSidebar {
   }
   renderPinnedSection() {
     const state = this.pinStore.getRenderableState();
-    const groups = resolvePinnedWorkspaceGroups({
+    const pinnedGroups = resolvePinnedWorkspaceGroups({
       pinState: state,
       projects: this.projects,
       archivedPaths: this.archived,
     });
-    const section = document.createElement("div");
-    section.className = "pinned-group sidebar-section-pinned";
-    const header = document.createElement("div");
-    header.className = "project-header pinned-header";
-    header.textContent = t("sidebar.pinned");
-    const body = document.createElement("div");
-    body.className = "project-sessions pinned-sessions";
+    const { section } = buildSidebarSection({
+      region: "pinned",
+      titleKey: "sidebar.pinned",
+      count: pinnedGroups.length,
+      renderSessions: (body) => {
+        for (const pinned of pinnedGroups) {
+          const workspace = pinned.workspace;
+          const unavailableFilePath = pinned.sessions[0]?.filePath || "";
+          const workspacePath = workspace?.path || "";
+          const folderName =
+            workspace?.folderName ||
+            workspacePath.split("/").filter(Boolean).at(-1) ||
+            unavailableFilePath ||
+            t("sidebar.unavailable");
+          const workspaceId = workspace?.workspaceId || `pinned-session:${unavailableFilePath}`;
+          const { group, header } = buildSidebarWorkspaceGroup({
+            workspaceId,
+            folderName,
+            workspacePath,
+            sessionCount: pinned.sessions.length,
+            expanded: true,
+            onNewChat:
+              !pinned.unavailable && workspacePath ? () => this.onNewChat(workspacePath) : null,
+            renderSessions: (container) => {
+              if (pinned.unavailable) {
+                const unavailable = document.createElement("div");
+                unavailable.className = "pinned-unavailable";
+                unavailable.textContent =
+                  workspacePath || unavailableFilePath || t("sidebar.unavailable");
+                container.appendChild(unavailable);
 
-    for (const pinned of groups) {
-      const workspace = pinned.workspace;
-      const group = document.createElement("div");
-      group.className = "pinned-workspace-group";
-      group.dataset.workspaceId = workspace?.workspaceId || "";
-      const title = document.createElement("div");
-      title.className = "pinned-workspace-title";
-      title.textContent =
-        workspace?.folderName ||
-        workspace?.path?.split("/").filter(Boolean).at(-1) ||
-        pinned.sessions[0]?.filePath ||
-        t("sidebar.unavailable");
-      group.appendChild(title);
+                const unpin = document.createElement("button");
+                unpin.type = "button";
+                unpin.textContent = pinned.workspacePin
+                  ? t("sidebar.unpinWorkspace")
+                  : t("sidebar.unpinSession");
+                unpin.addEventListener("click", () => {
+                  if (pinned.workspacePin) this.pinStore.unpinWorkspace(workspace.workspaceId);
+                  else this.pinStore.unpinSession(unavailableFilePath);
+                });
+                container.appendChild(unpin);
+                return;
+              }
 
-      if (pinned.unavailable) {
-        const unavailable = document.createElement("div");
-        unavailable.className = "pinned-unavailable";
-        unavailable.textContent =
-          workspace?.path || pinned.sessions[0]?.filePath || t("sidebar.unavailable");
-        const unpin = document.createElement("button");
-        unpin.type = "button";
-        unpin.textContent = pinned.workspacePin
-          ? t("sidebar.unpinWorkspace")
-          : t("sidebar.unpinSession");
-        unpin.addEventListener("click", () => {
-          if (pinned.workspacePin) this.pinStore.unpinWorkspace(workspace.workspaceId);
-          else this.pinStore.unpinSession(pinned.sessions[0].filePath);
-        });
-        group.append(unavailable, unpin);
-      } else {
-        if (pinned.workspacePin) {
-          const unpin = document.createElement("button");
-          unpin.type = "button";
-          unpin.className = "pinned-workspace-unpin";
-          unpin.textContent = t("sidebar.unpinWorkspace");
-          unpin.addEventListener("click", () =>
-            this.pinStore.unpinWorkspace(workspace.workspaceId),
-          );
-          group.appendChild(unpin);
+              for (const session of pinned.sessions) {
+                container.appendChild(this.buildSessionItem(session, workspace));
+              }
+            },
+          });
+          group.classList.add("pinned-workspace-group");
+
+          if (pinned.workspacePin && !pinned.unavailable) {
+            const unpin = document.createElement("button");
+            unpin.type = "button";
+            unpin.className = "pinned-workspace-unpin";
+            unpin.textContent = t("sidebar.unpinWorkspace");
+            unpin.addEventListener("click", () =>
+              this.pinStore.unpinWorkspace(workspace.workspaceId),
+            );
+            header.appendChild(unpin);
+          }
+
+          if (!pinned.unavailable && workspace) this.quickInfo.bindHeader(header, workspace);
+          body.appendChild(group);
         }
-        for (const session of pinned.sessions) {
-          group.appendChild(this.buildSessionItem(session, workspace));
-        }
-      }
-      body.appendChild(group);
-    }
-
-    section.append(header, body);
+      },
+    });
+    section.className = `pinned-group ${section.className}`;
     this.container.appendChild(section);
   }
 

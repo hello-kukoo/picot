@@ -50,8 +50,10 @@ export function parseRepositoryName(remoteUrl: string, repositoryRoot: string) {
     } catch {
       return basename(repositoryRoot);
     }
-  } else if (value.includes(":") && !value.startsWith("/"))
+  } else if (value.includes(":") && !value.startsWith("/")) {
+    // URL forms are handled first, so this branch only parses SCP-like remotes.
     value = value.slice(value.indexOf(":") + 1);
+  }
   value = value.replace(/^.*@[^:]+:/, "").replace(/^\/+/, "");
   const parts = value.split("/").filter(Boolean);
   return parts.length >= 2 ? `${parts.at(-2)}/${parts.at(-1)}` : basename(repositoryRoot);

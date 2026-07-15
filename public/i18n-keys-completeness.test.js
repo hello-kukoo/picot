@@ -161,6 +161,10 @@ describe("JS t() literal key references", () => {
     "cost.js",
     "cost-infobar.js",
     "chat-history-navigation.js",
+    "pinned-items.js",
+    "sidebar-workspace-group.js",
+    "workspace-projects.js",
+    "workspace-quick-info.js",
   ];
 
   it("every literal t(\"...\") / t('...') key exists in en.json", () => {
