@@ -1489,12 +1489,18 @@ export default function (pi: ExtensionAPI) {
         res.end(JSON.stringify({ error: "Unknown workspace" }));
         return;
       }
+      const abortController = new AbortController();
+      const abortRequest = () => abortController.abort();
+      req.once("aborted", abortRequest);
+      res.once("close", abortRequest);
       try {
-        const info = await inspectWorkspaceGit(workspacePath);
+        const info = await inspectWorkspaceGit(workspacePath, {
+          signal: abortController.signal,
+        });
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(info));
       } catch (error) {
-        const aborted = String(error).includes("aborted");
+        const aborted = abortController.signal.aborted || String(error).includes("aborted");
         res.writeHead(aborted ? 408 : 500, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
@@ -1503,6 +1509,9 @@ export default function (pi: ExtensionAPI) {
               : "Workspace metadata unavailable",
           }),
         );
+      } finally {
+        req.removeListener("aborted", abortRequest);
+        res.removeListener("close", abortRequest);
       }
       return;
     }

@@ -296,7 +296,6 @@
     "updateAvailable": "有可用更新",
     "update": "更新",
     "recent": "最近访问",
-    "favourites": "收藏",
     "pinned": "固定",
     "archived": "已归档",
     "unavailable": "不可用",
@@ -308,6 +307,8 @@
     "unarchive": "取消归档",
     "archiveSession": "归档会话",
     "unarchiveSession": "取消归档会话",
+    "pinSession": "固定会话",
+    "unpinSession": "取消固定会话",
     "newChat": "在 {path} 中新建聊天",
     "deleteAllArchived": "删除所有已归档会话",
     "deleteArchivedConfirmOne": "永久删除 {count} 个已归档会话？此操作不可撤销。",
@@ -330,7 +331,19 @@
     "branch": "分支",
     "worktree": "工作树",
     "detachedAt": "分离于 {sha}",
-    "workspaceMetadataError": "Git 元数据不可用"
+    "workspaceMetadataError": "Git 元数据不可用",
+    "quickInfo": {
+      "cardLabel": "{folder} 的工作区详情",
+      "totalSessions": "会话总数",
+      "path": "路径",
+      "loadingGit": "正在加载 Git 元数据…",
+      "repository": "仓库",
+      "type": "类型",
+      "worktree": "工作树",
+      "branch": "分支",
+      "detachedAt": "分离于 {sha}",
+      "pinCapacityError": "固定项目数量过多"
+    }
   },
   "updater": {
     "update": "更新",

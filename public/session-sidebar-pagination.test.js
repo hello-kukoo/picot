@@ -20,7 +20,7 @@ beforeEach(async () => {
             showLess: "Show less",
             openProject: "Open Project",
             loadingSessions: "Loading sessions...",
-            favourites: "Favourites",
+            pinned: "PINNED",
             archived: "Archived",
             untitled: "Untitled",
             emptySession: "Empty session",

@@ -820,26 +820,6 @@ body {
   flex-shrink: 0;
 }
 
-/* Favourite star in session items */
-.session-fav-icon {
-  color: var(--accent);
-  font-size: 11px;
-  flex-shrink: 0;
-}
-
-/* Favourites header */
-.favourites-header {
-  color: var(--accent);
-}
-
-.archived-header {
-  color: var(--text-dim);
-}
-
-.fav-star {
-  font-size: 12px;
-}
-
 .tmux-tag {
   background: color-mix(in srgb, var(--accent) 15%, transparent);
   color: var(--accent);

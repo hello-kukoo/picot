@@ -5,7 +5,9 @@
 import { onLocaleChange, t } from "./i18n.js";
 import { createPinnedItemsStore } from "./pinned-items.js";
 import { readRecentSessions, recordRecentSession, writeRecentSessions } from "./recent-sessions.js";
-import { mergeWorkspaceProjects } from "./workspace-projects.js";
+import { buildSidebarWorkspaceGroup } from "./sidebar-workspace-group.js";
+import { mergeWorkspaceProjects, resolvePinnedWorkspaceGroups } from "./workspace-projects.js";
+import { WorkspaceQuickInfo } from "./workspace-quick-info.js";
 
 export class SessionSidebar {
   constructor(container, onSessionSelect, onNewChat, options = {}) {
@@ -21,12 +23,11 @@ export class SessionSidebar {
     this.searchQuery = "";
     this.recent = readRecentSessions();
     this.recentCollapsed = false;
-    // TODO(rename->picot): localStorage keys kept as `pi-studio-*` for backward compat — migration needed before changing.
-    this.favourites = JSON.parse(localStorage.getItem("pi-studio-favourites") || "[]");
     this.archived = JSON.parse(localStorage.getItem("pi-studio-archived") || "[]");
     this.archivedCollapsed = localStorage.getItem("pi-studio-archived-collapsed") !== "false";
     this.unread = new Set(JSON.parse(localStorage.getItem("pi-studio-unread") || "[]"));
     this.pinStore = options.pinStore || createPinnedItemsStore();
+    this.quickInfo = options.quickInfo || new WorkspaceQuickInfo({ pinStore: this.pinStore });
     this.unsubscribePinStore = this.pinStore.subscribe?.(() => this.render()) || null;
     this.pinStore.migrateLegacyFavourites?.({ excludedSessions: this.archived });
     this.streamingFiles = new Set();
@@ -57,10 +58,6 @@ export class SessionSidebar {
       this.render();
       this.container.scrollTop = savedScroll;
     });
-  }
-
-  saveFavourites() {
-    localStorage.setItem("pi-studio-favourites", JSON.stringify(this.favourites));
   }
 
   saveArchived() {
@@ -133,23 +130,8 @@ export class SessionSidebar {
     });
   }
 
-  isFavourite(filePath) {
-    return this.favourites.includes(filePath);
-  }
-
   isArchived(filePath) {
     return this.archived.includes(filePath);
-  }
-
-  toggleFavourite(filePath) {
-    const idx = this.favourites.indexOf(filePath);
-    if (idx >= 0) {
-      this.favourites.splice(idx, 1);
-    } else {
-      this.favourites.push(filePath);
-    }
-    this.saveFavourites();
-    this.render();
   }
 
   toggleArchived(filePath) {
@@ -249,21 +231,23 @@ export class SessionSidebar {
         const res = await fetch("/api/sessions");
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        let projects = Array.isArray(data.projects) ? data.projects : [];
+        const historyProjects = Array.isArray(data.projects) ? data.projects : [];
+        let instances = [];
         try {
           const instancesRes = await fetch("/api/instances");
           if (instancesRes.ok) {
             const instancesData = await instancesRes.json();
-            projects = mergeWorkspaceProjects(
-              projects,
-              instancesData.instances || [],
-              this.projects,
-            ).projects;
+            instances = Array.isArray(instancesData.instances) ? instancesData.instances : [];
           }
         } catch {
-          // Session history remains usable when the instance registry is unavailable.
+          // History still receives stable workspace IDs when live-instance lookup fails.
         }
+        const merged = mergeWorkspaceProjects(historyProjects, instances, this.projects);
+        const projects = merged.projects;
         if (seq < this.loadCommitted) return this.projects;
+        for (const reconciliation of merged.reconciliations) {
+          this.pinStore.reconcileWorkspace?.(reconciliation);
+        }
         this.loadCommitted = seq;
         this.projects = projects;
         this.render();
@@ -407,28 +391,13 @@ export class SessionSidebar {
         el.classList.remove("hidden");
       });
       this.container
-        .querySelectorAll(".project-group, .archived-group, .recent-group")
+        .querySelectorAll(".project-group, .pinned-group, .archived-group, .recent-group")
         .forEach((el) => {
           el.style.display = "";
         });
-      const favSection = this.container.querySelector(".favourites-group");
-      if (favSection) favSection.style.display = "";
-      // Remove full-text results
       const searchGroup = this.container.querySelector(".search-results-group");
       if (searchGroup) searchGroup.remove();
       return;
-    }
-
-    // Search favourites section
-    const favSection = this.container.querySelector(".favourites-group");
-    if (favSection) {
-      let hasVisible = false;
-      favSection.querySelectorAll(".session-item").forEach((item) => {
-        const matches = this.sessionItemMatchesSearch(item);
-        item.classList.toggle("hidden", !matches);
-        if (matches) hasVisible = true;
-      });
-      favSection.style.display = hasVisible ? "" : "none";
     }
 
     // Search RECENT section
@@ -523,7 +492,16 @@ export class SessionSidebar {
     menu.className = "session-context-menu";
 
     const isArchived = this.isArchived(session.filePath);
+    const isPinned = this.pinStore.isSessionPinned(session.filePath);
     const items = [
+      {
+        icon: isPinned ? "📌" : "📍",
+        label: isPinned ? t("sidebar.unpinSession") : t("sidebar.pinSession"),
+        action: () => {
+          if (isPinned) this.pinStore.unpinSession(session.filePath);
+          else this.pinStore.pinSession(session.filePath);
+        },
+      },
       {
         icon: isArchived ? "📤" : "🗄️",
         label: isArchived ? t("sidebar.unarchive") : t("sidebar.archive"),
@@ -649,9 +627,6 @@ export class SessionSidebar {
     const title = session.name || session.firstMessage || t("sidebar.emptySession");
     const time = this.formatTime(session.timestamp);
     const tmuxTag = session.tmux ? '<span class="session-tag tmux-tag">tmux</span>' : "";
-    const favIcon = this.isFavourite(session.filePath)
-      ? '<span class="session-fav-icon">★</span>'
-      : "";
     const isArchived = this.isArchived(session.filePath);
     const archiveBtnLabel = isArchived
       ? t("sidebar.unarchiveSession")
@@ -670,7 +645,6 @@ export class SessionSidebar {
 
     item.innerHTML = `
       <div class="session-title-row">
-        ${favIcon}
         <div class="session-title" title="${this.escapeHtml(title)}">${this.escapeHtml(title)}</div>
         ${tmuxTag}
         <span class="session-action-slot">
@@ -680,6 +654,9 @@ export class SessionSidebar {
       </div>
     `;
 
+    item.addEventListener("contextmenu", (event) =>
+      this.showContextMenu(event, session, project, item),
+    );
     item.addEventListener("click", () => this.onSessionSelect(session, project));
     const archiveBtn = item.querySelector(".session-archive-btn");
     if (archiveBtn) {
@@ -754,107 +731,82 @@ export class SessionSidebar {
     return toggleRow;
   }
   renderPinnedSection() {
-    const state = this.pinStore?.getRenderableState?.() || { workspaces: [], sessions: [] };
-    const workspacePins = Array.isArray(state.workspaces) ? state.workspaces : [];
-    const sessionPins = new Set(Array.isArray(state.sessions) ? state.sessions : []);
-    const groups = [];
-    for (const pin of workspacePins) {
-      const project = this.projects.find(
-        (candidate) =>
-          candidate.workspaceId === pin.id ||
-          candidate.path === pin.path ||
-          candidate.normalizedPath === pin.path,
-      );
-      if (!project) {
-        groups.push({ pin, project: null, sessions: [] });
-        continue;
-      }
-      groups.push({
-        pin,
-        project,
-        sessions: project.sessions.filter((session) => !this.isArchived(session.filePath)),
-      });
-    }
-    const pinnedSessionRows = [];
-    for (const filePath of sessionPins) {
-      for (const project of this.projects) {
-        const session = project.sessions.find((candidate) => candidate.filePath === filePath);
-        if (
-          session &&
-          !this.isArchived(filePath) &&
-          !groups.some((group) => group.sessions.some((row) => row.filePath === filePath))
-        ) {
-          pinnedSessionRows.push({ session, project });
-        }
-      }
-    }
-    if (groups.length === 0 && pinnedSessionRows.length === 0) return;
+    const state = this.pinStore.getRenderableState();
+    const groups = resolvePinnedWorkspaceGroups({
+      pinState: state,
+      projects: this.projects,
+      archivedPaths: this.archived,
+    });
     const section = document.createElement("div");
     section.className = "pinned-group sidebar-section-pinned";
     const header = document.createElement("div");
     header.className = "project-header pinned-header";
     header.textContent = t("sidebar.pinned");
-    section.appendChild(header);
     const body = document.createElement("div");
     body.className = "project-sessions pinned-sessions";
-    for (const { pin, project, sessions } of groups) {
+
+    for (const pinned of groups) {
+      const workspace = pinned.workspace;
       const group = document.createElement("div");
       group.className = "pinned-workspace-group";
-      group.dataset.workspaceId = pin.id || "";
+      group.dataset.workspaceId = workspace?.workspaceId || "";
       const title = document.createElement("div");
       title.className = "pinned-workspace-title";
       title.textContent =
-        project?.path?.split("/").filter(Boolean).at(-1) ||
-        pin.path ||
-        pin.id ||
+        workspace?.folderName ||
+        workspace?.path?.split("/").filter(Boolean).at(-1) ||
+        pinned.sessions[0]?.filePath ||
         t("sidebar.unavailable");
       group.appendChild(title);
-      if (project) {
-        for (const row of sessions) group.appendChild(this.buildSessionItem(row, project));
-      } else {
+
+      if (pinned.unavailable) {
         const unavailable = document.createElement("div");
         unavailable.className = "pinned-unavailable";
-        unavailable.textContent = t("sidebar.unavailable");
+        unavailable.textContent =
+          workspace?.path || pinned.sessions[0]?.filePath || t("sidebar.unavailable");
         const unpin = document.createElement("button");
         unpin.type = "button";
-        unpin.textContent = t("sidebar.unpinWorkspace");
+        unpin.textContent = pinned.workspacePin
+          ? t("sidebar.unpinWorkspace")
+          : t("sidebar.unpinSession");
         unpin.addEventListener("click", () => {
-          this.pinStore.unpinWorkspace(pin.id);
-          this.render();
+          if (pinned.workspacePin) this.pinStore.unpinWorkspace(workspace.workspaceId);
+          else this.pinStore.unpinSession(pinned.sessions[0].filePath);
         });
         group.append(unavailable, unpin);
+      } else {
+        if (pinned.workspacePin) {
+          const unpin = document.createElement("button");
+          unpin.type = "button";
+          unpin.className = "pinned-workspace-unpin";
+          unpin.textContent = t("sidebar.unpinWorkspace");
+          unpin.addEventListener("click", () =>
+            this.pinStore.unpinWorkspace(workspace.workspaceId),
+          );
+          group.appendChild(unpin);
+        }
+        for (const session of pinned.sessions) {
+          group.appendChild(this.buildSessionItem(session, workspace));
+        }
       }
       body.appendChild(group);
     }
-    for (const row of pinnedSessionRows)
-      body.appendChild(this.buildSessionItem(row.session, row.project));
-    section.appendChild(body);
+
+    section.append(header, body);
     this.container.appendChild(section);
   }
 
   render() {
-    if (this.projects.length === 0) {
-      this.resolveRecentSessions();
-      this.renderEmptyState();
-      return;
-    }
-
     const recentSessions = this.resolveRecentSessions();
 
     this.container.innerHTML = "";
+    this.quickInfo.clearHeaders();
+    this.quickInfo.setWorkspaces(this.projects);
 
-    // Favourites + archived sections — collect from all projects
-    const favSessions = [];
     const archivedSessions = [];
     for (const project of this.projects) {
-      for (const session of project.sessions) {
-        if (this.isArchived(session.filePath)) {
-          archivedSessions.push({ session, project });
-          continue;
-        }
-        if (this.isFavourite(session.filePath)) {
-          favSessions.push({ session, project });
-        }
+      for (const session of project.sessions || []) {
+        if (this.isArchived(session.filePath)) archivedSessions.push({ session, project });
       }
     }
 
@@ -897,96 +849,53 @@ export class SessionSidebar {
     }
     this.renderPinnedSection();
 
-    if (favSessions.length > 0) {
-      const favGroup = document.createElement("div");
-      favGroup.className = "favourites-group";
-
-      const header = document.createElement("div");
-      header.className = "project-header favourites-header";
-      header.innerHTML = `<span class="fav-star">★</span> <span>${this.escapeHtml(t("sidebar.favourites"))}</span> <span class="project-count">${favSessions.length}</span>`;
-      favGroup.appendChild(header);
-
-      const sessionsDiv = document.createElement("div");
-      sessionsDiv.className = "project-sessions";
-      for (const { session, project } of favSessions) {
-        sessionsDiv.appendChild(this.buildSessionItem(session, project));
-      }
-      favGroup.appendChild(sessionsDiv);
-      this.container.appendChild(favGroup);
-    }
-
-    // Regular project groups
+    const projectsGroup = document.createElement("div");
+    projectsGroup.className = "projects-group";
     for (const project of this.projects) {
-      const visibleSessions = project.sessions.filter(
+      const visibleSessions = (project.sessions || []).filter(
         (session) => !this.isArchived(session.filePath),
       );
-      if (visibleSessions.length === 0) continue;
-
-      const group = document.createElement("div");
-      group.className = "project-group";
-      group.dataset.projectSearchText = this.getProjectSearchText(project);
-      const isCollapsed = this.collapsedProjects.has(project.dirName);
-
-      const header = document.createElement("div");
-      header.className = `project-header${isCollapsed ? " collapsed" : ""}`;
-
-      const pathParts = project.path.split("/").filter(Boolean);
-      const shortPath = pathParts.length > 0 ? pathParts[pathParts.length - 1] : project.path;
-
-      header.innerHTML = `
-        <span class="chevron">▼</span>
-        <span class="project-name" title="${project.path}">${shortPath}</span>
-        <span class="project-count">${visibleSessions.length}</span>
-        <button class="project-new-chat-btn" title="${this.escapeHtml(t("sidebar.newChat", { path: shortPath }))}" aria-label="${this.escapeHtml(t("sidebar.newChat", { path: shortPath }))}">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        </button>
-      `;
-
-      const newChatBtn = header.querySelector(".project-new-chat-btn");
-      newChatBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (this.onNewChat) this.onNewChat(project);
-      });
-
-      header.addEventListener("click", () => {
-        if (this.collapsedProjects.has(project.dirName)) {
-          this.collapsedProjects.delete(project.dirName);
-        } else {
-          this.collapsedProjects.add(project.dirName);
-        }
-        header.classList.toggle("collapsed");
-        sessionsDiv.classList.toggle("collapsed");
-      });
-
-      group.appendChild(header);
-
-      const sessionsDiv = document.createElement("div");
-      sessionsDiv.className = `project-sessions${isCollapsed ? " collapsed" : ""}`;
       const visibleCount = this.getProjectVisibleSessionCount(project, visibleSessions.length);
-      const visibleProjectSessions = this.searchQuery
+      const sessionsToRender = this.searchQuery
         ? visibleSessions
         : visibleSessions.slice(0, visibleCount);
-
-      for (const session of visibleProjectSessions) {
-        sessionsDiv.appendChild(this.buildSessionItem(session, project));
-      }
-
-      if (!this.searchQuery) {
-        const toggleRow = this.buildProjectSessionsToggleRow(
-          project,
-          visibleProjectSessions.length,
-          visibleSessions.length,
-        );
-        if (toggleRow) {
-          sessionsDiv.appendChild(toggleRow);
-        }
-      }
-
-      group.appendChild(sessionsDiv);
-      this.container.appendChild(group);
+      const projectKey = this.getProjectVisibilityKey(project);
+      const { group, header } = buildSidebarWorkspaceGroup({
+        workspaceId: project.workspaceId,
+        folderName:
+          project.folderName ||
+          project.path?.split("/").filter(Boolean).at(-1) ||
+          project.path ||
+          t("sidebar.unavailable"),
+        workspacePath: project.path,
+        sessionCount: visibleSessions.length,
+        expanded: !this.collapsedProjects.has(projectKey),
+        onToggle: (expanded) => {
+          if (expanded) this.collapsedProjects.delete(projectKey);
+          else this.collapsedProjects.add(projectKey);
+        },
+        onNewChat: this.onNewChat ? () => this.onNewChat(project) : null,
+        renderSessions: (sessionsDiv) => {
+          for (const session of sessionsToRender) {
+            sessionsDiv.appendChild(this.buildSessionItem(session, project));
+          }
+          if (!this.searchQuery) {
+            const toggleRow = this.buildProjectSessionsToggleRow(
+              project,
+              sessionsToRender.length,
+              visibleSessions.length,
+            );
+            if (toggleRow) sessionsDiv.appendChild(toggleRow);
+          }
+        },
+      });
+      group.dataset.projectSearchText = this.getProjectSearchText(project);
+      projectsGroup.appendChild(group);
+      this.quickInfo.bindHeader(header, project);
     }
+    this.container.appendChild(projectsGroup);
 
-    if (archivedSessions.length > 0) {
+    {
       archivedSessions.sort((a, b) => {
         const aCreated = a.session.timestamp
           ? new Date(a.session.timestamp).getTime()
@@ -1018,10 +927,13 @@ export class SessionSidebar {
       archivedGroup.appendChild(header);
 
       const deleteAllBtn = header.querySelector(".archived-delete-all-btn");
-      deleteAllBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this.deleteAllArchived();
-      });
+      if (deleteAllBtn) {
+        deleteAllBtn.hidden = archivedSessions.length === 0;
+        deleteAllBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.deleteAllArchived();
+        });
+      }
 
       const sessionsDiv = document.createElement("div");
       sessionsDiv.className = `project-sessions${this.archivedCollapsed ? " collapsed" : ""}`;
@@ -1042,25 +954,33 @@ export class SessionSidebar {
       this.container.appendChild(archivedGroup);
     }
 
+    const pinState = this.pinStore.getRenderableState();
+    if (
+      this.projects.length === 0 &&
+      recentSessions.length === 0 &&
+      archivedSessions.length === 0 &&
+      pinState.workspaces.length === 0 &&
+      pinState.sessions.length === 0
+    ) {
+      this.renderEmptyState({ append: true });
+    }
+
     if (this.searchQuery) this.applySearch();
   }
 
-  renderEmptyState() {
-    this.container.innerHTML = `
-      <div class="session-empty-state">
-        <button type="button" class="session-empty-open-project" title="${this.escapeHtml(t("sidebar.openProject"))}" aria-label="${this.escapeHtml(t("sidebar.openProject"))}">
-          <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path>
-            <line x1="12" y1="12" x2="12" y2="18"></line>
-            <line x1="9" y1="15" x2="15" y2="15"></line>
-          </svg>
-          <span>${this.escapeHtml(t("sidebar.openProject"))}</span>
-        </button>
-      </div>
-    `;
-    this.container
-      .querySelector(".session-empty-open-project")
-      ?.addEventListener("click", () => this.onOpenProject?.());
+  renderEmptyState({ append = false } = {}) {
+    const empty = document.createElement("div");
+    empty.className = "session-empty-state";
+    const openButton = document.createElement("button");
+    openButton.type = "button";
+    openButton.className = "session-empty-open-project";
+    openButton.title = t("sidebar.openProject");
+    openButton.setAttribute("aria-label", t("sidebar.openProject"));
+    openButton.textContent = t("sidebar.openProject");
+    openButton.addEventListener("click", () => this.onOpenProject?.());
+    empty.appendChild(openButton);
+    if (append) this.container.appendChild(empty);
+    else this.container.replaceChildren(empty);
   }
 
   getProjectSearchText(project) {

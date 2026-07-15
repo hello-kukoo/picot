@@ -296,7 +296,6 @@
     "updateAvailable": "Update available",
     "update": "Update",
     "recent": "RECENT",
-    "favourites": "Favourites",
     "pinned": "PINNED",
     "archived": "Archived",
     "unavailable": "Unavailable",
@@ -308,6 +307,8 @@
     "unarchive": "Unarchive",
     "archiveSession": "Archive session",
     "unarchiveSession": "Unarchive session",
+    "pinSession": "Pin session",
+    "unpinSession": "Unpin session",
     "newChat": "New chat in {path}",
     "deleteAllArchived": "Delete all archived sessions",
     "deleteArchivedConfirmOne": "Delete {count} archived session permanently? This cannot be undone.",
@@ -330,7 +331,19 @@
     "branch": "Branch",
     "worktree": "Worktree",
     "detachedAt": "Detached at {sha}",
-    "workspaceMetadataError": "Git metadata unavailable"
+    "workspaceMetadataError": "Git metadata unavailable",
+    "quickInfo": {
+      "cardLabel": "Workspace details for {folder}",
+      "totalSessions": "Total sessions",
+      "path": "Path",
+      "loadingGit": "Loading Git metadata…",
+      "repository": "Repository",
+      "type": "Type",
+      "worktree": "Worktree",
+      "branch": "Branch",
+      "detachedAt": "Detached at {sha}",
+      "pinCapacityError": "Too many pinned items"
+    }
   },
   "updater": {
     "update": "Update",

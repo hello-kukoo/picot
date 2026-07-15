@@ -42,7 +42,7 @@ beforeEach(async () => {
             showLess: "Show less",
             openProject: "Open Project",
             loadingSessions: "Loading sessions...",
-            favourites: "Favourites",
+            pinned: "PINNED",
             archived: "Archived",
             untitled: "Untitled",
             emptySession: "Empty session",
@@ -238,7 +238,6 @@ describe("SessionSidebar RECENT group", () => {
     writeRecentSessions(["/sessions/alpha.jsonl"]);
     const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn());
     sidebar.projects = createProjects();
-    sidebar.favourites = ["/sessions/alpha.jsonl"];
     sidebar.unread.add("/sessions/alpha.jsonl");
     sidebar.setStreaming("/sessions/alpha.jsonl", true);
     sidebar.render();
@@ -247,7 +246,7 @@ describe("SessionSidebar RECENT group", () => {
     const duplicates = document.querySelectorAll(
       '.session-item[data-file-path="/sessions/alpha.jsonl"]',
     );
-    expect(duplicates).toHaveLength(3);
+    expect(duplicates).toHaveLength(2);
     duplicates.forEach((item) => {
       expect(item.classList.contains("active")).toBe(true);
       expect(item.classList.contains("unread")).toBe(false);
