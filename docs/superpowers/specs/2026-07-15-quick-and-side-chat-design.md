@@ -3,9 +3,10 @@
 ## Status
 
 The product and interaction design was approved in conversation with Dr. Lin on
-2026-07-15 and revised after an architecture review. This document defines
-ephemeral chats that use Pi's `--no-session` mode. Implementation has not
-started.
+2026-07-15 and revised after two architecture reviews. The capability navigation
+boundary, cross-workspace transition policy, RPC classification, and rebind
+sequencing contract were approved on 2026-07-15. This document defines ephemeral
+chats that use Pi's `--no-session` mode. Implementation has not started.
 
 Reference prototypes:
 
@@ -41,7 +42,8 @@ Pi session history and Picot's session navigation.
 | Global extensions, skills, prompt templates, and settings | Loaded by Pi | Loaded by Pi |
 | Workspace-local Pi resources | Loaded by Pi | Absent because the cwd is not a user workspace |
 | Persistence | None | None |
-| Same-window reload/navigation | Rebind from host/Pi memory | Rebind from host/Pi memory |
+| Same-window reload or same-canonical-cwd navigation | Rebind from host/Pi memory | Rebind from host/Pi memory |
+| Cross-workspace navigation | Close before transition; confirmation when destructive | Preserve and rebind |
 | Concurrent instances | Up to 5 per workspace window | 1 per workspace window |
 | Presentation | Tabs in the File Preview/Edit panel | Non-modal floating dialog |
 | Session navigation | Never appears | Never appears |
@@ -89,9 +91,10 @@ this feature is designed to prevent.
 ### Window owner and native capability
 
 The host creates an opaque owner record for each native workspace window. The
-owner is bound to that window label, its primary workspace process, and a
-host-issued native capability. Reusing a window label after destruction creates
-a new owner record and capability.
+owner is bound to that window label, its current canonical workspace cwd, its
+primary workspace process, an owner transition generation, and a host-issued
+native capability. Reusing a window label after destruction creates a new owner
+record and capability.
 
 The capability is a 256-bit value generated from the operating system's
 cryptographically secure random source. It is a bearer capability: trusted
@@ -99,11 +102,38 @@ WebView JavaScript may hold and submit it, but remote clients cannot guess or
 derive it. This mechanism does not defend against malicious script that already
 controls the same native WebView and is not an XSS sandbox.
 
-`WebviewWindowBuilder::initialization_script()` injects the capability into the
-native workspace WebView's main frame on every load and navigation. The value is
-not placed in the HTTP query string, URL fragment, cookie, localStorage, or
-sessionStorage. LAN/mobile pages are not constructed with this initialization
-script and never receive the value.
+`WebviewWindowBuilder::initialization_script()` runs on every top-level document
+navigation, so it is not an authorization boundary by itself. Its static script
+exposes the capability only when `window.location` has Picot's canonical native
+Pi shape: `http` on the configured loopback hostname. The script cannot know the
+dynamic owner port set; exact origin authorization is enforced by the host
+navigation callback below. The value is not placed in the HTTP query string,
+URL fragment, cookie, localStorage, or sessionStorage. LAN/mobile pages are not
+constructed with this initialization script and never receive the value.
+
+Every capability-bearing WebView also has a host-owned navigation boundary:
+
+- the owner registry keeps an exact set of approved `http` Pi origins, including
+  scheme, host, and port; arbitrary loopback origins are not equivalent;
+- an origin may be registered only from a live Pi process already owned and
+  verified by `PiManager`, never from a frontend-supplied cwd, host, or port;
+- a host-approved in-window switch first creates a one-shot, short-lived pending
+  navigation permit for the destination origin, then navigates; consuming or
+  expiring the permit removes it unless the origin becomes the owner's current
+  primary origin;
+- `WebviewWindowBuilder::on_navigation` rejects external HTTPS pages, LAN
+  addresses, file/custom schemes, unregistered `localhost` or `127.0.0.1` ports,
+  redirects to unapproved origins, and any other destination not present in the
+  owner's current or pending origin set before its document loads; and
+- `WebviewWindowBuilder::on_new_window` never creates a capability-bearing popup.
+  Existing intended external-link and download actions must use the native
+  system opener, an explicit download path, or a separately constructed WebView
+  that has no owner capability.
+
+The initialization-script origin guard is defense in depth behind the native
+navigation callback. A frontend request cannot enlarge the origin set by naming
+a destination, and approval of one Pi port never authorizes another local
+service or another owner's port.
 
 The capability must not appear in QR/LAN URLs, `/api/instances`, logs, errors,
 telemetry, broker events, progress frames, or diagnostics. The broker stores the
@@ -164,6 +194,40 @@ cancels the candidate, and closes the old record. A second replace is rejected
 as busy. If the old child exits while replacement is pending, the candidate may
 still commit; if the candidate then fails, Quick Chat becomes failed/empty
 rather than claiming that the old context was recovered.
+
+### Same-window workspace transition
+
+Navigation to another Pi process is classified by canonical cwd before the host
+issues a navigation permit.
+
+For the same canonical cwd, the owner ID, capability, and workspace binding stay
+unchanged. The host transaction updates the primary process and exact approved
+origin, then the existing Side Chats and Quick Chat rebind in the new document.
+
+For a different canonical cwd, the owner enters a serialized workspace-transition
+transaction:
+
+1. The host marks the owner as transitioning and blocks another workspace
+   transition, ephemeral creation/replacement, and frontend navigation.
+2. The frontend freezes user mutations and gathers every Side Chat belonging to
+   the old cwd. If any are non-empty or streaming, they join one localized
+   destructive confirmation. Cancel cancels the entire workspace navigation
+   without closing any Side Chat or changing the owner binding. With no risk, or
+   after confirmation, all old-workspace Side Chats enter cleanup together.
+3. The target Pi process must be ready and owned by `PiManager`, but its origin
+   does not become current yet.
+4. After all old Side Chats complete generation-checked cleanup, the registry
+   compare-and-commits the new canonical cwd, primary process, current origin,
+   and owner transition generation. It then issues the one-shot navigation
+   permit.
+5. Quick Chat remains owned by the window and survives the transition because
+   its temporary cwd is independent of the workspace. New Side Chats use only
+   the committed destination cwd.
+
+Failure or cancellation before commit leaves the old workspace binding active.
+After commit, delayed exit or close notifications from the old workspace carry
+their old instance and transition generations and cannot mutate the new binding,
+unregister a new route, or consume a new origin permit.
 
 ### Side Chat spawn
 
@@ -260,6 +324,11 @@ Authenticated ephemeral lifecycle commands extend the existing
 - list/rebind all ephemeral instances owned by the authenticated window; and
 - update the minimal in-memory UI metadata needed across same-window reloads.
 
+Workspace navigation approval is a host transaction, not a general-purpose
+`register_origin` command. Existing open/attach/new-session host operations may
+return a navigation permit only after resolving their target to a live,
+owner-authorized `PiManager` process and applying the workspace-transition rules.
+
 Requests use the broker's existing request/result correlation pattern. The
 frontend supplies a kind and request ID, not an arbitrary executable, cwd,
 port, environment, or Pi flag list.
@@ -275,18 +344,43 @@ events are sent only to the authenticated native client bound to the matching
 owner. They are never put through the all-client broadcast path, and remote or
 other-window clients receive neither their contents nor existence metadata.
 
-### Session-lifecycle deny policy
+### Command classification and session-lifecycle policy
 
-After resolving an ephemeral route, the broker inspects the structured inner RPC
-command and rejects a named session-lifecycle deny set. It includes current and
-equivalent future commands for persisted-session create, new/reset, switch,
-resume, fork, tree/history replacement, and export. The policy is a deny set,
-not a closed allowlist, so normal prompt, abort, model/thinking, compaction,
-skills, prompt templates, and extension commands remain extensible.
+Picot core RPC commands use one versioned command manifest shared by the Rust
+broker and TypeScript embedded server. Every core command is exhaustively
+classified as exactly one of:
 
-The embedded server applies the same semantic deny policy when its ephemeral
-marker is present, including session mutation REST handlers, as defense in
-depth. A hidden UI control is never the enforcement boundary.
+```text
+allowed
+deniedSessionLifecycle
+desktopOwnerOnly
+```
+
+Adding or renaming a core command requires an explicit classification. Schema or
+golden tests fail if either implementation is missing a manifest entry, exposes
+an unknown core command to an ephemeral route, or disagrees about a command's
+classification. An unknown core command fails closed for an ephemeral route.
+The broker and embedded server do not maintain independent handwritten deny
+string lists.
+
+Current persisted-session creation, new/reset, switch, resume, fork,
+tree/history replacement, and export commands are
+`deniedSessionLifecycle`. Prompt, steer/follow-up, abort, read-only state,
+model/thinking controls, and the temporary-chat operations explicitly required
+by this design are classified individually rather than admitted by a broad
+catch-all.
+
+Extension UI responses use a distinct, explicitly supported extension envelope
+instead of masquerading as an unclassified core command. The first version does
+not add a generic arbitrary extension-command passthrough. The embedded server
+may route the supported envelope to Pi's trusted extension UI mechanism, while
+the broker continues to authenticate its owner and ephemeral instance. This
+transport distinction does not sandbox code already running inside a
+user-trusted extension.
+
+The embedded server enforces the same manifest classification when its
+ephemeral marker is present, including session mutation REST handlers, as
+defense in depth. A hidden UI control is never the enforcement boundary.
 
 Quick Chat's New Chat is the only reset entry point that **Picot provides**.
 Picot provides no reset entry point for Side Chat; users close it and create a
@@ -300,13 +394,35 @@ Direct WebView-to-ephemeral-port WebSockets are explicitly outside this design.
 After an authenticated native connection is established, the broker returns an
 owner-scoped bootstrap snapshot containing non-secret descriptors in creation
 order. It does not include capability, port, cwd, or another owner's data. The
-frontend rebinds each runtime by ID and requests the embedded in-memory message
-snapshot to rebuild content and the first-prompt title.
+frontend rebinds each runtime by ID and requests its authoritative embedded
+runtime snapshot.
 
-The runtime begins receiving owner-targeted events before requesting its
-snapshot, queues those events until the snapshot is applied, and then replays
-them using message/tool identity deduplication. This prevents a streaming delta
-from being lost or rendered twice during reload.
+The embedded runtime is the sequence authority because it alone can couple a
+state snapshot to the event stream that produced it. For every render-relevant
+event it increments a process-lifetime, per-runtime monotonic `runtimeSequence`
+before publishing the event. Its authoritative snapshot is produced from the
+same serialized runtime state and contains:
+
+- finalized messages and any in-progress assistant content;
+- active tool calls, streaming tool output, completion/error state, and stable
+  message/tool identities;
+- model, thinking, streaming, context/usage, and error state; and
+- `runtimeSequenceWatermark`, the last event incorporated into the snapshot.
+
+The broker preserves the producer's sequence and keeps a short, bounded journal
+per ephemeral runtime even when no native client is connected. During rebind it
+serializes snapshot delivery, journal replay, and live delivery for that runtime.
+The frontend queues events until the snapshot is mounted, applies the snapshot,
+then applies only events whose sequence is greater than the watermark, in order.
+Sequence, rather than content equality alone, prevents lost or duplicate text
+and tool cards. If the journal cannot bridge the snapshot/mount race or reports
+an overflow/gap, the frontend discards the partial replay and requests a fresh
+authoritative snapshot.
+
+Unread is owner UI metadata, not Pi session data. The host records whether a
+runtime received a sequence newer than its last owner-acknowledged visible
+sequence while its view was inactive or disconnected. Rebind restores that
+derived unread state without persisting it to disk.
 
 Minimal UI state such as last active Side Chat and Quick Chat minimized/geometry
 may be kept in the owner record and updated only by the authenticated client.
@@ -320,9 +436,13 @@ The embedded server continues to expose the process-scoped HTTP/WS surface that
 Picot requires. When the ephemeral environment marker is present, it must:
 
 - publish its instance ID and kind to the broker handshake/event metadata;
+- assign and publish the runtime sequence on every render-relevant event;
+- maintain the complete in-memory render state required by the authoritative
+  snapshot and return that state with its sequence watermark;
 - skip the normal instance-registry entry used by `/api/instances`;
-- skip session-title and persisted-session side effects; and
-- enforce the server-side session-lifecycle deny policy;
+- skip session-title and persisted-session side effects;
+- enforce the shared command classification and server-side session-lifecycle
+  policy; and
 - retain prompt, abort, model, thinking-level, extension-UI, event, health, and
   usage behavior required by the temporary chat UI.
 
@@ -570,9 +690,13 @@ initial close, and sends a targeted close request through the authenticated
 owner's broker connection. `WindowEvent::Destroyed` remains final cleanup, not
 the first chance to coordinate.
 
-The JavaScript coordinator collects one immutable risk snapshot from its
-participants: dirty file tabs and non-empty/streaming ephemeral chats. The flow
-is serialized by request ID:
+The JavaScript coordinator starts one serialized close transaction and collects
+a versioned risk snapshot from its participants: dirty file tabs and
+non-empty/streaming ephemeral chats. While that transaction is open, the UI
+disables new prompts, Quick Chat replacement, Side Chat create/close, workspace
+navigation, and file editing. Background agent events may continue rendering,
+but no new user mutation may expand the destructive state. The flow is
+serialized by request ID:
 
 1. With no risk, the client immediately authorizes close.
 2. With risk, one summary dialog describes unsaved files and the number of
@@ -581,14 +705,20 @@ is serialized by request ID:
 3. Continue invokes the file participant's existing Save/Discard/Cancel flow.
    Cancel or save failure keeps the window open, reports a recoverable error,
    and does not touch ephemeral runtimes.
-4. Only after file settlement succeeds does the coordinator abort streaming
-   ephemeral chats and request generation-checked owner cleanup.
-5. Only after cleanup succeeds does the client send the authorized one-shot
+4. Before any abort or cleanup, the coordinator re-reads dirty state,
+   `hasMessages`, and streaming state. If risk expanded, it updates the same
+   dialog and risk version; it never opens a second dialog or silently applies
+   the older snapshot.
+5. Only after file settlement and final risk validation succeed does the
+   coordinator abort streaming ephemeral chats and request generation-checked
+   owner cleanup.
+6. Only after cleanup succeeds does the client send the authorized one-shot
    close approval. Rust consumes that approval and allows the next close event.
 
 Only one close transaction may be active. Repeated OS close requests focus the
-existing dialog. A failed phase keeps the window and coordinator usable for
-retry; it never starts a competing confirmation.
+existing dialog. Cancel or failure restores all controls that the transaction
+disabled. A failed phase keeps the window and coordinator usable for retry; it
+never starts a competing confirmation.
 
 `FilePreviewPanel` removes its private `beforeunload` registration and registers
 its dirty-state participant with the coordinator. The coordinator owns one
@@ -675,11 +805,19 @@ Enter/Space, and keyboard tab-navigation support. Icon controls have localized
 names. Streaming, unread, connection, and error states use accessible text/live
 regions and do not rely on color alone.
 
-The Quick Chat dialog uses non-modal dialog semantics. Dragging and resizing are
-explicit, mutually exclusive state machines with complete pointer-cancel and
-window-blur cleanup. Keyboard resize controls provide a non-pointer path. Motion
-respects `prefers-reduced-motion`. WKWebView focus, drag, and resize behavior
-requires manual desktop verification in addition to jsdom tests.
+The Quick Chat dialog uses non-modal dialog semantics. Its title bar, resize
+handles, buttons, and other interactive controls explicitly use
+`-webkit-app-region: no-drag`, so the custom dialog gesture never competes with
+Picot's native macOS window-drag regions. Text and dialog body content do not
+start a custom drag.
+
+Dragging and resizing are explicit, mutually exclusive state machines. Only a
+validated custom handle calls `preventDefault()` on `pointerdown`, then takes
+pointer capture. `pointerup`, `pointercancel`, `lostpointercapture`, window blur,
+and view destruction all call the same idempotent cleanup. Keyboard resize
+controls provide a non-pointer path. Motion respects `prefers-reduced-motion`.
+WKWebView focus, native-header drag, dialog drag, and resize behavior require
+manual desktop verification in addition to jsdom tests.
 
 ## Verification Strategy
 
@@ -691,6 +829,12 @@ requires manual desktop verification in addition to jsdom tests.
   revocation on window destruction;
 - unauthenticated/native/remote handshake states, invalid-token rejection, and
   no capability leakage through URLs, events, logs, errors, or diagnostics;
+- exact-origin navigation enforcement: reject external HTTPS, LAN, file/custom
+  schemes, redirects, and unregistered loopback ports before document load;
+- one-shot pending-origin handoff for an owner-approved Pi port A to Pi port B,
+  expiration/consumption behavior, and denial of frontend-selected origins;
+- `window.open` denial or capability-free handling, including regression
+  coverage for existing external-link and download actions;
 - owner derivation from verified client context rather than request payload;
 - rejection of native-only lifecycle commands from LAN/mobile and other owners
   without revealing whether an instance exists;
@@ -701,7 +845,14 @@ requires manual desktop verification in addition to jsdom tests.
   readiness failure;
 - transactional Quick Chat replacement races: concurrent replace, close during
   replace, old-child exit, candidate failure, and window close;
+- same-canonical-cwd process switches preserve Side Chat and Quick Chat, while
+  cross-workspace transitions close old Side Chats, preserve Quick Chat, cancel
+  atomically, and reject stale old-generation cleanup after commit;
 - broker routing by ephemeral ID without changing `active_port`;
+- bounded per-runtime journal ordering, replay, gap detection, and overflow
+  fallback to a fresh snapshot;
+- shared command-manifest parity and exhaustive classification in Rust and
+  TypeScript, including fail-closed unknown core commands;
 - generation-checked idempotent cleanup and delayed-exit/port-reuse safety;
 - child-exit watcher removal of the exact registry record and upstream route;
 - no-proxy health checks, readiness failure cleanup, and window-level cleanup;
@@ -712,13 +863,19 @@ requires manual desktop verification in addition to jsdom tests.
 ### Embedded server tests
 
 - ephemeral metadata is published to the broker;
+- every render-relevant event carries a strictly increasing runtime sequence;
+- authoritative snapshots include in-progress assistant text, active and
+  streaming tool state, stable identities, usage/state, and the matching
+  sequence watermark;
 - chat RPC and events remain available;
 - `--no-session` creates no session file;
 - ephemeral processes do not enter the normal instance registry;
-- automatic session-title and history side effects are skipped; and
+- automatic session-title and history side effects are skipped;
 - ephemeral mode rejects Picot-controlled `new_session`, `switch_session`,
-  resume, fork, history/tree replacement, export, and equivalent mutation
-  requests while permitting non-lifecycle and extension commands;
+  resume, fork, history/tree replacement, and export through the shared
+  classification while permitting explicitly allowed core commands;
+- the supported extension UI response envelope remains functional without a
+  generic unknown-command passthrough; and
 - Quick Chat reports no active tools while global non-tool resources remain
   available according to Pi behavior.
 
@@ -735,14 +892,21 @@ requires manual desktop verification in addition to jsdom tests.
 - file/Side-Chat switching without file-state or process loss;
 - close confirmation, abort-before-close, and failed-close recovery;
 - one native window-close transaction coordinating dirty-file settlement before
-  ephemeral cleanup, including cancel, save failure, retry, repeated close, and
-  disconnected-WebView fallback;
+  ephemeral cleanup, including mutation freeze, final risk revalidation, risk
+  expansion in the same dialog, cancel/failure control restoration, save
+  failure, retry, repeated close, and disconnected-WebView fallback;
 - the centralized `beforeunload` fallback guards dirty file buffers without
   destroying window-lifetime ephemeral runtimes;
 - Quick Chat non-modal behavior, New Chat transactional replacement,
-  minimize/restore paths, unread state, geometry bounds, and focus restoration;
+  minimize/restore paths, unread state, geometry bounds, focus restoration, and
+  custom pointer cleanup on cancel, lost capture, blur, and destroy;
 - same-window reload/navigation rebind from an authorized owner snapshot,
-  including message/title reconstruction and cross-window rejection;
+  including disconnect-time assistant/tool events, events racing snapshot and
+  mount, ordered sequence replay, no loss/duplication, unread reconstruction,
+  journal overflow recovery, and cross-window rejection;
+- same-workspace navigation preserves Side Chats; cross-workspace navigation
+  closes them with one destructive flow, cancels the whole navigation when
+  declined, and preserves Quick Chat;
 - `MessageRenderer`, `ToolCardRenderer`, and `EphemeralChatView` idempotent
   teardown, including no locale updates after destroyed Side Chats close;
 - Quick Chat exposes one Picot-provided New Chat reset; Side Chat exposes none;
@@ -766,14 +930,21 @@ exercise the real bundled Pi in the desktop Tauri WebView:
 7. Window close and application exit leave no owned Pi process or Quick Chat
    directory behind under normal shutdown.
 8. Chinese and English UI, keyboard operation, pointer drag/resize, reduced
-   motion, minimized restoration, and error recovery work in WKWebView.
-9. Reloading or navigating the native WebView restores the same window's live
-   ephemeral chats, while another native window and LAN/mobile clients cannot
-   list, control, rebind, or receive them.
+   motion, minimized restoration, and error recovery work in WKWebView. Native
+   macOS window dragging and Quick Chat dragging never compete for one gesture.
+9. Reloading or navigating within the same canonical workspace restores the
+   same window's live ephemeral chats without losing streaming text or tool
+   state, while another native window and LAN/mobile clients cannot list,
+   control, rebind, or receive them.
 10. Closing a real Tauri window exercises the unified close coordinator without
     competing browser/native dialogs; disconnect fallback is also verified.
 11. A previous-run Quick Chat temporary directory is not scanned or deleted on
     Picot startup.
+12. Navigating from workspace A to B closes A's Side Chats, preserves Quick
+    Chat, and leaves the owner on A when the destructive confirmation is
+    cancelled.
+13. External, LAN, unregistered loopback, redirect, and popup navigation cannot
+    expose the native capability; an approved same-owner Pi-port handoff works.
 
 ## Acceptance Criteria
 
@@ -793,14 +964,18 @@ The feature is complete when all of the following are true:
    confirmation behavior.
 7. Process, broker-route, and temporary-directory cleanup is bounded to the
    correct owner and succeeds on every normal lifecycle path.
-8. Same-window page reload/navigation rebinds live chats without browser or
-   filesystem persistence; application restart restores none.
+8. Same-window reload or same-workspace navigation rebinds live chats without
+   losing or duplicating streamed content and without browser/filesystem
+   persistence; application restart restores none.
 9. Missing/invalid capability, another window, and LAN/mobile clients cannot
    discover, control, or receive an owner's ephemeral chats.
 10. Picot-controlled persisted-session lifecycle commands are denied in both
-    broker and embedded-server layers; no claim is made that Picot sandboxes
-    user-trusted extension code.
-11. The feature is localized, keyboard accessible, and does not regress the
+    broker and embedded-server layers through one mechanically checked command
+    classification; no claim is made that Picot sandboxes user-trusted extension
+    code.
+11. Cross-workspace navigation closes the old workspace's Side Chats as one
+    cancellable transaction and preserves the workspace-independent Quick Chat.
+12. The feature is localized, keyboard accessible, and does not regress the
    existing main chat, session routing, sidebar regions, file editor, or mobile
    surface.
 
