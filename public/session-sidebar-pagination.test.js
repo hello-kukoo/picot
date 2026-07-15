@@ -29,6 +29,9 @@ beforeEach(async () => {
             unarchive: "Unarchive",
             archiveSession: "Archive session",
             unarchiveSession: "Unarchive session",
+            pinSession: "Pin session",
+            unpinSession: "Unpin session",
+            workspaceActions: "Workspace actions",
             newChat: "New chat in {path}",
             deleteAllArchived: "Delete all archived sessions",
             deleteArchivedConfirmOne:

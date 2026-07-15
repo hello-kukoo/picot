@@ -52,6 +52,7 @@ function makeQuickInfo() {
     clearHeaders: vi.fn(),
     setWorkspaces: vi.fn(),
     bindHeader: vi.fn(),
+    close: vi.fn(),
     destroy: vi.fn(),
   };
 }
@@ -94,6 +95,9 @@ beforeEach(async () => {
             unpinSession: "Unpin session",
             pinWorkspace: "Pin workspace",
             unpinWorkspace: "Unpin workspace",
+            archiveWorkspaceSessions: "Archive sessions",
+            openInFinder: "Open in Finder",
+            workspaceActions: "Workspace actions",
             showMore: "Show more",
             showLess: "Show less",
             openProject: "Open project",
@@ -154,7 +158,7 @@ describe("SessionSidebar PINNED integration", () => {
     expect(quickInfo.bindHeader).toHaveBeenCalledTimes(3);
   });
 
-  test("pins and unpins a session through its context menu", () => {
+  test("pins and unpins a session with the action left of Archive", () => {
     const pinStore = makePinStore();
     const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
       pinStore,
@@ -162,10 +166,52 @@ describe("SessionSidebar PINNED integration", () => {
     });
     sidebar.projects = createProjects();
     sidebar.render();
+
     const item = document.querySelector('.session-item[data-file-path="/sessions/alpha.jsonl"]');
-    item.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }));
-    document.querySelector(".context-menu-item").click();
+    const pin = item.querySelector(".session-pin-btn");
+    const archive = item.querySelector(".session-archive-btn");
+    expect(pin).not.toBeNull();
+    expect(archive).not.toBeNull();
+    expect(pin.nextElementSibling).toBe(archive);
+
+    pin.click();
     expect(pinStore.pinSession).toHaveBeenCalledWith("/sessions/alpha.jsonl");
+
+    item.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }));
+    expect(document.querySelector(".sidebar-context-menu")).toBeNull();
+  });
+
+  test("opens the same workspace actions from an ellipsis button and right click", () => {
+    const pinStore = makePinStore();
+    const onOpenProject = vi.fn();
+    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
+      pinStore,
+      quickInfo: makeQuickInfo(),
+      onOpenProject,
+    });
+    sidebar.projects = createProjects();
+    sidebar.render();
+
+    const header = document.querySelector(".projects-group .workspace-header");
+    const more = header.querySelector(".workspace-more-actions-btn");
+    expect(more).not.toBeNull();
+    more.click();
+    expect(document.querySelector(".sidebar-context-menu").textContent).toContain("Pin workspace");
+    expect(document.querySelector(".sidebar-context-menu").textContent).toContain("Open in Finder");
+    expect(document.querySelector(".sidebar-context-menu").textContent).toContain(
+      "Archive sessions",
+    );
+
+    document.querySelector(".sidebar-context-menu .context-menu-item:nth-child(2)").click();
+    expect(onOpenProject).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: "history:alpha", path: "/work/alpha" }),
+    );
+
+    header.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }),
+    );
+    document.querySelector(".sidebar-context-menu .context-menu-item:first-child").click();
+    expect(pinStore.pinWorkspace).toHaveBeenCalledWith("history:alpha", "/work/alpha");
   });
 
   test("uses the shared disclosure builder for PINNED workspace groups", () => {
@@ -185,6 +231,7 @@ describe("SessionSidebar PINNED integration", () => {
     expect(header.getAttribute("role")).toBe("button");
     expect(header.getAttribute("aria-expanded")).toBe("true");
     expect(document.querySelector(".pinned-group .workspace-group")).not.toBeNull();
+    expect(document.querySelector(".pinned-workspace-unpin")).toBeNull();
 
     header.dispatchEvent(new KeyboardEvent("keydown", { key: " " }));
     expect(header.getAttribute("aria-expanded")).toBe("false");

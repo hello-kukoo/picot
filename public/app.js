@@ -193,7 +193,16 @@ const sidebar = new SessionSidebar(
   document.getElementById("session-list"),
   handleSessionSelect,
   handleNewProjectChat,
-  { onOpenProject: () => handleOpenFolder() },
+  {
+    onOpenProject: (project) => {
+      if (!project?.path) return handleOpenFolder();
+      return fetch("/api/open", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filePath: project.path }),
+      });
+    },
+  },
 );
 
 // UI elements

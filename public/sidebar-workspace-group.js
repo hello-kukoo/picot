@@ -138,7 +138,10 @@ export function buildSidebarSection({
  * @param {boolean} [opts.expanded=false]    Initial expanded state.
  * @param {function} [opts.onToggle]         Called with the new expanded boolean.
  * @param {function} [opts.onNewChat]        New-chat callback (button shown only when provided).
+ * @param {function} [opts.onContextMenu]    Workspace context-menu callback.
+ * @param {function} [opts.onMoreActions]    Workspace actions-button callback.
  * @param {string}  [opts.newChatTitleKey]   i18n key for the new-chat aria-label.
+ * @param {string}  [opts.moreActionsTitleKey] i18n key for the actions-button aria-label.
  * @param {function} [opts.renderSessions]   Receives the sessions container element.
  * @param {function} [opts.renderFooter]     Receives a footer element (shown only when provided).
  * @returns {{ group: HTMLElement, header: HTMLElement, sessionsContainer: HTMLElement }}
@@ -151,7 +154,10 @@ export function buildSidebarWorkspaceGroup({
   expanded = false,
   onToggle = null,
   onNewChat = null,
+  onContextMenu = null,
+  onMoreActions = null,
   newChatTitleKey = "sidebar.newChat",
+  moreActionsTitleKey = "sidebar.workspaceActions",
   renderSessions = null,
   renderFooter = null,
 }) {
@@ -178,6 +184,28 @@ export function buildSidebarWorkspaceGroup({
   countEl.className = "project-count workspace-count";
   countEl.textContent = String(sessionCount);
   header.appendChild(countEl);
+
+  if (onContextMenu) {
+    header.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      onContextMenu(event);
+    });
+  }
+
+  if (onMoreActions) {
+    const label = t(moreActionsTitleKey, { path: folderName });
+    const moreActionsBtn = document.createElement("button");
+    moreActionsBtn.type = "button";
+    moreActionsBtn.className = "workspace-more-actions-btn";
+    moreActionsBtn.title = label;
+    moreActionsBtn.setAttribute("aria-label", label);
+    moreActionsBtn.textContent = "…";
+    moreActionsBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onMoreActions(event);
+    });
+    header.appendChild(moreActionsBtn);
+  }
 
   if (onNewChat) {
     const label = t(newChatTitleKey, { path: folderName });

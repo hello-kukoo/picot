@@ -518,19 +518,26 @@ export class WorkspaceQuickInfo {
 
   _onPinClick() {
     if (!this._pinStore || !this._currentWorkspace) return;
-    this._clearError();
 
-    const { workspaceId, path } = this._currentWorkspace;
+    const header = this._currentHeader;
+    const workspace = this._currentWorkspace;
+    const reason = this._openReason;
+    const { workspaceId, path } = workspace;
     const isPinned = this._pinStore.isWorkspacePinned(workspaceId);
+
+    // Pin changes synchronously rebuild the sidebar. Hiding before that shared
+    // state mutation prevents the detached card from being rebound to a newly
+    // inserted PINNED header and flashing at the viewport edge.
+    this._hideCard();
     const result = isPinned
       ? this._pinStore.unpinWorkspace(workspaceId)
       : this._pinStore.pinWorkspace(workspaceId, path);
 
-    if (result?.ok === false && result?.error === "capacity") {
+    if (result?.ok === false && result?.error === "capacity" && header) {
+      this._showCard(header, workspace, reason || "pointer");
       this._errorEl.textContent = t("sidebar.quickInfo.pinCapacityError");
       this._errorEl.hidden = false;
     }
-    this._updatePinState();
   }
 
   // ── Event handlers ─────────────────────────────────────────────────

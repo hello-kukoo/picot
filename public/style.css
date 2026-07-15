@@ -539,6 +539,31 @@ body {
   color: var(--bg);
 }
 
+.workspace-more-actions-btn {
+  display: flex;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 16px;
+  letter-spacing: 1px;
+  line-height: 1;
+}
+
+.workspace-more-actions-btn:hover,
+.workspace-more-actions-btn:focus-visible {
+  background: var(--bg-glass-hover);
+  color: var(--text-primary);
+  outline: none;
+}
+
 .archived-header {
   color: var(--text-dim);
 }
@@ -712,7 +737,7 @@ body {
 
 .session-action-slot {
   position: relative;
-  width: 64px;
+  width: 52px;
   height: 22px;
   flex-shrink: 0;
   margin-left: auto;
@@ -729,21 +754,21 @@ body {
   transition: opacity var(--duration) var(--ease);
 }
 
+.session-pin-btn,
 .session-archive-btn {
   position: absolute;
   top: 0;
-  right: 0;
   display: inline-flex;
   width: 22px;
   height: 22px;
   padding: 0;
   border: none;
   border-radius: var(--radius-sm);
+  align-items: center;
+  justify-content: center;
   background: transparent;
   color: var(--text-dim);
   cursor: pointer;
-  align-items: center;
-  justify-content: flex-end;
   flex-shrink: 0;
   transition:
     all var(--duration) var(--ease),
@@ -752,6 +777,34 @@ body {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
+}
+
+.session-pin-btn {
+  right: 24px;
+}
+
+.session-archive-btn {
+  right: 0;
+}
+
+.session-pin-icon,
+.context-menu-pin-icon {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill='black' d='m14.7 3.3 6 6-2.2 2.2-1.2-.2-3.4 3.4.2 1.2-1.5 1.5-3.2-3.2-4.1 4.1-.9-.9 4.1-4.1-3.2-3.2 1.5-1.5 1.2.2 3.4-3.4-.2-1.2z'/%3E%3C/svg%3E");
+  -webkit-mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill='black' d='m14.7 3.3 6 6-2.2 2.2-1.2-.2-3.4 3.4.2 1.2-1.5 1.5-3.2-3.2-4.1 4.1-.9-.9 4.1-4.1-3.2-3.2 1.5-1.5 1.2.2 3.4-3.4-.2-1.2z'/%3E%3C/svg%3E");
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+}
+
+.session-pin-btn[aria-pressed="true"] .session-pin-icon {
+  background-color: var(--accent);
 }
 
 .session-archive-btn svg {
@@ -768,12 +821,14 @@ body {
   opacity: 0;
 }
 
+.session-item:hover .session-pin-btn,
 .session-item:hover .session-archive-btn {
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
 }
 
+.session-pin-btn:hover,
 .session-archive-btn:hover {
   background: var(--bg-glass-hover);
 }
@@ -788,10 +843,10 @@ body {
 }
 
 /* Context menu */
-.session-context-menu {
+.sidebar-context-menu {
   position: fixed;
   z-index: 10000;
-  min-width: 160px;
+  min-width: 180px;
   padding: 4px;
   background: var(--bg-frosted);
   backdrop-filter: blur(20px);
@@ -804,13 +859,17 @@ body {
 
 .context-menu-item {
   display: flex;
+  width: 100%;
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
+  border: 0;
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  background: transparent;
   color: var(--text-primary);
   cursor: pointer;
+  font-size: 12px;
+  text-align: left;
   transition: background var(--duration) var(--ease);
 }
 
@@ -822,6 +881,16 @@ body {
   width: 16px;
   text-align: center;
   flex-shrink: 0;
+}
+
+.context-menu-icon svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .tmux-tag {

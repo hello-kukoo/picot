@@ -9,6 +9,11 @@ import { buildSidebarSection, buildSidebarWorkspaceGroup } from "./sidebar-works
 import { mergeWorkspaceProjects, resolvePinnedWorkspaceGroups } from "./workspace-projects.js";
 import { WorkspaceQuickInfo } from "./workspace-quick-info.js";
 
+const ARCHIVE_ICON =
+  '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="4" rx="1.5"></rect><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"></path><path d="M10 12h4"></path></svg>';
+const OPEN_FOLDER_ICON =
+  '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>';
+
 export class SessionSidebar {
   constructor(container, onSessionSelect, onNewChat, options = {}) {
     this.projectSessionInitialLimit = 5;
@@ -34,14 +39,6 @@ export class SessionSidebar {
     this.streamingFiles = new Set();
     this.projectVisibleSessionCounts = new Map();
     this.contextMenu = null;
-    this.sessionItemData = new WeakMap();
-    this.onSessionItemContextMenu = (event) => {
-      const item = event.target.closest?.(".session-item");
-      if (!item || !this.container.contains(item)) return;
-      const data = this.sessionItemData.get(item);
-      if (data) this.showContextMenu(event, data.session, data.project, item);
-    };
-    this.container.addEventListener("contextmenu", this.onSessionItemContextMenu);
     // `loadSeq` counts issued loads; `loadCommitted` is the highest seq that has
     // actually rendered. We discard a response only when a *newer* one has
     // already committed (out-of-order arrival), never just because a newer load
@@ -56,8 +53,7 @@ export class SessionSidebar {
       this.closeContextMenu();
     });
     document.addEventListener("contextmenu", (e) => {
-      // Close if right-clicking outside a session item
-      if (!e.target.closest(".session-item")) this.closeContextMenu();
+      if (!e.target.closest(".workspace-header, .sidebar-context-menu")) this.closeContextMenu();
     });
 
     this.unsubscribeLocaleChange = onLocaleChange(() => {
@@ -493,54 +489,76 @@ export class SessionSidebar {
   // Context Menu
   // ═══════════════════════════════════════
 
-  showContextMenu(e, session, _project, _itemEl) {
-    e.preventDefault();
+  showWorkspaceContextMenu(event, workspace) {
+    event.preventDefault();
     this.closeContextMenu();
 
-    const menu = document.createElement("div");
-    menu.className = "session-context-menu";
-
-    const isArchived = this.isArchived(session.filePath);
-    const isPinned = this.pinStore.isSessionPinned(session.filePath);
+    const isPinned = this.pinStore.isWorkspacePinned(workspace.workspaceId);
     const items = [
       {
-        icon: isPinned ? "📌" : "📍",
-        label: isPinned ? t("sidebar.unpinSession") : t("sidebar.pinSession"),
+        iconClass: "context-menu-pin-icon",
+        label: isPinned ? t("sidebar.unpinWorkspace") : t("sidebar.pinWorkspace"),
         action: () => {
-          if (isPinned) this.pinStore.unpinSession(session.filePath);
-          else this.pinStore.pinSession(session.filePath);
+          this.quickInfo.close();
+          if (isPinned) this.pinStore.unpinWorkspace(workspace.workspaceId);
+          else this.pinStore.pinWorkspace(workspace.workspaceId, workspace.path);
         },
       },
       {
-        icon: isArchived ? "📤" : "🗄️",
-        label: isArchived ? t("sidebar.unarchive") : t("sidebar.archive"),
-        action: () => this.toggleArchived(session.filePath),
+        icon: OPEN_FOLDER_ICON,
+        label: t("sidebar.openInFinder"),
+        action: () => this.onOpenProject?.(workspace),
+      },
+      {
+        icon: ARCHIVE_ICON,
+        label: t("sidebar.archiveWorkspaceSessions"),
+        action: () => this.archiveWorkspaceSessions(workspace),
       },
     ];
 
+    const menu = document.createElement("div");
+    menu.className = "sidebar-context-menu";
+    menu.setAttribute("role", "menu");
     for (const item of items) {
-      const row = document.createElement("div");
+      const row = document.createElement("button");
+      row.type = "button";
       row.className = "context-menu-item";
-      row.innerHTML = `<span class="context-menu-icon">${item.icon}</span>${this.escapeHtml(item.label)}`;
-      row.addEventListener("click", (ev) => {
-        ev.stopPropagation();
+      row.setAttribute("role", "menuitem");
+
+      const icon = document.createElement("span");
+      icon.className = `context-menu-icon${item.iconClass ? ` ${item.iconClass}` : ""}`;
+      icon.setAttribute("aria-hidden", "true");
+      if (item.icon) icon.innerHTML = item.icon;
+      const label = document.createElement("span");
+      label.textContent = item.label;
+      row.append(icon, label);
+      row.addEventListener("click", (clickEvent) => {
+        clickEvent.stopPropagation();
         this.closeContextMenu();
         item.action();
       });
       menu.appendChild(row);
     }
 
-    // Position
     document.body.appendChild(menu);
     const rect = menu.getBoundingClientRect();
-    let x = e.clientX;
-    let y = e.clientY;
+    let x = event.clientX;
+    let y = event.clientY;
     if (x + rect.width > window.innerWidth) x = window.innerWidth - rect.width - 8;
     if (y + rect.height > window.innerHeight) y = window.innerHeight - rect.height - 8;
     menu.style.left = `${x}px`;
     menu.style.top = `${y}px`;
-
     this.contextMenu = menu;
+  }
+
+  archiveWorkspaceSessions(workspace) {
+    const filePaths = (workspace?.sessions || [])
+      .map((session) => session?.filePath)
+      .filter((filePath) => typeof filePath === "string" && filePath && !this.isArchived(filePath));
+    if (filePaths.length === 0) return;
+    this.archived.push(...filePaths);
+    this.saveArchived();
+    this.render();
   }
 
   closeContextMenu() {
@@ -623,34 +641,19 @@ export class SessionSidebar {
     item.dataset.filePath = session.filePath;
     item.dataset.projectSearchText = this.getProjectSearchText(project);
 
-    if (session.filePath === this.activeSessionFile) {
-      item.classList.add("active");
-    }
-    if (this.unread.has(session.filePath)) {
-      item.classList.add("unread");
-    }
-    if (this.streamingFiles.has(session.filePath)) {
-      item.classList.add("streaming");
-    }
+    if (session.filePath === this.activeSessionFile) item.classList.add("active");
+    if (this.unread.has(session.filePath)) item.classList.add("unread");
+    if (this.streamingFiles.has(session.filePath)) item.classList.add("streaming");
 
     const title = session.name || session.firstMessage || t("sidebar.emptySession");
     const time = this.formatTime(session.timestamp);
     const tmuxTag = session.tmux ? '<span class="session-tag tmux-tag">tmux</span>' : "";
     const isArchived = this.isArchived(session.filePath);
+    const isPinned = this.pinStore.isSessionPinned(session.filePath);
+    const pinBtnLabel = isPinned ? t("sidebar.unpinSession") : t("sidebar.pinSession");
     const archiveBtnLabel = isArchived
       ? t("sidebar.unarchiveSession")
       : t("sidebar.archiveSession");
-    const archiveBtnIcon = `
-      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-        <rect x="3" y="4" width="18" height="4" rx="1.5"></rect>
-        <path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"></path>
-        <path d="M10 12h4"></path>
-      </svg>
-    `;
-
-    const archiveButtonHtml = showArchiveButton
-      ? `<button class="session-archive-btn" title="${this.escapeHtml(archiveBtnLabel)}" aria-label="${this.escapeHtml(archiveBtnLabel)}">${archiveBtnIcon}</button>`
-      : "";
 
     item.innerHTML = `
       <div class="session-title-row">
@@ -658,19 +661,38 @@ export class SessionSidebar {
         ${tmuxTag}
         <span class="session-action-slot">
           <span class="session-time">${time}</span>
-          ${archiveButtonHtml}
         </span>
       </div>
     `;
 
-    this.sessionItemData.set(item, { session, project });
     item.addEventListener("click", () => this.onSessionSelect(session, project));
-    const archiveBtn = item.querySelector(".session-archive-btn");
-    if (archiveBtn) {
-      archiveBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
+    const actionSlot = item.querySelector(".session-action-slot");
+    const pinBtn = document.createElement("button");
+    pinBtn.type = "button";
+    pinBtn.className = "session-pin-btn";
+    pinBtn.title = pinBtnLabel;
+    pinBtn.setAttribute("aria-label", pinBtnLabel);
+    pinBtn.setAttribute("aria-pressed", String(isPinned));
+    pinBtn.innerHTML = '<span class="session-pin-icon" aria-hidden="true"></span>';
+    pinBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (isPinned) this.pinStore.unpinSession(session.filePath);
+      else this.pinStore.pinSession(session.filePath);
+    });
+    actionSlot.appendChild(pinBtn);
+
+    if (showArchiveButton) {
+      const archiveBtn = document.createElement("button");
+      archiveBtn.type = "button";
+      archiveBtn.className = "session-archive-btn";
+      archiveBtn.title = archiveBtnLabel;
+      archiveBtn.setAttribute("aria-label", archiveBtnLabel);
+      archiveBtn.innerHTML = ARCHIVE_ICON;
+      archiveBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
         this.toggleArchived(session.filePath);
       });
+      actionSlot.appendChild(archiveBtn);
     }
 
     return item;
@@ -767,6 +789,14 @@ export class SessionSidebar {
             expanded: true,
             onNewChat:
               !pinned.unavailable && workspacePath ? () => this.onNewChat(workspacePath) : null,
+            onContextMenu:
+              !pinned.unavailable && workspace
+                ? (event) => this.showWorkspaceContextMenu(event, workspace)
+                : null,
+            onMoreActions:
+              !pinned.unavailable && workspace
+                ? (event) => this.showWorkspaceContextMenu(event, workspace)
+                : null,
             renderSessions: (container) => {
               if (pinned.unavailable) {
                 const unavailable = document.createElement("div");
@@ -795,18 +825,8 @@ export class SessionSidebar {
           });
           group.classList.add("pinned-workspace-group");
 
-          if (pinned.workspacePin && !pinned.unavailable) {
-            const unpin = document.createElement("button");
-            unpin.type = "button";
-            unpin.className = "pinned-workspace-unpin";
-            unpin.textContent = t("sidebar.unpinWorkspace");
-            unpin.addEventListener("click", () =>
-              this.pinStore.unpinWorkspace(workspace.workspaceId),
-            );
-            header.appendChild(unpin);
-          }
-
           if (!pinned.unavailable && workspace) this.quickInfo.bindHeader(header, workspace);
+
           body.appendChild(group);
         }
       },
@@ -898,6 +918,8 @@ export class SessionSidebar {
           else this.collapsedProjects.add(projectKey);
         },
         onNewChat: this.onNewChat ? () => this.onNewChat(project) : null,
+        onContextMenu: (event) => this.showWorkspaceContextMenu(event, project),
+        onMoreActions: (event) => this.showWorkspaceContextMenu(event, project),
         renderSessions: (sessionsDiv) => {
           for (const session of sessionsToRender) {
             sessionsDiv.appendChild(this.buildSessionItem(session, project));

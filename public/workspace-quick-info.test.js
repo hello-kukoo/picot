@@ -371,27 +371,39 @@ describe("Escape behavior", () => {
 
 describe("Pin/Unpin control", () => {
   test("button exposes aria-pressed reflecting pinned state", () => {
-    const { qi, headerEl } = makeHarness();
-    headerEl.dispatchEvent(new FocusEvent("focusin"));
+    const unpinned = makeHarness();
+    unpinned.headerEl.dispatchEvent(new FocusEvent("focusin"));
+    expect(document.querySelector(".wqi-pin-btn").getAttribute("aria-pressed")).toBe("false");
+    expect(document.querySelector(".wqi-pin-btn").getAttribute("aria-label")).toBe("Pin workspace");
 
-    const pinBtn = document.querySelector(".wqi-pin-btn");
-    expect(pinBtn.getAttribute("aria-pressed")).toBe("false");
-    expect(pinBtn.getAttribute("aria-label")).toBe("Pin workspace");
-
-    pinBtn.click();
-    expect(pinBtn.getAttribute("aria-pressed")).toBe("true");
-    expect(pinBtn.getAttribute("aria-label")).toBe("Unpin workspace");
+    unpinned.qi.close();
+    const pinned = makeHarness({ pinStore: makePinStore(new Set(["history:alpha"])) });
+    pinned.headerEl.dispatchEvent(new FocusEvent("focusin"));
+    const pinnedButton = document.querySelectorAll(".wqi-pin-btn").item(1);
+    expect(pinnedButton.getAttribute("aria-pressed")).toBe("true");
+    expect(pinnedButton.getAttribute("aria-label")).toBe("Unpin workspace");
   });
 
-  test("clicking pin toggles via pinStore", () => {
-    const { qi, headerEl, pinStore } = makeHarness();
-    headerEl.dispatchEvent(new FocusEvent("focusin"));
+  test("clicking Pin or Unpin closes the card before mutating shared Pin state", () => {
+    const { headerEl, pinStore } = makeHarness();
+    const card = document.querySelector(".workspace-quick-info");
+    pinStore.pinWorkspace = vi.fn(() => {
+      expect(card.style.display).toBe("none");
+      pinStore.pinned.add("history:alpha");
+      return { ok: true, changed: true };
+    });
+    pinStore.unpinWorkspace = vi.fn(() => {
+      expect(card.style.display).toBe("none");
+      pinStore.pinned.delete("history:alpha");
+      return { ok: true, changed: true };
+    });
 
-    const pinBtn = document.querySelector(".wqi-pin-btn");
-    pinBtn.click();
+    headerEl.dispatchEvent(new FocusEvent("focusin"));
+    document.querySelector(".wqi-pin-btn").click();
     expect(pinStore.pinWorkspace).toHaveBeenCalledWith("history:alpha", "/work/alpha");
 
-    pinBtn.click();
+    headerEl.dispatchEvent(new FocusEvent("focusin"));
+    document.querySelector(".wqi-pin-btn").click();
     expect(pinStore.unpinWorkspace).toHaveBeenCalledWith("history:alpha");
   });
 
