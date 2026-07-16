@@ -1,18 +1,68 @@
+// ABOUTME: Owns embedded Pi child processes, ports, identities, and RPC pipes.
+// ABOUTME: Provides safe spawn, routing, exit observation, and exact cleanup.
+
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex, OnceLock,
+};
 use std::time::{Duration, Instant};
+
+use rand::rngs::OsRng;
+use rand::RngCore;
+use tokio::sync::broadcast;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+const QUICK_CHAT_TEMP_PREFIX: &str = "picot-quick-chat-";
+const QUICK_CHAT_TOKEN_BYTES: usize = 16;
+
+/// Generalized spawn request. The host owns every field; callers never inject
+/// capability, owner tokens, executables, or arbitrary flags through this.
+#[derive(Clone, Debug)]
+pub struct PiSpawnSpec {
+    pub cwd: PathBuf,
+    pub port: u16,
+    pub session_path: Option<String>,
+    pub no_session: bool,
+    pub no_tools: bool,
+    pub environment: Vec<(String, String)>,
+}
+
+/// Identity of a just-spawned pi process, returned to the host for tracking.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SpawnedPi {
+    pub port: u16,
+    pub pid: u32,
+    pub identity: u64,
+}
+
+/// Natural-exit notification for one exact (port, pid) pi process.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProcessExit {
+    pub port: u16,
+    pub pid: u32,
+    pub identity: u64,
+}
+
+/// One JSON frame emitted by Pi's RPC stdout, such as an extension UI request.
+#[derive(Clone, Debug)]
+pub struct RpcOutput {
+    pub port: u16,
+    pub payload: serde_json::Value,
+}
+
 struct PiProcess {
     child: Child,
     stdin: ChildStdin,
+    pid: u32,
+    identity: u64,
 }
 
 pub struct PiManager {
@@ -22,6 +72,9 @@ pub struct PiManager {
     /// Maps workspace_port -> [dedicated session ports] for cleanup on window close.
     workspace_dedicated: Arc<Mutex<HashMap<u16, Vec<u16>>>>,
     static_dir: PathBuf,
+    exit_sender: broadcast::Sender<ProcessExit>,
+    rpc_output_sender: broadcast::Sender<RpcOutput>,
+    next_process_identity: AtomicU64,
 }
 
 struct EmbeddedExtensionResolution {
@@ -316,11 +369,16 @@ fn mirror_is_up_to_date(src: &Path, dest: &Path) -> bool {
 
 impl PiManager {
     pub fn new(static_dir: PathBuf) -> Self {
+        let (exit_sender, _) = broadcast::channel(64);
+        let (rpc_output_sender, _) = broadcast::channel(128);
         Self {
             processes: Arc::new(Mutex::new(HashMap::new())),
             session_ports: Arc::new(Mutex::new(HashMap::new())),
             workspace_dedicated: Arc::new(Mutex::new(HashMap::new())),
             static_dir,
+            exit_sender,
+            rpc_output_sender,
+            next_process_identity: AtomicU64::new(1),
         }
     }
 
@@ -473,7 +531,7 @@ impl PiManager {
         ))
     }
 
-    pub fn spawn(&self, cwd: &str, port: u16, session_path: Option<&str>) -> Result<(), String> {
+    pub fn spawn_with_spec(&self, spec: &PiSpawnSpec) -> Result<SpawnedPi, String> {
         let pi_bin = self.resolve_bundled_pi()?;
         // Tauri resolves resource paths as `\\?\`-prefixed extended-length
         // paths. Bun (the embedded pi runtime) segfaults on Windows arm64 when
@@ -481,54 +539,27 @@ impl PiManager {
         // path-shaped argument/env we hand to it back to the plain form.
         let pi_bin_str = strip_verbatim_prefix(&pi_bin.to_string_lossy());
         let static_dir = strip_verbatim_prefix(&self.static_dir.to_string_lossy());
-        let cwd = strip_verbatim_prefix(cwd);
+        let cwd = strip_verbatim_prefix(&spec.cwd.to_string_lossy());
 
-        // We treat a missing embedded-server extension as a hard error
-        // rather than continuing to spawn pi without `--extension`. Without
-        // the extension, pi runs as a plain RPC process with no
-        // `/api/sessions` or `/ws`, which the web UI then renders as
-        // "Failed to load sessions" / "Disconnected" — a confusing soft
-        // failure that hides the real bundling bug.
+        // A missing embedded-server extension is a hard error: without it pi
+        // runs as a plain RPC process with no `/api` or `/ws`, which surfaces
+        // as a confusing "Failed to load sessions" soft failure.
         let extension = self.resolve_embedded_extension_path()?;
         log::info!(
             "[pi-desktop] embedded-server resolved: source={} path={}",
             extension.source,
             extension.path
         );
-
-        // The embedded pi (Bun-compiled standalone) mis-parses `--extension`
-        // paths that contain spaces on Windows: it truncates at the first
-        // space, so `...\Picot\extensions\embedded-server.mjs` is loaded
-        // as `...\Pi`, which then fails to load and crashes the process
-        // (segfault) during extension-load error handling. The primary fix is
-        // the space-free `productName` ("Picot") so the install dir has no
-        // space; this mirroring remains as a defensive fallback for paths that
-        // can still contain spaces out of our control (e.g. a Windows username
-        // like `C:\Users\Shi Xin\...`). Work around it by mirroring the
-        // extension into a space-free directory and passing that path instead.
-        //
-        // Also strip the `\\?\` verbatim prefix first: Bun on Windows arm64
-        // segfaults when loading an extension from an extended-length path.
         let extension_path =
             sanitize_extension_path_for_pi(&strip_verbatim_prefix(&extension.path));
 
-        let mut args: Vec<String> = vec![
-            "--extension".to_string(),
-            extension_path,
-            "--mode".to_string(),
-            "rpc".to_string(),
-        ];
-        if let Some(session) = session_path {
-            args.push("--session".to_string());
-            args.push(session.to_string());
-        }
-
+        let args = build_pi_args(&extension_path, spec)?;
         log::info!(
             "[pi-desktop] spawning pi: bin={} args={:?} cwd={} port={} static_dir={}",
             pi_bin_str,
             args,
             cwd,
-            port,
+            spec.port,
             static_dir
         );
 
@@ -542,12 +573,17 @@ impl PiManager {
             .current_dir(&cwd)
             .env("PATH", augmented_path)
             .env("PI_STUDIO_STATIC_DIR", &static_dir)
-            .env("PI_STUDIO_PORT", port.to_string())
-            .env("PI_STUDIO_PI_VERSION", locked_pi_version())
+            .env("PI_STUDIO_PORT", spec.port.to_string())
+            .env("PI_STUDIO_PI_VERSION", locked_pi_version());
+        // Ephemeral markers (kind, instance id, generation) are the only extra
+        // environment the host may inject; they never include a capability or
+        // owner token.
+        for (key, value) in &spec.environment {
+            child.env(key, value);
+        }
+        child
             .stdin(Stdio::piped())
-            // Drop stdout: pi emits RPC frames on it that we don't consume here, and
-            // letting it fill an unread pipe would eventually block the child.
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             // Inherit stderr so pi's startup/runtime errors are visible in the same
             // terminal running `bun run dev` — critical for diagnosing failures of
             // new_session / open_workspace that would otherwise be silent.
@@ -563,21 +599,138 @@ impl PiManager {
                 e,
             )
         })?;
+        let pid = child.id();
+        let identity = self.next_process_identity.fetch_add(1, Ordering::Relaxed);
         log::info!(
-            "[pi-desktop] pi process spawned: port={} pid={} elapsed_ms={}",
-            port,
-            child.id(),
+            "[pi-desktop] pi process spawned: port={} pid={} identity={} elapsed_ms={}",
+            spec.port,
+            pid,
+            identity,
             spawn_started_at.elapsed().as_millis()
         );
         let stdin = child
             .stdin
             .take()
             .ok_or_else(|| "Failed to get pi stdin".to_string())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "Failed to get pi stdout".to_string())?;
 
-        let mut lock = self.processes.lock().unwrap();
-        lock.insert(port, PiProcess { child, stdin });
+        let output_sender = self.rpc_output_sender.clone();
+        let output_port = spec.port;
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                let Ok(payload) = serde_json::from_str::<serde_json::Value>(&line) else {
+                    continue;
+                };
+                let _ = output_sender.send(RpcOutput {
+                    port: output_port,
+                    payload,
+                });
+            }
+        });
 
-        Ok(())
+        {
+            let mut lock = self.processes.lock().unwrap();
+            lock.insert(
+                spec.port,
+                PiProcess {
+                    child,
+                    stdin,
+                    pid,
+                    identity,
+                },
+            );
+        }
+        self.watch_process_exit(spec.port, pid, identity);
+        Ok(SpawnedPi {
+            port: spec.port,
+            pid,
+            identity,
+        })
+    }
+
+    /// Existing workspace spawn behavior expressed through the generalized spec.
+    pub fn spawn(&self, cwd: &str, port: u16, session_path: Option<&str>) -> Result<(), String> {
+        let spec = PiSpawnSpec {
+            cwd: PathBuf::from(cwd),
+            port,
+            session_path: session_path.map(|s| s.to_string()),
+            no_session: false,
+            no_tools: false,
+            environment: vec![],
+        };
+        self.spawn_with_spec(&spec).map(|_| ())
+    }
+
+    /// Poll one exact (port, pid) child for natural exit, emitting a single
+    /// ProcessExit and removing only that record. A different process that later
+    /// reuses the port is never observed or killed by this watcher.
+    fn watch_process_exit(&self, port: u16, pid: u32, identity: u64) {
+        let processes = self.processes.clone();
+        let exits = self.exit_sender.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(250));
+            let exited = {
+                let mut lock = match processes.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => return,
+                };
+                let Some(proc) = lock.get_mut(&port) else {
+                    return;
+                };
+                if proc.pid != pid || proc.identity != identity {
+                    return;
+                }
+                matches!(proc.child.try_wait(), Ok(Some(_)))
+            };
+            if exited {
+                let mut lock = match processes.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => return,
+                };
+                if let Some(proc) = lock.get(&port) {
+                    if proc.pid == pid && proc.identity == identity {
+                        lock.remove(&port);
+                    }
+                }
+                drop(lock);
+                let _ = exits.send(ProcessExit {
+                    port,
+                    pid,
+                    identity,
+                });
+                return;
+            }
+        });
+    }
+
+    #[allow(dead_code)]
+    pub fn subscribe_exits(&self) -> broadcast::Receiver<ProcessExit> {
+        self.exit_sender.subscribe()
+    }
+
+    pub fn subscribe_rpc_outputs(&self) -> broadcast::Receiver<RpcOutput> {
+        self.rpc_output_sender.subscribe()
+    }
+
+    #[allow(dead_code)]
+    pub fn matches_process(&self, port: u16, pid: u32) -> bool {
+        let lock = self.processes.lock().unwrap();
+        lock.get(&port).is_some_and(|p| p.pid == pid)
+    }
+
+    pub fn matches_process_identity(&self, port: u16, pid: u32, identity: u64) -> bool {
+        let lock = self.processes.lock().unwrap();
+        lock.get(&port)
+            .is_some_and(|p| p.pid == pid && p.identity == identity)
+    }
+
+    /// Whether this manager owns a live process at the given port.
+    pub fn owns_process(&self, port: u16) -> bool {
+        self.processes.lock().unwrap().contains_key(&port)
     }
 
     /// Send an RPC command to a pi instance (JSON line on stdin)
@@ -768,6 +921,133 @@ fn parse_package_sources(output: &str) -> Vec<String> {
     sources
 }
 
+/// Build the pi CLI argument vector for a spawn spec. Pure and separately
+/// tested so the side-chat / quick-chat flag combinations are locked down
+/// without spawning a real process.
+fn build_pi_args(extension_path: &str, spec: &PiSpawnSpec) -> Result<Vec<String>, String> {
+    if spec.no_session && spec.session_path.is_some() {
+        return Err("cannot combine --no-session with an explicit session path".to_string());
+    }
+    let mut args = vec![
+        "--extension".to_string(),
+        extension_path.to_string(),
+        "--mode".to_string(),
+        "rpc".to_string(),
+    ];
+    if spec.no_session {
+        args.push("--no-session".to_string());
+    } else if let Some(session) = &spec.session_path {
+        args.push("--session".to_string());
+        args.push(session.clone());
+    }
+    if spec.no_tools {
+        args.push("--no-tools".to_string());
+    }
+    Ok(args)
+}
+
+/// Trusted host-injected environment markers identifying one ephemeral chat.
+/// They carry no capability or owner token.
+#[allow(dead_code)]
+pub fn build_ephemeral_environment(
+    kind: &str,
+    instance_id: &str,
+    generation: u64,
+) -> Vec<(String, String)> {
+    vec![
+        ("PI_STUDIO_EPHEMERAL_KIND".to_string(), kind.to_string()),
+        (
+            "PI_STUDIO_EPHEMERAL_INSTANCE_ID".to_string(),
+            instance_id.to_string(),
+        ),
+        (
+            "PI_STUDIO_EPHEMERAL_GENERATION".to_string(),
+            generation.to_string(),
+        ),
+    ]
+}
+
+pub fn canonical_temp_root() -> PathBuf {
+    std::env::temp_dir()
+        .canonicalize()
+        .unwrap_or_else(|_| std::env::temp_dir())
+}
+
+/// Create a unique owner-private directory for a Quick Chat under the OS temp
+/// root. Returns its canonical path plus the random ownership token that is
+/// also encoded in the directory name. Picot never scans or recovers these on
+/// startup; only the live in-memory record can request cleanup.
+#[allow(dead_code)]
+pub fn create_quick_chat_temp_dir() -> Result<(PathBuf, String), String> {
+    let root = canonical_temp_root();
+    loop {
+        let token = random_hex_token();
+        let candidate = root.join(format!("{QUICK_CHAT_TEMP_PREFIX}{token}"));
+        match std::fs::create_dir(&candidate) {
+            Ok(()) => {
+                let canonical = candidate.canonicalize().map_err(|e| e.to_string())?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(
+                        &canonical,
+                        std::fs::Permissions::from_mode(0o700),
+                    );
+                }
+                return Ok((canonical, token));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+}
+
+/// Delete exactly one Quick Chat directory after verifying it is beneath the
+/// temp root, is not itself the root, is not a symlink, and its name still
+/// encodes the owning token. Rejects everything else without deleting.
+#[allow(dead_code)]
+pub fn cleanup_quick_chat_dir(
+    canonical_temp_root: &Path,
+    exact_path: &Path,
+    ownership_token: &str,
+) -> Result<(), String> {
+    // Reject a symlink swapped in at the stored path before canonicalize
+    // (canonicalize follows the link and would hide the replacement).
+    let input_meta = std::fs::symlink_metadata(exact_path).map_err(|e| e.to_string())?;
+    if input_meta.file_type().is_symlink() {
+        return Err("refusing to delete a symlink".to_string());
+    }
+    let canonical = exact_path.canonicalize().map_err(|e| e.to_string())?;
+    if canonical == canonical_temp_root {
+        return Err("refusing to delete the temporary root".to_string());
+    }
+    if !canonical.starts_with(canonical_temp_root) {
+        return Err("path is outside the temporary root".to_string());
+    }
+    let expected_name = format!("{QUICK_CHAT_TEMP_PREFIX}{ownership_token}");
+    let actual_name = canonical.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if actual_name != expected_name {
+        return Err("ownership token mismatch".to_string());
+    }
+    std::fs::remove_dir_all(&canonical).map_err(|e| e.to_string())
+}
+
+#[allow(dead_code)]
+fn random_hex_token() -> String {
+    let mut bytes = [0u8; QUICK_CHAT_TOKEN_BYTES];
+    OsRng.fill_bytes(&mut bytes);
+    hex_encode(&bytes)
+}
+
+#[allow(dead_code)]
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
 pub fn is_port_in_use(port: u16) -> bool {
     std::net::TcpListener::bind(format!("0.0.0.0:{}", port)).is_err()
 }
@@ -927,5 +1207,140 @@ No packages installed.";
                 "/abs/pkg",
             ],
         );
+    }
+
+    fn spec(no_session: bool, no_tools: bool, session_path: Option<&str>) -> PiSpawnSpec {
+        PiSpawnSpec {
+            cwd: PathBuf::from("/workspace"),
+            port: 47821,
+            session_path: session_path.map(|s| s.to_string()),
+            no_session,
+            no_tools,
+            environment: vec![],
+        }
+    }
+
+    #[test]
+    fn build_pi_args_normal_sessionless_spawn() {
+        let args = build_pi_args("/ext/server.mjs", &spec(false, false, None)).unwrap();
+        assert_eq!(
+            args,
+            vec![
+                "--extension".to_string(),
+                "/ext/server.mjs".to_string(),
+                "--mode".to_string(),
+                "rpc".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_pi_args_persisted_session_adds_session_flag() {
+        let args = build_pi_args("/ext/server.mjs", &spec(false, false, Some("/s.jsonl"))).unwrap();
+        assert_eq!(
+            args,
+            vec![
+                "--extension".to_string(),
+                "/ext/server.mjs".to_string(),
+                "--mode".to_string(),
+                "rpc".to_string(),
+                "--session".to_string(),
+                "/s.jsonl".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_pi_args_side_chat_uses_no_session_only() {
+        let args = build_pi_args("/ext/server.mjs", &spec(true, false, None)).unwrap();
+        assert!(args.contains(&"--no-session".to_string()));
+        assert!(!args.contains(&"--no-tools".to_string()));
+        assert!(!args.contains(&"--session".to_string()));
+    }
+
+    #[test]
+    fn build_pi_args_quick_chat_uses_no_session_and_no_tools() {
+        let args = build_pi_args("/ext/server.mjs", &spec(true, true, None)).unwrap();
+        assert!(args.contains(&"--no-session".to_string()));
+        assert!(args.contains(&"--no-tools".to_string()));
+    }
+
+    #[test]
+    fn build_pi_args_rejects_no_session_with_explicit_session_path() {
+        assert!(build_pi_args("/ext/server.mjs", &spec(true, false, Some("/s.jsonl"))).is_err());
+    }
+
+    #[test]
+    fn ephemeral_environment_markers_carry_no_capability_or_token() {
+        let env = build_ephemeral_environment("side-chat", "inst-123", 7);
+        let serialized = format!("{env:?}");
+        assert!(serialized.contains("side-chat"));
+        assert!(serialized.contains("inst-123"));
+        assert!(serialized.contains("7"));
+        for key in env.iter().map(|(k, _)| k.as_str()) {
+            assert!(!key.to_ascii_lowercase().contains("capabilit"));
+            assert!(!key.to_ascii_lowercase().contains("token"));
+            assert!(!key.to_ascii_lowercase().contains("owner"));
+        }
+    }
+
+    #[test]
+    fn matches_process_is_false_for_empty_manager() {
+        let manager = PiManager::new(PathBuf::from("."));
+        assert!(!manager.matches_process(47821, 12345));
+    }
+
+    #[test]
+    fn quick_chat_temp_dir_create_and_cleanup_roundtrip() {
+        let root = canonical_temp_root();
+        let (path, token) = create_quick_chat_temp_dir().expect("create temp dir");
+        assert!(path.starts_with(&root));
+        assert_eq!(
+            path.file_name().and_then(|n| n.to_str()).unwrap(),
+            format!("{QUICK_CHAT_TEMP_PREFIX}{token}")
+        );
+        assert!(path.is_dir());
+        cleanup_quick_chat_dir(&root, &path, &token).expect("cleanup owned dir");
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn quick_chat_cleanup_rejects_root_itself() {
+        let root = canonical_temp_root();
+        assert!(cleanup_quick_chat_dir(&root, &root, "any").is_err());
+    }
+
+    #[test]
+    fn quick_chat_cleanup_rejects_outside_root() {
+        let outside = PathBuf::from("/etc");
+        let root = std::env::temp_dir();
+        assert!(cleanup_quick_chat_dir(&root, &outside, "x").is_err());
+    }
+
+    #[test]
+    fn quick_chat_cleanup_rejects_symlink_replacement() {
+        let root = canonical_temp_root();
+        let (real, token) = create_quick_chat_temp_dir().unwrap();
+        let link = root.join(format!("picot-quick-chat-link-{}", random_hex_token()));
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        #[cfg(not(unix))]
+        {
+            let _ = (real, token);
+            return;
+        }
+        assert!(cleanup_quick_chat_dir(&root, &link, &token).is_err());
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_dir_all(&real);
+    }
+
+    #[test]
+    fn quick_chat_cleanup_rejects_token_mismatch() {
+        let root = canonical_temp_root();
+        let (path, _token) = create_quick_chat_temp_dir().unwrap();
+        // A real picot-quick-chat dir but with a non-matching ownership token.
+        assert!(cleanup_quick_chat_dir(&root, &path, "deadbeef").is_err());
+        assert!(path.exists());
+        let _ = std::fs::remove_dir_all(&path);
     }
 }

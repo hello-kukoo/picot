@@ -31,6 +31,9 @@ futures-util = "0.3"
 tokio-tungstenite = "0.24"
 percent-encoding = "2"
 base64 = "0.22"
+rand = "0.8"
+subtle = "2"
+tempfile = "3"
 
 [profile.dev]
 incremental = true
