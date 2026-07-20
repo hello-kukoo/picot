@@ -2,8 +2,10 @@
 // ABOUTME: composer, dialogs, and usage — reusing the shared render helpers.
 
 import { setupVoiceInput } from "./app-voice-input.js";
+import { setupComposerImageAttachments } from "./composer-image-attachments.js";
 import { DialogHandler } from "./dialogs.js";
 import { onLocaleChange, t } from "./i18n.js";
+import { processImageFile, processImagePayload } from "./image-attachments.js";
 import { MessageRenderer } from "./message-renderer.js";
 import { ToolCardRenderer } from "./tool-card.js";
 
@@ -75,7 +77,14 @@ export class EphemeralChatView {
     this._textarea.className = "ephemeral-input";
     this._textarea.placeholder = t("ephemeral.placeholder");
     this._textarea.rows = 2;
-    this._composer.appendChild(this._textarea);
+    this._imagePreviews = doc.createElement("div");
+    this._imagePreviews.className = "image-previews hidden";
+    this._imageInput = doc.createElement("input");
+    this._imageInput.type = "file";
+    this._imageInput.multiple = true;
+    this._imageInput.accept = "image/*";
+    this._imageInput.classList.add("hidden");
+    this._composer.append(this._imagePreviews, this._textarea, this._imageInput);
 
     const toolbar = doc.createElement("div");
     toolbar.className = "composer-toolbar";
@@ -84,6 +93,14 @@ export class EphemeralChatView {
     toolbar.appendChild(toolbarLeft);
     const toolbarRight = doc.createElement("div");
     toolbarRight.className = "composer-toolbar-right";
+
+    const attachBtn = doc.createElement("button");
+    attachBtn.type = "button";
+    attachBtn.className = "input-icon-btn ephemeral-attach";
+    attachBtn.dataset.role = "ephemeral-attach";
+    appendIcon(doc, attachBtn, ["M12 5v14", "M5 12h14"]);
+    this._attachBtn = attachBtn;
+    toolbarLeft.appendChild(attachBtn);
 
     this._modelDropdown = doc.createElement("div");
     this._modelDropdown.className = "model-dropdown";
@@ -153,6 +170,24 @@ export class EphemeralChatView {
 
     this._destroyVoice = setupVoiceInput({ micBtn: this._micBtn, messageInput: this._textarea });
 
+    // Image attachments: attach button, native picker, paste/drop, previews.
+    // Spec §Frontend Module Boundaries: any reused setup helper must return
+    // an explicit cleanup function for the owning view.
+    this._imageAttachments = setupComposerImageAttachments({
+      doc,
+      composerCard: this._composer,
+      textarea: this._textarea,
+      attachBtn: this._attachBtn,
+      imageInput: this._imageInput,
+      imagePreviews: this._imagePreviews,
+      processImageFile,
+      processImagePayload,
+      pickImageFiles: this.runtime?.transport?.pickImageFiles?.bind(this.runtime.transport),
+      getWorkspacePath: undefined,
+      isNativeAvailable: () => Boolean(this.runtime?.transport?.capabilities?.native),
+      t,
+    });
+
     this._onRenderState = (event) => this._render(event.detail);
     this._onExtensionUi = (event) => this._showExtensionDialog(event.detail.request);
     this._onKeyDown = (event) => this._handleKeyDown(event);
@@ -209,6 +244,7 @@ export class EphemeralChatView {
     this._micBtn.disabled = this._interactionLocked;
     this._modelBtn.disabled = this._interactionLocked;
     this._thinkingBtn.disabled = this._interactionLocked;
+    this._attachBtn.disabled = this._interactionLocked;
   }
 
   destroy() {
@@ -226,6 +262,7 @@ export class EphemeralChatView {
     this.toolCardRenderer?.destroy();
     this.dialogHandler?.destroy();
     this._destroyVoice?.();
+    this._imageAttachments?.destroy();
     this._root.remove();
   }
 
@@ -239,7 +276,8 @@ export class EphemeralChatView {
     }
     const text = this._textarea.value.trim();
     if (!text) return;
-    this.runtime.sendPrompt(text);
+    const images = this._imageAttachments?.consumePendingImages() || [];
+    this.runtime.sendPrompt(text, images);
     this._textarea.value = "";
   }
 
@@ -285,7 +323,7 @@ export class EphemeralChatView {
       }
     }
 
-    this._renderUsage(state.contextUsage);
+    this._renderUsage(state);
     this._renderComposerState(state);
   }
   async _toggleModelMenu() {
@@ -385,14 +423,26 @@ export class EphemeralChatView {
     this._micBtn.setAttribute("aria-label", voiceLabel);
   }
 
-  _renderUsage(contextUsage) {
+  _renderUsage(state) {
     if (!this._usageEl) return;
-    const tokens = contextUsage?.used ?? contextUsage?.tokens;
-    if (typeof tokens === "number") {
-      this._usageEl.textContent = `${tokens} ${t("ephemeral.tokens")}`;
-    } else {
-      this._usageEl.textContent = "";
+    const parts = [];
+    const status = this._connectionStatus(state);
+    if (status) parts.push(status);
+    const tokens = state?.totalTokens ?? state?.contextUsage?.used ?? state?.contextUsage?.tokens;
+    if (typeof tokens === "number" && tokens > 0) {
+      parts.push(`${tokens} ${t("ephemeral.tokens")}`);
     }
+    const cost = state?.cost;
+    if (typeof cost === "number" && cost > 0) {
+      parts.push(`$${cost.toFixed(4)}`);
+    }
+    this._usageEl.textContent = parts.join(" · ");
+  }
+
+  _connectionStatus(state) {
+    if (state?.error) return t("ephemeral.statusError");
+    if (state?.isStreaming) return t("ephemeral.statusStreaming");
+    return t("ephemeral.statusReady");
   }
 
   _showExtensionDialog(request) {

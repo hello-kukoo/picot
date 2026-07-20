@@ -557,6 +557,10 @@
     "confirmCloseSummary": "Close and discard unsaved files and temporary chats?",
     "generating": "Generating",
     "unread": "Unread",
-    "resize": "Resize Quick Chat"
+    "resize": "Resize Quick Chat",
+    "statusReady": "Ready",
+    "statusStreaming": "Generating",
+    "statusError": "Error",
+    "statusDisconnected": "Disconnected"
   }
 }

@@ -61,6 +61,8 @@ export class EphemeralChatRuntime extends EventTarget {
     this.isStreaming = false;
     this.contextUsage = null;
     this.error = null;
+    this.cost = 0;
+    this.totalTokens = 0;
     this._titleSet = Boolean(this.title);
   }
 
@@ -147,6 +149,8 @@ export class EphemeralChatRuntime extends EventTarget {
     this.isStreaming = Boolean(snapshot.isStreaming);
     this.contextUsage = snapshot.contextUsage ?? null;
     this.error = snapshot.error ?? null;
+    this.cost = Number(snapshot.cost) || 0;
+    this.totalTokens = Number(snapshot.totalTokens) || 0;
     this.lastAppliedSequence = snapshot.runtimeSequenceWatermark ?? 0;
     this.mounted = true;
     this._drainQueue();
@@ -318,6 +322,13 @@ export class EphemeralChatRuntime extends EventTarget {
             this.error = message.errorMessage || GENERIC_FAILURE;
             this._emit("failure", { error: this.error });
           }
+          const usage = message.usage;
+          if (usage) {
+            const costTotal = Number(usage.cost?.total || 0);
+            if (Number.isFinite(costTotal)) this.cost += costTotal;
+            const tokens = Number(usage.input || 0) + Number(usage.output || 0);
+            if (Number.isFinite(tokens)) this.totalTokens += tokens;
+          }
         }
         break;
       }
@@ -384,6 +395,8 @@ export class EphemeralChatRuntime extends EventTarget {
       isStreaming: this.isStreaming,
       contextUsage: clone(this.contextUsage),
       error: this.error,
+      cost: this.cost,
+      totalTokens: this.totalTokens,
     });
   }
 

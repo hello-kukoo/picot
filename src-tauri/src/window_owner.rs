@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rand::rngs::OsRng;
 use rand::RngCore;
-use subtle::ConstantTimeEq;
 
 const CAPABILITY_LEN: usize = 32;
 const OWNER_ID_LEN: usize = 16;
@@ -27,6 +26,9 @@ pub struct WindowOwnerRegistry {
 #[derive(Default)]
 struct RegistryState {
     owners: HashMap<OwnerId, OwnerRecord>,
+    // O(1) capability → owner lookup. Kept 1:1 with `owners` on insert and
+    // revoke, so authentication stays constant-time over the owner count.
+    capability_index: HashMap<[u8; CAPABILITY_LEN], OwnerId>,
     next_generation: u64,
 }
 
@@ -86,6 +88,9 @@ impl WindowOwnerRegistry {
 
         let owner_id = OwnerId(hex_encode(&id_bytes));
         let capability = URL_SAFE_NO_PAD.encode(capability_bytes);
+        state
+            .capability_index
+            .insert(capability_bytes, owner_id.clone());
         state.owners.insert(
             owner_id.clone(),
             OwnerRecord {
@@ -111,12 +116,9 @@ impl WindowOwnerRegistry {
         bytes.copy_from_slice(&decoded);
 
         let state = self.inner.lock().expect("owner registry lock poisoned");
-        for (owner_id, record) in &state.owners {
-            if record.capability_bytes.ct_eq(&bytes).unwrap_u8() == 1 {
-                return Some(owner_id.clone());
-            }
-        }
-        None
+        // O(1) direct lookup. The key is the full 256-bit capability, so
+        // timing no longer varies with the number of owners.
+        state.capability_index.get(&bytes).cloned()
     }
 
     pub fn prepare_navigation(
@@ -354,18 +356,25 @@ impl WindowOwnerRegistry {
 
     pub fn revoke_owner(&self, owner: &OwnerId) {
         let mut state = self.inner.lock().expect("owner registry lock poisoned");
-        state.owners.remove(owner);
+        if let Some(record) = state.owners.remove(owner) {
+            state.capability_index.remove(&record.capability_bytes);
+        }
     }
 }
 
 /// Static initialization script that exposes the bearer capability only when
 /// the document is Picot's canonical native http loopback origin. Defense in
 /// depth behind the host navigation callback; never an authorization boundary.
-pub fn capability_initialization_script(loopback_host: &str, capability: &str) -> String {
+pub fn capability_initialization_script(
+    loopback_host: &str,
+    port: u16,
+    capability: &str,
+) -> String {
     let host = serde_json::to_string(loopback_host).expect("host JSON");
+    let port_str = port.to_string();
     let token = serde_json::to_string(capability).expect("capability JSON");
     format!(
-        "if (window.location.protocol === 'http:' && window.location.hostname === {host}) {{ Object.defineProperty(window, '__PICOT_NATIVE_CAPABILITY__', {{ value: {token}, configurable: true }}); }}"
+        "if (window.location.protocol === 'http:' && window.location.hostname === {host} && String(window.location.port) === \"{port_str}\") {{ Object.defineProperty(window, '__PICOT_NATIVE_CAPABILITY__', {{ value: {token}, configurable: true }}); }}"
     )
 }
 
@@ -589,12 +598,15 @@ mod tests {
     }
 
     #[test]
-    fn initialization_script_guards_capability_behind_loopback_origin() {
-        let script = capability_initialization_script("127.0.0.1", "secret-cap");
+    fn initialization_script_guards_capability_behind_loopback_origin_and_port() {
+        let script = capability_initialization_script("127.0.0.1", 3001, "secret-cap");
         assert!(script.contains("\"secret-cap\""));
         assert!(script.contains("\"127.0.0.1\""));
         assert!(script.contains("window.location.protocol === 'http:'"));
         assert!(script.contains("window.location.hostname === \"127.0.0.1\""));
+        // Defense in depth: the capability is only exposed at the exact owner
+        // port, never at another loopback service.
+        assert!(script.contains("String(window.location.port) === \"3001\""));
         assert!(script.contains("__PICOT_NATIVE_CAPABILITY__"));
     }
 

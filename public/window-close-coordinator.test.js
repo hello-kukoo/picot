@@ -100,6 +100,74 @@ describe("WindowCloseCoordinator risky path", () => {
   });
 });
 
+describe("WindowCloseCoordinator risk revalidation", () => {
+  it("re-opens the dialog when ephemeral risk expands during file settlement", async () => {
+    let state = {
+      dirtyFiles: [{ id: "f1", name: "a.txt" }],
+      ephemeralChats: [],
+    };
+    const file = {
+      getCloseRisk: vi.fn(() => state),
+      setInteractionLocked: vi.fn(),
+      settleCloseRisk: vi.fn(async () => {
+        // Simulate a Side Chat starting to stream while files settle.
+        state = {
+          dirtyFiles: [],
+          ephemeralChats: [
+            {
+              instanceId: "sc-new",
+              generation: 1,
+              kind: "side-chat",
+              hasMessages: true,
+              streaming: true,
+            },
+          ],
+        };
+        return state;
+      }),
+      cleanupAfterHostClose: vi.fn(),
+    };
+    const showSummaryDialog = vi.fn(async () => "discard");
+    const { coordinator, transport } = makeCoordinator({ showSummaryDialog });
+    coordinator.registerParticipant("file", file);
+    await coordinator.handleHostCloseRequest("close-expand");
+    // Dialog called twice: once for dirty-file risk, once for expanded ephemeral risk.
+    expect(showSummaryDialog).toHaveBeenCalledTimes(2);
+    expect(transport.approveWindowClose).toHaveBeenCalledWith("close-expand");
+    expect(file.cleanupAfterHostClose).toHaveBeenCalled();
+  });
+
+  it("does not re-open the dialog when risk is unchanged after settlement", async () => {
+    let state = {
+      dirtyFiles: [{ id: "f1", name: "a.txt" }],
+      ephemeralChats: [
+        {
+          instanceId: "sc1",
+          generation: 1,
+          kind: "side-chat",
+          hasMessages: true,
+          streaming: false,
+        },
+      ],
+    };
+    const file = {
+      getCloseRisk: vi.fn(() => state),
+      setInteractionLocked: vi.fn(),
+      settleCloseRisk: vi.fn(async () => {
+        state = { dirtyFiles: [], ephemeralChats: state.ephemeralChats };
+        return state;
+      }),
+      cleanupAfterHostClose: vi.fn(),
+    };
+    const showSummaryDialog = vi.fn(async () => "discard");
+    const { coordinator, transport } = makeCoordinator({ showSummaryDialog });
+    coordinator.registerParticipant("file", file);
+    await coordinator.handleHostCloseRequest("close-stable");
+    expect(showSummaryDialog).toHaveBeenCalledTimes(1);
+    expect(transport.approveWindowClose).toHaveBeenCalledWith("close-stable");
+  });
+});
+
 describe("WindowCloseCoordinator global lock", () => {
   it("setGlobalInteractionLock propagates to every participant", () => {
     const a = participant();

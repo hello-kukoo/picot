@@ -635,6 +635,8 @@ export class FilePreviewPanel {
     if (next) {
       next.focus();
       next.click();
+      // Keep the focused tab visible when the tab strip overflows.
+      next.scrollIntoView?.({ block: "nearest", inline: "nearest" });
     }
   }
 

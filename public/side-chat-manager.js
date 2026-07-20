@@ -185,6 +185,9 @@ export class SideChatManager {
   /** Host confirmed the window-close cleanup: drop everything without host calls. */
   cleanupAfterHostClose() {
     for (const id of this.order.slice()) {
+      const chat = this.chats.get(id);
+      // Spec §Lifecycle: abort streaming ephemeral chats before host cleanup.
+      if (chat?.runtime?.isStreaming) chat.runtime.abort();
       this._dispose(id);
       this.filePreviewPanel.unregisterTransientTab(id);
     }
@@ -196,6 +199,8 @@ export class SideChatManager {
 
   destroy() {
     for (const id of this.order.slice()) {
+      const chat = this.chats.get(id);
+      if (chat?.runtime?.isStreaming) chat.runtime.abort();
       this._dispose(id);
       this.filePreviewPanel.unregisterTransientTab(id);
     }

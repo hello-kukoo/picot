@@ -11,6 +11,7 @@ import { setupSettingsToggles } from "./app-settings-toggles.js";
 import { createAppUpdater } from "./app-updater.js";
 import { setupVoiceInput } from "./app-voice-input.js";
 import { createChatHistoryNavigation } from "./chat-history-navigation.js";
+import { setupComposerImageAttachments } from "./composer-image-attachments.js";
 import { DialogHandler } from "./dialogs.js";
 import { EphemeralChatView } from "./ephemeral-chat-view.js";
 import { FileBrowser } from "./file-browser.js";
@@ -1439,108 +1440,42 @@ messageInput.addEventListener("input", () => {
 const attachBtn = document.getElementById("attach-btn");
 const imageInput = document.getElementById("image-input");
 const imagePreviews = document.getElementById("image-previews");
-let pendingImages = []; // Array of { data: base64, mimeType: string }
-
-async function addImageFiles(files) {
-  for (const file of files) {
-    if (!file.type.startsWith("image/")) continue;
-    try {
-      const img = await processImageFile(file);
-      pendingImages.push(img);
-    } catch (e) {
-      console.error("[Picot] Image processing failed:", e);
-    }
-  }
-  renderImagePreviews();
-}
-
-async function addImagePayloads(payloads) {
-  for (const payload of payloads) {
-    try {
-      const img = await processImagePayload(payload);
-      pendingImages.push(img);
-    } catch (e) {
-      console.error("[Picot] Native image processing failed:", e);
-    }
-  }
-  renderImagePreviews();
-}
-
-attachBtn.addEventListener("click", async () => {
-  if (!nativeAvailable() || typeof transport.pickImageFiles !== "function") {
-    imageInput.click();
-    return;
-  }
-  const workspacePath = getCurrentWorkspacePath();
-  try {
-    const result = await transport.pickImageFiles(workspacePath || null);
-    if (!Array.isArray(result) || result.length === 0) return;
-    await addImagePayloads(result);
-  } catch (err) {
-    console.error("[Picot] Native image picker failed:", err);
-    messageRenderer.renderError(t("errors.failedToAttachImage", { error: err }));
-  }
-});
-
-imageInput.addEventListener("change", () => {
-  addImageFiles(imageInput.files);
-  imageInput.value = "";
-});
-
-// Drag & drop anywhere on the composer card
 const composerCard = document.getElementById("composer-card");
-composerCard.addEventListener("dragover", (e) => {
-  e.preventDefault();
-  e.dataTransfer.dropEffect = "copy";
+
+// Image attachments: attach button, native picker, paste/drop, previews.
+// Uses the shared helper so the main chat and ephemeral chats stay in lockstep.
+// The file-tree drag handler (text/plain path mention) stays inline because it
+// is main-chat-only behavior; only the image portion delegates to the helper.
+const mainImageAttachments = setupComposerImageAttachments({
+  document,
+  composerCard,
+  textarea: messageInput,
+  attachBtn,
+  imageInput,
+  imagePreviews,
+  processImageFile,
+  processImagePayload,
+  pickImageFiles: (cwd) => transport.pickImageFiles(cwd),
+  getWorkspacePath: getCurrentWorkspacePath,
+  isNativeAvailable: nativeAvailable,
+  onError: (message) => messageRenderer.renderError(message),
+  t,
 });
-composerCard.addEventListener("drop", (e) => {
-  e.preventDefault();
-
-  // File Tree drag: text/plain carries an absolute path.
-  const rawPath = e.dataTransfer.getData("text/plain");
-  if (rawPath?.startsWith("/")) {
-    if (fileBrowser.insertFileMention(rawPath)) return;
-  }
-
-  // OS file drag: image attachments.
-  addImageFiles(e.dataTransfer.files);
-});
-
-// Paste images
-messageInput.addEventListener("paste", (e) => {
-  const files = [];
-  for (const item of e.clipboardData.items) {
-    if (!item.type.startsWith("image/")) continue;
-    files.push(item.getAsFile());
-  }
-  if (files.length) addImageFiles(files);
-});
-
-function renderImagePreviews() {
-  imagePreviews.replaceChildren();
-  if (pendingImages.length === 0) {
-    imagePreviews.classList.add("hidden");
-    return;
-  }
-  imagePreviews.classList.remove("hidden");
-  pendingImages.forEach((img, i) => {
-    const preview = document.createElement("div");
-    preview.className = "image-preview";
-    const image = document.createElement("img");
-    image.src = `data:${img.mimeType};base64,${img.data}`;
-    image.alt = "";
-    const removeButton = document.createElement("button");
-    removeButton.className = "image-preview-remove";
-    removeButton.dataset.index = String(i);
-    removeButton.textContent = "✕";
-    removeButton.addEventListener("click", () => {
-      pendingImages.splice(i, 1);
-      renderImagePreviews();
-    });
-    preview.append(image, removeButton);
-    imagePreviews.appendChild(preview);
-  });
-}
+composerCard.addEventListener(
+  "drop",
+  (e) => {
+    // File Tree drag: text/plain carries an absolute path. Image drops are
+    // handled by mainImageAttachments already; this listener only intercepts
+    // text/plain path mentions before the helper runs.
+    const rawPath = e.dataTransfer.getData("text/plain");
+    if (rawPath?.startsWith("/")) {
+      if (fileBrowser.insertFileMention(rawPath)) {
+        e.stopPropagation();
+      }
+    }
+  },
+  true,
+);
 
 // ═══════════════════════════════════════
 // Send message (with images)
@@ -1592,17 +1527,9 @@ function sendMessage() {
     message,
   };
 
-  if (pendingImages.length > 0) {
-    cmd.images = pendingImages.map((img) => {
-      console.log(`[Picot] Sending image: mimeType=${img.mimeType}, dataLen=${img.data?.length}`);
-      return {
-        type: "image",
-        data: img.data,
-        mimeType: img.mimeType || "image/png",
-      };
-    });
-    pendingImages = [];
-    renderImagePreviews();
+  const images = mainImageAttachments.consumePendingImages();
+  if (images.length > 0) {
+    cmd.images = images;
   }
 
   if (state.isStreaming) {

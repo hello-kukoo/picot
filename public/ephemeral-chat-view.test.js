@@ -33,6 +33,10 @@ const locale = {
     tokens: "tokens",
     sideChat: "Side Chat",
     quickChat: "Quick Chat",
+    statusReady: "Ready",
+    statusStreaming: "Generating",
+    statusError: "Error",
+    statusDisconnected: "Disconnected",
   },
   input: { switchModel: "Switch model" },
   models: { searchPlaceholder: "Search models…", emptyTitle: "No models available" },
@@ -101,7 +105,29 @@ describe("EphemeralChatView", () => {
     const textarea = view.element.querySelector("textarea");
     textarea.value = "what is 2+2";
     view.element.querySelector('[data-role="ephemeral-send"]').click();
-    expect(sendSpy).toHaveBeenCalledWith("what is 2+2");
+    expect(sendSpy).toHaveBeenCalledWith("what is 2+2", []);
+    view.destroy();
+  });
+
+  it("exposes an attach button that opens the file input and forwards images on submit", () => {
+    const runtime = makeRuntime();
+    const sendSpy = vi.spyOn(runtime, "sendPrompt");
+    const view = new EphemeralChatView({ runtime, kind: "side-chat", toolsEnabled: true });
+    const attachBtn = view.element.querySelector('[data-role="ephemeral-attach"]');
+    expect(attachBtn).not.toBeNull();
+    expect(view.element.querySelector('input[type="file"]')).not.toBeNull();
+    expect(view.element.querySelector(".image-previews")).not.toBeNull();
+    // Simulate adding a pending image directly via the helper API, then submit.
+    view._imageAttachments.getPendingImages().push({ data: "abc", mimeType: "image/png" });
+    view._imageAttachments.renderPreviews();
+    const textarea = view.element.querySelector("textarea");
+    textarea.value = "look at this";
+    view.element.querySelector('[data-role="ephemeral-send"]').click();
+    expect(sendSpy).toHaveBeenCalledWith("look at this", [
+      { type: "image", data: "abc", mimeType: "image/png" },
+    ]);
+    // Consumed on send.
+    expect(view._imageAttachments.getPendingImages()).toHaveLength(0);
     view.destroy();
   });
 
@@ -187,6 +213,56 @@ describe("EphemeralChatView", () => {
       error: null,
     });
     expect(view.element.querySelector(".tool-card")).toBeNull();
+    view.destroy();
+  });
+
+  it("renders status, tokens, and cost in the compact usage row", () => {
+    const runtime = makeRuntime();
+    const view = new EphemeralChatView({ runtime, kind: "side-chat", toolsEnabled: true });
+    runtime.applySnapshot({
+      type: "ephemeral_snapshot",
+      instanceId: "inst-1",
+      generation: 1,
+      runtimeSequenceWatermark: 0,
+      messages: [],
+      assistantDraft: null,
+      tools: [],
+      model: null,
+      thinkingLevel: "off",
+      isStreaming: true,
+      contextUsage: null,
+      error: null,
+      cost: 0.0123,
+      totalTokens: 456,
+    });
+    const usage = view.element.querySelector(".ephemeral-usage");
+    expect(usage.textContent).toContain("Generating");
+    expect(usage.textContent).toContain("456");
+    expect(usage.textContent).toContain("$0.0123");
+    view.destroy();
+  });
+
+  it("shows an error status when the runtime has an error", () => {
+    const runtime = makeRuntime();
+    const view = new EphemeralChatView({ runtime, kind: "side-chat", toolsEnabled: true });
+    runtime.applySnapshot({
+      type: "ephemeral_snapshot",
+      instanceId: "inst-1",
+      generation: 1,
+      runtimeSequenceWatermark: 0,
+      messages: [],
+      assistantDraft: null,
+      tools: [],
+      model: null,
+      thinkingLevel: "off",
+      isStreaming: false,
+      contextUsage: null,
+      error: "boom",
+      cost: 0,
+      totalTokens: 0,
+    });
+    const usage = view.element.querySelector(".ephemeral-usage");
+    expect(usage.textContent).toContain("Error");
     view.destroy();
   });
 

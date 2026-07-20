@@ -84,6 +84,7 @@ export class QuickChatDialog {
     this.view?.deactivate?.();
     this._dialog.classList.add("hidden");
     this._chip.classList.remove("hidden");
+    this._returnFocusToSidebar();
   }
 
   restore() {
@@ -135,6 +136,7 @@ export class QuickChatDialog {
     this.descriptor = null;
     this._dialog.classList.add("hidden");
     this._chip.classList.add("hidden");
+    this._returnFocusToSidebar();
     return true;
   }
 
@@ -163,6 +165,9 @@ export class QuickChatDialog {
 
   /** Window-close path: drop the runtime/view without a host round-trip. */
   cleanupAfterHostClose() {
+    // Spec §Lifecycle: abort a streaming response before host cleanup so the
+    // child stops generating while the window is being torn down.
+    if (this.runtime?.isStreaming) this.runtime.abort();
     this._disposeRuntime();
     this.descriptor = null;
     this._dialog?.classList.add("hidden");
@@ -181,6 +186,9 @@ export class QuickChatDialog {
       this._title?.removeEventListener("lostpointercapture", this._handlePointerUp);
     }
     this._unsubscribeLocale?.();
+    if (this._onDialogKeyDown) {
+      this._dialog?.removeEventListener("keydown", this._onDialogKeyDown);
+    }
     if (this._onWindowBlur) window.removeEventListener("blur", this._onWindowBlur);
     for (const handle of this._resizeHandles || []) {
       const handlers = this._resizePointerHandlers?.get(handle);
@@ -265,6 +273,18 @@ export class QuickChatDialog {
     this._title.addEventListener("lostpointercapture", this._handlePointerUp);
     this._onWindowBlur = () => this._endDrag();
     window.addEventListener("blur", this._onWindowBlur);
+    // Spec §Focus and shortcuts: with Quick Chat focused, Escape aborts the
+    // active response; it never closes or minimizes the dialog. Catching at
+    // dialog scope (not just inside the textarea) keeps it effective when the
+    // focus is on the model dropdown or title buttons.
+    this._onDialogKeyDown = (event) => {
+      if (event.key !== "Escape" || !this.runtime?.isStreaming) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.runtime.abort();
+    };
+    this._dialog.setAttribute("tabindex", "-1");
+    this._dialog.addEventListener("keydown", this._onDialogKeyDown);
 
     this._chip = this.chipRoot;
     this._chip.classList.add("quick-chat-chip", "hidden");
@@ -301,6 +321,18 @@ export class QuickChatDialog {
       handle.setAttribute("aria-label", t("ephemeral.resize"));
     }
     this._renderChipState();
+  }
+
+  _returnFocusToSidebar() {
+    const sidebarBtn = globalThis.document?.getElementById?.("quick-chat-btn");
+    if (sidebarBtn && !sidebarBtn.classList.contains("hidden")) {
+      sidebarBtn.focus();
+      return;
+    }
+    // Spec §Focus: when the sidebar button is hidden/collapsed, focus the
+    // main chat input as the closest meaningful control.
+    const mainInput = globalThis.document?.getElementById?.("message-input");
+    mainInput?.focus?.();
   }
 
   _mount() {

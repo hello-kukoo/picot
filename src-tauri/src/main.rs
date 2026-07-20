@@ -599,7 +599,8 @@ fn open_workspace_window(
     let (owner, capability) = registry
         .create_owner(label.clone(), canonical_cwd, port, origin)
         .map_err(|e| format!("Failed to create window owner: {e}"))?;
-    let init_script = window_owner::capability_initialization_script("localhost", &capability);
+    let init_script =
+        window_owner::capability_initialization_script("localhost", port, &capability);
 
     let nav_registry = registry.clone();
     let nav_owner = owner.clone();

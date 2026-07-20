@@ -166,6 +166,54 @@ describe("QuickChatDialog lifecycle", () => {
     expect(dialog.getCloseRisk()).toMatchObject({ instanceId: "qc-1", kind: "quick-chat" });
     dialog.destroy();
   });
+
+  it("Escape while streaming aborts the response and does not close the dialog", async () => {
+    const { dialog, dialogRoot } = makeDialog();
+    await dialog.open();
+    dialog.runtime.isStreaming = true;
+    const abortSpy = vi.spyOn(dialog.runtime, "abort");
+    dialogRoot.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(abortSpy).toHaveBeenCalled();
+    expect(dialogRoot.classList.contains("hidden")).toBe(false);
+    dialog.destroy();
+  });
+
+  it("Escape without streaming neither closes nor aborts", async () => {
+    const { dialog, dialogRoot } = makeDialog();
+    await dialog.open();
+    dialog.runtime.isStreaming = false;
+    const abortSpy = vi.spyOn(dialog.runtime, "abort");
+    dialogRoot.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(abortSpy).not.toHaveBeenCalled();
+    expect(dialogRoot.classList.contains("hidden")).toBe(false);
+    dialog.destroy();
+  });
+
+  it("minimize returns focus to the sidebar Quick Chat button when present", async () => {
+    const sidebarBtn = document.createElement("button");
+    sidebarBtn.id = "quick-chat-btn";
+    document.body.appendChild(sidebarBtn);
+    const focusSpy = vi.spyOn(sidebarBtn, "focus");
+    const { dialog } = makeDialog();
+    await dialog.open();
+    dialog.minimize();
+    expect(focusSpy).toHaveBeenCalled();
+    sidebarBtn.remove();
+    dialog.destroy();
+  });
+
+  it("close returns focus to the sidebar Quick Chat button when present", async () => {
+    const sidebarBtn = document.createElement("button");
+    sidebarBtn.id = "quick-chat-btn";
+    document.body.appendChild(sidebarBtn);
+    const focusSpy = vi.spyOn(sidebarBtn, "focus");
+    const { dialog } = makeDialog();
+    await dialog.open();
+    await dialog.close();
+    expect(focusSpy).toHaveBeenCalled();
+    sidebarBtn.remove();
+    dialog.destroy();
+  });
 });
 
 describe("QuickChatDialog drag", () => {
