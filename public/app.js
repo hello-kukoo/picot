@@ -576,7 +576,8 @@ document.getElementById("quick-chat-btn")?.addEventListener("click", () => {
   if (nativeAvailable()) void quickChatDialog.open();
 });
 filePreviewPanel.registerTabBarAction("new-side-chat", {
-  label: t("nav.newSideChat"),
+  labelKey: "nav.newSideChat",
+  icon: "chat-plus",
   onClick: () => {
     if (nativeAvailable()) void sideChatManager.createAdditional();
   },

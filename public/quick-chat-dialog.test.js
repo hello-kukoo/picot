@@ -101,6 +101,28 @@ describe("QuickChatDialog lifecycle", () => {
     dialog.destroy();
   });
 
+  it("renders title controls as labelled icon buttons", () => {
+    const { dialog, dialogRoot } = makeDialog();
+    const expected = [
+      ["quick-chat-new", "New chat"],
+      ["quick-chat-minimize", "Minimize"],
+      ["quick-chat-close", "Close"],
+    ];
+    for (const [role, label] of expected) {
+      const button = dialogRoot.querySelector(`[data-role="${role}"]`);
+      expect(button.getAttribute("aria-label")).toBe(label);
+      expect(button.getAttribute("title")).toBe(label);
+      expect(button.querySelector("svg")).not.toBeNull();
+      expect(button.textContent.trim()).toBe("");
+    }
+    expect(
+      Array.from(dialogRoot.querySelectorAll('[data-role="quick-chat-close"] path')).map((path) =>
+        path.getAttribute("d"),
+      ),
+    ).toEqual(["M18 6 6 18", "M6 6 18 18"]);
+    dialog.destroy();
+  });
+
   it("minimize() hides the dialog and shows the chip; restore() reverses", async () => {
     const { dialog, dialogRoot, chipRoot } = makeDialog();
     await dialog.open();

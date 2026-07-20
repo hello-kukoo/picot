@@ -48,6 +48,37 @@ function appendCloseIcon(button) {
   button.appendChild(svg);
 }
 
+function appendTabBarActionIcon(button, icon) {
+  if (icon !== "chat-plus") return;
+  const svg = document.createElementNS(SVG_NS, "svg");
+  for (const [name, value] of Object.entries({
+    "aria-hidden": "true",
+    width: "14",
+    height: "14",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    "stroke-width": "2",
+    "stroke-linecap": "round",
+    "stroke-linejoin": "round",
+  })) {
+    svg.setAttribute(name, value);
+  }
+  for (const d of [
+    "M12 19v-6",
+    "M9 8V2",
+    "M15 8V2",
+    "M18 8v5a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V8Z",
+    "M19 18h4",
+    "m-2-2 2 2-2 2",
+  ]) {
+    const path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", d);
+    svg.appendChild(path);
+  }
+  button.appendChild(svg);
+}
+
 export class FilePreviewPanel {
   constructor({
     panel,
@@ -337,12 +368,13 @@ export class FilePreviewPanel {
 
   // Tab-bar action adapter so an external manager (SideChatManager) can place a
   // control (e.g. "New Side Chat") inside the tab strip without owning DOM.
-  registerTabBarAction(actionId, { label, onClick, iconSvg = "" } = {}) {
+  registerTabBarAction(actionId, { label, labelKey, onClick, icon = "" } = {}) {
     if (!actionId) return;
     this.tabBarActions.set(actionId, {
       label,
+      labelKey,
       onClick,
-      iconSvg,
+      icon,
       enabled: true,
       visible: true,
       disabledReason: "",
@@ -569,14 +601,16 @@ export class FilePreviewPanel {
     // Tab-bar actions (e.g. "New Side Chat") registered by an external manager.
     for (const [actionId, action] of this.tabBarActions) {
       if (action.visible === false) continue;
+      const label = action.labelKey ? t(action.labelKey) : action.label || "";
       const btn = document.createElement("button");
       btn.type = "button";
-      btn.className = "file-preview-tab-action";
+      btn.className = `file-preview-tab-action${action.icon ? " icon-btn" : ""}`;
       btn.dataset.actionId = actionId;
-      btn.textContent = action.label || "";
-      btn.setAttribute("aria-label", action.label || "");
+      btn.setAttribute("aria-label", label);
+      btn.title = action.disabledReason || label;
+      if (action.icon) appendTabBarActionIcon(btn, action.icon);
+      else btn.textContent = label;
       btn.disabled = !action.enabled || this._interactionLocked;
-      if (action.disabledReason) btn.title = action.disabledReason;
       btn.addEventListener("click", () => {
         if (action.enabled && !this._interactionLocked) action.onClick?.();
       });

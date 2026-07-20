@@ -68,7 +68,7 @@ describe("EphemeralChatRuntime outbound commands", () => {
     );
   });
 
-  it("sends abort, model, thinking, and extension-ui responses", () => {
+  it("sends abort, a correctly shaped model selection, thinking, and extension-ui responses", () => {
     const { runtime, transport } = makeRuntime();
     runtime.abort();
     runtime.setModel("anthropic", "claude-3");
@@ -76,7 +76,28 @@ describe("EphemeralChatRuntime outbound commands", () => {
     runtime.respondToExtensionUi("ui-1", { value: "yes" });
     const types = transport.sent.map((s) => s.payload.type);
     expect(types).toEqual(["abort", "set_model", "set_thinking_level", "extension_ui_response"]);
+    expect(transport.sent[1].payload).toMatchObject({
+      provider: "anthropic",
+      modelId: "claude-3",
+    });
     expect(transport.sent[3].payload).toMatchObject({ id: "ui-1", value: "yes" });
+  });
+
+  it("returns the ephemeral runtime's available models from its correlated response", async () => {
+    const { runtime } = makeRuntime();
+    const modelsPromise = runtime.getAvailableModels();
+    runtime.applySequencedEvent({
+      instanceId: "inst-1",
+      generation: 3,
+      payload: {
+        type: "response",
+        id: "ep-1",
+        command: "get_available_models",
+        success: true,
+        data: { models: [{ provider: "anthropic", id: "claude-3" }] },
+      },
+    });
+    await expect(modelsPromise).resolves.toEqual([{ provider: "anthropic", id: "claude-3" }]);
   });
 
   it("drops commands after destroy and is idempotent", () => {

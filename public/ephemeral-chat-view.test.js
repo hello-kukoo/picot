@@ -34,7 +34,16 @@ const locale = {
     sideChat: "Side Chat",
     quickChat: "Quick Chat",
   },
+  input: { switchModel: "Switch model" },
+  models: { searchPlaceholder: "Search models…", emptyTitle: "No models available" },
+  settings: {
+    thinkingCompact: "Think {level}",
+    thinkingTitle: "Cycle thinking effort",
+    thinkingAriaLabel: "Thinking effort: {level}",
+    off: "off",
+  },
   voice: { voiceInput: "Voice", stopRecording: "Stop" },
+  misc: { model: "model" },
 };
 
 beforeEach(async () => {
@@ -93,6 +102,70 @@ describe("EphemeralChatView", () => {
     textarea.value = "what is 2+2";
     view.element.querySelector('[data-role="ephemeral-send"]').click();
     expect(sendSpy).toHaveBeenCalledWith("what is 2+2");
+    view.destroy();
+  });
+
+  it("uses the main composer structure with model and thinking controls", () => {
+    const runtime = makeRuntime();
+    const view = new EphemeralChatView({ runtime, kind: "side-chat", toolsEnabled: true });
+    runtime.applySnapshot({
+      type: "ephemeral_snapshot",
+      instanceId: "inst-1",
+      generation: 1,
+      runtimeSequenceWatermark: 0,
+      messages: [],
+      assistantDraft: null,
+      tools: [],
+      model: { provider: "anthropic", id: "claude-3" },
+      thinkingLevel: "high",
+      isStreaming: false,
+      contextUsage: null,
+      error: null,
+    });
+
+    const composer = view.element.querySelector(".composer-card");
+    expect(composer).not.toBeNull();
+    expect(composer.querySelector('[data-role="ephemeral-model"]')).not.toBeNull();
+    expect(composer.querySelector('[data-role="ephemeral-thinking"]')).not.toBeNull();
+    expect(composer.querySelector('[data-role="ephemeral-send"] svg')).not.toBeNull();
+    expect(
+      Array.from(composer.querySelectorAll('[data-role="ephemeral-send"] path')).map((path) =>
+        path.getAttribute("d"),
+      ),
+    ).toEqual(["M12 19V5", "m-7 7 7-7 7 7"]);
+    expect(composer.querySelector('[data-role="ephemeral-send"]').textContent.trim()).toBe("");
+    expect(composer.textContent).toContain("claude-3");
+    expect(composer.textContent).toContain("Think high");
+    view.destroy();
+  });
+
+  it("loads models from its own runtime and sends the selected model to that runtime", async () => {
+    const runtime = makeRuntime();
+    const view = new EphemeralChatView({ runtime, kind: "quick-chat", toolsEnabled: false });
+    view.element.querySelector('[data-role="ephemeral-model"]').click();
+    runtime.applySequencedEvent({
+      instanceId: "inst-1",
+      generation: 1,
+      payload: {
+        type: "response",
+        id: "ep-1",
+        command: "get_available_models",
+        success: true,
+        data: { models: [{ provider: "anthropic", id: "claude-3" }] },
+      },
+    });
+    await vi.waitFor(() => {
+      expect(view.element.querySelector(".model-dropdown-item")).not.toBeNull();
+    });
+
+    const option = view.element.querySelector(".model-dropdown-item");
+    expect(option.textContent).toContain("claude-3");
+    option.click();
+    expect(runtime.transport.sendEphemeral).toHaveBeenLastCalledWith("inst-1", 1, {
+      type: "set_model",
+      provider: "anthropic",
+      modelId: "claude-3",
+    });
     view.destroy();
   });
 

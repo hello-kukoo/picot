@@ -165,6 +165,22 @@ function applyTranslations(root = document) {
   });
 }
 
+function notifyLocaleChange() {
+  for (const listener of listeners) {
+    try {
+      listener(currentLocale, currentPreference);
+    } catch (e) {
+      console.warn("[i18n] locale-change listener error:", e);
+    }
+  }
+
+  window.dispatchEvent(
+    new CustomEvent("picot:locale-change", {
+      detail: { locale: currentLocale, preference: currentPreference },
+    }),
+  );
+}
+
 // ── Initialization ────────────────────────────────────────────────────
 
 export async function initI18n() {
@@ -198,6 +214,7 @@ export async function initI18n() {
 
   document.documentElement.lang = BCP47_TAG[currentLocale] || "en";
   applyTranslations(document);
+  notifyLocaleChange();
 }
 
 // ── Locale switching ──────────────────────────────────────────────────
@@ -223,21 +240,7 @@ export async function setLocale(preference) {
 
   document.documentElement.lang = BCP47_TAG[currentLocale] || "en";
   applyTranslations(document);
-
-  // Notify subscribers.
-  for (const listener of listeners) {
-    try {
-      listener(currentLocale, currentPreference);
-    } catch (e) {
-      console.warn("[i18n] locale-change listener error:", e);
-    }
-  }
-
-  window.dispatchEvent(
-    new CustomEvent("picot:locale-change", {
-      detail: { locale: currentLocale, preference: currentPreference },
-    }),
-  );
+  notifyLocaleChange();
 }
 
 export function onLocaleChange(listener) {

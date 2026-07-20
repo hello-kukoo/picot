@@ -247,6 +247,17 @@ describe("onLocaleChange", () => {
     await setLocale("en");
     expect(calls).toHaveLength(1);
   });
+
+  it("notifies listeners registered before initialization after translations load", async () => {
+    vi.stubGlobal("fetch", makeFetchMock({ en: {}, zh: {} }));
+    const { initI18n, onLocaleChange } = await importFreshI18n();
+    const listener = vi.fn();
+    onLocaleChange(listener);
+
+    await initI18n();
+
+    expect(listener).toHaveBeenCalledWith("en", "system");
+  });
 });
 
 // ── picot:locale-change CustomEvent ───────────────────────────────────

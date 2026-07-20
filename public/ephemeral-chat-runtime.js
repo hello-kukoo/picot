@@ -51,6 +51,7 @@ export class EphemeralChatRuntime extends EventTarget {
     this.lastAppliedSequence = 0;
     this._queue = [];
     this._pendingCommandIds = new Set();
+    this._pendingRequests = new Map();
 
     this.messages = [];
     this.assistantDraft = null;
@@ -75,11 +76,20 @@ export class EphemeralChatRuntime extends EventTarget {
     return this._send({ type: "abort" });
   }
 
-  setModel(provider, model) {
-    return this._send({ type: "set_model", provider, model });
+  setModel(provider, modelId) {
+    this.model = { provider, id: modelId };
+    this._emitRender();
+    return this._send({ type: "set_model", provider, modelId });
+  }
+
+  async getAvailableModels() {
+    const response = await this._request({ type: "get_available_models" });
+    return Array.isArray(response?.models) ? response.models : [];
   }
 
   setThinkingLevel(level) {
+    this.thinkingLevel = level;
+    this._emitRender();
     return this._send({ type: "set_thinking_level", level });
   }
 
@@ -104,6 +114,17 @@ export class EphemeralChatRuntime extends EventTarget {
       this._emitFailure(err);
       return null;
     }
+  }
+
+  _request(payload) {
+    return new Promise((resolve, reject) => {
+      const requestId = this._send(payload);
+      if (!requestId) {
+        reject(new Error("ephemeral transport unavailable"));
+        return;
+      }
+      this._pendingRequests.set(requestId, { resolve, reject });
+    });
   }
 
   // ── Inbound state ───────────────────────────────────────────────────────────
@@ -145,6 +166,10 @@ export class EphemeralChatRuntime extends EventTarget {
       this.applySnapshot(frame.payload);
       return;
     }
+    if (frame.payload?.type === "response") {
+      this._handleCommandResponse(frame.payload);
+      return;
+    }
     const seq = frame.runtimeSequence ?? frame.payload?.runtimeSequence;
     if (typeof seq !== "number") return;
 
@@ -177,7 +202,25 @@ export class EphemeralChatRuntime extends EventTarget {
 
   handleCommandFailure(requestId) {
     if (this.destroyed || !requestId || !this._pendingCommandIds.delete(requestId)) return;
+    const pending = this._pendingRequests.get(requestId);
+    this._pendingRequests.delete(requestId);
+    pending?.reject(new Error("ephemeral command failed"));
     this._emitFailure(new Error("ephemeral command failed"));
+  }
+
+  _handleCommandResponse(response) {
+    const requestId = response?.id;
+    if (!requestId) return;
+    this._pendingCommandIds.delete(requestId);
+    const pending = this._pendingRequests.get(requestId);
+    if (!pending) return;
+    this._pendingRequests.delete(requestId);
+    if (response.success) {
+      pending.resolve(response.data);
+    } else {
+      pending.reject(new Error("ephemeral command failed"));
+      this._emitFailure(new Error("ephemeral command failed"));
+    }
   }
 
   getCloseRisk() {
@@ -195,6 +238,10 @@ export class EphemeralChatRuntime extends EventTarget {
     this.destroyed = true;
     this._queue = [];
     this._pendingCommandIds.clear();
+    for (const pending of this._pendingRequests.values()) {
+      pending.reject(new Error("ephemeral runtime destroyed"));
+    }
+    this._pendingRequests.clear();
     this.messages = [];
     this.assistantDraft = null;
     this.tools.clear();

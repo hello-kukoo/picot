@@ -2,13 +2,34 @@
 // ABOUTME: chip, title-bar drag, New Chat replacement, and close confirmation.
 
 import { EphemeralChatRuntime } from "./ephemeral-chat-runtime.js";
-import { t } from "./i18n.js";
+import { onLocaleChange, t } from "./i18n.js";
 
 const INTERACTIVE_SELECTOR = "button, textarea, input, select, a, [contenteditable]";
 const MIN_DIALOG_WIDTH = 360;
 const MIN_DIALOG_HEIGHT = 280;
 const RECOVERY_AREA = 48;
 const RESIZE_DIRECTIONS = ["n", "ne", "e", "se", "s", "sw", "w", "nw"];
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function appendTitleIcon(button, paths) {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "14");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  for (const d of paths) {
+    const path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", d);
+    svg.appendChild(path);
+  }
+  button.replaceChildren(svg);
+}
 
 export class QuickChatDialog {
   constructor({ transport, dialogRoot, chipRoot, boundsElement, confirmDiscard, createView }) {
@@ -36,6 +57,8 @@ export class QuickChatDialog {
 
     const doc = globalThis.document;
     this._buildDom(doc);
+    this._unsubscribeLocale = onLocaleChange(() => this._updateLocalizedChrome());
+    this._updateLocalizedChrome();
   }
 
   async open() {
@@ -157,6 +180,7 @@ export class QuickChatDialog {
       window.removeEventListener("pointercancel", this._handlePointerUp);
       this._title?.removeEventListener("lostpointercapture", this._handlePointerUp);
     }
+    this._unsubscribeLocale?.();
     if (this._onWindowBlur) window.removeEventListener("blur", this._onWindowBlur);
     for (const handle of this._resizeHandles || []) {
       const handlers = this._resizePointerHandlers?.get(handle);
@@ -190,14 +214,21 @@ export class QuickChatDialog {
     this._costSpan.className = "quick-chat-cost";
     title.appendChild(this._costSpan);
 
+    this._titleButtons = new Map();
     title.appendChild(
-      this._titleButton("quick-chat-new", t("ephemeral.newChat"), () => this.replace()),
+      this._titleButton("quick-chat-new", "ephemeral.newChat", ["M12 5v14", "M5 12h14"], () =>
+        this.replace(),
+      ),
     );
     title.appendChild(
-      this._titleButton("quick-chat-minimize", t("ephemeral.minimize"), () => this.minimize()),
+      this._titleButton("quick-chat-minimize", "ephemeral.minimize", ["M5 12h14"], () =>
+        this.minimize(),
+      ),
     );
     title.appendChild(
-      this._titleButton("quick-chat-close", t("ephemeral.close"), () => this.close()),
+      this._titleButton("quick-chat-close", "ephemeral.close", ["M18 6 6 18", "M6 6 18 18"], () =>
+        this.close(),
+      ),
     );
     this._dialog.appendChild(title);
 
@@ -241,16 +272,35 @@ export class QuickChatDialog {
     this._chip.addEventListener("click", () => this.restore());
   }
 
-  _titleButton(role, label, onClick) {
+  _titleButton(role, labelKey, paths, onClick) {
     const btn = globalThis.document.createElement("button");
     btn.type = "button";
+    btn.className = "quick-chat-title-btn";
     btn.dataset.role = role;
-    btn.textContent = label;
+    btn.dataset.i18nKey = labelKey;
+    appendTitleIcon(btn, paths);
     btn.addEventListener("click", (event) => {
       event.stopPropagation();
       onClick();
     });
+    this._titleButtons.set(role, btn);
     return btn;
+  }
+
+  _updateLocalizedChrome() {
+    if (this.destroyed) return;
+    this._titleText.textContent = t("ephemeral.quickChat");
+    this._chip.textContent = t("ephemeral.quickChat");
+    this._chip.setAttribute("aria-label", t("ephemeral.quickChat"));
+    for (const button of this._titleButtons.values()) {
+      const label = t(button.dataset.i18nKey);
+      button.title = label;
+      button.setAttribute("aria-label", label);
+    }
+    for (const handle of this._resizeHandles || []) {
+      handle.setAttribute("aria-label", t("ephemeral.resize"));
+    }
+    this._renderChipState();
   }
 
   _mount() {

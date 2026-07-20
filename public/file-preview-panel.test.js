@@ -15,6 +15,7 @@ beforeEach(async () => {
         ok: true,
         json: async () => ({
           messages: { copied: "Copied!" },
+          nav: { newSideChat: "New Side Chat" },
           files: {
             preview: {
               close: "Close",
@@ -369,6 +370,20 @@ describe("FilePreviewPanel", () => {
     await p.openFile("/test/workspace/main.js");
     const closeBtn = tabBar.querySelector(".file-preview-tab-close");
     expect(closeBtn).not.toBeNull();
+    p.destroy();
+  });
+
+  test("renders the New Side Chat tab action as a localized icon button", () => {
+    const p = createPanel();
+    p.registerTabBarAction("new-side-chat", {
+      labelKey: "nav.newSideChat",
+      icon: "chat-plus",
+      onClick: vi.fn(),
+    });
+    const action = tabBar.querySelector('[data-action-id="new-side-chat"]');
+    expect(action.getAttribute("aria-label")).toBe("New Side Chat");
+    expect(action.querySelector("svg")).not.toBeNull();
+    expect(action.textContent.trim()).toBe("");
     p.destroy();
   });
 
