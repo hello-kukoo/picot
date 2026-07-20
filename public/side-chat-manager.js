@@ -30,10 +30,18 @@ function segmentGraphemes(text) {
 }
 
 export class SideChatManager {
-  constructor({ transport, filePreviewPanel, confirmDiscard, createView }) {
+  constructor({
+    transport,
+    filePreviewPanel,
+    confirmDiscard,
+    createView,
+    getStartupProfile = () => null,
+  }) {
     this.transport = transport;
     this.filePreviewPanel = filePreviewPanel;
-    this.confirmDiscard = confirmDiscard || (async () => "discard");
+    this.confirmDiscard = confirmDiscard;
+    this.createView = createView;
+    this.getStartupProfile = getStartupProfile;
     this.createView = createView || (() => null);
     this.chats = new Map(); // instanceId -> { descriptor, runtime, view, title }
     this.order = [];
@@ -48,22 +56,61 @@ export class SideChatManager {
     if (this._locked || this._creating || this.chats.size >= SIDE_CHAT_QUOTA) return null;
     this._creating = true;
     this._updateQuotaUi();
+    // Show a loading tab immediately so the user sees feedback while pi
+    // spins up (cold start takes several seconds). The tab is replaced by
+    // the real Side Chat view once the descriptor arrives.
+    const loadingId = `side-chat-loading-${Date.now()}`;
+    const loadingElement = this._buildLoadingElement();
+    this.filePreviewPanel.registerTransientTab({
+      id: loadingId,
+      title: t("ephemeral.startingSideChat"),
+      fullTitle: t("ephemeral.startingSideChat"),
+      status: "streaming",
+      unread: false,
+      contentElement: loadingElement,
+      onActivate: () => {},
+      onDeactivate: () => {},
+      onRequestClose: () => {},
+    });
+    this.filePreviewPanel.activateContent({ kind: "transient", id: loadingId });
+    this.filePreviewPanel.showPanel();
     try {
-      const descriptor = await this.transport.createEphemeral("side-chat");
-      if (!descriptor) return null;
+      const startupProfile = await this.getStartupProfile();
+      const descriptor = await this.transport.createEphemeral("side-chat", {
+        startupProfile,
+      });
+      if (!descriptor) {
+        this.filePreviewPanel.unregisterTransientTab(loadingId);
+        return null;
+      }
       try {
-        this._instantiate(descriptor);
+        this._instantiate(descriptor, true, startupProfile);
+        this.filePreviewPanel.unregisterTransientTab(loadingId);
       } catch (error) {
         await this.transport
           .closeEphemeral(descriptor.instanceId, descriptor.generation)
           .catch(() => {});
+        this.filePreviewPanel.unregisterTransientTab(loadingId);
         throw error;
       }
       return descriptor;
+    } catch (error) {
+      this.filePreviewPanel.unregisterTransientTab(loadingId);
+      throw error;
     } finally {
       this._creating = false;
       this._updateQuotaUi();
     }
+  }
+
+  _buildLoadingElement() {
+    const doc = globalThis.document;
+    const el = doc.createElement("div");
+    el.className = "ephemeral-chat-loading";
+    el.setAttribute("role", "status");
+    el.setAttribute("aria-busy", "true");
+    el.textContent = t("ephemeral.startingSideChat");
+    return el;
   }
 
   /** Header button: create the first, restore the most recent, or collapse. */
@@ -212,7 +259,7 @@ export class SideChatManager {
 
   // ── Internals ───────────────────────────────────────────────────────────────
 
-  _instantiate(descriptor, activate = true) {
+  _instantiate(descriptor, activate = true, startupProfile = null) {
     const runtime = new EphemeralChatRuntime({ descriptor, transport: this.transport });
     runtime.active = activate;
     runtime.unread = Boolean(descriptor.unread);
@@ -264,6 +311,22 @@ export class SideChatManager {
     // Both fresh and re-bound runtimes begin from an authoritative snapshot;
     // any broker events that arrive first remain queued until it is applied.
     runtime.requestSnapshot();
+    // After the runtime's first snapshot is applied (renderstate fires), push
+    // the inherited model + thinking level via WS. The host also sends
+    // set_model via stdin at spawn time, but the runtime snapshot may race
+    // ahead and show Pi's advisor-restored model. This WS set_model is the
+    // authoritative path: it updates Pi's state and emits a fresh renderstate
+    // with the correct model, so the view re-renders correctly.
+    if (startupProfile?.provider && startupProfile?.modelId) {
+      const applyOnce = () => {
+        runtime.removeEventListener("renderstate", applyOnce);
+        runtime.setModel(startupProfile.provider, startupProfile.modelId);
+        if (startupProfile.thinkingLevel && startupProfile.thinkingLevel !== "off") {
+          runtime.setThinkingLevel(startupProfile.thinkingLevel);
+        }
+      };
+      runtime.addEventListener("renderstate", applyOnce);
+    }
     this._updateQuotaUi();
   }
 

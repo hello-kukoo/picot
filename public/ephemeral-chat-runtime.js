@@ -31,6 +31,22 @@ function firstUserText(message) {
   return "";
 }
 
+function normalizeUserMessage(message) {
+  const normalized = clone(message);
+  if (!Array.isArray(normalized?.content)) return normalized;
+
+  const blocks = normalized.content;
+  normalized.content = blocks
+    .filter((block) => block?.type === "text")
+    .map((block) => block.text || "")
+    .join("\n");
+  const images = blocks
+    .filter((block) => block?.type === "image" && typeof block.data === "string")
+    .map((block) => ({ data: block.data, mimeType: block.mimeType }));
+  if (images.length > 0) normalized.images = images;
+  return normalized;
+}
+
 /**
  * Owns one ephemeral chat's connection-facing state. It accepts only frames
  * matching its instance id + generation, replays ordered events after a
@@ -99,6 +115,10 @@ export class EphemeralChatRuntime extends EventTarget {
     return this._send({ type: "extension_ui_response", id, ...response });
   }
 
+  runCommand(type) {
+    return this._request({ type });
+  }
+
   _send(payload) {
     if (this.destroyed) return null;
     try {
@@ -141,7 +161,11 @@ export class EphemeralChatRuntime extends EventTarget {
     ) {
       return;
     }
-    this.messages = Array.isArray(snapshot.messages) ? clone(snapshot.messages) : [];
+    this.messages = Array.isArray(snapshot.messages)
+      ? snapshot.messages.map((message) =>
+          message?.role === "user" ? normalizeUserMessage(message) : clone(message),
+        )
+      : [];
     this.assistantDraft = snapshot.assistantDraft ? clone(snapshot.assistantDraft) : null;
     this.tools = new Map((snapshot.tools || []).map((tool) => [tool.toolCallId, { ...tool }]));
     this.model = snapshot.model ?? null;
@@ -300,7 +324,7 @@ export class EphemeralChatRuntime extends EventTarget {
       case "message_start": {
         const message = event.message;
         if (message?.role === "user") {
-          this.messages.push(clone(message));
+          this.messages.push(normalizeUserMessage(message));
         } else if (message?.role === "assistant") {
           this.assistantDraft = { text: assistantText(message), thinking: "" };
         }

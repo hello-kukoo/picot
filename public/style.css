@@ -4564,6 +4564,11 @@ body.hide-thinking .thinking-block {
   transform: scale(0.98);
 }
 
+.command-item.disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .command-icon {
   width: 28px;
   height: 28px;
@@ -6419,6 +6424,9 @@ body.file-preview-resizing {
   flex: 0 0 auto;
   margin: 8px 12px 12px;
 }
+.quick-chat-dialog .ephemeral-composer {
+  margin-bottom: 12px;
+}
 .ephemeral-composer.streaming {
   border-color: transparent;
 }
@@ -6464,10 +6472,12 @@ body.file-preview-resizing {
   -webkit-app-region: no-drag;
   user-select: none;
 }
-.quick-chat-cost {
-  font-size: 11px;
-  color: var(--text-dim);
+.quick-chat-title-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   margin-left: auto;
+  -webkit-app-region: no-drag;
 }
 .quick-chat-title button {
   -webkit-app-region: no-drag;
@@ -6489,6 +6499,10 @@ body.file-preview-resizing {
   color: var(--text-primary);
   background: var(--bg-glass-hover);
 }
+.quick-chat-resize-handle {
+  position: absolute;
+}
+
 .quick-chat-resize-n,
 .quick-chat-resize-s {
   left: 12px;
@@ -6568,6 +6582,21 @@ body.file-preview-resizing {
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+.quick-chat-loading {
+  flex: 1 1 auto;
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.ephemeral-chat-loading {
+  flex: 1 1 auto;
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+  font-size: 13px;
+  padding: 24px;
 }
 .quick-chat-chip {
   position: fixed;

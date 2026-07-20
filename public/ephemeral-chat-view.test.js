@@ -38,7 +38,20 @@ const locale = {
     statusError: "Error",
     statusDisconnected: "Disconnected",
   },
-  input: { switchModel: "Switch model" },
+  input: {
+    switchModel: "Switch model",
+    commands: "Commands",
+    compact: "Compact",
+    exportHtml: "Export HTML",
+    sessionStats: "Session stats",
+    expandAllTools: "Expand tools",
+    collapseAllTools: "Collapse tools",
+    compactDesc: "Compact the context",
+    exportHtmlDesc: "Export this chat",
+    sessionStatsDesc: "Show session statistics",
+    expandAllToolsDesc: "Expand all tools",
+    collapseAllToolsDesc: "Collapse all tools",
+  },
   models: { searchPlaceholder: "Search models…", emptyTitle: "No models available" },
   settings: {
     thinkingCompact: "Think {level}",
@@ -70,7 +83,7 @@ beforeEach(async () => {
 function makeRuntime() {
   return new EphemeralChatRuntime({
     descriptor: { instanceId: "inst-1", generation: 1, kind: "side-chat" },
-    transport: { sendEphemeral: vi.fn(() => "ep-1") },
+    transport: { sendEphemeral: vi.fn(() => "ep-1"), getCachedModels: vi.fn(async () => null) },
   });
 }
 
@@ -85,7 +98,15 @@ describe("EphemeralChatView", () => {
       instanceId: "inst-1",
       generation: 1,
       runtimeSequenceWatermark: 0,
-      messages: [{ role: "user", content: "hello world" }],
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "hello world" },
+            { type: "image", data: "image-data", mimeType: "image/png" },
+          ],
+        },
+      ],
       assistantDraft: null,
       tools: [],
       model: null,
@@ -95,6 +116,9 @@ describe("EphemeralChatView", () => {
       error: null,
     });
     expect(el.textContent).toContain("hello world");
+    expect(el.querySelector(".message-image")?.getAttribute("src")).toBe(
+      "data:image/png;base64,image-data",
+    );
     view.destroy();
   });
 
@@ -131,6 +155,21 @@ describe("EphemeralChatView", () => {
     view.destroy();
   });
 
+  it("renders the Side Chat Commands palette with main-chat icons and descriptions", () => {
+    const runtime = makeRuntime();
+    const view = new EphemeralChatView({ runtime, kind: "side-chat", toolsEnabled: true });
+    view.element.querySelector('[data-role="ephemeral-command"]').click();
+    const palette = view.element.querySelector(".command-palette");
+    expect(palette.classList.contains("hidden")).toBe(false);
+    expect(palette.querySelector(".command-palette-header").textContent).toBe("Commands");
+    expect(
+      Array.from(palette.querySelectorAll(".command-icon")).map((icon) => icon.textContent),
+    ).toEqual(["🗜️", "📋", "📊", "⬇️", "⬆️"]);
+    expect(palette.querySelector(".command-desc").textContent).toBe("Compact the context");
+    expect(palette.querySelector('[aria-disabled="true"]').textContent).toContain("Export HTML");
+    view.destroy();
+  });
+
   it("uses the main composer structure with model and thinking controls", () => {
     const runtime = makeRuntime();
     const view = new EphemeralChatView({ runtime, kind: "side-chat", toolsEnabled: true });
@@ -154,11 +193,14 @@ describe("EphemeralChatView", () => {
     expect(composer.querySelector('[data-role="ephemeral-model"]')).not.toBeNull();
     expect(composer.querySelector('[data-role="ephemeral-thinking"]')).not.toBeNull();
     expect(composer.querySelector('[data-role="ephemeral-send"] svg')).not.toBeNull();
-    expect(
-      Array.from(composer.querySelectorAll('[data-role="ephemeral-send"] path')).map((path) =>
-        path.getAttribute("d"),
-      ),
-    ).toEqual(["M12 19V5", "m-7 7 7-7 7 7"]);
+    const sendIcon = composer.querySelector('[data-role="ephemeral-send"] svg');
+    const line = sendIcon.querySelector("line");
+    expect(line).not.toBeNull();
+    expect(line.getAttribute("x1")).toBe("12");
+    expect(line.getAttribute("y1")).toBe("19");
+    expect(line.getAttribute("x2")).toBe("12");
+    expect(line.getAttribute("y2")).toBe("5");
+    expect(sendIcon.querySelector("polyline").getAttribute("points")).toBe("5 12 12 5 19 12");
     expect(composer.querySelector('[data-role="ephemeral-send"]').textContent.trim()).toBe("");
     expect(composer.textContent).toContain("claude-3");
     expect(composer.textContent).toContain("Think high");
@@ -169,6 +211,16 @@ describe("EphemeralChatView", () => {
     const runtime = makeRuntime();
     const view = new EphemeralChatView({ runtime, kind: "quick-chat", toolsEnabled: false });
     view.element.querySelector('[data-role="ephemeral-model"]').click();
+    // The view first checks the host model cache (async), then falls back to
+    // the live runtime query. Wait for the runtime request to be registered
+    // before delivering its response, mirroring real async ordering.
+    await vi.waitFor(() => {
+      expect(runtime.transport.sendEphemeral).toHaveBeenCalledWith(
+        "inst-1",
+        1,
+        expect.objectContaining({ type: "get_available_models" }),
+      );
+    });
     runtime.applySequencedEvent({
       instanceId: "inst-1",
       generation: 1,
@@ -177,20 +229,32 @@ describe("EphemeralChatView", () => {
         id: "ep-1",
         command: "get_available_models",
         success: true,
-        data: { models: [{ provider: "anthropic", id: "claude-3" }] },
+        data: {
+          models: [
+            { provider: "anthropic", id: "claude-3" },
+            { provider: "openai", id: "gpt-4o" },
+          ],
+        },
       },
     });
     await vi.waitFor(() => {
       expect(view.element.querySelector(".model-dropdown-item")).not.toBeNull();
     });
 
+    const search = view.element.querySelector(".model-dropdown-search");
+    expect(search).not.toBeNull();
+    expect(view.element.querySelector(".model-dropdown-items")).not.toBeNull();
+    search.value = "gpt";
+    search.dispatchEvent(new Event("input"));
     const option = view.element.querySelector(".model-dropdown-item");
-    expect(option.textContent).toContain("claude-3");
+    expect(option.tagName).toBe("DIV");
+    expect(option.textContent).toContain("gpt-4o");
+    expect(view.element.querySelectorAll(".model-dropdown-item")).toHaveLength(1);
     option.click();
     expect(runtime.transport.sendEphemeral).toHaveBeenLastCalledWith("inst-1", 1, {
       type: "set_model",
-      provider: "anthropic",
-      modelId: "claude-3",
+      provider: "openai",
+      modelId: "gpt-4o",
     });
     view.destroy();
   });

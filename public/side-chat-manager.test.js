@@ -15,7 +15,11 @@ beforeEach(async () => {
           ok: true,
           status: 200,
           json: async () => ({
-            ephemeral: { sideChat: "Side Chat", newSideChat: "New Side Chat" },
+            ephemeral: {
+              sideChat: "Side Chat",
+              newSideChat: "New Side Chat",
+              startingSideChat: "Starting…",
+            },
           }),
         };
       }
@@ -73,6 +77,7 @@ function makeManager(overrides = {}) {
     filePreviewPanel,
     confirmDiscard: overrides.confirmDiscard ?? vi.fn(async () => "discard"),
     createView: overrides.createView ?? (() => fakeView()),
+    getStartupProfile: overrides.getStartupProfile,
   });
   return { manager, transport, filePreviewPanel };
 }
@@ -81,12 +86,54 @@ describe("SideChatManager create + quota", () => {
   it("create() registers a transient tab and activates it", async () => {
     const { manager, filePreviewPanel } = makeManager();
     await manager.create();
-    expect(filePreviewPanel.registerTransientTab).toHaveBeenCalledTimes(1);
+    // Loading tab + real tab = 2 registrations; loading tab is unregistered.
+    expect(filePreviewPanel.registerTransientTab).toHaveBeenCalledTimes(2);
     expect(filePreviewPanel.activateContent).toHaveBeenCalledWith({
       kind: "transient",
       id: "sc-1",
     });
     expect(filePreviewPanel.showPanel).toHaveBeenCalled();
+    expect(filePreviewPanel.unregisterTransientTab).toHaveBeenCalled();
+  });
+
+  it("passes the active session model and thinking level to a new Side Chat", async () => {
+    const getStartupProfile = vi.fn(async () => ({
+      provider: "openai",
+      modelId: "gpt-4.1",
+      thinkingLevel: "high",
+    }));
+    const { manager, transport } = makeManager({ getStartupProfile });
+    await manager.create();
+    expect(transport.createEphemeral).toHaveBeenCalledWith("side-chat", {
+      startupProfile: {
+        provider: "openai",
+        modelId: "gpt-4.1",
+        thinkingLevel: "high",
+      },
+    });
+  });
+
+  it("applies the startup profile to the runtime after its first snapshot", async () => {
+    const getStartupProfile = vi.fn(async () => ({
+      provider: "openai",
+      modelId: "gpt-4.1",
+      thinkingLevel: "high",
+    }));
+    const { manager } = makeManager({ getStartupProfile });
+    const descriptor = await manager.create();
+    const chat = manager.chats.get(descriptor.instanceId);
+    expect(chat).toBeDefined();
+    const setModel = vi.spyOn(chat.runtime, "setModel");
+    const setThinking = vi.spyOn(chat.runtime, "setThinkingLevel");
+    // Simulate the first snapshot arriving — this fires renderstate.
+    chat.runtime.applySnapshot({
+      type: "ephemeral_snapshot",
+      instanceId: descriptor.instanceId,
+      generation: descriptor.generation,
+      messages: [],
+    });
+    expect(setModel).toHaveBeenCalledWith("openai", "gpt-4.1");
+    expect(setThinking).toHaveBeenCalledWith("high");
   });
 
   it("enforces the five-instance quota", async () => {

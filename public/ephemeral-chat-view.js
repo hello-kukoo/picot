@@ -2,6 +2,7 @@
 // ABOUTME: composer, dialogs, and usage — reusing the shared render helpers.
 
 import { setupVoiceInput } from "./app-voice-input.js";
+import { setupComposerCommandMenu } from "./composer-command-menu.js";
 import { setupComposerImageAttachments } from "./composer-image-attachments.js";
 import { DialogHandler } from "./dialogs.js";
 import { onLocaleChange, t } from "./i18n.js";
@@ -28,6 +29,28 @@ function appendIcon(doc, button, paths, { fill = "none", strokeWidth = "2" } = {
     path.setAttribute("d", d);
     svg.appendChild(path);
   }
+  button.replaceChildren(svg);
+}
+
+function appendSendIcon(doc, button) {
+  const svg = doc.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("width", "16");
+  svg.setAttribute("height", "16");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2.5");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  const line = doc.createElementNS(SVG_NS, "line");
+  line.setAttribute("x1", "12");
+  line.setAttribute("y1", "19");
+  line.setAttribute("x2", "12");
+  line.setAttribute("y2", "5");
+  const chevron = doc.createElementNS(SVG_NS, "polyline");
+  chevron.setAttribute("points", "5 12 12 5 19 12");
+  svg.append(line, chevron);
   button.replaceChildren(svg);
 }
 
@@ -102,6 +125,21 @@ export class EphemeralChatView {
     this._attachBtn = attachBtn;
     toolbarLeft.appendChild(attachBtn);
 
+    this._commandBtn = doc.createElement("button");
+    this._commandBtn.type = "button";
+    this._commandBtn.className = "input-icon-btn ephemeral-command";
+    this._commandBtn.dataset.role = "ephemeral-command";
+    const commandsLabel = t("input.commands");
+    this._commandBtn.title = commandsLabel;
+    this._commandBtn.setAttribute("aria-label", commandsLabel);
+    appendIcon(doc, this._commandBtn, [
+      "M12 22v-5",
+      "M9 8V2",
+      "M15 8V2",
+      "M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z",
+    ]);
+    toolbarLeft.appendChild(this._commandBtn);
+
     this._modelDropdown = doc.createElement("div");
     this._modelDropdown.className = "model-dropdown";
     this._modelBtn = doc.createElement("button");
@@ -154,7 +192,18 @@ export class EphemeralChatView {
     toolbarRight.appendChild(this._sendBtn);
     toolbar.appendChild(toolbarRight);
     this._composer.appendChild(toolbar);
-    this._root.appendChild(this._composer);
+
+    this._commandOverlay = doc.createElement("div");
+    this._commandOverlay.className = "command-palette-overlay hidden";
+    this._commandMenu = doc.createElement("div");
+    this._commandMenu.className = "command-palette hidden";
+    this._commandHeader = doc.createElement("div");
+    this._commandHeader.className = "command-palette-header";
+    this._commandHeader.textContent = t("input.commands");
+    this._commandList = doc.createElement("div");
+    this._commandList.className = "command-list";
+    this._commandMenu.append(this._commandHeader, this._commandList);
+    this._root.append(this._commandOverlay, this._commandMenu, this._composer);
 
     // Shared render helpers, each scoped to this view's containers.
     this.messageRenderer = new MessageRenderer(this._messagesEl);
@@ -187,6 +236,14 @@ export class EphemeralChatView {
       isNativeAvailable: () => Boolean(this.runtime?.transport?.capabilities?.native),
       t,
     });
+    this._commandMenuController = setupComposerCommandMenu({
+      button: this._commandBtn,
+      menu: this._commandMenu,
+      list: this._commandList,
+      getCommands: () => this._sideCommands(),
+      document: this._doc,
+      overlay: this._commandOverlay,
+    });
 
     this._onRenderState = (event) => this._render(event.detail);
     this._onExtensionUi = (event) => this._showExtensionDialog(event.detail.request);
@@ -208,6 +265,7 @@ export class EphemeralChatView {
     this._thinkingBtn.addEventListener("click", this._onThinkingClick);
     this._doc.addEventListener("click", this._onDocumentClick);
     this._unsubscribeLocale = onLocaleChange(() => {
+      this._commandHeader.textContent = t("input.commands");
       this._renderComposerState({
         model: this.runtime.model,
         thinkingLevel: this.runtime.thinkingLevel,
@@ -245,6 +303,7 @@ export class EphemeralChatView {
     this._modelBtn.disabled = this._interactionLocked;
     this._thinkingBtn.disabled = this._interactionLocked;
     this._attachBtn.disabled = this._interactionLocked;
+    this._commandBtn.disabled = this._interactionLocked;
   }
 
   destroy() {
@@ -256,6 +315,7 @@ export class EphemeralChatView {
     this._sendBtn.removeEventListener("click", this._onSendClick);
     this._modelBtn.removeEventListener("click", this._onModelClick);
     this._thinkingBtn.removeEventListener("click", this._onThinkingClick);
+    this._commandMenuController?.destroy();
     this._doc.removeEventListener("click", this._onDocumentClick);
     this._unsubscribeLocale?.();
     this.messageRenderer?.destroy();
@@ -326,6 +386,52 @@ export class EphemeralChatView {
     this._renderUsage(state);
     this._renderComposerState(state);
   }
+
+  _sideCommands() {
+    return [
+      {
+        icon: "🗜️",
+        label: t("input.compact"),
+        desc: t("input.compactDesc"),
+        action: () => this.runtime.runCommand("compact"),
+      },
+      {
+        icon: "📋",
+        label: t("input.exportHtml"),
+        desc: t("input.exportHtmlDesc"),
+        action: () => {},
+        disabled: true,
+      },
+      {
+        icon: "📊",
+        label: t("input.sessionStats"),
+        desc: t("input.sessionStatsDesc"),
+        action: async () => {
+          const stats = await this.runtime.runCommand("get_session_stats");
+          if (!stats) return;
+          this.messageRenderer.renderSystemMessage(
+            t("status.sessionStatsMessages", {
+              total: stats.totalMessages,
+              user: stats.userMessages,
+              assistant: stats.assistantMessages,
+            }),
+          );
+        },
+      },
+      {
+        icon: "⬇️",
+        label: t("input.expandAllTools"),
+        desc: t("input.expandAllToolsDesc"),
+        action: () => this.toolCardRenderer?.expandAll(),
+      },
+      {
+        icon: "⬆️",
+        label: t("input.collapseAllTools"),
+        desc: t("input.collapseAllToolsDesc"),
+        action: () => this.toolCardRenderer?.collapseAll(),
+      },
+    ];
+  }
   async _toggleModelMenu() {
     if (this._interactionLocked) return;
     if (!this._modelMenu.classList.contains("hidden")) {
@@ -337,7 +443,23 @@ export class EphemeralChatView {
     this._modelDropdown.classList.add("open");
     this._modelMenu.classList.remove("hidden");
     try {
-      const models = await this.runtime.getAvailableModels();
+      // Prefer the host-wide cache so the menu renders instantly without
+      // waiting for this ephemeral Pi to respond. Fall back to the live
+      // query if the cache is cold. Both paths run sequentially to preserve
+      // the runtime's pending-request setup order: the cache is a fast
+      // read, and if it misses, the live query takes over.
+      let models = [];
+      if (typeof this.runtime.transport?.getCachedModels === "function") {
+        try {
+          const cached = await this.runtime.transport.getCachedModels();
+          if (Array.isArray(cached?.models)) models = cached.models;
+        } catch {
+          // cache unavailable — fall through to the live query
+        }
+      }
+      if (models.length === 0) {
+        models = await this.runtime.getAvailableModels();
+      }
       if (this.destroyed || this._modelMenu.classList.contains("hidden")) return;
       this._renderModelMenu(models);
     } catch {
@@ -352,36 +474,76 @@ export class EphemeralChatView {
 
   _renderModelMenu(models) {
     this._modelMenu.replaceChildren();
-    if (!models.length) {
-      const empty = this._doc.createElement("div");
-      empty.className = "model-dropdown-empty";
-      empty.textContent = t("models.emptyTitle");
-      this._modelMenu.appendChild(empty);
-      return;
-    }
+
+    const search = this._doc.createElement("input");
+    search.className = "model-dropdown-search";
+    search.placeholder = t("models.searchPlaceholder");
+    search.type = "text";
+    this._modelMenu.appendChild(search);
+
+    const itemsContainer = this._doc.createElement("div");
+    itemsContainer.className = "model-dropdown-items";
+    this._modelMenu.appendChild(itemsContainer);
+
     const activeModelId = this.runtime.model?.id ?? this.runtime.model?.modelId;
-    for (const model of models) {
-      const option = this._doc.createElement("button");
-      option.type = "button";
-      option.className = `model-dropdown-item${model.id === activeModelId ? " active" : ""}`;
-      const name = this._doc.createElement("span");
-      name.textContent = model.id || "";
-      if (model.provider) {
-        const provider = this._doc.createElement("span");
-        provider.className = "model-dropdown-item-provider";
-        provider.textContent = model.provider;
-        name.appendChild(provider);
+    const renderItems = (filter) => {
+      itemsContainer.replaceChildren();
+      const query = (filter || "").toLowerCase();
+      if (!models.length) {
+        const empty = this._doc.createElement("div");
+        empty.className = "model-dropdown-empty";
+        empty.textContent = t("models.emptyTitle");
+        itemsContainer.appendChild(empty);
+        return;
       }
-      const context = this._doc.createElement("span");
-      context.className = "model-dropdown-item-ctx";
-      context.textContent = model.contextWindow ? `${Math.round(model.contextWindow / 1000)}k` : "";
-      option.append(name, context);
-      option.addEventListener("click", () => {
-        this.runtime.setModel(model.provider, model.id);
+
+      for (const model of models) {
+        const id = model.id || "";
+        const shortName = id.replace(/-\d{8}$/, "");
+        const providerName = model.provider || "";
+        if (
+          query &&
+          !shortName.toLowerCase().includes(query) &&
+          !providerName.toLowerCase().includes(query)
+        ) {
+          continue;
+        }
+
+        const option = this._doc.createElement("div");
+        option.className = `model-dropdown-item${id === activeModelId ? " active" : ""}`;
+        const name = this._doc.createElement("span");
+        name.textContent = shortName;
+        if (providerName && providerName !== "anthropic") {
+          const provider = this._doc.createElement("span");
+          provider.className = "model-dropdown-item-provider";
+          provider.textContent = providerName;
+          name.appendChild(provider);
+        }
+        const context = this._doc.createElement("span");
+        context.className = "model-dropdown-item-ctx";
+        context.textContent = model.contextWindow
+          ? `${(model.contextWindow / 1000).toFixed(0)}k`
+          : "";
+        option.append(name, context);
+        option.addEventListener("click", () => {
+          this.runtime.setModel(model.provider, id);
+          this._closeModelMenu();
+        });
+        itemsContainer.appendChild(option);
+      }
+    };
+
+    renderItems("");
+    search.addEventListener("input", () => renderItems(search.value));
+    search.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
         this._closeModelMenu();
-      });
-      this._modelMenu.appendChild(option);
-    }
+        event.stopPropagation();
+      } else if (event.key === "Enter") {
+        itemsContainer.querySelector(".model-dropdown-item")?.click();
+      }
+    });
+    requestAnimationFrame(() => search.focus());
   }
 
   _cycleThinkingLevel() {
@@ -412,12 +574,14 @@ export class EphemeralChatView {
     const sendLabel = state?.isStreaming ? t("ephemeral.abort") : t("ephemeral.send");
     this._sendBtn.title = sendLabel;
     this._sendBtn.setAttribute("aria-label", sendLabel);
-    appendIcon(
-      this._doc,
-      this._sendBtn,
-      state?.isStreaming ? ["M4 4h16v16H4z"] : ["M12 19V5", "m-7 7 7-7 7 7"],
-      { fill: state?.isStreaming ? "currentColor" : "none", strokeWidth: "2.5" },
-    );
+    if (state?.isStreaming) {
+      appendIcon(this._doc, this._sendBtn, ["M4 4h16v16H4z"], {
+        fill: "currentColor",
+        strokeWidth: "2.5",
+      });
+    } else {
+      appendSendIcon(this._doc, this._sendBtn);
+    }
     const voiceLabel = t("voice.voiceInput");
     this._micBtn.title = voiceLabel;
     this._micBtn.setAttribute("aria-label", voiceLabel);

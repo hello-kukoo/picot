@@ -68,12 +68,20 @@ export class QuickChatDialog {
       return;
     }
     this._creating = true;
+    this._locked = true;
+    this._showLoading();
+    this._show();
     try {
       this.descriptor = await this.transport.createEphemeral("quick-chat");
       if (!this.descriptor) return;
       this._mount();
       this._show();
+    } catch (error) {
+      this._dialog.classList.add("hidden");
+      this._chip.classList.add("hidden");
+      throw error;
     } finally {
+      this._locked = false;
       this._creating = false;
     }
   }
@@ -218,26 +226,21 @@ export class QuickChatDialog {
     this._titleText.textContent = t("ephemeral.quickChat");
     title.appendChild(this._titleText);
 
-    this._costSpan = doc.createElement("span");
-    this._costSpan.className = "quick-chat-cost";
-    title.appendChild(this._costSpan);
-
     this._titleButtons = new Map();
-    title.appendChild(
+    this._titleActions = doc.createElement("div");
+    this._titleActions.className = "quick-chat-title-actions";
+    this._titleActions.append(
       this._titleButton("quick-chat-new", "ephemeral.newChat", ["M12 5v14", "M5 12h14"], () =>
         this.replace(),
       ),
-    );
-    title.appendChild(
       this._titleButton("quick-chat-minimize", "ephemeral.minimize", ["M5 12h14"], () =>
         this.minimize(),
       ),
-    );
-    title.appendChild(
       this._titleButton("quick-chat-close", "ephemeral.close", ["M18 6 6 18", "M6 6 18 18"], () =>
         this.close(),
       ),
     );
+    title.appendChild(this._titleActions);
     this._dialog.appendChild(title);
 
     this._body = doc.createElement("div");
@@ -341,20 +344,26 @@ export class QuickChatDialog {
       transport: this.transport,
     });
     this.runtime.active = true;
-    this._onRuntimeRenderState = (event) => {
-      this._renderCost(event.detail);
-      this._renderChipState();
-    };
+    this._onRuntimeRenderState = () => this._renderChipState();
     this._onRuntimeUnread = () => this._renderChipState();
     this.runtime.addEventListener("renderstate", this._onRuntimeRenderState);
     this.runtime.addEventListener("unreadchange", this._onRuntimeUnread);
     this.view = this.createView(this.runtime);
     if (this.view?.element) {
-      this._body.replaceChildren();
-      this._body.appendChild(this.view.element);
+      this._body.replaceChildren(this.view.element);
     }
+    this._dialog.setAttribute("aria-busy", "false");
     this._renderChipState();
     this.runtime.requestSnapshot();
+  }
+
+  _showLoading() {
+    const loading = this._dialog.ownerDocument.createElement("div");
+    loading.className = "quick-chat-loading";
+    loading.setAttribute("role", "status");
+    loading.textContent = t("ephemeral.generating");
+    this._body.replaceChildren(loading);
+    this._dialog.setAttribute("aria-busy", "true");
   }
 
   _show() {
@@ -383,18 +392,6 @@ export class QuickChatDialog {
       width,
       height,
     });
-  }
-
-  _renderCost(state) {
-    if (!this._costSpan || !state) return;
-    const usage = state.contextUsage || {};
-    const tokens = usage.used ?? usage.tokens ?? usage.inputTokens;
-    const cost =
-      usage.cost ?? usage.totalCost ?? usage.total ?? state.cost ?? state.totalCost ?? null;
-    const parts = [];
-    if (typeof cost === "number") parts.push(`$${cost.toFixed(4)}`);
-    if (typeof tokens === "number") parts.push(`${tokens} ${t("ephemeral.tokens")}`);
-    this._costSpan.textContent = parts.join(" · ");
   }
 
   _onPointerDown(event) {

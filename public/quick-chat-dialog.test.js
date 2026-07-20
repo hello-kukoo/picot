@@ -101,6 +101,37 @@ describe("QuickChatDialog lifecycle", () => {
     dialog.destroy();
   });
 
+  it("reveals a loading shell while the Quick Chat process starts", async () => {
+    let resolveCreate;
+    const transport = fakeTransport();
+    transport.createEphemeral.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        }),
+    );
+    const { dialog, dialogRoot } = makeDialog({ transport });
+
+    const opening = dialog.open();
+
+    expect(dialogRoot.classList.contains("hidden")).toBe(false);
+    expect(dialogRoot.querySelector(".quick-chat-loading")?.textContent).toBe("Generating");
+    expect(dialogRoot.getAttribute("aria-busy")).toBe("true");
+
+    resolveCreate({
+      instanceId: "qc-1",
+      generation: 1,
+      kind: "quick-chat",
+      state: "ready",
+      title: null,
+      unread: false,
+    });
+    await opening;
+    expect(dialogRoot.querySelector(".quick-chat-loading")).toBeNull();
+    expect(dialogRoot.getAttribute("aria-busy")).toBe("false");
+    dialog.destroy();
+  });
+
   it("renders title controls as labelled icon buttons", () => {
     const { dialog, dialogRoot } = makeDialog();
     const expected = [
@@ -120,6 +151,17 @@ describe("QuickChatDialog lifecycle", () => {
         path.getAttribute("d"),
       ),
     ).toEqual(["M18 6 6 18", "M6 6 18 18"]);
+    const actions = dialogRoot.querySelector(".quick-chat-title-actions");
+    expect(actions).not.toBeNull();
+    expect(
+      Array.from(actions.querySelectorAll("button")).map((button) => button.dataset.role),
+    ).toEqual(expected.map(([role]) => role));
+    dialog.destroy();
+  });
+
+  it("keeps Quick Chat cost out of the title bar", () => {
+    const { dialog, dialogRoot } = makeDialog();
+    expect(dialogRoot.querySelector(".quick-chat-cost")).toBeNull();
     dialog.destroy();
   });
 

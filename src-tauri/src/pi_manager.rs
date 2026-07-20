@@ -75,6 +75,21 @@ pub struct PiManager {
     exit_sender: broadcast::Sender<ProcessExit>,
     rpc_output_sender: broadcast::Sender<RpcOutput>,
     next_process_identity: AtomicU64,
+    /// Cached result of `get_available_models` from the first Pi instance that
+    /// responded. Shared across all windows/chats so Side/Quick Chat and new
+    /// sessions populate their dropdowns instantly without re-querying Pi.
+    /// Invalidated when API keys or package extensions change.
+    model_cache: Arc<Mutex<Option<CachedModels>>>,
+}
+
+/// Snapshot of `get_available_models` output, captured once per Pi process
+/// lifetime and shared across all Picot windows/chats.
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub struct CachedModels {
+    pub source_port: u16,
+    pub payload: serde_json::Value,
+    pub cached_at: std::time::Instant,
 }
 
 struct EmbeddedExtensionResolution {
@@ -366,7 +381,6 @@ fn mirror_is_up_to_date(src: &Path, dest: &Path) -> bool {
         _ => false,
     }
 }
-
 impl PiManager {
     pub fn new(static_dir: PathBuf) -> Self {
         let (exit_sender, _) = broadcast::channel(64);
@@ -379,6 +393,7 @@ impl PiManager {
             exit_sender,
             rpc_output_sender,
             next_process_identity: AtomicU64::new(1),
+            model_cache: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -746,6 +761,48 @@ impl PiManager {
             .map_err(|e| e.to_string())
     }
 
+    /// Return the cached `get_available_models` payload, if any. Shared across
+    /// all windows/chats so dropdowns populate instantly without re-querying
+    /// every Pi instance.
+    pub fn cached_models(&self) -> Option<CachedModels> {
+        self.model_cache.lock().unwrap().clone()
+    }
+
+    /// Store a fresh `get_available_models` payload. The first Pi instance to
+    /// respond wins; later calls overwrite so a newer catalog replaces a stale
+    /// one. Called from the host after subscribing to RPC output.
+    pub fn store_cached_models(&self, source_port: u16, payload: serde_json::Value) {
+        let cached = CachedModels {
+            source_port,
+            payload,
+            cached_at: std::time::Instant::now(),
+        };
+        let mut lock = self.model_cache.lock().unwrap();
+        *lock = Some(cached);
+        log::info!(
+            "[pi-desktop] model cache populated: source_port={} models={}",
+            source_port,
+            lock.as_ref()
+                .and_then(|c| c
+                    .payload
+                    .get("models")
+                    .and_then(|m| m.as_array())
+                    .map(|m| m.len()))
+                .unwrap_or(0)
+        );
+    }
+
+    /// Drop the cached payload. Called when API keys change, package sources
+    /// are installed/removed, or any other event that could alter the model
+    /// registry. The next `get_available_models` RPC repopulates the cache.
+    pub fn invalidate_cached_models(&self) {
+        let mut lock = self.model_cache.lock().unwrap();
+        if lock.is_some() {
+            log::info!("[pi-desktop] model cache invalidated");
+        }
+        *lock = None;
+    }
+
     /// Returns `Some(exit_status_string)` if the process has already exited, `None` if still running.
     pub fn check_exited(&self, port: u16) -> Option<String> {
         let mut lock = self.processes.lock().unwrap();
@@ -942,6 +999,22 @@ fn build_pi_args(extension_path: &str, spec: &PiSpawnSpec) -> Result<Vec<String>
     }
     if spec.no_tools {
         args.push("--no-tools".to_string());
+    }
+    // Ephemeral chats (no_session) skip coding-assistant features that add
+    // seconds to startup: pi-lens, LSP diagnostics, autoformat, autofix,
+    // test runner, opengrep security scanner, read-before-edit guard, and
+    // AGENTS.md/CLAUDE.md context loading. This cuts cold-start from ~12s
+    // to ~3-5s. Side Chat keeps tools (read/bash/edit/write/grep/glob) but
+    // drops the assistant layers; Quick Chat already has --no-tools.
+    if spec.no_session {
+        args.push("--no-lens".to_string());
+        args.push("--no-lsp".to_string());
+        args.push("--no-autoformat".to_string());
+        args.push("--no-autofix".to_string());
+        args.push("--no-tests".to_string());
+        args.push("--no-opengrep".to_string());
+        args.push("--no-read-guard".to_string());
+        args.push("--no-context-files".to_string());
     }
     Ok(args)
 }
@@ -1256,6 +1329,16 @@ No packages installed.";
         assert!(args.contains(&"--no-session".to_string()));
         assert!(!args.contains(&"--no-tools".to_string()));
         assert!(!args.contains(&"--session".to_string()));
+        // Side Chat skips coding-assistant layers for faster startup but
+        // keeps its tools (read/bash/edit/write/grep/glob).
+        assert!(args.contains(&"--no-lens".to_string()));
+        assert!(args.contains(&"--no-lsp".to_string()));
+        assert!(args.contains(&"--no-autoformat".to_string()));
+        assert!(args.contains(&"--no-autofix".to_string()));
+        assert!(args.contains(&"--no-tests".to_string()));
+        assert!(args.contains(&"--no-opengrep".to_string()));
+        assert!(args.contains(&"--no-read-guard".to_string()));
+        assert!(args.contains(&"--no-context-files".to_string()));
     }
 
     #[test]
@@ -1342,5 +1425,46 @@ No packages installed.";
         assert!(cleanup_quick_chat_dir(&root, &path, "deadbeef").is_err());
         assert!(path.exists());
         let _ = std::fs::remove_dir_all(&path);
+    }
+
+    #[test]
+    fn model_cache_starts_empty() {
+        let manager = PiManager::new(PathBuf::from("."));
+        assert!(manager.cached_models().is_none());
+    }
+
+    #[test]
+    fn store_cached_models_round_trips_payload_and_source_port() {
+        let manager = PiManager::new(PathBuf::from("."));
+        let payload = serde_json::json!({
+            "models": [
+                {"provider": "openai", "id": "gpt-4o"},
+                {"provider": "anthropic", "id": "claude-3"},
+            ]
+        });
+        manager.store_cached_models(47821, payload.clone());
+        let cached = manager.cached_models().expect("cached payload");
+        assert_eq!(cached.source_port, 47821);
+        assert_eq!(cached.payload, payload);
+        assert_eq!(cached.payload["models"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn invalidate_cached_models_clears_payload() {
+        let manager = PiManager::new(PathBuf::from("."));
+        manager.store_cached_models(47821, serde_json::json!({"models": []}));
+        assert!(manager.cached_models().is_some());
+        manager.invalidate_cached_models();
+        assert!(manager.cached_models().is_none());
+    }
+
+    #[test]
+    fn store_cached_models_overwrites_previous_payload() {
+        let manager = PiManager::new(PathBuf::from("."));
+        manager.store_cached_models(47821, serde_json::json!({"models": [{"id": "old"}]}));
+        manager.store_cached_models(47822, serde_json::json!({"models": [{"id": "new"}]}));
+        let cached = manager.cached_models().expect("cached payload");
+        assert_eq!(cached.source_port, 47822);
+        assert_eq!(cached.payload["models"][0]["id"], "new");
     }
 }

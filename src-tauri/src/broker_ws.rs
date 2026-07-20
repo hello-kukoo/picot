@@ -231,6 +231,11 @@ impl BrokerWs {
     /// broker never accepts route registrations from a client payload.
     #[allow(dead_code)]
     pub fn register_ephemeral_route(&self, route: EphemeralRoute) -> Result<(), String> {
+        self.inner
+            .disabled_ports
+            .lock()
+            .unwrap()
+            .remove(&route.port);
         let mut routes = self.inner.ephemeral_routes.lock().unwrap();
         let key = (route.owner_id, route.instance_id, route.generation);
         routes.insert(key.clone(), route.port);
@@ -253,13 +258,23 @@ impl BrokerWs {
         generation: u64,
         port: u16,
     ) {
-        let mut routes = self.inner.ephemeral_routes.lock().unwrap();
-        if let Some(&registered) = routes.get(&(owner.clone(), id.to_string(), generation)) {
-            if registered == port {
-                let key = (owner.clone(), id.to_string(), generation);
-                routes.remove(&key);
-                self.inner.ephemeral_journals.lock().unwrap().remove(&key);
+        let removed = {
+            let mut routes = self.inner.ephemeral_routes.lock().unwrap();
+            let key = (owner.clone(), id.to_string(), generation);
+            match routes.get(&key) {
+                Some(&registered) if registered == port => {
+                    routes.remove(&key);
+                    self.inner.ephemeral_journals.lock().unwrap().remove(&key);
+                    true
+                }
+                _ => false,
             }
+        };
+        // A dedicated ephemeral process owns this port. Disable its upstream
+        // before the host terminates the child so `run_upstream` never retries
+        // a deliberately closed listener.
+        if removed {
+            self.unregister_port(port);
         }
     }
 
@@ -773,7 +788,7 @@ impl BrokerWs {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let payload = value.get("payload").cloned().unwrap_or(Value::Null);
+        let mut payload = value.get("payload").cloned().unwrap_or(Value::Null);
         let fail = || {
             let _ = client_tx.send(
                 json!({
@@ -795,6 +810,12 @@ impl BrokerWs {
         if payload.get("type").and_then(Value::as_str) == Some("extension_ui_response") {
             self.dispatch_ephemeral_extension_response(ctx, value, payload, client_tx);
             return;
+        }
+        // The embedded server correlates response frames through `command.id`;
+        // carry the browser request id across the broker envelope so scoped
+        // runtime requests (notably the model list) can resolve.
+        if let Some(command) = payload.as_object_mut() {
+            command.insert("id".to_string(), Value::String(request_id.clone()));
         }
         self.ensure_upstream(port);
         let upstream_tx = self.inner.upstreams.lock().unwrap().get(&port).cloned();
@@ -1061,12 +1082,23 @@ impl BrokerWs {
                                     Some(Ok(Message::Close(_))) | None => break,
                                     Some(Ok(_)) => {}
                                     Some(Err(err)) => {
-                                        log::warn!("[broker-ws] upstream {} read failed: {}", port, err);
+                                        if !self.inner.disabled_ports.lock().unwrap().contains(&port)
+                                        {
+                                            log::warn!(
+                                                "[broker-ws] upstream {} read failed: {}",
+                                                port,
+                                                err
+                                            );
+                                        }
                                         break;
                                     }
                                 }
                             }
                         }
+                    }
+                    if self.inner.disabled_ports.lock().unwrap().contains(&port) {
+                        self.inner.upstreams.lock().unwrap().remove(&port);
+                        return;
                     }
                     log::warn!(
                         "[broker-ws] upstream port {} disconnected; reconnecting",
@@ -1455,6 +1487,42 @@ mod tests {
     }
 
     #[test]
+    fn ephemeral_command_forwards_request_id_as_upstream_command_id() {
+        let (broker, registry) = broker_with_registry();
+        let ctx = native_ctx(&broker, &registry, "w1");
+        let owner = ctx.owner_id.as_ref().expect("owner");
+        let port = 50001;
+        broker
+            .register_ephemeral_route(EphemeralRoute {
+                owner_id: owner.clone(),
+                instance_id: "inst-A".to_string(),
+                generation: 1,
+                port,
+            })
+            .expect("route");
+        let (upstream_tx, mut upstream_rx) = mpsc::unbounded_channel();
+        broker
+            .inner
+            .upstreams
+            .lock()
+            .unwrap()
+            .insert(port, upstream_tx);
+        let (client_tx, _client_rx) = mpsc::unbounded_channel();
+
+        broker.dispatch_ephemeral_command(
+            &ctx,
+            &ephemeral_command("inst-A", 1, "get_available_models"),
+            &client_tx,
+        );
+
+        let forwarded: Value =
+            serde_json::from_str(&upstream_rx.try_recv().expect("forwarded command"))
+                .expect("JSON command");
+        assert_eq!(forwarded["id"], "req-1");
+        assert_eq!(forwarded["type"], "get_available_models");
+    }
+
+    #[test]
     fn ephemeral_command_denied_for_other_owner() {
         let (broker, registry) = broker_with_registry();
         let owner_a = native_ctx(&broker, &registry, "wA");
@@ -1552,10 +1620,52 @@ mod tests {
             broker.resolve_ephemeral_command(&ctx, &ephemeral_command("inst-A", 1, "prompt")),
             Ok(50006)
         );
+        let stale_cleanup_disabled_port = match broker.inner.disabled_ports.lock() {
+            Ok(ports) => ports.contains(&50006),
+            Err(_) => false,
+        };
+        assert!(!stale_cleanup_disabled_port);
         broker.unregister_ephemeral_route(owner, "inst-A", 1, 50006);
         assert!(broker
             .resolve_ephemeral_command(&ctx, &ephemeral_command("inst-A", 1, "prompt"))
             .is_err());
+        let live_cleanup_disabled_port = match broker.inner.disabled_ports.lock() {
+            Ok(ports) => ports.contains(&50006),
+            Err(_) => false,
+        };
+        assert!(live_cleanup_disabled_port);
+    }
+
+    #[test]
+    fn registering_a_replacement_ephemeral_route_reenables_its_reused_port() {
+        let (broker, registry) = broker_with_registry();
+        let ctx = native_ctx(&broker, &registry, "w1");
+        let owner = ctx.owner_id.as_ref().unwrap();
+        let route = EphemeralRoute {
+            owner_id: owner.clone(),
+            instance_id: "inst-A".to_string(),
+            generation: 1,
+            port: 50006,
+        };
+        broker.register_ephemeral_route(route).unwrap();
+        broker.unregister_ephemeral_route(owner, "inst-A", 1, 50006);
+
+        broker
+            .register_ephemeral_route(EphemeralRoute {
+                owner_id: owner.clone(),
+                instance_id: "inst-B".to_string(),
+                generation: 2,
+                port: 50006,
+            })
+            .unwrap();
+
+        let disabled = broker
+            .inner
+            .disabled_ports
+            .lock()
+            .expect("disabled ports lock")
+            .contains(&50006);
+        assert!(!disabled);
     }
 
     #[test]

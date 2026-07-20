@@ -11,6 +11,7 @@ import { setupSettingsToggles } from "./app-settings-toggles.js";
 import { createAppUpdater } from "./app-updater.js";
 import { setupVoiceInput } from "./app-voice-input.js";
 import { createChatHistoryNavigation } from "./chat-history-navigation.js";
+import { setupComposerCommandMenu } from "./composer-command-menu.js";
 import { setupComposerImageAttachments } from "./composer-image-attachments.js";
 import { DialogHandler } from "./dialogs.js";
 import { EphemeralChatView } from "./ephemeral-chat-view.js";
@@ -486,11 +487,40 @@ const createEphemeralView = (runtime) =>
     toolsEnabled: runtime.kind === "side-chat",
   });
 
+async function getActiveSessionStartupProfile() {
+  try {
+    const response = await fetch("/api/rpc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "get_state" }),
+    });
+    const payload = await response.json();
+    const model = payload.success ? payload.data?.model : null;
+    if (model?.provider && model?.id) {
+      return {
+        provider: model.provider,
+        modelId: model.id,
+        thinkingLevel: payload.data.thinkingLevel || "off",
+      };
+    }
+  } catch {
+    // Fall back to the latest UI state if the active session is briefly reloading.
+  }
+  const model = availableModels.find((entry) => entry.id === currentModelId);
+  if (!model?.provider || !model?.id) return null;
+  return {
+    provider: model.provider,
+    modelId: model.id,
+    thinkingLevel: currentThinkingLevel || "off",
+  };
+}
+
 const sideChatManager = new SideChatManager({
   transport,
   filePreviewPanel,
   confirmDiscard: confirmEphemeralDiscard,
   createView: createEphemeralView,
+  getStartupProfile: getActiveSessionStartupProfile,
 });
 const quickChatDialog = new QuickChatDialog({
   transport,
@@ -1640,41 +1670,15 @@ const commands = [
     action: () => toolCardRenderer.collapseAll(),
   },
 ];
-
-function openCommandPalette() {
-  commandList.replaceChildren();
-  commands.forEach((cmd) => {
-    const item = document.createElement("div");
-    item.className = "command-item";
-    const icon = document.createElement("div");
-    icon.className = "command-icon";
-    icon.textContent = cmd.icon;
-    const details = document.createElement("div");
-    const label = document.createElement("div");
-    label.className = "command-label";
-    label.textContent = cmd.label;
-    const description = document.createElement("div");
-    description.className = "command-desc";
-    description.textContent = cmd.desc;
-    details.append(label, description);
-    item.append(icon, details);
-    item.addEventListener("click", () => {
-      closeCommandPalette();
-      cmd.action();
-    });
-    commandList.appendChild(item);
-  });
-  commandPalette.classList.remove("hidden");
-  commandPaletteOverlay.classList.remove("hidden");
-}
-
-function closeCommandPalette() {
-  commandPalette.classList.add("hidden");
-  commandPaletteOverlay.classList.add("hidden");
-}
-
-commandBtn.addEventListener("click", openCommandPalette);
-commandPaletteOverlay.addEventListener("click", closeCommandPalette);
+const mainCommandMenu = setupComposerCommandMenu({
+  button: commandBtn,
+  menu: commandPalette,
+  list: commandList,
+  getCommands: () => commands,
+  document,
+  overlay: commandPaletteOverlay,
+});
+commandPaletteOverlay.addEventListener("click", mainCommandMenu.close);
 
 async function rpcCommand(cmd, statusMsg) {
   try {
@@ -1789,6 +1793,22 @@ function updateOnboardingUI() {
 
 async function fetchModelInfo() {
   try {
+    // Populate models from the host-wide cache first so the dropdown renders
+    // instantly on cold start. The active Pi's get_state call below still
+    // runs in parallel; whichever returns models first wins. The cache is
+    // warmed by the host after the first session registers and is shared
+    // across all windows, Side Chats, and Quick Chats.
+    try {
+      const cached = await transport.getCachedModels();
+      if (Array.isArray(cached?.models) && cached.models.length > 0) {
+        availableModels = cached.models;
+        hasLoadedAvailableModels = true;
+        didAutoOpenEmptyModelsDropdown = false;
+      }
+    } catch (_cacheErr) {
+      // Cache miss or host not ready — fall through to the live query below.
+    }
+
     const [modelsResp, stateResp] = await Promise.all([
       fetch("/api/rpc", {
         method: "POST",

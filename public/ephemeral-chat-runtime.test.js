@@ -162,6 +162,21 @@ describe("EphemeralChatRuntime snapshot + sequenced replay", () => {
     expect(runtime.lastAppliedSequence).toBe(5);
   });
 
+  it("normalizes Pi user content blocks in an authoritative snapshot", () => {
+    const { runtime } = makeRuntime();
+    runtime.applySnapshot(
+      snapshot({
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "Restored prompt" }],
+          },
+        ],
+      }),
+    );
+    expect(runtime.messages).toEqual([{ role: "user", content: "Restored prompt" }]);
+  });
+
   it("ignores duplicate or out-of-order sequences", () => {
     const { runtime } = makeRuntime();
     runtime.applySnapshot(snapshot({ runtimeSequenceWatermark: 10 }));
@@ -213,6 +228,30 @@ describe("EphemeralChatRuntime reduce", () => {
     );
     expect(runtime.assistantDraft).toBeNull();
     expect(runtime.messages.filter((m) => m.role === "assistant")).toHaveLength(1);
+  });
+
+  it("normalizes Pi user content blocks for the shared message renderer", () => {
+    const { runtime } = makeRuntime();
+    runtime.applySnapshot(snapshot());
+    runtime.applySequencedEvent(
+      eventFrame(1, {
+        type: "message_start",
+        message: {
+          role: "user",
+          content: [
+            { type: "text", text: "Describe this" },
+            { type: "image", data: "base64-image", mimeType: "image/png" },
+          ],
+        },
+      }),
+    );
+    expect(runtime.messages).toEqual([
+      {
+        role: "user",
+        content: "Describe this",
+        images: [{ data: "base64-image", mimeType: "image/png" }],
+      },
+    ]);
   });
 
   it("transitions a tool through pending -> streaming -> complete", () => {

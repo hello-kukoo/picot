@@ -547,6 +547,7 @@
     "send": "Send",
     "abort": "Abort",
     "newChat": "New chat",
+    "startingSideChat": "Starting Side Chat…",
     "tokens": "tokens",
     "sideChat": "Side Chat",
     "sideChatLimit": "Side Chat limit reached",

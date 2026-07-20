@@ -547,6 +547,7 @@
     "send": "发送",
     "abort": "中止",
     "newChat": "新对话",
+    "startingSideChat": "正在启动侧边聊天…",
     "tokens": "令牌",
     "sideChat": "侧边聊天",
     "sideChatLimit": "已达到侧边聊天上限",

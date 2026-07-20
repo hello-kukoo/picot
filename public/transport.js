@@ -137,6 +137,10 @@ export class WsTransport {
     return this._control("list_installed_apps", {});
   }
 
+  getCachedModels() {
+    return this._control("get_cached_models", {});
+  }
+
   openInApp(path, { appName = null, command = null } = {}) {
     return this._control("open_in_app", { path, appName, command });
   }
@@ -175,8 +179,8 @@ export class WsTransport {
 
   // ── Ephemeral chats (Side Chat / Quick Chat) ───────────────────────────────
 
-  createEphemeral(kind) {
-    return this._control("ephemeral_create", { kind }, { timeoutMs: SPAWN_TIMEOUT_MS });
+  createEphemeral(kind, options = {}) {
+    return this._control("ephemeral_create", { kind, ...options }, { timeoutMs: SPAWN_TIMEOUT_MS });
   }
   replaceQuickChat() {
     return this._control("ephemeral_replace_quick", {}, { timeoutMs: SPAWN_TIMEOUT_MS });

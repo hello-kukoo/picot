@@ -50,6 +50,21 @@ fn new_session_core(port: u16, manager: &PiManager, broker: &BrokerWs) -> Result
     result
 }
 
+/// Ask the Pi instance at `port` for its available models. The response lands
+/// on stdout and is captured by the RPC output subscriber loop, which stores
+/// it in the shared model cache. Called once per session registration so the
+/// cache is populated by the time any Side Chat / Quick Chat / new session
+/// needs to render a model dropdown.
+fn warm_model_cache(manager: &PiManager, port: u16) {
+    if manager.cached_models().is_some() {
+        return; // already populated by an earlier session
+    }
+    let cmd = serde_json::json!({ "type": "get_available_models" });
+    if let Err(e) = manager.send_rpc(port, cmd) {
+        log::warn!("[pi-desktop] model cache warm-up rpc failed: {}", e);
+    }
+}
+
 /// Resume (switch to) an existing session file within the current workspace
 fn switch_session_core(
     port: u16,
@@ -63,6 +78,7 @@ fn switch_session_core(
     );
     if result.is_ok() {
         broker.register_session(port, session_path);
+        warm_model_cache(manager, port);
     }
     result
 }
@@ -131,6 +147,7 @@ async fn open_workspace_core(
     // on any spawn failure path that returns without unregistering.
     if open_window {
         broker.register_session(port, session_path.unwrap_or(""));
+        warm_model_cache(manager, port);
     } else {
         broker.track_background_session(port, session_path.unwrap_or(""));
     }
@@ -735,7 +752,8 @@ fn list_session_files(root: &PathBuf) -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{image_mime_from_path, resolve_static_dir};
+    use super::{image_mime_from_path, resolve_static_dir, side_chat_startup_rpc_commands};
+    use serde_json::json;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -801,6 +819,46 @@ mod tests {
         assert_eq!(image_mime_from_path(std::path::Path::new("img.bmp")), None);
         assert_eq!(image_mime_from_path(std::path::Path::new("noext")), None);
         assert_eq!(image_mime_from_path(std::path::Path::new("/")), None);
+    }
+
+    #[test]
+    fn side_chat_startup_rpc_emits_set_model_and_thinking_for_active_profile() {
+        let profile = json!({
+            "provider": "openai-codex",
+            "modelId": "gpt-5.6-terra",
+            "thinkingLevel": "medium",
+        });
+        let cmds = side_chat_startup_rpc_commands(&profile);
+        assert_eq!(cmds.len(), 2);
+        assert_eq!(
+            cmds[0],
+            json!({"type":"set_model","provider":"openai-codex","modelId":"gpt-5.6-terra"})
+        );
+        assert_eq!(
+            cmds[1],
+            json!({"type":"set_thinking_level","level":"medium"})
+        );
+    }
+
+    #[test]
+    fn side_chat_startup_rpc_omits_thinking_when_off() {
+        let profile = json!({
+            "provider": "anthropic",
+            "modelId": "claude-sonnet-4",
+            "thinkingLevel": "off",
+        });
+        let cmds = side_chat_startup_rpc_commands(&profile);
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(
+            cmds[0],
+            json!({"type":"set_model","provider":"anthropic","modelId":"claude-sonnet-4"})
+        );
+    }
+
+    #[test]
+    fn side_chat_startup_rpc_drops_profile_without_model_identity() {
+        assert!(side_chat_startup_rpc_commands(&json!({"thinkingLevel":"medium"})).is_empty());
+        assert!(side_chat_startup_rpc_commands(&json!({"provider":"","modelId":""})).is_empty());
     }
 }
 
@@ -871,12 +929,7 @@ async fn cmd_retry_startup(
     let initial_port = manager.next_port();
     manager.spawn(&cwd, initial_port, session_path.as_deref())?;
     broker.register_session(initial_port, session_path.as_deref().unwrap_or(""));
-    if let Err(e) = wait_for_pi_health(initial_port, 30).await {
-        // Tear down the upstream reconnect loop started by register_session so it
-        // doesn't spin forever against a dead port every 750ms.
-        broker.unregister_port(initial_port);
-        return Err(e);
-    }
+    warm_model_cache(&manager, initial_port);
     Ok(initial_port)
 }
 
@@ -1097,12 +1150,17 @@ fn install_control_handler(
                         let sources = manager.list_configured_package_sources()?;
                         Ok(serde_json::to_value(sources).unwrap_or(Value::Null))
                     }
+                    "get_cached_models" => Ok(manager
+                        .cached_models()
+                        .map(|c| c.payload)
+                        .unwrap_or(Value::Null)),
                     "install_pi_package" => {
                         let source = arg_str("source").unwrap_or_default();
                         if source.trim().is_empty() {
                             return Err("Package source cannot be empty".to_string());
                         }
                         manager.install_package_source(source.trim())?;
+                        manager.invalidate_cached_models();
                         Ok(Value::Null)
                     }
                     "remove_pi_package" => {
@@ -1111,6 +1169,7 @@ fn install_control_handler(
                             return Err("Package source cannot be empty".to_string());
                         }
                         manager.remove_package_source(source.trim())?;
+                        manager.invalidate_cached_models();
                         Ok(Value::Null)
                     }
                     "check_for_update" => check_for_update_core(&app).await,
@@ -1177,6 +1236,30 @@ fn install_control_handler(
                                 (cwd, Some(created))
                             }
                         };
+                        let startup_profile = if kind == EphemeralKind::SideChat {
+                            let profile = arg("startupProfile");
+                            let provider = profile.get("provider").and_then(Value::as_str);
+                            let model_id = profile.get("modelId").and_then(Value::as_str);
+                            match (provider, model_id) {
+                                (Some(provider), Some(model_id))
+                                    if !provider.trim().is_empty()
+                                        && !model_id.trim().is_empty() =>
+                                {
+                                    let thinking = profile
+                                        .get("thinkingLevel")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("off");
+                                    Some(serde_json::json!({
+                                        "provider": provider.trim(),
+                                        "modelId": model_id.trim(),
+                                        "thinkingLevel": thinking,
+                                    }))
+                                }
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        };
                         let port = manager.next_port();
                         let env = build_ephemeral_environment(
                             &kind_str,
@@ -1200,6 +1283,7 @@ fn install_control_handler(
                             port,
                             temp_dir,
                             transition_generation,
+                            startup_profile,
                         )
                         .await?;
                         Ok(serde_json::to_value(descriptor).map_err(|e| e.to_string())?)
@@ -1245,6 +1329,7 @@ fn install_control_handler(
                             port,
                             Some(created),
                             transition_generation,
+                            None,
                         )
                         .await?;
                         close_ephemeral_instance(
@@ -1509,6 +1594,7 @@ async fn ephemeral_spawn_commit(
     port: u16,
     temp_dir: Option<(PathBuf, String)>,
     transition_generation: u64,
+    startup_profile: Option<Value>,
 ) -> Result<ephemeral_registry::EphemeralDescriptor, String> {
     let owner = reservation.owner_id.clone();
     let spawned = match manager.spawn_with_spec(&spec) {
@@ -1563,7 +1649,72 @@ async fn ephemeral_spawn_commit(
         generation: reservation.generation,
         port,
     });
+    // Defer set_model until after the frontend's initial runtime snapshot
+    // has been processed. The snapshot — fired when the descriptor arrives
+    // — reads Pi's advisor-restored model. Sending set_model before the
+    // snapshot returns means the Side Chat initially shows Pi's default
+    // model, not the inherited one. The 400ms delay lets the snapshot
+    // settle first; the set_model then sticks and a later state refresh
+    // picks up the new model.
+    apply_side_chat_startup_profile(manager, port, startup_profile);
     Ok(descriptor)
+}
+
+/// Build the RPC commands that mirror the active workspace session's model
+/// and thinking level into a freshly spawned Side Chat. Returns None when the
+/// profile is missing or incomplete so the caller can skip the round-trip.
+fn side_chat_startup_rpc_commands(profile: &Value) -> Vec<Value> {
+    let mut commands = Vec::new();
+    let provider = profile.get("provider").and_then(Value::as_str);
+    let model_id = profile.get("modelId").and_then(Value::as_str);
+    let thinking = profile.get("thinkingLevel").and_then(Value::as_str);
+    if let (Some(provider), Some(model_id)) = (provider, model_id) {
+        if !provider.is_empty() && !model_id.is_empty() {
+            commands.push(serde_json::json!({
+                "type": "set_model",
+                "provider": provider,
+                "modelId": model_id,
+            }));
+            if let Some(level) = thinking {
+                if !level.is_empty() && level != "off" {
+                    commands.push(serde_json::json!({
+                        "type": "set_thinking_level",
+                        "level": level,
+                    }));
+                }
+            }
+        }
+    }
+    commands
+}
+
+fn apply_side_chat_startup_profile(manager: &PiManager, port: u16, startup_profile: Option<Value>) {
+    let Some(profile) = startup_profile else {
+        return;
+    };
+    let commands = side_chat_startup_rpc_commands(&profile);
+    if commands.is_empty() {
+        log::info!(
+            "[pi-desktop] side-chat startup profile incomplete; skipping model RPC (port={})",
+            port
+        );
+        return;
+    }
+    let model = commands
+        .iter()
+        .find(|c| c.get("type").and_then(Value::as_str) == Some("set_model"))
+        .and_then(|c| c.get("modelId").and_then(Value::as_str))
+        .unwrap_or("");
+    log::info!(
+        "[pi-desktop] applying side-chat startup profile: port={} model={}",
+        port,
+        model
+    );
+    for cmd in commands {
+        if let Err(e) = manager.send_rpc(port, cmd) {
+            log::warn!("[pi-desktop] side-chat startup rpc failed: {}", e);
+        }
+    }
 }
 
 /// Remove an uncommitted/failed candidate: generation-checked registry cleanup
@@ -1606,17 +1757,20 @@ fn cleanup_ephemeral_lease(
     registry: &EphemeralRegistry,
     lease: CleanupLease,
 ) {
-    if lease.port != 0
-        && manager.matches_process_identity(lease.port, lease.pid, lease.child_identity)
-    {
-        manager.kill(lease.port);
-    }
+    // Stop the broker's reconnect loop before killing the child. Otherwise its
+    // next connect attempt races the intentional port shutdown and logs a
+    // spurious connection-refused warning.
     broker.unregister_ephemeral_route(
         &lease.owner_id,
         &lease.instance_id,
         lease.generation,
         lease.port,
     );
+    if lease.port != 0
+        && manager.matches_process_identity(lease.port, lease.pid, lease.child_identity)
+    {
+        manager.kill(lease.port);
+    }
     if let Some((path, token)) = &lease.temporary_directory {
         let _ = cleanup_quick_chat_dir(&canonical_temp_root(), path, token);
     }
@@ -1750,14 +1904,6 @@ fn handle_window_destroyed(window: &tauri::Window) {
     };
     if let Some(ephemeral) = window.try_state::<EphemeralRegistryState>() {
         for lease in ephemeral.owner_cleanup(&owner) {
-            if lease.port != 0 {
-                if let Some(manager) = window.try_state::<PiManagerState>() {
-                    if manager.matches_process_identity(lease.port, lease.pid, lease.child_identity)
-                    {
-                        manager.kill(lease.port);
-                    }
-                }
-            }
             if let Some(broker) = window.try_state::<BrokerWsState>() {
                 broker.unregister_ephemeral_route(
                     &owner,
@@ -1765,6 +1911,14 @@ fn handle_window_destroyed(window: &tauri::Window) {
                     lease.generation,
                     lease.port,
                 );
+            }
+            if lease.port != 0 {
+                if let Some(manager) = window.try_state::<PiManagerState>() {
+                    if manager.matches_process_identity(lease.port, lease.pid, lease.child_identity)
+                    {
+                        manager.kill(lease.port);
+                    }
+                }
             }
             if let Some((path, token)) = &lease.temporary_directory {
                 let _ = cleanup_quick_chat_dir(&canonical_temp_root(), path, token);
@@ -1825,13 +1979,60 @@ fn main() {
                 app.handle().clone(),
             );
 
+            let manager_for_rpc_output = manager.clone();
             let mut rpc_output_rx = manager.subscribe_rpc_outputs();
             let broker_for_rpc_output = broker.clone();
             tauri::async_runtime::spawn(async move {
                 loop {
                     match rpc_output_rx.recv().await {
                         Ok(output) => {
-                            broker_for_rpc_output.publish_rpc_output(output.port, output.payload)
+                            // Forward extension UI requests to the broker.
+                            broker_for_rpc_output
+                                .publish_rpc_output(output.port, output.payload.clone());
+                            // Diagnostic: log set_model / set_thinking_level
+                            // responses so we can see whether Side Chat's
+                            // startup profile RPCs reach Pi and succeed.
+                            let cmd = output
+                                .payload
+                                .get("command")
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            if cmd == "set_model" || cmd == "set_thinking_level" {
+                                let success = output
+                                    .payload
+                                    .get("success")
+                                    .and_then(Value::as_bool)
+                                    .unwrap_or(false);
+                                let model_id = output
+                                    .payload
+                                    .pointer("/data/model/id")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("");
+                                log::info!(
+                                    "[pi-desktop] rpc response port={} cmd={} success={} model={}",
+                                    output.port,
+                                    cmd,
+                                    success,
+                                    model_id
+                                );
+                            }
+                            // Capture get_available_models responses to populate
+                            // the shared model cache. The cache lets Side Chat,
+                            // Quick Chat, and new sessions render dropdowns
+                            // instantly without each re-querying Pi.
+                            if let Some(models) = output.payload.get("data").and_then(|d| d.get("models")) {
+                                if output
+                                    .payload
+                                    .get("command")
+                                    .and_then(Value::as_str)
+                                    == Some("get_available_models")
+                                {
+                                    manager_for_rpc_output.store_cached_models(
+                                        output.port,
+                                        serde_json::json!({ "models": models.clone() }),
+                                    );
+                                }
+                            }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -1943,19 +2144,24 @@ fn main() {
             app.manage(ephemeral_registry.clone());
 
             if startup_ok {
-                broker.register_session(initial_port, session_path.as_deref().unwrap_or(""));
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = wait_for_pi_health(initial_port, 30).await {
                         log::error!("Pi failed to start: {}", e);
-                        // Tear down the upstream reconnect loop started by
-                        // register_session so it doesn't spin forever against a
-                        // dead port every 750ms.
-                        if let Some(broker) = app_handle.try_state::<BrokerWsState>() {
-                            broker.unregister_port(initial_port);
-                        }
                     } else if let Some(broker) = app_handle.try_state::<BrokerWsState>() {
-                        if let Err(e) = open_workspace_window(&app_handle, initial_port, &cwd, &broker.url()) {
+                        // Register only after the embedded server owns the port;
+                        // otherwise BrokerWs logs expected connection-refused
+                        // retries during every normal startup.
+                        broker.register_session(
+                            initial_port,
+                            session_path.as_deref().unwrap_or(""),
+                        );
+                        if let Some(manager) = app_handle.try_state::<PiManagerState>() {
+                            warm_model_cache(&manager, initial_port);
+                        }
+                        if let Err(e) =
+                            open_workspace_window(&app_handle, initial_port, &cwd, &broker.url())
+                        {
                             log::error!("Failed to open window: {}", e);
                         }
                     } else {
