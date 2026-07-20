@@ -22,6 +22,8 @@ export interface EphemeralSnapshot {
   isStreaming: boolean;
   contextUsage: unknown;
   error: string | null;
+  cost: number;
+  totalTokens: number;
 }
 
 type Event = Record<string, unknown>;
@@ -64,12 +66,9 @@ export class EphemeralRuntimeState {
   private assistantThinking = "";
   private assistantActive = false;
   private tools = new Map<string, EphemeralToolState>();
-  private model: unknown = null;
-  private thinkingLevel = "off";
-  private isStreaming = false;
-  private contextUsage: unknown = null;
   private error: string | null = null;
-
+  private cost = 0;
+  private totalTokens = 0;
   constructor(opts: { instanceId: string; generation: number }) {
     this.instanceId = opts.instanceId;
     this.generation = opts.generation;
@@ -116,6 +115,8 @@ export class EphemeralRuntimeState {
       isStreaming: this.isStreaming,
       contextUsage: clone(this.contextUsage),
       error: this.error,
+      cost: this.cost,
+      totalTokens: this.totalTokens,
     };
   }
 
@@ -145,7 +146,16 @@ export class EphemeralRuntimeState {
       }
       case "message_end": {
         const message = event.message as
-          | { role?: string; stopReason?: string; errorMessage?: string; usage?: unknown }
+          | {
+              role?: string;
+              stopReason?: string;
+              errorMessage?: string;
+              usage?: {
+                cost?: { total?: number };
+                input?: number;
+                output?: number;
+              };
+            }
           | undefined;
         if (message?.role === "assistant") {
           this.messages.push(clone(event.message));
@@ -154,6 +164,13 @@ export class EphemeralRuntimeState {
           this.assistantThinking = "";
           if (message.stopReason === "error") {
             this.error = asString(message.errorMessage) || "Assistant request failed";
+          }
+          const usage = message.usage;
+          if (usage) {
+            const costTotal = Number(usage.cost?.total || 0);
+            if (Number.isFinite(costTotal)) this.cost += costTotal;
+            const tokens = Number(usage.input || 0) + Number(usage.output || 0);
+            if (Number.isFinite(tokens)) this.totalTokens += tokens;
           }
         }
         break;

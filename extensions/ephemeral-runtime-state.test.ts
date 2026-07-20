@@ -173,6 +173,24 @@ describe("EphemeralRuntimeState snapshot", () => {
     state.applyEvent({ type: "agent_end" });
     expect(state.snapshot().isStreaming).toBe(false);
   });
+
+  it("accumulates cost and tokens from assistant message_end usage", () => {
+    const state = makeState();
+    state.applyEvent(assistantStart());
+    state.applyEvent(assistantEnd({ cost: { total: 0.01 }, input: 100, output: 50 }));
+    state.applyEvent(assistantStart());
+    state.applyEvent(assistantEnd({ cost: { total: 0.02 }, input: 200, output: 80 }));
+    const snap = state.snapshot();
+    expect(snap.cost).toBeCloseTo(0.03);
+    expect(snap.totalTokens).toBe(430);
+  });
+
+  it("snapshot includes cost and totalTokens fields", () => {
+    const state = makeState();
+    const snap = state.snapshot();
+    expect(snap).toHaveProperty("cost", 0);
+    expect(snap).toHaveProperty("totalTokens", 0);
+  });
 });
 
 describe("parseEphemeralEnv", () => {
