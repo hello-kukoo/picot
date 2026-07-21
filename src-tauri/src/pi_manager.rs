@@ -756,6 +756,31 @@ impl PiManager {
             .env("PI_STUDIO_STATIC_DIR", &static_dir)
             .env("PI_STUDIO_PORT", spec.port.to_string())
             .env("PI_STUDIO_PI_VERSION", locked_pi_version());
+        // On Windows, HOME is not set by default. Many cross-platform tools
+        // (including pi's Bun runtime and its session-path resolution) check
+        // HOME before USERPROFILE, so without it pi may resolve ~/.pi/agent
+        // to the wrong directory, making the session list appear empty.
+        // Set HOME=USERPROFILE (or HOMEDRIVE+HOMEPATH) so pi's home lookup
+        // matches macOS/Linux behavior. This is a no-op on Unix where HOME
+        // is already inherited.
+        if std::env::var("HOME").is_err() {
+            if let Ok(userprofile) = std::env::var("USERPROFILE") {
+                child.env("HOME", &userprofile);
+                log::info!(
+                    "[pi-desktop] set HOME={} from USERPROFILE for pi subprocess",
+                    userprofile
+                );
+            } else if let (Ok(drive), Ok(path_part)) =
+                (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH"))
+            {
+                let combined = format!("{drive}{path_part}");
+                child.env("HOME", &combined);
+                log::info!(
+                    "[pi-desktop] set HOME={} from HOMEDRIVE+HOMEPATH for pi subprocess",
+                    combined
+                );
+            }
+        }
         // Ephemeral markers (kind, instance id, generation) are the only extra
         // environment the host may inject; they never include a capability or
         // owner token.
