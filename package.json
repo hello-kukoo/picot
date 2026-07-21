@@ -69,6 +69,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.2",
+    "@earendil-works/pi-coding-agent": "0.80.10",
     "@tauri-apps/cli": "^2.11.2",
     "esbuild": "^0.28.0",
     "husky": "^9.1.7",
