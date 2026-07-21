@@ -273,6 +273,14 @@ function findPublicDir(): string {
   return path.resolve(process.cwd(), "public");
 }
 const SESSIONS_DIR = path.join(PI_AGENT_ROOT, "sessions");
+// Log the resolved paths so Windows users can diagnose "empty session list"
+// issues: if PI_AGENT_ROOT resolves to the wrong directory, sessions won't
+// appear even though they exist on disk under the real ~/.pi/agent.
+console.log(`[Embedded] PI_AGENT_ROOT=${PI_AGENT_ROOT}`);
+console.log(`[Embedded] SESSIONS_DIR=${SESSIONS_DIR}`);
+console.log(
+  `[Embedded] HOME=${process.env.HOME ?? "(unset)"} USERPROFILE=${process.env.USERPROFILE ?? "(unset)"}`,
+);
 // TODO(rename->picot): directory `pistudio-instances` kept for backward compat — migrate to `picot-instances` once existing users are handled.
 const INSTANCES_DIR = path.join(path.dirname(PI_AGENT_ROOT), "pistudio-instances");
 
