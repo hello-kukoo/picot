@@ -12,7 +12,11 @@ import {
   recordRecentSession,
   writeRecentSessions,
 } from "../recent-sessions.js";
-import { buildSidebarSection, buildSidebarWorkspaceGroup } from "../sidebar-workspace-group.js";
+import {
+  buildSidebarSection,
+  buildSidebarWorkspaceGroup,
+  createSectionChevron,
+} from "../sidebar-workspace-group.js";
 import { getSuperAgentProject, isSuperAgentProjectPath } from "../super-agent/session.js";
 import { isSuperAgentEnabled } from "../super-agent/settings.js";
 import { basenameLocalPath } from "../workspace/path-utils.js";
@@ -91,17 +95,39 @@ export class SessionSidebar {
     this.superAgentPath = options.superAgentPath || "";
     this.activeSessionFile = null;
     this.projects = [];
-    this.collapsedProjects = new Set();
+    // Instance-level fold state. Workspaces default to collapsed (empty set =
+    // none expanded); only IDs added here render expanded. Kept in memory only,
+    // so a fresh app start always begins with every workspace collapsed while
+    // subsequent reloads (refresh button, + new session, pin/unpin) preserve
+    // the user's current expand/collapse choices.
+    this.expandedWorkspaces = new Set();
+    this.pinnedCollapsed = false;
+    this.projectsCollapsed = false;
     this.searchQuery = "";
     this.recent = readRecentSessions();
     this.recentCollapsed = false;
     this.archived = readJsonArray("pi-studio-archived");
-    this.archivedCollapsed = localStorage.getItem("pi-studio-archived-collapsed") !== "false";
+    // ARCHIVED starts collapsed on every app launch (in-memory, like PINNED /
+    // PROJECTS) so a previous session's expand choice does not carry over.
+    this.archivedCollapsed = true;
     this.unread = new Set(readJsonArray("pi-studio-unread"));
     this.pinStore = options.pinStore || createPinnedItemsStore();
     this.quickInfo = options.quickInfo || new WorkspaceQuickInfo({ pinStore: this.pinStore });
+    this.lastPinnedWorkspaceIds = this.snapshotPinnedWorkspaceIds();
     this.unsubscribePinStore =
-      this.pinStore.subscribe?.(() => this.render({ preserveQuickInfo: true })) || null;
+      this.pinStore.subscribe?.((next) => {
+        // Auto-expand any workspace that was just pinned (regardless of entry
+        // point: context menu, quick-info card, or any future caller) without
+        // touching the expansion state of existing pinned workspaces.
+        const nextIds = new Set(
+          (next?.workspaces || []).map((workspace) => workspace?.id).filter(Boolean),
+        );
+        for (const id of nextIds) {
+          if (!this.lastPinnedWorkspaceIds.has(id)) this.expandedWorkspaces.add(id);
+        }
+        this.lastPinnedWorkspaceIds = nextIds;
+        this.render({ preserveQuickInfo: true });
+      }) || null;
     this.pinStore.migrateLegacyFavourites?.({ excludedSessions: this.archived });
     this.streamingFiles = new Set();
     this.projectVisibleSessionCounts = new Map();
@@ -134,10 +160,6 @@ export class SessionSidebar {
 
   saveArchived() {
     localStorage.setItem("pi-studio-archived", JSON.stringify(this.archived));
-  }
-
-  saveArchivedCollapsed() {
-    localStorage.setItem("pi-studio-archived-collapsed", String(this.archivedCollapsed));
   }
 
   saveUnread() {
@@ -337,6 +359,12 @@ export class SessionSidebar {
         if (seq < this.loadCommitted) return this.projects;
         for (const reconciliation of merged.reconciliations) {
           this.pinStore.reconcileWorkspace?.(reconciliation);
+          // A live workspace's provisional `path:` id resolves to its stable
+          // `history:` id on this load; carry over any expansion the user
+          // already set so it does not snap back to collapsed after render.
+          if (this.expandedWorkspaces.delete(reconciliation.fromId)) {
+            this.expandedWorkspaces.add(reconciliation.toId);
+          }
         }
         this.loadCommitted = seq;
         this.projects = projects;
@@ -863,6 +891,34 @@ export class SessionSidebar {
     return project?.path || project?.dirName || "";
   }
 
+  // Snapshot of pinned workspace IDs, used to detect newly-pinned workspaces
+  // across pin-store notifications. Falls back to getRenderableState for stubs
+  // (and the legacy test pin store) that do not expose getState.
+  snapshotPinnedWorkspaceIds() {
+    const state = (typeof this.pinStore.getState === "function" && this.pinStore.getState()) ||
+      this.pinStore.getRenderableState?.() || { workspaces: [], sessions: [] };
+    return new Set((state.workspaces || []).map((workspace) => workspace?.id).filter(Boolean));
+  }
+
+  // Stable expansion key for a workspace record. Prefers the canonical
+  // workspaceId; falls back to the path/dirName visibility key so test
+  // fixtures and live-only workspaces without an id still track distinctly.
+  getWorkspaceExpansionKey(workspace) {
+    return workspace?.workspaceId || this.getProjectVisibilityKey(workspace) || "";
+  }
+
+  isWorkspaceExpanded(workspace) {
+    const key = this.getWorkspaceExpansionKey(workspace);
+    return Boolean(key) && this.expandedWorkspaces.has(key);
+  }
+
+  setWorkspaceExpanded(workspace, expanded) {
+    const key = this.getWorkspaceExpansionKey(workspace);
+    if (!key) return;
+    if (expanded) this.expandedWorkspaces.add(key);
+    else this.expandedWorkspaces.delete(key);
+  }
+
   getProjectVisibleSessionCount(project, sessionCount) {
     const key = this.getProjectVisibilityKey(project);
     const stored = this.projectVisibleSessionCounts.get(key);
@@ -931,6 +987,10 @@ export class SessionSidebar {
       region: "pinned",
       titleKey: "sidebar.pinned",
       count: pinnedGroups.length,
+      expanded: !this.pinnedCollapsed,
+      onToggle: (expanded) => {
+        this.pinnedCollapsed = !expanded;
+      },
       renderSessions: (body) => {
         for (const pinned of pinnedGroups) {
           const workspace = pinned.workspace;
@@ -942,12 +1002,14 @@ export class SessionSidebar {
             unavailableFilePath ||
             t("sidebar.unavailable");
           const workspaceId = workspace?.workspaceId || `pinned-session:${unavailableFilePath}`;
+          const expansionWorkspace = { workspaceId };
           const { group, header } = buildSidebarWorkspaceGroup({
             workspaceId,
             folderName,
             workspacePath,
             sessionCount: pinned.sessions.length,
-            expanded: true,
+            expanded: this.isWorkspaceExpanded(expansionWorkspace),
+            onToggle: (expanded) => this.setWorkspaceExpanded(expansionWorkspace, expanded),
             onNewChat:
               !pinned.unavailable && workspacePath ? () => this.onNewChat(workspacePath) : null,
             onContextMenu:
@@ -1027,16 +1089,17 @@ export class SessionSidebar {
       recentGroup.className = "recent-group";
 
       const header = document.createElement("div");
-      header.className = `project-header recent-header${this.recentCollapsed ? " collapsed" : ""}`;
+      header.className = `project-header recent-header sidebar-section-header${
+        this.recentCollapsed ? " collapsed" : ""
+      }`;
       header.setAttribute("role", "button");
       header.tabIndex = 0;
       header.setAttribute("aria-expanded", String(!this.recentCollapsed));
-      const chevron = document.createElement("span");
-      chevron.className = "chevron";
-      chevron.textContent = "▼";
+      header.appendChild(createSectionChevron());
       const label = document.createElement("span");
+      label.className = "sidebar-section-title";
       label.textContent = t("sidebar.recent");
-      header.append(chevron, label);
+      header.appendChild(label);
       recentGroup.appendChild(header);
 
       const sessionsDiv = document.createElement("div");
@@ -1067,6 +1130,10 @@ export class SessionSidebar {
       region: "projects",
       titleKey: "sidebar.projects",
       count: this.projects.length,
+      expanded: !this.projectsCollapsed,
+      onToggle: (expanded) => {
+        this.projectsCollapsed = !expanded;
+      },
     });
     projectsSection.className = `projects-group ${projectsSection.className}`;
     for (const project of this.projects) {
@@ -1078,7 +1145,6 @@ export class SessionSidebar {
       const sessionsToRender = this.searchQuery
         ? visibleSessions
         : visibleSessions.slice(0, visibleCount);
-      const projectKey = this.getProjectVisibilityKey(project);
       const { group, header } = buildSidebarWorkspaceGroup({
         workspaceId: project.workspaceId,
         folderName:
@@ -1088,11 +1154,8 @@ export class SessionSidebar {
           t("sidebar.unavailable"),
         workspacePath: project.path,
         sessionCount: visibleSessions.length,
-        expanded: !this.collapsedProjects.has(projectKey),
-        onToggle: (expanded) => {
-          if (expanded) this.collapsedProjects.delete(projectKey);
-          else this.collapsedProjects.add(projectKey);
-        },
+        expanded: this.isWorkspaceExpanded(project),
+        onToggle: (expanded) => this.setWorkspaceExpanded(project, expanded),
         onNewChat: this.onNewChat ? () => this.onNewChat(project) : null,
         onContextMenu: (event) => this.showWorkspaceContextMenu(event, project),
         onMoreActions: (event) => this.showWorkspaceContextMenu(event, project),
@@ -1130,14 +1193,18 @@ export class SessionSidebar {
       archivedGroup.className = "archived-group";
 
       const header = document.createElement("div");
-      header.className = `project-header archived-header${this.archivedCollapsed ? " collapsed" : ""}`;
-      const archivedChevron = document.createElement("span");
-      archivedChevron.className = "chevron";
-      archivedChevron.textContent = "▼";
+      header.className = `project-header archived-header sidebar-section-header${
+        this.archivedCollapsed ? " collapsed" : ""
+      }`;
+      header.setAttribute("role", "button");
+      header.tabIndex = 0;
+      header.setAttribute("aria-expanded", String(!this.archivedCollapsed));
+      header.appendChild(createSectionChevron());
       const archivedLabel = document.createElement("span");
+      archivedLabel.className = "sidebar-section-title";
       archivedLabel.textContent = t("sidebar.archived");
       const archivedCount = document.createElement("span");
-      archivedCount.className = "project-count";
+      archivedCount.className = "project-count sidebar-section-count";
       archivedCount.textContent = String(archivedSessions.length);
       const deleteAllBtn = document.createElement("button");
       deleteAllBtn.type = "button";
@@ -1145,7 +1212,7 @@ export class SessionSidebar {
       deleteAllBtn.title = t("sidebar.deleteAllArchived");
       deleteAllBtn.setAttribute("aria-label", t("sidebar.deleteAllArchived"));
       deleteAllBtn.appendChild(createSvgIcon("trash"));
-      header.append(archivedChevron, archivedLabel, archivedCount, deleteAllBtn);
+      header.append(archivedLabel, archivedCount, deleteAllBtn);
       archivedGroup.appendChild(header);
 
       deleteAllBtn.hidden = archivedSessions.length === 0;
@@ -1162,11 +1229,20 @@ export class SessionSidebar {
         );
       }
 
-      header.addEventListener("click", () => {
+      const toggleArchived = () => {
         this.archivedCollapsed = !this.archivedCollapsed;
-        this.saveArchivedCollapsed();
         header.classList.toggle("collapsed", this.archivedCollapsed);
+        header.setAttribute("aria-expanded", String(!this.archivedCollapsed));
         sessionsDiv.classList.toggle("collapsed", this.archivedCollapsed);
+      };
+      header.addEventListener("click", (event) => {
+        if (event.target.closest("button")) return;
+        toggleArchived();
+      });
+      header.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        toggleArchived();
       });
 
       archivedGroup.appendChild(sessionsDiv);

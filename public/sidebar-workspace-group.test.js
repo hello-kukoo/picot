@@ -402,3 +402,26 @@ describe("buildSidebarSection inert rendering", () => {
     expect(section.querySelectorAll("img").length).toBe(0);
   });
 });
+
+describe("section vs workspace disclosure icon", () => {
+  test("section header uses the shared section chevron and never a folder icon", () => {
+    setupDom();
+    const { header } = buildSidebarSection({
+      region: "pinned",
+      titleKey: "sidebar.pinned",
+      expanded: true,
+    });
+    expect(header.querySelector(".section-chevron")).not.toBeNull();
+    expect(header.querySelector(".folder-icon")).toBeNull();
+  });
+
+  test("workspace header keeps the folder icon and has no section chevron", () => {
+    setupDom();
+    const { header } = buildSidebarWorkspaceGroup({
+      workspaceId: "history:alpha",
+      folderName: "alpha",
+    });
+    expect(header.querySelector(".folder-icon")).not.toBeNull();
+    expect(header.querySelector(".section-chevron")).toBeNull();
+  });
+});

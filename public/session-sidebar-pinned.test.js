@@ -75,6 +75,13 @@ function createProjects() {
   ];
 }
 
+function workspaceExpanded(workspaceId) {
+  const header = document.querySelector(
+    `.workspace-group[data-workspace-id="${workspaceId}"] .workspace-header`,
+  );
+  return header?.getAttribute("aria-expanded") === "true";
+}
+
 beforeEach(async () => {
   const dom = new JSDOM('<div id="sessions"></div>', { url: "http://localhost:3001" });
   globalThis.document = dom.window.document;
@@ -272,6 +279,191 @@ describe("SessionSidebar PINNED integration", () => {
       fromId: "path:/work/live",
       toId: "history:live",
       path: "/work/live",
+    });
+  });
+});
+
+describe("SessionSidebar fold-state stability", () => {
+  test("workspaces start collapsed and sections start expanded on first render", () => {
+    const pinStore = makePinStore({
+      workspaces: [{ id: "history:alpha", path: "/work/alpha" }],
+      sessions: [],
+    });
+    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
+      pinStore,
+      quickInfo: makeQuickInfo(),
+    });
+    sidebar.projects = createProjects();
+    sidebar.render();
+
+    expect(workspaceExpanded("history:alpha")).toBe(false);
+    expect(workspaceExpanded("path:/work/live")).toBe(false);
+    expect(
+      document.querySelector(".pinned-group .sidebar-section-header").getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(
+      document
+        .querySelector(".projects-group .sidebar-section-header")
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+  });
+
+  test("archived section starts collapsed on every launch, ignoring any prior expand choice", () => {
+    localStorage.setItem("pi-studio-archived-collapsed", "false");
+    const pinStore = makePinStore({ workspaces: [], sessions: [] });
+    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
+      pinStore,
+      quickInfo: makeQuickInfo(),
+    });
+    sidebar.projects = createProjects();
+    sidebar.render();
+
+    const archivedHeader = document.querySelector(".archived-group .sidebar-section-header");
+    expect(archivedHeader.getAttribute("aria-expanded")).toBe("false");
+    expect(archivedHeader.classList.contains("collapsed")).toBe(true);
+  });
+
+  test("rebuilding the sidebar preserves workspace expansion state", () => {
+    const pinStore = makePinStore({ workspaces: [], sessions: [] });
+    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
+      pinStore,
+      quickInfo: makeQuickInfo(),
+    });
+    sidebar.projects = createProjects();
+    sidebar.render();
+
+    document
+      .querySelector(
+        '.projects-group .workspace-group[data-workspace-id="history:alpha"] .workspace-header',
+      )
+      .click();
+    expect(workspaceExpanded("history:alpha")).toBe(true);
+    expect(workspaceExpanded("path:/work/live")).toBe(false);
+
+    // Simulate the full rebuild triggered by refresh / + new session / pin.
+    sidebar.render();
+
+    expect(workspaceExpanded("history:alpha")).toBe(true);
+    expect(workspaceExpanded("path:/work/live")).toBe(false);
+  });
+
+  test("pinning a workspace via its context menu auto-expands it in PINNED", () => {
+    const pinStore = makePinStore({ workspaces: [], sessions: [] });
+    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
+      pinStore,
+      quickInfo: makeQuickInfo(),
+    });
+    sidebar.projects = createProjects();
+    sidebar.render();
+
+    document
+      .querySelector(
+        '.projects-group .workspace-group[data-workspace-id="history:alpha"] .workspace-header',
+      )
+      .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }));
+    document.querySelector(".sidebar-context-menu .context-menu-item:first-child").click();
+
+    expect(workspaceExpanded("history:alpha")).toBe(true);
+  });
+
+  test("pinning a workspace (any source) preserves the expansion of existing pinned ones", () => {
+    const pinStore = makePinStore({
+      workspaces: [{ id: "history:alpha", path: "/work/alpha" }],
+      sessions: [],
+    });
+    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
+      pinStore,
+      quickInfo: makeQuickInfo(),
+    });
+    sidebar.projects = [
+      ...createProjects(),
+      {
+        workspaceId: "history:beta",
+        path: "/work/beta",
+        dirName: "beta",
+        sessions: [{ filePath: "/sessions/beta.jsonl", name: "Beta" }],
+      },
+    ];
+    sidebar.render();
+
+    document
+      .querySelector(
+        '.pinned-group .workspace-group[data-workspace-id="history:alpha"] .workspace-header',
+      )
+      .click();
+    expect(workspaceExpanded("history:alpha")).toBe(true);
+
+    // Pin beta directly through the store — this is the path quick-info and any
+    // future caller share; the subscribe diff must catch it.
+    pinStore.pinWorkspace("history:beta", "/work/beta");
+
+    expect(workspaceExpanded("history:beta")).toBe(true);
+    expect(workspaceExpanded("history:alpha")).toBe(true);
+  });
+
+  test("carries workspace expansion across a provisional to history id reconciliation", async () => {
+    const pinStore = makePinStore({
+      workspaces: [{ id: "path:/work/live", path: "/work/live" }],
+      sessions: [],
+    });
+    global.fetch = vi.fn(async (url) => {
+      if (url === "/api/sessions")
+        return {
+          ok: true,
+          json: async () => ({
+            projects: [
+              {
+                dirName: "live",
+                path: "/work/live",
+                sessions: [{ filePath: "/sessions/live.jsonl", name: "Live" }],
+              },
+            ],
+          }),
+        };
+      if (url === "/api/instances") return { ok: true, json: async () => ({ instances: [] }) };
+      return { ok: false, json: async () => ({}) };
+    });
+    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
+      pinStore,
+      quickInfo: makeQuickInfo(),
+    });
+    sidebar.projects = [
+      {
+        workspaceId: "path:/work/live",
+        path: "/work/live",
+        dirName: "",
+        isProvisional: true,
+        sessions: [],
+      },
+    ];
+    sidebar.render();
+    sidebar.setWorkspaceExpanded({ workspaceId: "path:/work/live" }, true);
+    expect(sidebar.isWorkspaceExpanded({ workspaceId: "path:/work/live" })).toBe(true);
+
+    await sidebar.loadSessions({ retries: 0 });
+
+    expect(sidebar.isWorkspaceExpanded({ workspaceId: "history:live" })).toBe(true);
+    expect(sidebar.isWorkspaceExpanded({ workspaceId: "path:/work/live" })).toBe(false);
+  });
+
+  test("all four section headers share the section chevron and no folder icon", () => {
+    writeRecentSessions(["/sessions/alpha.jsonl"]);
+    const pinStore = makePinStore({
+      workspaces: [{ id: "history:alpha", path: "/work/alpha" }],
+      sessions: [],
+    });
+    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
+      pinStore,
+      quickInfo: makeQuickInfo(),
+    });
+    sidebar.projects = createProjects();
+    sidebar.render();
+
+    const headers = document.querySelectorAll(".sidebar-section-header");
+    expect(headers.length).toBe(4);
+    headers.forEach((header) => {
+      expect(header.querySelector(".section-chevron")).not.toBeNull();
+      expect(header.querySelector(".folder-icon")).toBeNull();
     });
   });
 });

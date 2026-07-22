@@ -603,8 +603,43 @@ body {
   outline: none;
 }
 
-.archived-header {
-  color: var(--text-dim);
+/* Section headers (RECENT / PINNED / PROJECTS / ARCHIVED) render as muted
+   group labels, visually distinct from the workspace folder headers below.
+   All four share one disclosure arrow and one typographic treatment. */
+.sidebar-section-header {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 14px;
+}
+
+.sidebar-section-header:hover {
+  color: var(--text-primary);
+}
+
+.sidebar-section-title {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Disclosure arrow shared by all four section headers: points right when
+   collapsed, rotates 90deg to point down when expanded. */
+.sidebar-section-header .section-chevron {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  opacity: 0.6;
+  transition: transform var(--duration) var(--ease);
+}
+
+.sidebar-section-header:not(.collapsed) .section-chevron {
+  transform: rotate(90deg);
+}
+
+.sidebar-section-header.collapsed .section-chevron {
+  transform: rotate(0deg);
 }
 
 /* Open project in external app (VS Code / Cursor / Terminal / …) */
@@ -1081,7 +1116,12 @@ body {
   flex-direction: column;
   min-width: 0;
   position: relative;
-  z-index: 1;
+  /* No z-index on .main: a z-index here would create a stacking context that
+     traps the Quick Chat dialog (position:absolute, z-index:9000) and the
+     minimized chip (position:fixed, z-index:9000) at this layer. The
+     .file-preview-panel sibling forms its own stacking context via
+     backdrop-filter, so it would paint over them. Keeping .main free of a
+     stacking context lets the floating layers compete in the root context. */
 }
 
 /* Header — translucent toolbar */

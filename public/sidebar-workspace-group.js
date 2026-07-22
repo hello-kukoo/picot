@@ -16,6 +16,13 @@ const FOLDER_CLOSED_ICON =
 const FOLDER_OPEN_ICON =
   '<svg class="folder-open-icon" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 14l1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg>';
 
+// Static disclosure arrow for the four section headers (RECENT, PINNED,
+// PROJECTS, ARCHIVED). Points right when collapsed; CSS rotates it 90deg to
+// point down when expanded. Fixed markup — never interpolated — so the
+// DOMParser innerHTML path is safe.
+const SECTION_CHEVRON_ICON =
+  '<svg class="section-chevron-icon" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
+
 function createChevron() {
   const chevron = document.createElement("span");
   chevron.className = "chevron folder-icon";
@@ -24,6 +31,20 @@ function createChevron() {
     `${FOLDER_CLOSED_ICON}${FOLDER_OPEN_ICON}`,
     "text/html",
   );
+  chevron.append(...doc.body.childNodes);
+  return chevron;
+}
+
+/**
+ * Builds the disclosure arrow shared by all four sidebar section headers.
+ * Exported so inline section builders (recent / archived in index.js) render
+ * the exact same icon contract as buildSidebarSection.
+ */
+export function createSectionChevron() {
+  const chevron = document.createElement("span");
+  chevron.className = "chevron section-chevron";
+  chevron.setAttribute("aria-hidden", "true");
+  const doc = new DOMParser().parseFromString(SECTION_CHEVRON_ICON, "text/html");
   chevron.append(...doc.body.childNodes);
   return chevron;
 }
@@ -94,7 +115,7 @@ export function buildSidebarSection({
   const header = document.createElement("div");
   header.className = `project-header sidebar-section-header sidebar-section-header-${region}`;
 
-  header.appendChild(createChevron());
+  header.appendChild(createSectionChevron());
 
   const title = document.createElement("span");
   title.className = "sidebar-section-title";
