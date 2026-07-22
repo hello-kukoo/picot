@@ -5,15 +5,15 @@
   "version": "0.3.5",
   "build": {
     "frontendDist": "../public",
-    "beforeDevCommand": "bun run fetch:pi && bun run build:frontend",
-    "beforeBuildCommand": "bun run fetch:pi && bun run build:extensions && bun run build:frontend"
+    "beforeDevCommand": "bun run fetch:pi && bun run fetch:terminal-font && bun run build:frontend",
+    "beforeBuildCommand": "bun run fetch:pi && bun run fetch:terminal-font && bun run build:extensions && bun run build:frontend"
   },
   "app": {
     "withGlobalTauri": true,
     "macOSPrivateApi": true,
     "windows": [],
     "security": {
-      "csp": "default-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' mediastream:;",
+      "csp": "default-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; media-src 'self' mediastream:;",
       "capabilities": ["default"]
     }
   },

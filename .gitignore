@@ -15,6 +15,10 @@ extensions/dist/
 # Embedded pi binary tree (produced by scripts/fetch-pi-binary.js)
 src-tauri/resources/pi/
 .cache/pi-binaries/
+.cache/terminal-fonts/
+
+# Generated terminal font assets (produced by scripts/fetch-terminal-font.js)
+public/fonts/terminal/
 
 # Pi session exports
 pi-session-*.html

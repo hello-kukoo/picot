@@ -17,6 +17,8 @@ cd "$ROOT_DIR"
 # with a stale or missing embedded pi binary / extension bundle.
 echo "Fetching embedded pi binary (idempotent if version matches)..."
 bun run "$ROOT_DIR/scripts/fetch-pi-binary.js"
+echo "Fetching bundled terminal font..."
+bun run "$ROOT_DIR/scripts/fetch-terminal-font.js"
 echo "Building extensions bundle..."
 bun run "$ROOT_DIR/scripts/build-extensions.js"
 
