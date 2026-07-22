@@ -4,7 +4,9 @@
 
 The product, interaction, process-lifecycle, transport, persistence, and security
 choices in this document were approved in conversation with Dr. Lin on
-2026-07-21. Implementation has not started.
+2026-07-21, then revised after the `private/features-v3` merge to align with
+its owner-capability, ephemeral-runtime, and window-close-coordinator
+architecture. Terminal-specific implementation has not started.
 
 References:
 
@@ -14,8 +16,10 @@ References:
   analyzes Codux's terminal implementation and informed the separation between
   PTY ownership, terminal state, and rendering.
 - [`ARCHITECTURE.md`](../../../ARCHITECTURE.md) defines Picot's current host,
-  broker, embedded-server, WebView, owner-capability, and workspace-transition
-  boundaries.
+  broker, embedded-server, WebView, owner-capability, workspace-transition,
+  ephemeral-runtime, and window-close-coordinator boundaries. In particular,
+  Terminal must extend `window_owner.rs`, `broker_ws.rs`, and
+  `public/window-close-coordinator.js`; it must not create parallel paths.
 - [`docs/engineering-lessons.md`](../../engineering-lessons.md) defines the
   required cross-boundary and visual verification criteria.
 
@@ -59,7 +63,10 @@ default shell profile because the company environment requires Git for Windows.
 | Windows default | Git Bash; missing Git Bash produces guidance rather than a silent fallback |
 | Alternative Windows profiles | PowerShell and Command Prompt are manually selectable |
 | Live-tab close | Always confirms before terminating the shell and descendants |
-| App/window close | One owner-scoped summary confirmation, then process-tree cleanup |
+| App/window close | Existing `WindowCloseCoordinator` summary confirmation, then process-tree cleanup |
+| Capability on cross-port navigation | Host re-injects the same owner capability into the destination document; rotation occurs only on owner revocation |
+| Broker protocol | New `terminal_command` / `terminal_event` envelopes dispatched by Rust before generic Pi routing |
+| Live terminal partition | `(ownerId, canonicalWorkspaceRoot)`; `workspaceGeneration` authorizes the current attachment but preserves background workspace terminals for later reattachment |
 
 ## Non-goals
 
@@ -86,10 +93,10 @@ view, but does not copy Codux's implementation:
 
 ```text
 WebView xterm.js
-    ⇅ owner-scoped terminal frames
-BrokerWs
-    ⇅ internal bounded terminal queue
-TerminalManager
+    ⇅ terminal_command / terminal_event envelopes
+BrokerWs (authenticated UI/WS)
+    ⇅ bounded low-priority per-terminal queues
+TerminalManager (new)
     ⇅ raw bytes / resize / lifecycle
 portable-pty
     ⇅
@@ -102,30 +109,45 @@ through xterm.js. This avoids implementing a second terminal emulator and
 canvas renderer while retaining native process ownership and cross-platform PTY
 behavior.
 
-Terminal traffic uses the existing broker WebSocket. It does not pass through
+Terminal traffic uses the existing broker WebSocket, but Terminal support is
+**not** an existing generic broker capability. `BrokerWs::route_ui_message`
+currently special-cases `broker_control` and `ephemeral_command`; other frames
+fall through to the generic resolver and are forwarded to Pi. Terminal therefore
+adds a first-class `terminal_command` branch **before** that generic resolver,
+with a paired host-to-WebView `terminal_event` envelope. It does not pass through
 `extensions/embedded-server.ts`, does not enter a Pi process, and does not add a
-stable Tauri command. A dedicated terminal WebSocket was rejected because it
-would add a port, authentication surface, and lifecycle path. Tauri commands and
-events were rejected because host operations other than bootstrap currently use
-the authenticated broker boundary.
+stable Tauri command. A dedicated Terminal WebSocket was rejected because it
+would add a port, authentication surface, and lifecycle path.
 
-The broker must schedule Terminal output through an independent bounded,
-low-priority queue. Pi chat/control frames have priority, so a noisy terminal
-cannot starve agent streaming or session routing even though both share one
-physical WebSocket.
+The dispatcher derives owner, canonical cwd, and the current attachment
+`workspaceGeneration` from `VerifiedClientContext` and `WindowOwnerRegistry`;
+payload owner/cwd/workspace/port/pid/executable/argument hints are ignored.
+The generation authorizes the active attachment; it is not part of the retained
+background-terminal partition. Terminal output is scheduled
+through bounded, low-priority per-terminal queues. Pi chat/control frames have
+priority, so a noisy terminal cannot starve agent streaming or session routing.
+On queue saturation the broker coalesces delivery and asks the tab to resync from
+its retained journal; it never silently drops Pi frames or Terminal bytes.
+
+A cross-workspace navigation reloads the WebView at a new port. The host consumes
+the pending navigation permit and re-injects `__PICOT_NATIVE_CAPABILITY__` into
+the destination origin before the new document's `client_hello`. The capability
+is not rotated during navigation; `revoke_owner` is its rotation boundary.
 
 ## Component Boundaries
 
 ### Rust host
 
-#### `terminal_manager.rs`
+#### `terminal_manager.rs` (new)
 
 `TerminalManager` owns the PTY processes and is the only module allowed to
 spawn, write to, resize, restart, or terminate a terminal. Its responsibilities
 are:
 
 - reserve quota before spawn and release quota after terminal cleanup;
-- resolve the current authenticated owner and canonical workspace root;
+- resolve `(ownerId, canonicalWorkspaceRoot)` from `VerifiedClientContext` and
+  `WindowOwnerRegistry`, and validate current `workspaceGeneration` as the
+  attachment authority, never from payload hints;
 - resolve a server-defined shell profile into an executable and fixed arguments;
 - spawn a PTY with the canonical workspace root as cwd;
 - run output-reader and exit-watcher tasks;
@@ -134,7 +156,10 @@ are:
 - terminate the full process tree idempotently; and
 - expose owner/workspace summaries to the broker and window-close coordinator.
 
-It does not parse ANSI output, infer shell cwd, or interpret checkpoint bytes.
+It is invoked by the new `BrokerWs::dispatch_terminal_command` branch, installed
+alongside `dispatch_ephemeral_command`, rather than by a new Tauri command or Pi
+extension. It does not parse ANSI output, infer shell cwd, or interpret
+checkpoint bytes.
 
 #### `terminal_registry.rs`
 
@@ -148,7 +173,8 @@ It does not parse ANSI output, infer shell cwd, or interpret checkpoint bytes.
 a tab starts or restarts a PTY. Commands carrying an old generation cannot
 write to, resize, checkpoint, or terminate a replacement process.
 
-Registry state transitions are serialized per owner/workspace:
+Registry state transitions are serialized per
+`(ownerId, canonicalWorkspaceRoot)` partition:
 
 ```text
 restored-metadata -> creating -> running -> exited
@@ -165,7 +191,12 @@ global live-process reservation but leaves a visible failed tab record in its
 workspace slot so it can be retried or closed.
 
 The registry is partitioned by owner even if two owners refer to the same
-canonical path. Terminals are never transferred between native windows.
+canonical path. `workspaceGeneration` is an attachment authorization value, not
+part of the retained terminal partition: changing workspaces must not orphan a
+background PTY that should reattach when that canonical root returns. A command
+must match the owner's current generation and root before it resolves against
+that root's partition. Two native windows on the same path never share live
+terminals, output, or quotas; terminals are never transferred between windows.
 
 #### `terminal_output.rs`
 
@@ -197,6 +228,11 @@ Persisted state is keyed by canonical workspace root and contains only:
 - last expanded panel height; and
 - schema version.
 
+This key is a cross-restart metadata key, not a live-terminal ownership key. A
+new app run creates a new owner ID, so `ownerId` and `workspaceGeneration` must
+never gate restore. Concurrent same-path windows may last-write-win only this
+inert metadata; their live registries remain owner-isolated.
+
 It does not contain PTY output, checkpoints, process identifiers, exit output,
 environment values, dynamic OSC titles, or last cwd. Automatic OSC titles may
 be shown while a process is alive, but only the stable profile-derived display
@@ -204,7 +240,9 @@ label is persisted.
 
 The panel always starts collapsed after app restart. On its first expansion,
 Picot recreates all persisted tabs as fresh shells rooted at the workspace and
-shows a one-time notice that previous processes were not restored. If no
+shows a one-time notice that previous processes were not restored. Persisted
+metadata never revives an owner ID, process, checkpoint, output journal, or
+workspace generation. If no
 metadata exists, first expansion creates one default-profile tab.
 
 ### Broker
@@ -215,9 +253,15 @@ port, pid, executable, or arguments supplied by a payload. Remote clients and
 clients that have not completed native capability verification receive a
 fail-closed authorization error before registry lookup.
 
-Terminal events are delivered only to the current authenticated connection for
-the owning native window. They are not broadcast to other native windows or
-forwarded upstream to Pi.
+`BrokerWs::route_ui_message` gains a `terminal_command` branch after the
+existing `ephemeral_command` branch and before the generic port resolver.
+`dispatch_terminal_command` resolves the verified owner and canonical workspace,
+compares the frame's `workspaceGeneration` with the current host binding, then
+delegates to `TerminalManager`. It
+returns request-correlated `terminal_command_failed` errors only to the sender.
+`terminal_event` frames are delivered only to the current authenticated
+connection for the owning native window. They are not broadcast to other native
+windows, forwarded upstream to Pi, or allowed through the generic Pi route.
 
 ### WebView
 
@@ -256,7 +300,11 @@ Terminal frames use JSON envelopes on the current broker connection. Raw PTY
 input, output, and checkpoint data are Base64 encoded so invalid UTF-8 and
 control bytes survive round trips exactly.
 
-Representative client commands are:
+The WebView sends a `terminal_command` envelope with `requestId`, the current
+`workspaceGeneration`, and an inner payload. `workspaceGeneration` is a
+compare-only concurrency token: Rust compares it with the host-owned current
+binding before registry lookup, but never uses it to select an owner or root.
+Its inner command types are:
 
 ```text
 terminal_list
@@ -273,10 +321,12 @@ terminal_set_panel_height { heightPx }
 ```
 
 `profileId` is an enum resolved by Rust. There is no arbitrary command profile.
-Commands include a request ID and receive one success/error response. Terminal
-identity and generation are required for mutating an existing tab.
+`requestId` correlates command response; `terminalId + generation` is required
+for mutations to an existing tab. The host derives owner/root identity and
+never accepts those values in this envelope; it only compares the supplied
+`workspaceGeneration` with the host-owned current binding.
 
-Representative host events are:
+The host sends a `terminal_event` envelope whose inner event is one of:
 
 ```text
 terminal_snapshot
@@ -285,16 +335,20 @@ terminal_exited
 terminal_failed
 terminal_activity
 terminal_quota_changed
+terminal_journal_resync
 ```
 
-A `terminal_output` event contains terminal identity, generation, first/last
-sequence, and `dataBase64`. Output generated in one PTY reader batch remains in
-order. Events from different tabs may interleave.
+A rejected command receives `terminal_command_failed { requestId, error }` only
+to its sender. A `terminal_output` event contains terminal identity, generation,
+first/last sequence, and `dataBase64`. Output generated in one PTY reader batch
+remains in order. Events from different tabs may interleave. Queue saturation
+emits `terminal_journal_resync` rather than dropping bytes.
 
 The protocol enforces explicit per-frame limits. Oversized input, resize floods,
-invalid Base64, invalid dimensions, stale generations, and unknown profile IDs
-return errors without mutating terminal state. Resize dimensions are bounded to
-valid PTY `u16` values and a practical configured maximum.
+invalid Base64, invalid dimensions, stale terminal or workspace generations,
+and unknown profile IDs return errors without mutating terminal state. Resize
+dimensions are bounded to valid PTY `u16` values and a practical configured
+maximum.
 
 ## PTY Spawn Profiles
 
@@ -391,11 +445,15 @@ screen. Rust never parses or executes the snapshot.
 
 ### Reattachment
 
-When the owner returns to a workspace:
+When the owner returns to a workspace — including after a cross-port WebView
+reload — the newly constructed frontend sends `terminal_list` only after its
+`client_hello` has re-authenticated with the host-reinjected capability:
 
-1. `terminal_list` returns tab descriptors, generations, checkpoints,
-   checkpoint watermarks, available journals, and gap state.
-2. The tab creates a new xterm instance.
+1. `terminal_list` validates the current owner/workspace-generation attachment,
+   then resolves its `(ownerId, canonicalWorkspaceRoot)` partition and returns
+   tab descriptors, generations, checkpoints, checkpoint watermarks, available
+   journals, and gap state.
+2. The new page creates a new xterm instance per tab.
 3. It writes the serialized checkpoint first.
 4. It applies journal batches only when the next sequence is exactly
    `lastAppliedSequence + 1`.
@@ -547,33 +605,57 @@ always starts from workspace root.
 
 ### Workspace navigation
 
-Switching Pi sessions in one workspace has no terminal effect. During a
-cross-workspace transition:
+Switching Pi sessions in one workspace has no terminal effect. A cross-workspace
+transition is a host prepare → commit → `location.assign()` navigation, not an
+in-page detach/attach: the previous WebView document is destroyed. Terminal
+therefore participates in `beforeWorkspaceTransition` and must finish its
+checkpoint work before `transport.commitWorkspaceTransition`:
 
-1. freeze terminal create/close/reorder actions;
-2. checkpoint all running visible-workspace tabs;
-3. commit the existing host workspace transition;
-4. detach the previous workspace UI while its PTYs continue running;
-5. attach the destination workspace's registry partition; and
-6. unfreeze after snapshot/journal reconciliation.
+1. freeze terminal create/close/reorder actions and the resizer;
+2. checkpoint all running tabs in the visible source partition and await their
+   responses; a stale/exited tab is skipped rather than blocking transition;
+3. commit the existing host workspace transition, atomically changing the
+   owner's canonical cwd, port, and `workspaceGeneration`;
+4. navigate to the prepared target origin; host consumes the navigation permit
+   and injects the owner capability into the destination document;
+5. leave source PTYs running in their source partition while the old page dies;
+6. on the new page, re-authenticate with `client_hello`, list the destination
+   partition, create fresh xterm instances, restore checkpoints/journals, then
+   unfreeze actions.
 
-A cancelled transition restores the prior interactive state. A failed
-checkpoint does not silently kill PTYs; it reports reduced recovery confidence
-and lets the existing workspace-transition policy decide whether navigation can
-continue.
+A cancelled transition restores the prior interactive state before any commit
+and leaves PTYs untouched. A failed checkpoint does not silently kill PTYs; it
+reports reduced recovery confidence and lets the existing workspace-transition
+policy decide whether navigation can continue. Reattachment follows the same
+strict snapshot-before-journal and gap-recovery contract described above.
 
 ### Window and application close
 
-Terminal Panel registers with the existing `window-close-coordinator` as a
-versioned close-risk participant. If any owner terminal is live, the one summary
-dialog states how many shells will be terminated. Approval freezes terminal
-input, checkpoints no further state, terminates all terminal process trees for
-the owner, and only then approves close. Cancel restores interaction.
+Terminal Panel registers a `"terminal"` participant with the existing JS
+`WindowCloseCoordinator`; it does not introduce a Rust close coordinator. The
+coordinator's risk schema and summary dialog must be extended with a
+`terminalTabs` collection (stable label + terminal ID/generation only), alongside
+its current dirty-file and ephemeral collections. The participant reports only a
+live-PTY count and stable profile-derived labels, never untrusted shell
+titles/output. It provides:
 
-Window destruction performs final idempotent owner cleanup even if the WebView
-did not respond. Application exit calls `kill_all` for every terminal. Cleanup
-uses Unix process groups and Windows Job Objects or an equivalent verified
-process-tree mechanism so child servers do not survive the owning terminal.
+- `getCloseRisk()` — live terminal summary for the coordinator's single dialog;
+- `setInteractionLocked(locked)` — disable input, create/reorder controls, and
+  the resizer while the close transaction runs; and
+- `settleCloseRisk(decision)` — on approved discard, terminate the owner's live
+  process trees and await bounded cleanup; on cancel, leave them untouched.
+
+The existing coordinator freezes all participants, collects file, ephemeral, and
+terminal risk, shows one summary dialog, settles participants, and calls
+`window_close_approve` only after settlement succeeds. Cancel or settlement
+failure unlocks terminal interaction and retains the window.
+
+Rust remains the final authority. `handle_window_destroyed` calls an idempotent
+`TerminalManager::kill_owner(ownerId)` even if the WebView crashed or did not
+settle; application exit calls `kill_all`. Cleanup uses Unix process groups and
+Windows Job Objects or an equivalent verified process-tree mechanism so child
+servers do not survive the owning terminal. Owner destruction then revokes its
+capability and terminal registry partitions.
 
 ## Security Boundary
 
@@ -582,13 +664,20 @@ verification is mandatory rather than a UI-only feature flag.
 
 - Only a broker connection authenticated as the current native window owner can
   call terminal commands or receive terminal events.
-- Authorization is derived from `VerifiedClientContext`; payload owner,
-  workspace, cwd, port, pid, executable, and argument fields are ignored or
-  rejected.
-- The current canonical workspace root is taken from host-owned window state.
-- A tab ID is meaningful only inside its owner/workspace partition.
-- `terminalId + generation` prevents stale pages from controlling replacements.
-- Remote, LAN, mobile, unverified, and timed-out clients fail closed.
+- Authorization is derived from `VerifiedClientContext.owner_id` and the
+  host-owned `WindowOwnerRegistry` current workspace + workspace generation;
+  payload owner, workspace, cwd, port, pid, executable, and argument fields are
+  ignored or rejected.
+- The live partition key is `(ownerId, canonicalWorkspaceRoot)`. A tab ID is
+  meaningful only inside that partition; same-path native windows remain
+  isolated. `workspaceGeneration` authorizes the current attachment and is not
+  a partition key, otherwise returning to a background workspace could not
+  restore its terminal.
+- `terminalId + generation` prevents stale pages from controlling replacements;
+  a stale workspace generation is rejected before partition lookup.
+- Remote, LAN, mobile, unverified, and timed-out clients fail closed. On a
+  permitted cross-port navigation, the host re-injects the same capability into
+  the destination document; rotation occurs only when the owner is revoked.
 - Shell profiles are fixed host definitions; there is no arbitrary executable
   protocol.
 - Input, output, title, exit text, checkpoint bytes, and persisted JSON are
@@ -655,8 +744,13 @@ unbounded container defaults.
 
 ### Rust unit tests
 
-- owner/workspace partition isolation;
+- owner/canonical-workspace partition isolation and same-path multi-window
+  isolation;
 - native versus remote authorization;
+- stale workspace-generation rejection without losing a retained background
+  workspace partition;
+- permitted cross-port navigation reinjecting capability before destination
+  `client_hello`;
 - atomic five-tab-per-workspace and fifteen-live-PTY-global quota under
   concurrent creates;
 - reserve/spawn/commit rollback;
@@ -693,7 +787,9 @@ Tests use real local shell processes, not mocked E2E behavior:
 - strict snapshot-before-journal replay;
 - duplicate suppression, sequence-gap pause, overflow warning, reconnect, and
   stale-generation rejection;
-- workspace detach/reattach and background activity count;
+- full cross-port navigation/reload reattachment and background activity count;
+- terminal participant risk, lock, settle, cancel, and WebView-disconnect
+  fallback through `WindowCloseCoordinator`;
 - restored metadata creating fresh shells from workspace root;
 - i18n live switching, untrusted title rendering through `textContent`, ARIA tab
   behavior, focus restoration, and reduced-motion behavior; and
@@ -714,12 +810,15 @@ tests are insufficient. Required release evidence includes:
 4. ANSI 16/256/true-color, Unicode/CJK, IME, selection/copy/paste, resize, and
    long-output checks;
 5. run a long command, switch workspace, return, and verify checkpoint plus
-   background output continuity;
+   background output continuity across a real cross-port WebView reload;
 6. force journal overflow and verify the explicit incomplete-output warning;
-7. close a tab/window with a descendant server and verify no process remains;
-8. verify LAN/mobile clients cannot discover or invoke terminal commands; and
+7. close a tab/window with a descendant server and verify no process remains,
+   including the fallback where the WebView disconnects before settlement;
+8. verify LAN/mobile clients cannot discover or invoke terminal commands;
 9. flood terminal output while a Pi response streams and verify chat remains
-   responsive.
+   responsive; and
+10. verify cross-port capability reinjection: the destination WebView completes
+    native `client_hello`, while owner revocation makes the old capability fail.
 
 After JS/TS and Rust changes, run:
 
@@ -736,12 +835,21 @@ Picot policy forbids using a full Tauri/Cargo build merely as verification.
 Implementation must update `ARCHITECTURE.md` with:
 
 - the TerminalManager process model;
-- the owner-scoped broker Terminal protocol;
-- background workspace retention and window-close cleanup;
-- checkpoint/journal recovery and its bounded-gap behavior;
-- persisted metadata versus intentionally non-persisted output;
+- `terminal_command` / `terminal_event` dispatch placement before generic Pi
+  routing, plus low-priority per-terminal queue behavior;
+- owner/canonical-root terminal partitioning, workspace-generation attachment
+  authorization, and same-path multi-window isolation;
+- host capability reinjection on permitted cross-port navigation, with rotation
+  only at owner revocation;
+- background workspace retention and `WindowCloseCoordinator` participant plus
+  Rust final-cleanup behavior;
+- checkpoint/journal recovery and its bounded-gap behavior across full WebView
+  reloads;
+- persisted metadata versus intentionally non-persisted output, including that
+  canonical-root metadata is not a persistent live owner identity;
 - macOS/Windows shell-profile rules; and
 - the native-only arbitrary-code-execution security boundary.
 
 The final architecture text must not imply that Terminal traffic passes through
-Pi or `embedded-server.ts`.
+Pi or `embedded-server.ts`, or that generic broker routing can safely carry
+Terminal frames.
