@@ -347,6 +347,24 @@ describe("SessionSidebar fold-state stability", () => {
     expect(workspaceExpanded("path:/work/live")).toBe(false);
   });
 
+  test("PINNED workspace new-chat passes the workspace object (with path) to onNewChat", () => {
+    const pinStore = makePinStore({
+      workspaces: [{ id: "history:alpha", path: "/work/alpha" }],
+      sessions: [],
+    });
+    const onNewChat = vi.fn();
+    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), onNewChat, {
+      pinStore,
+      quickInfo: makeQuickInfo(),
+    });
+    sidebar.projects = createProjects();
+    sidebar.render();
+
+    document.querySelector(".pinned-group .workspace-new-chat-btn").click();
+
+    expect(onNewChat).toHaveBeenCalledWith(expect.objectContaining({ path: "/work/alpha" }));
+  });
+
   test("pinning a workspace via its context menu auto-expands it in PINNED", () => {
     const pinStore = makePinStore({ workspaces: [], sessions: [] });
     const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {

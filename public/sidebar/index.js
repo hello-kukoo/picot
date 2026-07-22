@@ -1010,8 +1010,7 @@ export class SessionSidebar {
             sessionCount: pinned.sessions.length,
             expanded: this.isWorkspaceExpanded(expansionWorkspace),
             onToggle: (expanded) => this.setWorkspaceExpanded(expansionWorkspace, expanded),
-            onNewChat:
-              !pinned.unavailable && workspacePath ? () => this.onNewChat(workspacePath) : null,
+            onNewChat: !pinned.unavailable && workspace ? () => this.onNewChat(workspace) : null,
             onContextMenu:
               !pinned.unavailable && workspace
                 ? (event) => this.showWorkspaceContextMenu(event, workspace)
