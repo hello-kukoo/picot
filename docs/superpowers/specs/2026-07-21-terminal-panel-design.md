@@ -6,7 +6,48 @@ The product, interaction, process-lifecycle, transport, persistence, and securit
 choices in this document were approved in conversation with Dr. Lin on
 2026-07-21, then revised after the `private/features-v3` merge to align with
 its owner-capability, ephemeral-runtime, and window-close-coordinator
-architecture. Terminal-specific implementation has not started.
+architecture.
+
+**Implementation status: partial.** Tasks 1–6 (dependencies, Rust state
+layer, PTY ownership + broker routing, frontend client/adapter, native panel,
+workspace/close integration) were implemented on 2026-07-22, then revised
+after a code review. The status is intentionally not "complete": several
+areas remain partial or deferred. See **Implementation deviations (2026-07-22)**
+at the end of this document for the as-built delta, including what is open.
+
+Already implemented and verified by tests:
+
+- Rust state layer (`terminal_registry` quotas/generation, `terminal_output`
+  checkpoint/journal, `terminal_profiles`, `terminal_state_store` module) with
+  unit tests.
+- PTY ownership (`TerminalManager`) with a real-PTY integration test (UTF-8
+  round-trip + resize), Unix `killpg` process-tree cleanup, and a reader thread
+  with generation-checked journal writes.
+- Broker `terminal_command` routing before Pi, owner-scoped event delivery via
+  `send_owner_event`, and `workspaceGeneration` compare-only enforcement.
+- Frontend `TerminalClient` replay state machine, `TerminalTab` xterm adapter,
+  `TerminalPreferences`, and `TerminalPanel` (mount, expand/collapse, height
+  clamp, close-risk participant, tab bar render + switching + new/close,
+  per-tab xterm container, icon-only header toggle).
+- `window-close-coordinator` v4 (`terminalTabs` risk + settle check).
+- i18n keys (en/zh parity).
+
+Still partial or deferred (see deviations):
+
+- Panel UI: resizer pointer/keyboard drag, ARIA roving tabindex, i18n labels
+  on tab/control text, profile menu, and a restart control. (#3)
+- `terminal_state_store` is wired into the runtime: workspace-keyed tab
+  metadata (order/label/profile) and panel height are persisted
+  on create/close/restart/resize. A fresh app run re-creates one shell per
+  persisted tab with a one-time restart notice. xterm display preferences
+  (font size) are not yet wired into the panel. (#10, partial)
+- Broker backpressure: terminal output shares the unbounded owner→client
+  channel; per-terminal bounded queues + saturation resync are deferred. (#17)
+- xterm checkpoint and terminal ACKs are now awaited/emitted; the remaining
+  recovery deviation is the shared broker output channel described above.
+
+The behavior in this document remains the design intent; the deviations
+section records the as-built delta.
 
 References:
 
@@ -31,6 +72,16 @@ not specify behavior.
 Add a native-owner-only Terminal Panel to Picot. The panel sits below the
 right-hand workspace content, spans the chat, File Preview, and File Browser
 columns, and provides multiple terminal tabs for the current workspace.
+
+### Toolbar visual contract
+
+The Terminal toggle and the existing File Browser toggle share the compact
+outlined-panel control shown in [`docs/sidebar-terminal-btn.png`](../../sidebar-terminal-btn.png):
+a 32×28px horizontal rounded rectangle with a neutral outline and a
+16×16px line icon. The Terminal icon uses a horizontal divider; the File
+Browser icon uses a right-side vertical divider. Hover, pressed, focus, and
+accent colors use the existing theme tokens. Side Chat intentionally remains
+an `icon-btn` with its existing chat-bubble design.
 
 Each terminal tab owns a real local shell running in a PTY. Terminal processes
 continue running when their panel is collapsed and when the owning window
@@ -853,3 +904,63 @@ Implementation must update `ARCHITECTURE.md` with:
 The final architecture text must not imply that Terminal traffic passes through
 Pi or `embedded-server.ts`, or that generic broker routing can safely carry
 Terminal frames.
+
+## Implementation deviations (2026-07-22)
+
+Tasks 1–6 shipped on 2026-07-22. The following deltas from the design above
+were confirmed against primary sources (Tauri v2.11.2, `portable-pty` 0.9,
+`wry` 0.55) and approved by Dr. Lin during implementation. The design text
+above is the intent; this section is the as-built record.
+
+1. **Capability cross-port reinjection → loopback-agnostic init script (方案 F).**
+   The design's `consume_navigation_injection` + host runtime script injection
+   is not implemented: Tauri v2.11.2 has no public runtime
+   "evaluate-on-new-document" API (only builder-time `initialization_script` +
+   in-page `eval`, which runs after `client_hello`). Since the capability is
+   owner-bound and invariant across navigation, `capability_initialization_script`
+   is now loopback-agnostic — it checks the http loopback hostname only and no
+   longer hardcodes the Pi port. A cross-port navigation's new document
+   auto-receives the capability. The exact-origin boundary is still enforced by
+   `on_navigation`/`authorize_navigation` (the hard gate); the init script is
+   defense-in-depth. Owner revocation (`revoke_owner`) remains the sole
+   capability-rotation point.
+
+2. **Broker priority queue → manager-side batching + `send_owner_event`.** The
+   per-terminal bounded queue + saturation `terminal_journal_resync` (see
+   *I/O, Ordering, and Backpressure*) is not implemented in v1. Terminal output
+   is batched per reader chunk in `TerminalManager` and delivered through the
+   existing owner→client channel (`send_owner_event`, shared with Pi frames).
+   Pi chat/control frames are not starved (same channel, WebView consumes in
+   order); memory growth is bounded by the per-terminal journal limit enforced
+   in `terminal_output.rs`. Strict per-terminal bounded queues + saturation
+   resync are a follow-up.
+
+3. **`workspaceGeneration` compare token → now enforced.** The broker
+   compares the frame's `workspaceGeneration` against the host-owned current
+   binding (`WindowOwnerRegistry::current_workspace_generation`) and rejects a
+   mismatch with `terminal_command_failed`. The page learns the current
+   generation from `owner_bootstrap` (updated on reconnect) so a stale
+   page/connection cannot command the current workspace's terminals. (Restored
+   after code review; was previously deferred.)
+
+4. **Terminal toolbar projection is intentionally icon-only.** The workspace
+   header toggle no longer renders a count badge or activity dot. Terminal
+   counts and background output remain internal state until a dedicated
+   per-workspace sidebar-summary surface is implemented; the toolbar button is
+   reserved for opening and closing the panel.
+
+5. **Output batching → per-read-chunk.** The 8–16 ms / 32 KiB batching target
+   is approximated by emitting one `terminal_output` event per reader chunk
+   (`read()` already coalesces the kernel buffer). Strict time/size coalescing
+   is a follow-up.
+
+6. **Windows process-tree termination.** Unix uses
+   `killpg(master.process_group_leader())` (PTY session group, kills shell +
+   descendants). Windows assigns the child to a Job Object and terminates the
+   job before the direct-child fallback, covering descendants under ConPTY.
+
+7. **Exit code.** `portable-pty` 0.9 `ExitStatus` exposes `success()`/`signal()`
+   but no `code()`; v1 maps success → `0`, failure → `-1`.
+
+8. **`terminal-preferences`.** Implemented as an independent display-only
+   module with its own tests; not yet wired into the panel's runtime options.
