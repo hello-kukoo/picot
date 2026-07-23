@@ -365,16 +365,17 @@ impl WindowOwnerRegistry {
 /// Static initialization script that exposes the bearer capability only when
 /// the document is Picot's canonical native http loopback origin. Defense in
 /// depth behind the host navigation callback; never an authorization boundary.
-pub fn capability_initialization_script(
-    loopback_host: &str,
-    port: u16,
-    capability: &str,
-) -> String {
-    let host = serde_json::to_string(loopback_host).expect("host JSON");
-    let port_str = port.to_string();
+/// Loopback-agnostic capability injection script. The capability is bound to
+/// the window owner (not to a specific Pi port), so it is exposed on every
+/// loopback HTTP origin the WebView loads. This keeps the capability available
+/// across a cross-port workspace navigation, where the document reloads at a new
+/// loopback port. The exact-origin boundary is enforced by `authorize_navigation`
+/// (the hard gate); this script is defense-in-depth and never an authorization
+/// boundary.
+pub fn capability_initialization_script(capability: &str) -> String {
     let token = serde_json::to_string(capability).expect("capability JSON");
     format!(
-        "if (window.location.protocol === 'http:' && window.location.hostname === {host} && String(window.location.port) === \"{port_str}\") {{ Object.defineProperty(window, '__PICOT_NATIVE_CAPABILITY__', {{ value: {token}, configurable: true }}); }}"
+        "if (window === window.top && window.location.protocol === 'http:' && [\"127.0.0.1\",\"localhost\",\"::1\",\"[::1]\"].includes(window.location.hostname)) {{ Object.defineProperty(window, '__PICOT_NATIVE_CAPABILITY__', {{ value: {token}, configurable: true }}); }}"
     )
 }
 
@@ -598,16 +599,21 @@ mod tests {
     }
 
     #[test]
-    fn initialization_script_guards_capability_behind_loopback_origin_and_port() {
-        let script = capability_initialization_script("127.0.0.1", 3001, "secret-cap");
+    fn initialization_script_exposes_capability_on_any_loopback_origin() {
+        let script = capability_initialization_script("secret-cap");
         assert!(script.contains("\"secret-cap\""));
-        assert!(script.contains("\"127.0.0.1\""));
         assert!(script.contains("window.location.protocol === 'http:'"));
-        assert!(script.contains("window.location.hostname === \"127.0.0.1\""));
-        // Defense in depth: the capability is only exposed at the exact owner
-        // port, never at another loopback service.
-        assert!(script.contains("String(window.location.port) === \"3001\""));
+        // Loopback hosts are all accepted so a cross-port workspace navigation
+        // (new loopback port, same owner capability) still receives it.
+        assert!(script.contains("\"127.0.0.1\""));
+        assert!(script.contains("\"localhost\""));
+        // The script is loopback-agnostic by design: the exact-origin boundary
+        // is enforced by `authorize_navigation`, not by this init script.
+        assert!(!script.contains("window.location.port"));
         assert!(script.contains("__PICOT_NATIVE_CAPABILITY__"));
+        // The capability is injected only into the top-level frame, so a child
+        // frame or popup (window !== window.top) cannot inherit it.
+        assert!(script.contains("window === window.top"));
     }
 
     #[test]

@@ -180,3 +180,41 @@ describe("WindowCloseCoordinator global lock", () => {
     expect(b.setInteractionLocked).toHaveBeenCalledWith(true);
   });
 });
+
+describe("WindowCloseCoordinator terminal risk (version 4)", () => {
+  it("includes live terminals in the single summary and approves", async () => {
+    const showSummaryDialog = vi.fn(async () => "discard");
+    const { coordinator, transport } = makeCoordinator({ showSummaryDialog });
+    let termRisk = { terminalTabs: [{ terminalId: "t1", label: "zsh" }] };
+    const terminal = {
+      getCloseRisk: () => termRisk,
+      settleCloseRisk: vi.fn(async () => {
+        // Settling closes the live terminals, so the risk they reported clears.
+        termRisk = { terminalTabs: [] };
+      }),
+      setInteractionLocked: vi.fn(),
+    };
+    coordinator.registerParticipant("terminal", terminal);
+    await coordinator.handleHostCloseRequest("close-term");
+    expect(showSummaryDialog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalTabs: [expect.objectContaining({ label: "zsh" })],
+      }),
+      expect.anything(),
+    );
+    expect(terminal.settleCloseRisk).toHaveBeenCalledWith("discard");
+    expect(transport.approveWindowClose).toHaveBeenCalledWith("close-term");
+  });
+
+  it("does not show the dialog when terminal risk is empty", async () => {
+    const showSummaryDialog = vi.fn(async () => "discard");
+    const { coordinator, transport } = makeCoordinator({ showSummaryDialog });
+    coordinator.registerParticipant("terminal", {
+      getCloseRisk: () => ({ terminalTabs: [] }),
+      settleCloseRisk: vi.fn(async () => {}),
+    });
+    await coordinator.handleHostCloseRequest("close-empty");
+    expect(showSummaryDialog).not.toHaveBeenCalled();
+    expect(transport.approveWindowClose).toHaveBeenCalledWith("close-empty");
+  });
+});

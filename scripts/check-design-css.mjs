@@ -7,8 +7,12 @@ const root = process.cwd();
 const publicDir = join(root, "public");
 const fix = process.argv.includes("--fix");
 const tokenSource = "public/style-theme.css";
-const cssFiles = (await walk(publicDir)).filter((path) => extname(path) === ".css");
-const jsFiles = (await walk(publicDir)).filter((path) => extname(path) === ".js");
+const cssFiles = (await walk(publicDir)).filter(
+  (path) => extname(path) === ".css" && !relative(root, path).startsWith("public/vendor/"),
+);
+const jsFiles = (await walk(publicDir)).filter(
+  (path) => extname(path) === ".js" && !relative(root, path).startsWith("public/vendor/"),
+);
 
 const exactTokens = new Map([
   ["2px", "--space-0-5"],

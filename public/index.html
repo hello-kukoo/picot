@@ -12,6 +12,7 @@
     <link rel="stylesheet" href="style-theme.css" />
     <link rel="stylesheet" href="design-system.css" />
     <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="vendor/xterm.css" />
     <script>
       // Detect macOS for overlay title bar padding (TitleBarStyle::Overlay in Rust
       // extends the WebView into the native title bar area; we add padding so
@@ -371,10 +372,11 @@
               ></div>
             </fieldset>
             <button
-              class="icon-btn"
+              class="icon-btn panel-toggle-btn"
               id="file-sidebar-toggle"
               title="Files"
               aria-label="Toggle file browser"
+              aria-pressed="false"
               data-i18n-title="nav.files"
               data-i18n-aria-label="nav.files"
             >
@@ -388,9 +390,8 @@
                 stroke-linecap="round"
                 stroke-linejoin="round"
               >
-                <path
-                  d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
-                />
+                <rect x="3.5" y="4.5" width="17" height="15" rx="3" />
+                <path d="M17 5v14" />
               </svg>
             </button>
             <button
@@ -426,7 +427,6 @@
               id="quick-chat-dialog-root"
             ></div>
             <div class="quick-chat-chip-root" id="quick-chat-chip-root"></div>
-
             <!-- Super Agent Chat Header web component (shown when SA is active) -->
             <sa-chat-header
               class="super-agent-chat-header hidden"
@@ -1797,6 +1797,9 @@
         }
       }
     </script>
+    <!-- Terminal runtime: same-origin xterm bundle. Registers globalThis.PicotXterm
+         as a side effect before any terminal module reads it. No CDN, no import map. -->
+    <script type="module" src="vendor/xterm.js"></script>
     <script type="module" src="bootstrap-entry.js"></script>
     <script type="module" src="components/super-agent-entry.js"></script>
     <script type="module" src="components/super-agent-runtime.js"></script>

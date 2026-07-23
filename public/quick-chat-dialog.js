@@ -1,5 +1,5 @@
 // ABOUTME: Non-modal floating Quick Chat dialog: single runtime/view, minimize
-// ABOUTME: chip, title-bar drag, New Chat replacement, and close confirmation.
+// ABOUTME: chip, title-bar drag, replacement, and close confirmation.
 
 import { EphemeralChatRuntime } from "./ephemeral-chat-runtime.js";
 import { onLocaleChange, t } from "./i18n.js";

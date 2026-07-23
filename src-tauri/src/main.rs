@@ -17,6 +17,11 @@ mod pi_rpc_bridge;
 mod remote_auth;
 mod runtime_coordinator;
 mod settings_store;
+mod terminal_manager;
+mod terminal_output;
+mod terminal_profiles;
+mod terminal_registry;
+mod terminal_state_store;
 mod window_owner;
 
 use broker_ws::BrokerWs;
@@ -44,6 +49,9 @@ use tauri::image::Image;
 use tauri::{AppHandle, Manager, State, TitleBarStyle, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_dialog::MessageDialogKind;
+use terminal_manager::TerminalManager;
+use terminal_registry::TerminalRegistry;
+use terminal_state_store::TerminalStateStore;
 use window_owner::WindowOwnerRegistry;
 
 type PiManagerState = Arc<PiManager>;
@@ -51,6 +59,7 @@ type BrokerWsState = Arc<BrokerWs>;
 type NativePiManagerState = NativePiManager;
 #[allow(dead_code)]
 type OwnerRegistryState = Arc<WindowOwnerRegistry>;
+type TerminalManagerState = Arc<TerminalManager>;
 #[allow(dead_code)]
 type EphemeralRegistryState = Arc<EphemeralRegistry>;
 
@@ -700,8 +709,7 @@ fn open_workspace_window(
     let (owner, capability) = registry
         .create_owner(label.clone(), canonical_cwd, port, origin)
         .map_err(|e| format!("Failed to create window owner: {e}"))?;
-    let init_script =
-        window_owner::capability_initialization_script("localhost", port, &capability);
+    let init_script = window_owner::capability_initialization_script(&capability);
 
     let nav_registry = registry.clone();
     let nav_owner = owner.clone();
@@ -2250,6 +2258,9 @@ fn handle_window_destroyed(window: &tauri::Window) {
             ephemeral.finish_cleanup(&lease);
         }
     }
+    if let Some(terminal_manager) = window.try_state::<TerminalManagerState>() {
+        terminal_manager.kill_owner(&owner);
+    }
     close_approvals().lock().unwrap().remove(&owner);
     registry.revoke_owner(&owner);
 }
@@ -2293,6 +2304,21 @@ fn main() {
             let owner_registry = Arc::new(WindowOwnerRegistry::default());
             let ephemeral_registry = Arc::new(EphemeralRegistry::default());
             broker.set_owner_registry(owner_registry.clone());
+
+            let terminal_state_dir = app
+                .path()
+                .app_data_dir()
+                .map(|dir| dir.join("terminal"))
+                .unwrap_or_else(|_| std::env::temp_dir());
+            let terminal_manager = Arc::new(TerminalManager::new(
+                TerminalRegistry::new(15),
+                TerminalStateStore::new(terminal_state_dir),
+            ));
+            let broker_for_terminal_events = broker.clone();
+            terminal_manager.set_event_sink(Arc::new(move |owner, event| {
+                broker_for_terminal_events.send_owner_event(owner, event);
+            }));
+            broker.set_terminal_manager(terminal_manager.clone());
             let descriptor_registry = ephemeral_registry.clone();
             broker.set_ephemeral_descriptor_provider(Arc::new(move |owner| {
                 serde_json::to_value(descriptor_registry.descriptors(owner))
@@ -2460,6 +2486,7 @@ fn main() {
             app.manage(broker.clone());
             app.manage(owner_registry.clone());
             app.manage(ephemeral_registry.clone());
+            app.manage(terminal_manager.clone());
 
             if startup_ok {
                 let app_handle = app.handle().clone();
@@ -2516,6 +2543,9 @@ fn main() {
                 if let Some(manager) = app_handle.try_state::<PiManagerState>() {
                     manager.kill_all_standby();
                     manager.kill_all();
+                }
+                if let Some(terminal_manager) = app_handle.try_state::<TerminalManagerState>() {
+                    terminal_manager.kill_all();
                 }
             }
         });

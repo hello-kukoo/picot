@@ -68,6 +68,20 @@ import {
   markTaskFinished,
   normalizeSuperAgentTasks,
 } from "./super-agent/task-state.js";
+import { TerminalClient } from "./terminal-client.js";
+import {
+  DEFAULT_TERMINAL_FONT_SIZE,
+  loadTerminalFont,
+  TERMINAL_FONT_FAMILY,
+  TERMINAL_FONT_STACK,
+} from "./terminal-font.js";
+import { TerminalPanel } from "./terminal-panel.js";
+import { TerminalPreferences } from "./terminal-preferences.js";
+import {
+  encodeBase64 as encodeTerminalBase64,
+  picotThemeToXterm,
+  TerminalTab,
+} from "./terminal-tab.js";
 import { applyTheme, getCurrentTheme, themes } from "./themes.js";
 import { DialogHandler } from "./ui/dialogs.js";
 import { setupMessagesInsets } from "./ui/layout-insets.js";
@@ -761,6 +775,198 @@ windowCloseCoordinator.registerParticipant("file", filePreviewPanel);
 windowCloseCoordinator.registerParticipant("side", sideChatManager);
 windowCloseCoordinator.registerParticipant("quick", quickChatDialog);
 
+// ── Terminal panel (native owner only) ──────────────────────────────────────
+// The host owns every PTY; the WebView owns xterm rendering. The panel is gated
+// on native capability, so LAN/mobile clients render no terminal surface.
+const terminalPreferences = new TerminalPreferences();
+const savedTerminalPreferences = terminalPreferences.load();
+const terminalFontSize = Number.isFinite(savedTerminalPreferences.fontSize)
+  ? Math.min(32, Math.max(10, savedTerminalPreferences.fontSize))
+  : DEFAULT_TERMINAL_FONT_SIZE;
+const terminalClient = new TerminalClient({
+  send: (envelope) => {
+    if (wsClient.ws && wsClient.ws.readyState === WebSocket.OPEN) {
+      try {
+        wsClient.ws.send(JSON.stringify(envelope));
+      } catch (err) {
+        console.warn("[terminal] send failed:", err);
+      }
+    }
+  },
+  createTab: (terminalId, generation) =>
+    new TerminalTab({
+      terminalId,
+      generation,
+      container: terminalPanel.getTabContainer(terminalId),
+      terminalFactory: () =>
+        new globalThis.PicotXterm.Terminal({
+          fontFamily: TERMINAL_FONT_STACK,
+          fontSize: terminalFontSize,
+          fontWeight: 400,
+        }),
+      fontFamily: TERMINAL_FONT_FAMILY,
+      fontSize: terminalFontSize,
+      loadFont: () =>
+        loadTerminalFont({
+          family: TERMINAL_FONT_FAMILY,
+          fontSize: terminalFontSize,
+        }),
+      fitAddonFactory: () => new globalThis.PicotXterm.FitAddon(),
+      serializeAddonFactory: () => new globalThis.PicotXterm.SerializeAddon(),
+      sendInput: (id, gen, b64) =>
+        terminalClient.command({
+          type: "terminal_input",
+          terminalId: id,
+          generation: gen,
+          dataBase64: b64,
+        }),
+      sendResize: (id, gen, cols, rows) =>
+        terminalClient.command({
+          type: "terminal_resize",
+          terminalId: id,
+          generation: gen,
+          cols,
+          rows,
+        }),
+    }),
+});
+const terminalPanel = new TerminalPanel({
+  native: nativeAvailable(),
+  subscribeLocale: onLocaleChange,
+  getAvailableHeight: () =>
+    document.querySelector(".workspace")?.clientHeight ||
+    document.querySelector(".workspace-content")?.clientHeight ||
+    600,
+  client: {
+    create: (profileId) => terminalClient.command({ type: "terminal_create", profileId }),
+    close: (id, gen) =>
+      terminalClient.command({ type: "terminal_close", terminalId: id, generation: gen }),
+    restart: (id, gen, profileId) =>
+      terminalClient.command({
+        type: "terminal_restart",
+        terminalId: id,
+        generation: gen,
+        profileId,
+      }),
+    focusTab: (id) => terminalClient.tabs.get(id)?.tab?.focus?.(),
+    refitTab: (id) => terminalClient.tabs.get(id)?.tab?.refit?.(),
+    refitAll: () => {
+      for (const entry of terminalClient.tabs.values()) entry.tab?.refit?.();
+    },
+    setPanelHeight: (height) =>
+      terminalClient.command({ type: "terminal_set_panel_height", heightPx: height }),
+    checkpointAll: async () => {
+      const pending = [];
+      for (const [id, entry] of terminalClient.tabs) {
+        const serialized = entry.tab.serializeForCheckpoint?.(2000);
+        if (!serialized) continue;
+        pending.push(
+          terminalClient.sendAndAwait(
+            {
+              type: "terminal_checkpoint",
+              terminalId: id,
+              generation: entry.generation,
+              watermark: entry.lastAppliedSequence,
+              snapshotBase64: encodeTerminalBase64(new TextEncoder().encode(serialized)),
+            },
+            (msg) => msg.type === "terminal_checkpoint_acked" && msg.terminalId === id,
+          ),
+        );
+      }
+      const results = await Promise.all(pending);
+      if (results.some((result) => result === null)) {
+        throw new Error("terminal checkpoint timed out");
+      }
+    },
+    closeAll: async () => {
+      const ids = [...terminalClient.tabs.keys()];
+      // Await each host-acknowledged close (terminal_closed) instead of polling
+      // the local cache; a timeout resolves null so Rust kill_owner still wins.
+      const results = await Promise.all(
+        ids.map(async (id) => {
+          const entry = terminalClient.tabs.get(id);
+          if (!entry) return null;
+          return terminalClient.sendAndAwait(
+            { type: "terminal_close", terminalId: id, generation: entry.generation },
+            (msg) => msg.type === "terminal_closed" && msg.terminalId === id,
+          );
+        }),
+      );
+      if (results.some((result) => result === null)) {
+        throw new Error("terminal close timed out");
+      }
+      terminalClient.reset();
+      terminalPanel.setTabs([]);
+    },
+  },
+});
+// The panel is mounted only after the broker confirms native capability:
+// `transport.capabilities.native` is false before the WS handshake completes,
+// so mounting at module top would skip it on the desktop. The event listeners
+// are registered once; only the DOM mount is gated on the capability.
+function mountTerminalPanelIfNative() {
+  if (!nativeAvailable() || terminalPanel.toggleEl) {
+    return;
+  }
+  const workspaceEl = document.querySelector(".workspace") || document.body;
+  const headerEl = document.querySelector(".workspace .header") || workspaceEl;
+  const toolbarEl = headerEl.querySelector(".header-right") || headerEl;
+  const sideChatToggle = toolbarEl.querySelector("#side-chat-btn");
+  const fileSidebarToggle = toolbarEl.querySelector("#file-sidebar-toggle");
+  if (sideChatToggle && fileSidebarToggle) {
+    toolbarEl.insertBefore(sideChatToggle, fileSidebarToggle);
+  }
+  terminalPanel.native = true;
+  terminalPanel.mount({ toggleContainer: toolbarEl, panelContainer: workspaceEl });
+  if (fileSidebarToggle && terminalPanel.toggleEl) {
+    toolbarEl.insertBefore(terminalPanel.toggleEl, fileSidebarToggle);
+  }
+  windowCloseCoordinator.registerParticipant("terminal", terminalPanel);
+}
+wsClient.addEventListener("terminalEvent", (event) => {
+  const msg = event.detail || {};
+  // Async PTY events arrive wrapped in a `terminal_event` envelope.
+  if (msg.type === "terminal_event") {
+    const payload = msg.payload || {};
+    if (payload.type === "terminal_output") {
+      terminalClient.applyOutput(payload);
+      terminalPanel.markActivity(payload.terminalId);
+    } else if (payload.type === "terminal_exited" || payload.type === "terminal_failed") {
+      terminalClient.removeTab(payload.terminalId, payload.generation);
+      terminalClient.command({ type: "terminal_list" });
+    }
+    return;
+  }
+  // Synchronous command responses (terminal_created/listed/closed/...).
+  terminalClient.resolveResponse(msg);
+  if (msg.type === "terminal_listed") {
+    terminalClient.applyListed(msg);
+    terminalPanel.setTabs(
+      (msg.tabs || []).map((tab) => ({
+        terminalId: tab.terminalId,
+        generation: tab.generation,
+        label: tab.label,
+        profileId: tab.profileId,
+        status: tab.status,
+        historyGap: tab.historyGap,
+      })),
+    );
+    if (Number.isFinite(msg.panelHeightPx)) {
+      terminalPanel.setHeight(msg.panelHeightPx);
+    }
+  } else if (
+    msg.type === "terminal_created" ||
+    msg.type === "terminal_restarted" ||
+    msg.type === "terminal_closed"
+  ) {
+    terminalClient.command({ type: "terminal_list" });
+  }
+});
+wsClient.addEventListener("terminalCommandFailed", (event) => {
+  console.warn("[terminal] command failed:", event.detail);
+});
+mountTerminalPanelIfNative();
+
 async function prepareEphemeralWorkspaceTransition() {
   quickChatDialog.setInteractionLocked(true);
   filePreviewPanel.setInteractionLocked(true);
@@ -768,6 +974,7 @@ async function prepareEphemeralWorkspaceTransition() {
     const accepted = await sideChatManager.prepareWorkspaceTransition();
     if (accepted) {
       sideChatManager.setInteractionLocked(true);
+      await terminalPanel.beforeWorkspaceTransition?.();
     } else {
       quickChatDialog.setInteractionLocked(false);
       filePreviewPanel.setInteractionLocked(false);
@@ -785,10 +992,17 @@ function cancelEphemeralWorkspaceTransition() {
   sideChatManager.setInteractionLocked(false);
   quickChatDialog.setInteractionLocked(false);
   filePreviewPanel.setInteractionLocked(false);
+  terminalPanel.cancelWorkspaceTransition?.();
 }
 
 wsClient.addEventListener("ownerBootstrap", async (event) => {
   if (!nativeAvailable()) return;
+  // The host advertises the current workspace generation; terminal commands
+  // carry it as a compare-only attachment token (broker rejects a mismatch).
+  if (typeof event.detail?.workspaceGeneration === "number") {
+    terminalClient.setWorkspaceGeneration(event.detail.workspaceGeneration);
+    if (terminalPanel.toggleEl) terminalClient.requestList();
+  }
   try {
     const advertised = event.detail?.instances;
     const instances = Array.isArray(advertised)
@@ -878,6 +1092,7 @@ async function refreshFileBrowserForWorkspace(
 
 fileSidebarToggle.addEventListener("click", () => {
   const isCollapsed = fileSidebar.classList.toggle("collapsed");
+  fileSidebarToggle.setAttribute("aria-pressed", String(!isCollapsed));
   if (!isCollapsed) {
     refreshFileBrowserForWorkspace(getCurrentWorkspacePath(), { force: true });
   }
@@ -886,6 +1101,7 @@ fileSidebarToggle.addEventListener("click", () => {
 
 fileSidebarClose.addEventListener("click", () => {
   fileSidebar.classList.add("collapsed");
+  fileSidebarToggle.setAttribute("aria-pressed", "false");
   localStorage.setItem("pi-studio-file-sidebar", "closed");
 });
 
@@ -1073,7 +1289,9 @@ document.addEventListener("click", () => closeHeaderOpenAppMenu());
 void loadHeaderOpenApps();
 
 // Restore file sidebar state
-if (localStorage.getItem("pi-studio-file-sidebar") === "open") {
+const fileSidebarIsOpen = localStorage.getItem("pi-studio-file-sidebar") === "open";
+fileSidebarToggle.setAttribute("aria-pressed", String(fileSidebarIsOpen));
+if (fileSidebarIsOpen) {
   fileSidebar.classList.remove("collapsed");
   refreshFileBrowserForWorkspace(getCurrentWorkspacePath(), { force: true });
 }
@@ -1396,6 +1614,9 @@ wsClient.addEventListener("connected", () => {
   updateConnectionStatus("connected");
   // Fetch model context window size for token % display
   setTimeout(fetchContextWindow, 1000);
+  // Terminal reattachment is triggered after owner_bootstrap supplies the
+  // current workspace generation. Sending before that token is known would
+  // make a cross-workspace reload use generation zero.
 });
 
 wsClient.addEventListener("disconnected", () => {
@@ -4611,6 +4832,7 @@ wsClient.addEventListener("capabilities", () => {
   refreshHeaderOpenAppButton();
   void loadHeaderOpenApps();
   void updater.initUpdaterUI();
+  mountTerminalPanelIfNative();
   // Ephemeral chat entry points are native-only.
   const showEphemeral = nativeAvailable();
   document.getElementById("side-chat-btn")?.classList.toggle("hidden", !showEphemeral);
@@ -4636,6 +4858,11 @@ function buildThemeGrid() {
     btn.appendChild(colors);
     btn.addEventListener("click", () => {
       applyTheme(id);
+      // Re-apply the Picot theme to every live xterm instance.
+      const xtermTheme = picotThemeToXterm();
+      for (const entry of terminalClient.tabs.values()) {
+        entry.tab?.setTheme?.(xtermTheme);
+      }
       themeGrid.querySelectorAll(".theme-swatch").forEach((s) => {
         s.classList.remove("active");
       });

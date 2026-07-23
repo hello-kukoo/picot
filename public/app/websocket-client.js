@@ -478,6 +478,25 @@ export class WebSocketClient extends EventTarget {
       return;
     }
 
+    // Terminal PTY events (owner-scoped): the host terminal manager delivers
+    // these only to the current authenticated native client. They never pass
+    // through Pi or the embedded server.
+    if (message.type === "terminal_event") {
+      this.dispatchEvent(new CustomEvent("terminalEvent", { detail: message }));
+      return;
+    }
+    if (message.type === "terminal_command_failed") {
+      this.dispatchEvent(new CustomEvent("terminalCommandFailed", { detail: message }));
+      return;
+    }
+    // Manager synchronous responses (terminal_created/listed/closed/restarted/...)
+    // are delivered on this socket too; surface them as terminalEvent so the
+    // panel can rebuild tab state.
+    if (typeof message.type === "string" && message.type.startsWith("terminal_")) {
+      this.dispatchEvent(new CustomEvent("terminalEvent", { detail: message }));
+      return;
+    }
+
     // Host-targeted window close request: the coordinator runs its serialized
     // risk/settlement flow and replies with window_close_approve.
     if (message.type === "window_close_request") {

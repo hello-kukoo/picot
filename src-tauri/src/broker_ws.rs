@@ -2,6 +2,7 @@
 // ABOUTME: Enforces owner-scoped ephemeral routing, bounded replay, and command policy.
 
 use crate::command_policy::{classify_core_command, EphemeralPermission};
+use crate::terminal_manager::TerminalManager;
 use crate::window_owner::{OwnerId, WindowOwnerRegistry};
 use futures_util::future::BoxFuture;
 use futures_util::{SinkExt, StreamExt};
@@ -119,6 +120,7 @@ struct BrokerInner {
     next_client_id: AtomicU64,
     control_handler: Mutex<Option<ControlHandler>>,
     owner_registry: Mutex<Option<Arc<WindowOwnerRegistry>>>,
+    terminal_manager: Mutex<Option<Arc<TerminalManager>>>,
 }
 
 #[derive(Clone)]
@@ -192,6 +194,12 @@ impl BrokerWs {
     /// registry exist.
     pub fn set_owner_registry(&self, registry: Arc<WindowOwnerRegistry>) {
         *self.inner.owner_registry.lock().unwrap() = Some(registry);
+    }
+
+    /// Install the terminal PTY manager used to dispatch `terminal_command`
+    /// frames. Called once from main.rs after both the broker and manager exist.
+    pub fn set_terminal_manager(&self, manager: Arc<TerminalManager>) {
+        *self.inner.terminal_manager.lock().unwrap() = Some(manager);
     }
 
     /// Provide redacted owner-scoped descriptors for the native reconnect bootstrap.
@@ -643,11 +651,20 @@ impl BrokerWs {
             .as_ref()
             .map(|provider| provider(owner))
             .unwrap_or_else(|| json!([]));
+        let workspace_generation = self
+            .inner
+            .owner_registry
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|registry| registry.current_workspace_generation(owner))
+            .unwrap_or(0);
         let _ = tx.send(
             json!({
                 "type": "owner_bootstrap",
                 "protocolVersion": PROTOCOL_VERSION,
-                "instances": instances
+                "instances": instances,
+                "workspaceGeneration": workspace_generation
             })
             .to_string(),
         );
@@ -674,6 +691,15 @@ impl BrokerWs {
         // UI response also carries `payload.type = extension_ui_response`.
         if value.get("type").and_then(Value::as_str) == Some("ephemeral_command") {
             self.dispatch_ephemeral_command(ctx, &value, client_tx);
+            return;
+        }
+
+        // Terminal commands are owner-scoped host ops handled by the terminal
+        // manager. They never reach a Pi upstream or the embedded server. This
+        // runs before the generic UI-response branch so a terminal frame cannot
+        // be misrouted as an extension_ui_response.
+        if value.get("type").and_then(Value::as_str) == Some("terminal_command") {
+            self.dispatch_terminal_command(ctx, &value, client_tx);
             return;
         }
 
@@ -867,6 +893,77 @@ impl BrokerWs {
                 );
             }
         });
+    }
+
+    /// Dispatch an owner-scoped `terminal_command` to the terminal manager.
+    /// Owner, canonical workspace root, and the current workspace generation
+    /// are derived from the verified client + owner registry; payload hints for
+    /// those fields are ignored. The frame's `workspaceGeneration` is compared
+    /// against the host-owned current binding before the manager is called. A
+    /// failure replies only to the sender with `terminal_command_failed`.
+    fn dispatch_terminal_command(
+        &self,
+        ctx: &VerifiedClientContext,
+        value: &Value,
+        client_tx: &Tx,
+    ) {
+        let request_id = value
+            .get("requestId")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let fail = |reason: &str| {
+            let _ = client_tx.send(
+                json!({
+                    "type": "terminal_command_failed",
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "requestId": request_id,
+                    "error": reason,
+                })
+                .to_string(),
+            );
+        };
+        let Some(owner) = &ctx.owner_id else {
+            fail("unauthorized");
+            return;
+        };
+        if ctx.class != ClientClass::Native {
+            fail("unauthorized");
+            return;
+        }
+        let Some(manager) = self.inner.terminal_manager.lock().unwrap().clone() else {
+            fail("terminal unavailable");
+            return;
+        };
+        let Some(registry) = self.inner.owner_registry.lock().unwrap().clone() else {
+            fail("unauthorized");
+            return;
+        };
+        let Some((workspace_root, _port)) = registry.current_workspace(owner) else {
+            fail("no workspace");
+            return;
+        };
+        let Some(current_generation) = registry.current_workspace_generation(owner) else {
+            fail("no workspace");
+            return;
+        };
+        // Compare-only attachment token: the frame's workspaceGeneration must
+        // match the host-owned current binding. The page learns the current
+        // generation from owner_bootstrap (and updates it after a committed
+        // workspace transition), so a stale page/connection cannot command the
+        // current workspace's terminals.
+        let frame_generation = value.get("workspaceGeneration").and_then(Value::as_u64);
+        if frame_generation != Some(current_generation) {
+            fail("stale workspace");
+            return;
+        }
+        let payload = value.get("payload").cloned().unwrap_or(Value::Null);
+        match manager.dispatch(owner, &workspace_root, &payload) {
+            Ok(response) => {
+                let _ = client_tx.send(response.to_string());
+            }
+            Err(error) => fail(&error),
+        }
     }
 
     /// Reply to the originating UI client that a `broker_command` could not be
@@ -1453,6 +1550,32 @@ mod tests {
             broker.classify_hello(&hello),
             HelloOutcome::Remote
         ));
+    }
+
+    #[test]
+    fn terminal_command_rejects_stale_workspace_generation() {
+        let (broker, registry) = broker_with_registry();
+        broker.set_terminal_manager(Arc::new(TerminalManager::new(
+            crate::terminal_registry::TerminalRegistry::new(15),
+            crate::terminal_state_store::TerminalStateStore::new(std::env::temp_dir()),
+        )));
+        let ctx = native_ctx(&broker, &registry, "w-gen");
+        let owner = ctx.owner_id.clone().expect("owner");
+        let current_gen = registry
+            .current_workspace_generation(&owner)
+            .expect("current generation");
+        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        let frame = json!({
+            "type": "terminal_command",
+            "requestId": "r-gen",
+            "workspaceGeneration": current_gen + 999,
+            "payload": { "type": "terminal_list" }
+        })
+        .to_string();
+        broker.route_ui_message(&ctx, &frame, &tx);
+        let reply = rx.try_recv().expect("expected a command_failed reply");
+        assert!(reply.contains("terminal_command_failed"), "got: {reply}");
+        assert!(reply.contains("r-gen"));
     }
 
     #[test]

@@ -44,6 +44,13 @@ function loadLock() {
   if (!Array.isArray(lock.fontFiles) || lock.fontFiles.length === 0) {
     fail(`missing fontFiles in ${LOCK_FILE}`);
   }
+  if (
+    !Array.isArray(lock.outputFiles) ||
+    lock.outputFiles.length !== lock.fontFiles.length ||
+    lock.outputFiles.some((name) => !name.endsWith(".woff2"))
+  ) {
+    fail(`missing or invalid outputFiles in ${LOCK_FILE}`);
+  }
   return lock;
 }
 
@@ -59,7 +66,7 @@ function isUpToDate(lock) {
   } catch {
     return false;
   }
-  return lock.fontFiles
+  return lock.outputFiles
     .concat(LICENSE_FILE)
     .every((name) => fs.existsSync(path.join(OUT_DIR, name)));
 }
@@ -125,6 +132,12 @@ function replaceDirectory(directory) {
   fs.mkdirSync(directory, { recursive: true });
 }
 
+async function convertToWoff2(sourcePath, destinationPath) {
+  const { default: convert } = await import("ttf2woff2");
+  const converted = convert(fs.readFileSync(sourcePath));
+  fs.writeFileSync(destinationPath, converted);
+}
+
 async function main() {
   const lock = loadLock();
   if (isUpToDate(lock)) {
@@ -153,10 +166,12 @@ async function main() {
   try {
     extractArchive(archivePath, extractDir);
     replaceDirectory(OUT_DIR);
-    for (const fontFile of lock.fontFiles) {
+    for (let index = 0; index < lock.fontFiles.length; index += 1) {
+      const fontFile = lock.fontFiles[index];
+      const outputFile = lock.outputFiles[index];
       const source = findFile(extractDir, fontFile);
       if (!source) fail(`release archive is missing ${fontFile}`);
-      fs.copyFileSync(source, path.join(OUT_DIR, fontFile));
+      await convertToWoff2(source, path.join(OUT_DIR, outputFile));
     }
     const license = findFile(extractDir, LICENSE_FILE);
     if (!license) fail(`release archive is missing ${LICENSE_FILE}`);

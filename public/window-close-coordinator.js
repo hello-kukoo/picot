@@ -60,7 +60,8 @@ export class WindowCloseCoordinator {
         const risk = this._collectRisk();
         const hasRisk =
           risk.dirtyFiles.length > 0 ||
-          risk.ephemeralChats.some((chat) => chat.hasMessages || chat.streaming);
+          risk.ephemeralChats.some((chat) => chat.hasMessages || chat.streaming) ||
+          risk.terminalTabs.length > 0;
         if (!hasRisk) {
           await this._finish(requestId);
           return;
@@ -95,8 +96,9 @@ export class WindowCloseCoordinator {
           if (participant.settleCloseRisk) await participant.settleCloseRisk(decision);
         }
         const remaining = this._collectRisk();
-        if (remaining.dirtyFiles.length > 0) {
-          // File settlement failed (e.g. save error): keep the window open.
+        if (remaining.dirtyFiles.length > 0 || remaining.terminalTabs.length > 0) {
+          // File settlement failed or live terminals remain: keep the window open.
+          // (Rust remains the final cleanup authority if the WebView disconnects.)
           this._resetTransaction(true);
           return;
         }
@@ -134,6 +136,7 @@ export class WindowCloseCoordinator {
   _collectRisk() {
     let dirtyFiles = [];
     let ephemeralChats = [];
+    let terminalTabs = [];
     for (const participant of this.participants.values()) {
       const risk = participant.getCloseRisk?.();
       if (!risk) continue;
@@ -145,8 +148,11 @@ export class WindowCloseCoordinator {
       } else if (risk.instanceId) {
         ephemeralChats.push(risk);
       }
+      if (Array.isArray(risk.terminalTabs)) {
+        terminalTabs = terminalTabs.concat(risk.terminalTabs);
+      }
     }
-    return { version: 3, dirtyFiles, ephemeralChats };
+    return { version: 4, dirtyFiles, ephemeralChats, terminalTabs };
   }
 }
 

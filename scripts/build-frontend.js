@@ -48,7 +48,26 @@ const entries = [
     ],
     outfile: path.join(OUT_DIR, "pdf.worker.js"),
   },
+  {
+    ...common,
+    entryPoints: [path.join(ROOT, "public", "terminal-vendor-entry.js")],
+    outfile: path.join(OUT_DIR, "xterm.js"),
+  },
 ];
+
+// Static assets copied verbatim into public/vendor/. Each entry is a
+// [source-relative-to-ROOT, destination-filename] pair.
+const staticAssets = [["node_modules/@xterm/xterm/css/xterm.css", "xterm.css"]];
+
+function copyStaticAssets() {
+  for (const [relSrc, destName] of staticAssets) {
+    const src = path.join(ROOT, relSrc);
+    const dest = path.join(OUT_DIR, destName);
+    fs.copyFileSync(src, dest);
+    const sizeKb = (fs.statSync(dest).size / 1024).toFixed(1);
+    console.log(`[build-frontend] ${path.relative(ROOT, dest)} (${sizeKb} KB)`);
+  }
+}
 
 async function buildOnce() {
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -58,6 +77,7 @@ async function buildOnce() {
     const sizeKb = (fs.statSync(outPath).size / 1024).toFixed(1);
     console.log(`[build-frontend] ${path.relative(ROOT, outPath)} (${sizeKb} KB)`);
   }
+  copyStaticAssets();
 }
 
 async function buildWatch() {
