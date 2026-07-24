@@ -6,7 +6,7 @@
    ═══════════════════════════════════════════════════════ */
 
 @font-face {
-  font-family: "Picot Terminal";
+  font-family: "Picot Mono Nerd";
   src: url("./fonts/terminal/FiraCodeNerdFontMono-Regular.woff2") format("woff2");
   font-style: normal;
   font-weight: 400;
@@ -14,7 +14,7 @@
 }
 
 @font-face {
-  font-family: "Picot Terminal";
+  font-family: "Picot Mono Nerd";
   src: url("./fonts/terminal/FiraCodeNerdFontMono-Bold.woff2") format("woff2");
   font-style: normal;
   font-weight: 700;
@@ -7119,7 +7119,8 @@ body.file-preview-resizing {
 }
 
 .file-code-editor .cm-scroller {
-  font-family: "SF Mono", "Menlo", "Monaco", "Courier New", monospace;
+  font-family: "Picot Mono Nerd", "SF Mono", "Menlo", "Monaco", "Courier New", monospace;
+  font-variant-ligatures: contextual;
 }
 
 /* Markdown preview */

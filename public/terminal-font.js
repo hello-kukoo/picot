@@ -1,9 +1,9 @@
 // ABOUTME: Loads Picot's same-origin bundled terminal font before xterm measures cells.
 // ABOUTME: Keeps font selection display-only and independent from PTY or terminal identity.
 
-export const TERMINAL_FONT_FAMILY = "Picot Terminal";
+export const TERMINAL_FONT_FAMILY = "Picot Mono Nerd";
 export const TERMINAL_FONT_STACK =
-  '"Picot Terminal", ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Mono", Consolas, "Liberation Mono", monospace';
+  '"Picot Mono Nerd", ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Mono", Consolas, "Liberation Mono", monospace';
 export const DEFAULT_TERMINAL_FONT_SIZE = 14;
 
 /**

@@ -53,14 +53,14 @@ test("resizing the panel refits the xterm viewport", () => {
   expect(refitAll).toHaveBeenCalledTimes(1);
 });
 
-test("closing the final tab leaves an expanded empty panel", async () => {
+test("closing the final tab collapses the panel", async () => {
   const { panel } = mountedPanel();
   await panel.expand();
 
   panel.setTabs([]);
 
-  expect(panel.isExpanded()).toBe(true);
-  expect(panel.root.classList.contains("hidden")).toBe(false);
+  expect(panel.isExpanded()).toBe(false);
+  expect(panel.root.classList.contains("hidden")).toBe(true);
 });
 
 test("body resize refits xterm and destroy disconnects the observer", () => {

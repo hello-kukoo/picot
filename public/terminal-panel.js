@@ -276,6 +276,9 @@ export class TerminalPanel {
     }
     this._renderTabBar();
     this._updateToggleAffordance();
+    if (this.tabs.length === 0 && this.expanded) {
+      this.collapse();
+    }
   }
 
   /** Record background output for a tab (cleared when the user views the panel). */

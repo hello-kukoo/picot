@@ -23,8 +23,8 @@ test("loads regular and bold bundled faces before resolving", async () => {
 
   await loadTerminalFont({ family: TERMINAL_FONT_FAMILY, fontSize: 16 });
 
-  expect(load).toHaveBeenCalledWith('16px "Picot Terminal"');
-  expect(load).toHaveBeenCalledWith('700 16px "Picot Terminal"');
+  expect(load).toHaveBeenCalledWith('16px "Picot Mono Nerd"');
+  expect(load).toHaveBeenCalledWith('700 16px "Picot Mono Nerd"');
 });
 
 test("exports the bundled family with monospace fallbacks", () => {
