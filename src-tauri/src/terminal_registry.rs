@@ -93,6 +93,7 @@ pub enum TerminalError {
     NotCreating,
     NotRunning,
     AlreadyClosing,
+    InvalidTabOrder,
 }
 
 /// Human-readable message for a terminal error, safe to return to the client.
@@ -105,6 +106,7 @@ pub fn err_str(err: TerminalError) -> &'static str {
         TerminalError::NotCreating => "terminal is not creating",
         TerminalError::NotRunning => "terminal is not running",
         TerminalError::AlreadyClosing => "terminal is already closing",
+        TerminalError::InvalidTabOrder => "terminal tab order is invalid",
     }
 }
 
@@ -312,8 +314,34 @@ impl TerminalRegistry {
         key: &TerminalKey,
         terminal_id: &str,
         generation: u64,
+        profile_id: &str,
+        label: String,
     ) -> Result<TerminalHandle, TerminalError> {
         let mut state = self.inner.lock().expect("terminal registry lock poisoned");
+        let old_status = state
+            .partitions
+            .get(key)
+            .and_then(|partition| {
+                partition
+                    .records
+                    .iter()
+                    .find(|record| {
+                        record.terminal_id == terminal_id && record.generation == generation
+                    })
+                    .map(|record| record.status)
+            })
+            .ok_or(TerminalError::UnknownTerminal)?;
+        if old_status == TerminalStatus::Closing {
+            return Err(TerminalError::AlreadyClosing);
+        }
+        if !matches!(
+            old_status,
+            TerminalStatus::Creating | TerminalStatus::Running
+        ) && self.live_reservations_locked(&state) >= self.global_process_quota
+        {
+            return Err(TerminalError::GlobalProcessQuota);
+        }
+
         let partition = state
             .partitions
             .get_mut(key)
@@ -321,18 +349,57 @@ impl TerminalRegistry {
         let idx = partition
             .records
             .iter()
-            .position(|r| r.terminal_id == terminal_id && r.generation == generation)
+            .position(|record| record.terminal_id == terminal_id && record.generation == generation)
             .ok_or(TerminalError::UnknownTerminal)?;
         let new_generation = partition.allocate_generation();
         let record = &mut partition.records[idx];
         record.generation = new_generation;
         record.status = TerminalStatus::Creating;
+        record.profile_id = profile_id.to_string();
+        record.label = label;
         record.exit_code = None;
         record.fail_reason = None;
         Ok(TerminalHandle {
             terminal_id: terminal_id.to_string(),
             generation: new_generation,
         })
+    }
+
+    /// Apply a complete tab ordering for one owner/workspace partition.
+    /// Each current terminal id must appear exactly once; no terminal is added
+    /// or removed by this UI metadata operation.
+    pub fn reorder(
+        &self,
+        key: &TerminalKey,
+        ordered_terminal_ids: &[String],
+    ) -> Result<(), TerminalError> {
+        let mut state = self.inner.lock().expect("terminal registry lock poisoned");
+        let partition = state
+            .partitions
+            .get_mut(key)
+            .ok_or(TerminalError::UnknownTerminal)?;
+        if ordered_terminal_ids.len() != partition.records.len()
+            || ordered_terminal_ids.iter().enumerate().any(|(index, id)| {
+                ordered_terminal_ids[..index].contains(id)
+                    || !partition
+                        .records
+                        .iter()
+                        .any(|record| record.terminal_id == *id)
+            })
+        {
+            return Err(TerminalError::InvalidTabOrder);
+        }
+        let mut records = std::mem::take(&mut partition.records);
+        let mut ordered = Vec::with_capacity(records.len());
+        for terminal_id in ordered_terminal_ids {
+            let index = records
+                .iter()
+                .position(|record| record.terminal_id == *terminal_id)
+                .expect("validated terminal id");
+            ordered.push(records.remove(index));
+        }
+        partition.records = ordered;
+        Ok(())
     }
 
     /// Validate that `(terminal_id, generation)` refers to the currently
@@ -576,11 +643,96 @@ mod tests {
     }
 
     #[test]
+    fn restart_of_exited_tab_reserves_global_quota() {
+        let registry = test_registry(1);
+        let exited_key = test_key("owner-restart-exited", "/ws-restart-exited");
+        let exited = registry.reserve_tab(&exited_key).unwrap();
+        commit(&registry, &exited_key, &exited);
+        registry
+            .mark_exited(&exited_key, &exited.terminal_id, exited.generation, Some(0))
+            .unwrap();
+        let live_key = test_key("owner-restart-live", "/ws-restart-live");
+        registry.reserve_tab(&live_key).unwrap();
+
+        assert_eq!(
+            registry.restart(
+                &exited_key,
+                &exited.terminal_id,
+                exited.generation,
+                "default",
+                "Terminal".to_string(),
+            ),
+            Err(TerminalError::GlobalProcessQuota)
+        );
+        assert_eq!(registry.live_reservations(), 1);
+    }
+
+    #[test]
+    fn restart_updates_the_visible_profile_and_label() {
+        let registry = test_registry(15);
+        let key = test_key("owner-restart-profile", "/ws-restart-profile");
+        let initial = registry.reserve_tab(&key).unwrap();
+        commit(&registry, &key, &initial);
+        let restarted = registry
+            .restart(
+                &key,
+                &initial.terminal_id,
+                initial.generation,
+                "powershell",
+                "PowerShell".to_string(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            registry.descriptors(&key),
+            vec![TerminalDescriptor {
+                terminal_id: initial.terminal_id,
+                generation: restarted.generation,
+                status: TerminalStatus::Creating,
+                profile_id: "powershell".to_string(),
+                label: "PowerShell".to_string(),
+                exit_code: None,
+                fail_reason: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn restart_rejects_a_closing_lease() {
+        let registry = test_registry(15);
+        let key = test_key("owner-restart-closing", "/ws-restart-closing");
+        let reservation = registry.reserve_tab(&key).unwrap();
+        commit(&registry, &key, &reservation);
+        registry
+            .begin_close(&key, &reservation.terminal_id, reservation.generation)
+            .unwrap();
+
+        assert_eq!(
+            registry.restart(
+                &key,
+                &reservation.terminal_id,
+                reservation.generation,
+                "default",
+                "Terminal".to_string(),
+            ),
+            Err(TerminalError::AlreadyClosing)
+        );
+    }
+
+    #[test]
     fn stale_terminal_generation_cannot_mutate_restarted_tab() {
         let registry = test_registry(15);
         let key = test_key("owner-a", "/workspace-a");
         let first = registry.insert_running(key.clone(), "id", 1).unwrap();
-        let second = registry.restart(&key, &first.terminal_id, 1).unwrap();
+        let second = registry
+            .restart(
+                &key,
+                &first.terminal_id,
+                1,
+                "default",
+                "Terminal".to_string(),
+            )
+            .unwrap();
         assert_eq!(second.generation, 2);
         assert!(matches!(
             registry.require_running(&key, "id", 1),

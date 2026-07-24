@@ -6,6 +6,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,7 @@ use sha2::{Digest, Sha256};
 
 const STATE_FILENAME: &str = "terminal-state.json";
 pub const SCHEMA_VERSION: u32 = 1;
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// One persisted terminal tab slot. The order of `WorkspaceTerminalMetadata::tabs`
 /// is the tab order; `active_index` selects the visible tab. Neither field
@@ -177,8 +179,7 @@ impl TerminalStateStore {
     }
 
     fn temp_path(&self) -> PathBuf {
-        let pid = std::process::id();
-        self.config_dir.join(format!("{STATE_FILENAME}.{pid}.tmp"))
+        self.unique_temp_path(&self.state_path())
     }
 
     fn workspace_state_path(&self, workspace_root: &Path) -> PathBuf {
@@ -189,10 +190,19 @@ impl TerminalStateStore {
     }
 
     fn workspace_temp_path(&self, workspace_root: &Path) -> PathBuf {
+        self.unique_temp_path(&self.workspace_state_path(workspace_root))
+    }
+
+    fn unique_temp_path(&self, final_path: &Path) -> PathBuf {
+        let filename = final_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .expect("terminal state path has a UTF-8 filename");
+        let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
         self.config_dir.join(format!(
-            "{STATE_FILENAME}.{}.{}.tmp",
-            workspace_key(workspace_root),
-            std::process::id()
+            ".{filename}.{}.{}.tmp",
+            std::process::id(),
+            sequence
         ))
     }
 
@@ -328,5 +338,16 @@ mod tests {
         let store = TerminalStateStore::new(nested.clone());
         store.save(&sample_metadata()).unwrap();
         assert!(nested.exists());
+    }
+
+    #[test]
+    fn temporary_paths_are_unique_within_one_process() {
+        let dir = tempdir().unwrap();
+        let store = TerminalStateStore::new(dir.path().to_path_buf());
+        assert_ne!(store.temp_path(), store.temp_path());
+        assert_ne!(
+            store.workspace_temp_path(Path::new("/workspace")),
+            store.workspace_temp_path(Path::new("/workspace"))
+        );
     }
 }

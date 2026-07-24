@@ -53,6 +53,51 @@ test("resizing the panel refits the xterm viewport", () => {
   expect(refitAll).toHaveBeenCalledTimes(1);
 });
 
+test("closing the final tab leaves an expanded empty panel", async () => {
+  const { panel } = mountedPanel();
+  await panel.expand();
+
+  panel.setTabs([]);
+
+  expect(panel.isExpanded()).toBe(true);
+  expect(panel.root.classList.contains("hidden")).toBe(false);
+});
+
+test("body resize refits xterm and destroy disconnects the observer", () => {
+  const observer = { observe: vi.fn(), disconnect: vi.fn() };
+  vi.stubGlobal(
+    "ResizeObserver",
+    vi.fn(() => observer),
+  );
+  const refitAll = vi.fn();
+  const { panel } = mountedPanel({ client: { refitAll } });
+
+  expect(observer.observe).toHaveBeenCalledWith(panel.bodyEl);
+  globalThis.ResizeObserver.mock.calls[0][0]();
+  expect(refitAll).toHaveBeenCalledTimes(1);
+  panel.destroy();
+  expect(observer.disconnect).toHaveBeenCalledTimes(1);
+  vi.unstubAllGlobals();
+});
+
+test("closing a running tab requires confirmation", () => {
+  const close = vi.fn();
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const { panel } = mountedPanel({ client: { close } });
+  panel.setTabs([
+    { terminalId: "t1", generation: 1, label: "zsh", profileId: "default", status: "running" },
+  ]);
+
+  panel.tabButtons.get("t1").querySelector(".terminal-tab-close").click();
+
+  expect(confirm).toHaveBeenCalledTimes(1);
+  expect(close).not.toHaveBeenCalled();
+  confirm.mockReturnValue(true);
+  panel.tabButtons.get("t1").querySelector(".terminal-tab-close").click();
+  expect(close).toHaveBeenCalledWith("t1", 1);
+  confirm.mockRestore();
+});
+
 test("getCloseRisk reports only live terminals with stable labels", async () => {
   const { panel } = mountedPanel();
   await panel.expand();

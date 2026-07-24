@@ -29,6 +29,16 @@ function makeMessageInput() {
   };
 }
 
+describe("FileBrowser.getParentPath", () => {
+  test("recognizes Windows drive paths case-insensitively", () => {
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
+    browser.workspaceRoot = "C:/Project";
+    browser.currentPath = "c:/project/src";
+
+    expect(browser.getParentPath()).toBe("c:/project");
+  });
+});
+
 describe("FileBrowser.setWorkspaceRoot", () => {
   test("resets currentPath, path label, and container without fetching", () => {
     const container = makeContainer();
@@ -339,6 +349,12 @@ describe("FileBrowser.toMentionPath", () => {
     const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
     browser.workspaceRoot = "C:\\Proj";
     expect(browser.toMentionPath("c:\\proj\\src\\a.ts")).toBe("@src/a.ts");
+  });
+
+  test("different UNC shares are not representable as relative mentions", () => {
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
+    browser.workspaceRoot = "\\\\server\\share-a\\project";
+    expect(browser.toMentionPath("\\\\server\\share-b\\file.ts")).toBe(null);
   });
 
   test("different Windows drive is null", () => {

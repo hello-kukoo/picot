@@ -37,6 +37,7 @@ export class TerminalPanel {
     this.root = null;
     this.tabBarEl = null;
     this.bodyEl = null;
+    this.resizeObserver = null;
     this.unsubscribeLocale = null;
     if (subscribeLocale) {
       this.unsubscribeLocale = subscribeLocale(() => this.applyLocale());
@@ -93,6 +94,10 @@ export class TerminalPanel {
 
     this.bodyEl = document.createElement("div");
     this.bodyEl.className = "terminal-body";
+    if (typeof ResizeObserver !== "undefined") {
+      this.resizeObserver = new ResizeObserver(() => this.client?.refitAll?.());
+      this.resizeObserver.observe(this.bodyEl);
+    }
 
     const closeButton = document.createElement("button");
     closeButton.type = "button";
@@ -271,9 +276,6 @@ export class TerminalPanel {
     }
     this._renderTabBar();
     this._updateToggleAffordance();
-    if (this.tabs.length === 0 && this.expanded) {
-      this.collapse();
-    }
   }
 
   /** Record background output for a tab (cleared when the user views the panel). */
@@ -326,13 +328,15 @@ export class TerminalPanel {
       label.className = "terminal-tab-label";
       label.textContent = tab.label || tab.terminalId;
       btn.appendChild(label);
-      const close = document.createElement("span");
+      const close = document.createElement("button");
+      close.type = "button";
       close.className = "terminal-tab-close";
       close.textContent = "×";
+      close.setAttribute("aria-label", "Close terminal tab");
       close.addEventListener("click", (event) => {
         event.stopPropagation();
-        // Tauri v2 blocks window.confirm; closing is an explicit user action
-        // on the tab's close control, and the host remains the final authority.
+        const live = tab.status === "running" || tab.status === "creating";
+        if (live && !window.confirm(`Close ${tab.label || "terminal"}?`)) return;
         this.client?.close?.(tab.terminalId, tab.generation);
       });
       btn.appendChild(close);
@@ -400,6 +404,8 @@ export class TerminalPanel {
   }
 
   destroy() {
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
     this.unsubscribeLocale?.();
     this.unsubscribeLocale = null;
     for (const btn of this.tabButtons.values()) btn.remove();

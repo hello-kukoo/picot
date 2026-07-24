@@ -139,7 +139,18 @@ export class FileBrowser {
     // /work/app and /work/application cannot bypass the workspace boundary.
     const parentSegments = parent.split("/").filter(Boolean);
     const rootSegments = normalizedRoot.split("/").filter(Boolean);
-    const isInsideRoot = rootSegments.every((segment, index) => parentSegments[index] === segment);
+    const isWindowsDrivePath = (path) => /^[A-Za-z]:\//.test(path);
+    const caseInsensitive =
+      isWindowsDrivePath(parent) ||
+      isWindowsDrivePath(normalizedRoot) ||
+      parent.startsWith("//") ||
+      normalizedRoot.startsWith("//");
+    const isInsideRoot = rootSegments.every((segment, index) => {
+      const parentSegment = parentSegments[index];
+      return caseInsensitive
+        ? parentSegment?.toLowerCase() === segment.toLowerCase()
+        : parentSegment === segment;
+    });
     return isInsideRoot ? parent : null;
   }
 
@@ -361,13 +372,22 @@ export class FileBrowser {
 
     // Reject cross-drive Windows paths (e.g. root C: vs file D:)
     const isDriveSeg = (s) => /^[A-Za-z]:$/.test(s);
+    const normalizedRootPath = this.workspaceRoot.replace(/\\/g, "/");
+    const normalizedFilePath = filePath.replace(/\\/g, "/");
+    const isUncRoot = normalizedRootPath.startsWith("//");
+    const isUncFile = normalizedFilePath.startsWith("//");
     const isWindowsPath =
-      isDriveSeg(rootSegs[0]) ||
-      isDriveSeg(fileSegs[0]) ||
-      this.workspaceRoot.replace(/\\/g, "/").startsWith("//") ||
-      filePath.replace(/\\/g, "/").startsWith("//");
+      isDriveSeg(rootSegs[0]) || isDriveSeg(fileSegs[0]) || isUncRoot || isUncFile;
     const sameSegment = (left, right) =>
       isWindowsPath ? left.toLowerCase() === right.toLowerCase() : left === right;
+    // A UNC server/share pair is its volume root. Relative paths cannot cross
+    // shares even when both paths have the same server prefix.
+    if (
+      isUncRoot &&
+      isUncFile &&
+      (!sameSegment(rootSegs[0], fileSegs[0]) || !sameSegment(rootSegs[1], fileSegs[1]))
+    )
+      return null;
     if (
       !sameSegment(rootSegs[0], fileSegs[0]) &&
       (isDriveSeg(rootSegs[0]) || isDriveSeg(fileSegs[0]))

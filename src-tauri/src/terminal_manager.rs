@@ -114,17 +114,16 @@ impl TerminalManager {
             "terminal_ack" => self.ack(owner, workspace_root, payload),
             "terminal_close" => self.close(owner, workspace_root, payload),
             "terminal_restart" => self.restart(owner, workspace_root, payload),
-            // UI-only metadata (activate/reorder/panel height) is owned by the
-            // frontend for the first version; the host acknowledges it.
-            "terminal_activate" | "terminal_reorder" => {
-                Ok(json!({ "type": "terminal_command_acked" }))
-            }
+            "terminal_activate" => self.activate(owner, workspace_root, payload),
+            "terminal_reorder" => self.reorder(owner, workspace_root, payload),
             "terminal_set_panel_height" => {
                 let height = payload
                     .get("heightPx")
                     .and_then(Value::as_u64)
                     .ok_or_else(|| "heightPx is required".to_string())?;
-                self.set_panel_height(owner, workspace_root, height as u32);
+                let height =
+                    u32::try_from(height).map_err(|_| "heightPx is out of range".to_string())?;
+                self.set_panel_height(owner, workspace_root, height);
                 Ok(json!({ "type": "terminal_command_acked" }))
             }
             other => Err(format!("unknown terminal command: {other}")),
@@ -469,29 +468,32 @@ impl TerminalManager {
             .and_then(Value::as_str)
             .map(str::to_string);
         let key = self.key(owner, workspace_root);
-        let handle = self
+        let previous_profile = self
             .inner
-            .registry
-            .restart(&key, &terminal_id, generation)
-            .map_err(err_str_owned)?;
-
-        let previous_profile = self.kill_live(&terminal_id);
-        self.inner.outputs.lock().expect("outputs lock").insert(
-            terminal_id.clone(),
-            TerminalOutputStore::new(TerminalLimits::default()),
-        );
-
+            .live
+            .lock()
+            .expect("live lock")
+            .get(&terminal_id)
+            .filter(|live| live.generation == generation)
+            .map(|live| live.profile_id.clone());
         let profile_id = requested_profile
             .or(previous_profile)
             .unwrap_or_else(|| "default".to_string());
-        let shell = self.resolve_shell(&profile_id).inspect_err(|reason| {
-            let _ = self.inner.registry.mark_failed(
+        // Validate the requested profile before transitioning the existing tab.
+        let shell = self.resolve_shell(&profile_id)?;
+        let handle = self
+            .inner
+            .registry
+            .restart(
                 &key,
                 &terminal_id,
-                handle.generation,
-                reason.clone(),
-            );
-        })?;
+                generation,
+                &profile_id,
+                label_for_profile(&profile_id),
+            )
+            .map_err(err_str_owned)?;
+
+        self.replace_generation(&terminal_id, generation);
         let spawned = self
             .spawn_pty(&shell, workspace_root)
             .inspect_err(|reason| {
@@ -682,37 +684,75 @@ impl TerminalManager {
         kill_process_tree(&*spawned.master, spawned.child, job);
     }
 
-    fn kill_live(&self, terminal_id: &str) -> Option<String> {
-        let lt = self
-            .inner
-            .live
-            .lock()
-            .expect("live lock")
-            .remove(terminal_id)?;
-        let profile_id = lt.profile_id.clone();
-        kill_live_terminal(lt);
-        Some(profile_id)
+    /// Remove only the generation being replaced, and reset its output store
+    /// while both maps are locked in their global lock order.
+    fn replace_generation(&self, terminal_id: &str, generation: u64) {
+        let removed = {
+            let mut live = self.inner.live.lock().expect("live lock");
+            let mut outputs = self.inner.outputs.lock().expect("outputs lock");
+            let matches_generation = live
+                .get(terminal_id)
+                .is_some_and(|terminal| terminal.generation == generation);
+            if matches_generation {
+                outputs.insert(
+                    terminal_id.to_string(),
+                    TerminalOutputStore::new(TerminalLimits::default()),
+                );
+                live.remove(terminal_id)
+            } else {
+                None
+            }
+        };
+        if let Some(terminal) = removed {
+            kill_live_terminal(terminal);
+        }
     }
 
     fn terminate_and_finish(&self, key: &TerminalKey, lease: &CloseLease) {
-        if let Some(lt) = self
-            .inner
-            .live
-            .lock()
-            .expect("live lock")
-            .remove(&lease.terminal_id)
-        {
-            kill_live_terminal(lt);
+        let removed = {
+            let mut live = self.inner.live.lock().expect("live lock");
+            let mut outputs = self.inner.outputs.lock().expect("outputs lock");
+            let matches_generation = live
+                .get(&lease.terminal_id)
+                .is_some_and(|terminal| terminal.generation == lease.generation);
+            if matches_generation {
+                outputs.remove(&lease.terminal_id);
+                live.remove(&lease.terminal_id)
+            } else {
+                None
+            }
+        };
+        if let Some(terminal) = removed {
+            kill_live_terminal(terminal);
         }
-        self.inner
-            .outputs
-            .lock()
-            .expect("outputs lock")
-            .remove(&lease.terminal_id);
         let _ = self
             .inner
             .registry
             .finish_close(key, &lease.terminal_id, lease.generation);
+    }
+
+    /// Atomically verify that output belongs to the current PTY generation and
+    /// append it to that generation's journal. Restart/close use the same
+    /// live-then-output lock order, preventing an old reader from appending
+    /// between validation and journal replacement.
+    fn append_output_if_current(
+        &self,
+        terminal_id: &str,
+        generation: u64,
+        chunk: &[u8],
+    ) -> Option<u64> {
+        let live = self.inner.live.lock().expect("live lock");
+        if live
+            .get(terminal_id)
+            .is_none_or(|terminal| terminal.generation != generation)
+        {
+            return None;
+        }
+        let mut outputs = self.inner.outputs.lock().expect("outputs lock");
+        let output = outputs
+            .entry(terminal_id.to_string())
+            .or_insert_with(|| TerminalOutputStore::new(TerminalLimits::default()));
+        Some(output.append(chunk))
     }
 
     fn emit_output(
@@ -739,7 +779,95 @@ impl TerminalManager {
         );
     }
 
+    fn activate(
+        &self,
+        owner: &OwnerId,
+        workspace_root: &Path,
+        payload: &Value,
+    ) -> Result<Value, String> {
+        let terminal_id = payload
+            .get("terminalId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "terminalId is required".to_string())?;
+        let generation = payload
+            .get("generation")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "generation is required".to_string())?;
+        let descriptors = self
+            .inner
+            .registry
+            .descriptors(&self.key(owner, workspace_root));
+        let active_index = descriptors
+            .iter()
+            .position(|descriptor| {
+                descriptor.terminal_id == terminal_id && descriptor.generation == generation
+            })
+            .ok_or_else(|| err_str_owned(TerminalError::UnknownTerminal))?;
+        self.persist_with_active_index(owner, workspace_root, Some(active_index));
+        Ok(json!({ "type": "terminal_command_acked" }))
+    }
+
+    fn reorder(
+        &self,
+        owner: &OwnerId,
+        workspace_root: &Path,
+        payload: &Value,
+    ) -> Result<Value, String> {
+        let ordered_terminal_ids = payload
+            .get("orderedTerminalIds")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "orderedTerminalIds is required".to_string())?
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| "orderedTerminalIds must contain strings".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let key = self.key(owner, workspace_root);
+        let before = self.inner.registry.descriptors(&key);
+        let active_terminal_id = self
+            .inner
+            .state_store
+            .load_for_workspace(workspace_root)
+            .ok()
+            .flatten()
+            .and_then(|metadata| metadata.active_index)
+            .and_then(|index| before.get(index))
+            .map(|descriptor| descriptor.terminal_id.clone());
+        self.inner
+            .registry
+            .reorder(&key, &ordered_terminal_ids)
+            .map_err(err_str_owned)?;
+        let active_index = active_terminal_id.and_then(|terminal_id| {
+            self.inner
+                .registry
+                .descriptors(&key)
+                .iter()
+                .position(|descriptor| descriptor.terminal_id == terminal_id)
+        });
+        self.persist_with_active_index(owner, workspace_root, active_index);
+        Ok(json!({ "type": "terminal_command_acked" }))
+    }
+
     fn persist(&self, owner: &OwnerId, workspace_root: &Path) {
+        let active_index = self
+            .inner
+            .state_store
+            .load_for_workspace(workspace_root)
+            .ok()
+            .flatten()
+            .and_then(|metadata| metadata.active_index);
+        self.persist_with_active_index(owner, workspace_root, active_index);
+    }
+
+    fn persist_with_active_index(
+        &self,
+        owner: &OwnerId,
+        workspace_root: &Path,
+        active_index: Option<usize>,
+    ) {
         let key = self.key(owner, workspace_root);
         let descriptors = self.inner.registry.descriptors(&key);
         let default_profile = descriptors
@@ -754,14 +882,14 @@ impl TerminalManager {
                 profile_id: d.profile_id.clone(),
             })
             .collect();
-        // Preserve a previously persisted panel height across create/close/restart.
-        metadata.panel_height_px = self
+        let previous = self
             .inner
             .state_store
             .load_for_workspace(workspace_root)
             .ok()
-            .flatten()
-            .and_then(|m| m.panel_height_px);
+            .flatten();
+        metadata.panel_height_px = previous.as_ref().and_then(|value| value.panel_height_px);
+        metadata.active_index = active_index.filter(|index| *index < metadata.tabs.len());
         if let Err(err) = self
             .inner
             .state_store
@@ -839,26 +967,10 @@ fn run_reader(
             Ok(0) => break,
             Ok(n) => {
                 let chunk = buf[..n].to_vec();
-                // Drop output for a generation that is no longer current BEFORE
-                // it touches the journal, so a restarted tab's old reader cannot
-                // pollute the new generation's output store.
-                let still_current = manager
-                    .inner
-                    .live
-                    .lock()
-                    .expect("live lock")
-                    .get(&terminal_id)
-                    .map(|lt| lt.generation == generation)
-                    .unwrap_or(false);
-                if !still_current {
+                let Some(sequence) =
+                    manager.append_output_if_current(&terminal_id, generation, &chunk)
+                else {
                     continue;
-                }
-                let sequence = {
-                    let mut outputs = manager.inner.outputs.lock().expect("outputs lock");
-                    let output = outputs
-                        .entry(terminal_id.clone())
-                        .or_insert_with(|| TerminalOutputStore::new(TerminalLimits::default()));
-                    output.append(&chunk)
                 };
                 manager.emit_output(&owner, &terminal_id, generation, sequence, &chunk);
             }
@@ -886,6 +998,17 @@ fn run_reader(
             .ok()
             .map(|status| if status.success() { 0 } else { -1 })
     });
+    // The child has exited; release the live handle only when it still belongs
+    // to this reader generation. A replacement generation remains untouched.
+    {
+        let mut live = manager.inner.live.lock().expect("live lock");
+        if live
+            .get(&terminal_id)
+            .is_some_and(|terminal| terminal.generation == generation)
+        {
+            live.remove(&terminal_id);
+        }
+    }
     let key = TerminalKey {
         owner: owner.clone(),
         workspace_root: workspace_root.clone(),
@@ -1087,21 +1210,154 @@ mod tests {
     }
 
     #[test]
-    fn ui_metadata_commands_are_acked() {
-        let mgr = manager();
+    fn activate_and_reorder_persist_active_index_and_tab_order() {
+        let dir = tempdir().unwrap();
+        let state_dir = dir.path().to_path_buf();
+        let registry = TerminalRegistry::new(15);
+        let mgr =
+            TerminalManager::new(registry.clone(), TerminalStateStore::new(state_dir.clone()));
         let owner = owner("t-ui");
-        for kind in ["terminal_activate", "terminal_reorder"] {
-            let payload = json!({ "type": kind });
-            assert!(mgr.dispatch(&owner, Path::new("/ws"), &payload).is_ok());
-        }
-        // set_panel_height persists the height into the state store and requires heightPx.
-        assert!(mgr
-            .dispatch(
-                &owner,
-                Path::new("/ws"),
-                &json!({ "type": "terminal_set_panel_height", "heightPx": 320 }),
+        let workspace = Path::new("/ws");
+        let key = TerminalKey {
+            owner: owner.clone(),
+            workspace_root: workspace.to_path_buf(),
+        };
+        let first = registry
+            .reserve_tab_with_profile(&key, "default", "Terminal".to_string())
+            .unwrap();
+        let second = registry
+            .reserve_tab_with_profile(&key, "powershell", "PowerShell".to_string())
+            .unwrap();
+
+        mgr.dispatch(
+            &owner,
+            workspace,
+            &json!({
+                "type": "terminal_reorder",
+                "orderedTerminalIds": [second.terminal_id, first.terminal_id],
+            }),
+        )
+        .unwrap();
+        mgr.dispatch(
+            &owner,
+            workspace,
+            &json!({
+                "type": "terminal_activate",
+                "terminalId": first.terminal_id,
+                "generation": first.generation,
+            }),
+        )
+        .unwrap();
+
+        let metadata = TerminalStateStore::new(state_dir)
+            .load_for_workspace(workspace)
+            .unwrap()
+            .expect("metadata persisted");
+        assert_eq!(metadata.active_index, Some(1));
+        assert_eq!(
+            metadata
+                .tabs
+                .iter()
+                .map(|tab| tab.profile_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["powershell", "default"]
+        );
+    }
+
+    #[test]
+    fn panel_height_rejects_values_that_do_not_fit_u32() {
+        let mgr = manager();
+        let owner = owner("t-height-overflow");
+        let result = mgr.dispatch(
+            &owner,
+            Path::new("/ws"),
+            &json!({ "type": "terminal_set_panel_height", "heightPx": u64::from(u32::MAX) + 1 }),
+        );
+        assert_eq!(result.unwrap_err(), "heightPx is out of range");
+    }
+
+    #[test]
+    fn stale_reader_and_close_do_not_touch_replacement_generation() {
+        let mgr = manager();
+        let owner = owner("t-generation-safe");
+        let workspace = Path::new("/ws");
+        let key = TerminalKey {
+            owner: owner.clone(),
+            workspace_root: workspace.to_path_buf(),
+        };
+        let reservation = mgr
+            .inner
+            .registry
+            .reserve_tab_with_profile(&key, "default", "Terminal".to_string())
+            .unwrap();
+        mgr.inner
+            .registry
+            .commit_running(&key, &reservation.terminal_id, reservation.generation)
+            .unwrap();
+        let replacement = mgr
+            .inner
+            .registry
+            .restart(
+                &key,
+                &reservation.terminal_id,
+                reservation.generation,
+                "default",
+                "Terminal".to_string(),
             )
-            .is_ok());
+            .unwrap();
+        mgr.inner
+            .registry
+            .commit_running(&key, &replacement.terminal_id, replacement.generation)
+            .unwrap();
+
+        let pair = native_pty_system()
+            .openpty(PtySize::default())
+            .expect("test PTY");
+        let writer = pair.master.take_writer().expect("test PTY writer");
+        mgr.inner.live.lock().unwrap().insert(
+            replacement.terminal_id.clone(),
+            LiveTerminal {
+                owner: owner.clone(),
+                workspace_root: workspace.to_path_buf(),
+                generation: replacement.generation,
+                profile_id: "default".to_string(),
+                master: pair.master,
+                writer,
+                child: None,
+                #[cfg(windows)]
+                job: None,
+            },
+        );
+        mgr.inner.outputs.lock().unwrap().insert(
+            replacement.terminal_id.clone(),
+            TerminalOutputStore::new(TerminalLimits::default()),
+        );
+
+        assert_eq!(
+            mgr.append_output_if_current(
+                &replacement.terminal_id,
+                reservation.generation,
+                b"old reader output",
+            ),
+            None
+        );
+        mgr.terminate_and_finish(
+            &key,
+            &CloseLease {
+                terminal_id: replacement.terminal_id.clone(),
+                generation: reservation.generation,
+            },
+        );
+        assert_eq!(
+            mgr.inner.live.lock().unwrap()[&replacement.terminal_id].generation,
+            replacement.generation
+        );
+        assert!(mgr
+            .inner
+            .outputs
+            .lock()
+            .unwrap()
+            .contains_key(&replacement.terminal_id));
     }
 
     #[test]
