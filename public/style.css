@@ -6752,7 +6752,6 @@ body.super-agent-active .file-sidebar {
   background: var(--bg-frosted);
   backdrop-filter: blur(var(--blur-heavy)) saturate(1.5);
   -webkit-backdrop-filter: blur(var(--blur-heavy)) saturate(1.5);
-  border-left: 1px solid var(--border);
   overflow: hidden;
   position: relative;
   min-width: 320px;
@@ -6784,9 +6783,9 @@ body.super-agent-active .file-sidebar {
 }
 
 .file-preview-resizer {
-  width: 4px;
+  width: 2px;
   cursor: col-resize;
-  background: transparent;
+  background: var(--border);
   flex-shrink: 0;
   -webkit-app-region: no-drag;
   transition: background 0.15s var(--ease);
@@ -7665,7 +7664,7 @@ body.file-preview-resizing {
   border-top: none;
 }
 .terminal-resizer {
-  height: 4px;
+  height: 2px;
   cursor: row-resize;
   background: var(--border);
 }
