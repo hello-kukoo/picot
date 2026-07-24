@@ -13,8 +13,9 @@ wiring, and CSS integration.
 
 Bundle a GB2312 subset of **LXGW WenKai Lite** (Simplified Chinese, SIL OFL
 1.1) as a same-origin WOFF2 web font, and apply it as the CJK fallback on
-Picot's **content surfaces** — assistant response prose and file-preview
-Markdown prose — only. Latin text and all app chrome continue to use the
+Picot's **content surfaces** — the main-chat prose (both assistant
+replies and user messages) and file-preview Markdown prose. Latin text and
+all app chrome continue to use the
 existing system font stack. The bundled font is the single source of truth for
 CJK rendering on those surfaces; a user-installed font is never required.
 
@@ -37,9 +38,9 @@ These are the outcomes of the design discussion and are not re-litigated here:
 3. **WOFF2 format**, consistent with the terminal font (not WOFF).
 4. **Ship Regular weight only for v1.** Markdown `<strong>` uses the browser's
    faux-bold. Real Medium/Bold is deferred.
-5. **Scope to content surfaces only** — assistant response body and Markdown
-   preview body. Not the whole UI, not the user bubble, not code blocks, not
-   the input box, not the terminal.
+5. **Scope to content surfaces only** — assistant response body, the user
+   message bubble, and Markdown preview body. Not the whole UI, not code
+   blocks, not the input box, not the terminal.
 6. **CJK fallback via `unicode-range` + font-family ordering:** list
    `"Picot CJK"` before the unchanged system stack so CJK reliably selects the
    bundled face; its `unicode-range` excludes ASCII, so Latin falls through to
@@ -53,10 +54,11 @@ These are the outcomes of the design discussion and are not re-litigated here:
   stroke weight and small serifs hurt legibility versus SF/Inter.
 - App chrome (sidebar, header, tabs, buttons, settings) is UI furniture; the
   "Dark Glassmorphism" identity is better served by a neutral system face.
-- Scoping the kai face to the assistant reply creates a deliberate typographic
-  "voice" distinction (you type in the system default; the assistant answers
-  in a composed written face), which reinforces that the reply is authored
-  content rather than chrome.
+- Both the assistant reply and the user bubble use the kai face for CJK, so
+  the whole conversation reads in one consistent written face; the
+  user/assistant distinction is carried by bubble background, alignment, and
+  chrome — not by switching CJK fonts mid-conversation (which looked
+  inconsistent when the user bubble fell back to the system CJK face).
 
 ## Non-goals
 
@@ -182,11 +184,12 @@ existing terminal `@font-face` blocks:
 }
 ```
 
-Add scoped font-family rules for the two content surfaces. The `body` rule is
+Add scoped font-family rules for the three content surfaces. The `body` rule is
 intentionally **unchanged** so chrome stays on the system font:
 
 ```css
 .message.assistant .message-content,
+.message.user .message-content,
 .file-markdown-preview {
   font-family:
     "Picot CJK", -apple-system, BlinkMacSystemFont, "SF Pro Display",
@@ -216,7 +219,7 @@ Notes:
 | `.message.assistant .message-content` (prose)    | Yes (CJK fallback)                  |
 | `.file-markdown-preview` (Markdown prose)        | Yes (CJK fallback)                  |
 | `body`, sidebar, header, tabs, buttons, settings | No (system font)                    |
-| `.message.user .message-content` (user bubble)   | No                                  |
+| `.message.user .message-content` (user bubble)   | Yes (CJK fallback)                  |
 | `input`, `textarea` (composer)                   | No                                  |
 | `pre` / `code` (chat code blocks)                | No (monospace; system CJK fallback) |
 | `.file-code-editor .cm-editor` (CodeMirror)      | No                                  |
@@ -307,10 +310,11 @@ shipped, and the subset byte size — are asserted by the fetch CLI under Build
    under `public/fonts/cjk/`, SHA-verified and version-marked.
 2. The shipped WOFF2 is a GB2312 + CJK-punctuation subset; no full TTF is
    distributed.
-3. Assistant response prose and Markdown preview prose render CJK in wenkai
-   and Latin in the system font.
-4. App chrome, the user bubble, the composer, code blocks, and the terminal
-   are visually unchanged (no `font-family` change on `body`).
+3. Assistant response prose, the user message bubble, and Markdown preview
+   prose render CJK in wenkai and Latin in the system font.
+4. App chrome, the composer, code blocks, and the terminal are visually
+   unchanged (no `font-family` change on `body`); the user bubble's Latin is
+   unchanged and only its CJK now resolves to wenkai.
 5. English-only content does not trigger a download of the CJK WOFF2.
 6. The asset ships inside the `.app` / DMG / Windows ZIP; the CSP is unchanged;
    `bun run test` and `bun run check` pass.
