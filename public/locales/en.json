@@ -48,7 +48,9 @@
   },
   "queue": {
     "queued": "Queued",
-    "cancelTitle": "Cancel"
+    "cancelTitle": "Cancel",
+    "steering": "Steer",
+    "followUp": "Follow-up"
   },
   "input": {
     "typeMessage": "Type a message...",

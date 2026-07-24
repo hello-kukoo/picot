@@ -48,7 +48,9 @@
   },
   "queue": {
     "queued": "排队中",
-    "cancelTitle": "取消"
+    "cancelTitle": "取消",
+    "steering": "转向",
+    "followUp": "后续"
   },
   "input": {
     "typeMessage": "输入消息...",

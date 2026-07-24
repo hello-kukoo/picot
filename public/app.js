@@ -1733,6 +1733,9 @@ function handleRPCEvent(event) {
         refreshSidebarForNewSession(event).catch(() => {});
       }
       break;
+    case "agent_settled":
+      handleAgentSettled();
+      break;
     case "message_start":
       handleMessageStart(event.message);
       // Refresh the sidebar as soon as the new session is persisted. Pi writes
@@ -1762,11 +1765,14 @@ function handleRPCEvent(event) {
     case "tool_execution_end":
       handleToolExecutionEnd(event);
       break;
-    case "auto_compaction_start":
+    case "compaction_start":
       handleCompactionStart();
       break;
-    case "auto_compaction_end":
+    case "compaction_end":
       handleCompactionEnd(event);
+      break;
+    case "queue_update":
+      renderPiQueue(event);
       break;
     case "auto_retry_start":
       handleAutoRetryStart(event);
@@ -1986,6 +1992,15 @@ function getCurrentLiveSessionFile(event = null) {
     mirrorActiveSessionFile,
     excludedSessionFile: pendingNewSessionPreviousFile,
   });
+}
+
+function handleAgentSettled() {
+  // 兜底：agent_end 正常已处理；此处仅在其未到达（如重连后不再重发）时
+  // 确保 streaming/typing 状态归位。幂等，无副作用（不重复通知/markUnread）。
+  state.setStreaming(false);
+  showTypingIndicator(false);
+  const live = getCurrentLiveSessionFile();
+  if (live) sidebar.setStreaming(live, false);
 }
 
 function handleAgentStart(event = null) {
@@ -2460,6 +2475,47 @@ function renderQueuedMessages() {
     item.append(label, message, cancel);
     queuedMessagesEl.appendChild(item);
   });
+}
+
+function renderPiQueue(event) {
+  // 只读展示 pi 侧 steer/followUp 队列（来自 queue_update 事件）。
+  // 与本地连发队列（messageQueue / renderQueuedMessages）相互独立，不改其逻辑。
+  const steering = Array.isArray(event?.steering) ? event.steering : [];
+  const followUp = Array.isArray(event?.followUp) ? event.followUp : [];
+  const el = getOrCreatePiQueueEl();
+  el.replaceChildren();
+  const items = [
+    ...steering.map((msg) => ({ kind: t("queue.steering"), msg })),
+    ...followUp.map((msg) => ({ kind: t("queue.followUp"), msg })),
+  ];
+  if (items.length === 0) {
+    el.classList.add("hidden");
+    return;
+  }
+  el.classList.remove("hidden");
+  for (const { kind, msg } of items) {
+    const item = document.createElement("div");
+    item.className = "queued-msg pi-queued-msg";
+    const label = document.createElement("span");
+    label.className = "queued-msg-label";
+    label.textContent = kind;
+    const text = document.createElement("span");
+    text.className = "queued-msg-text";
+    text.textContent = msg;
+    item.append(label, text);
+    el.appendChild(item);
+  }
+}
+
+function getOrCreatePiQueueEl() {
+  let el = document.getElementById("pi-queue");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "pi-queue";
+    el.className = "hidden";
+    queuedMessagesEl.insertAdjacentElement("afterend", el);
+  }
+  return el;
 }
 
 function flushQueue() {

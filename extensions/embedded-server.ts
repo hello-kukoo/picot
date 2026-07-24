@@ -1250,6 +1250,7 @@ export default function (pi: ExtensionAPI) {
   const eventTypes = [
     "agent_start",
     "agent_end",
+    "agent_settled",
     "turn_start",
     "turn_end",
     "message_start",
@@ -1258,10 +1259,12 @@ export default function (pi: ExtensionAPI) {
     "tool_execution_start",
     "tool_execution_update",
     "tool_execution_end",
-    "auto_compaction_start",
-    "auto_compaction_end",
+    "queue_update",
+    "compaction_start",
+    "compaction_end",
     "auto_retry_start",
     "auto_retry_end",
+    "extension_error",
     "model_select",
   ] as const;
 
@@ -1287,6 +1290,15 @@ export default function (pi: ExtensionAPI) {
       eventType as Parameters<typeof pi.on>[0],
       async (event: unknown, ctx: ExtensionContext) => {
         rememberCtx(ctx);
+        // pi 的 compaction_end 把 summary 放在 result.summary；统一提升到顶层，
+        // 让前端 handleCompactionEnd 不必区分「手动 compact」与「自动 compaction」两种来源。
+        if (eventType === "compaction_end") {
+          const e = event as Record<string, unknown> | undefined;
+          if (e && e.summary === undefined) {
+            const result = e.result as Record<string, unknown> | undefined;
+            if (result && typeof result.summary === "string") e.summary = result.summary;
+          }
+        }
         const eventPayload = { type: eventType, ...(event as Record<string, unknown>) };
         if (ephemeralState) {
           if (ctx) {
@@ -2070,18 +2082,18 @@ export default function (pi: ExtensionAPI) {
         case "compact": {
           if (ctx) {
             // Broadcast compaction start to all clients
-            broadcast({ type: "auto_compaction_start" });
+            broadcast({ type: "compaction_start" });
             ctx.compact({
               customInstructions: command.customInstructions,
               onComplete: (result: { summary?: string }) => {
                 broadcast({
-                  type: "auto_compaction_end",
+                  type: "compaction_end",
                   summary: result?.summary,
                 });
               },
               onError: (err: unknown) => {
                 broadcast({
-                  type: "auto_compaction_end",
+                  type: "compaction_end",
                   summary: `Error: ${errMessage(err)}`,
                 });
               },
