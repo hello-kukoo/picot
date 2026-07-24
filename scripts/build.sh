@@ -121,6 +121,8 @@ run_picot_prebuild() {
     bun run "$PROJECT_ROOT/scripts/fetch-pi-binary.js"
     log_info "Fetching bundled terminal font..."
     bun run "$PROJECT_ROOT/scripts/fetch-terminal-font.js"
+    log_info "Fetching bundled CJK font..."
+    bun run "$PROJECT_ROOT/scripts/fetch-cjk-font.js"
     log_info "Building extensions bundle..."
     bun run "$PROJECT_ROOT/scripts/build-extensions.js"
 }

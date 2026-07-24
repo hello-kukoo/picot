@@ -704,14 +704,19 @@ mod tests {
             .await
             .unwrap();
 
-        let health: serde_json::Value = reqwest::get(format!("{}/health", host.origin()))
-            .await
-            .unwrap()
-            .json()
+        let health_response = reqwest::get(format!("{}/health", host.origin()))
             .await
             .unwrap();
+        let health_status = health_response.status();
+        let health_body = health_response.text().await.unwrap();
+        assert!(
+            health_status.is_success(),
+            "health returned {health_status}: {health_body}"
+        );
+        let health: serde_json::Value = serde_json::from_str(&health_body)
+            .unwrap_or_else(|error| panic!("invalid health JSON {health_body:?}: {error}"));
         assert_eq!(health["protocolVersion"], 2);
-        assert_eq!(health["piVersion"], "0.80.10");
+        assert_eq!(health["piVersion"], "0.82.0");
         let index = reqwest::get(format!("{}/app/settings", host.origin()))
             .await
             .unwrap()

@@ -21,6 +21,15 @@
   font-display: swap;
 }
 
+@font-face {
+  font-family: "Picot CJK";
+  src: url("./fonts/cjk/LXGWWenKaiLite-Regular.gb2312.woff2") format("woff2");
+  unicode-range: U+3000-303F, U+4E00-9FFF, U+FF00-FFEF;
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -3617,6 +3626,21 @@ body {
   padding: var(--space-1) 0;
   color: var(--text-primary);
   width: 100%;
+}
+
+/* Content-surface CJK fallback: Picot CJK is first so its declared CJK
+   codepoints resolve to the bundled LXGW WenKai Lite GB2312 subset before
+   platform fallback can select PingFang/YaHei. Its unicode-range excludes
+   ASCII, which then falls through to the system stack copied from body.
+   Scoped to assistant replies and Markdown preview only — body is untouched.
+   Code blocks (<pre>/<code>) keep the browser UA monospace because font-family
+   is not declared on them in author CSS; routing them to "Picot Mono Nerd" is
+   a known Phase 2 item. */
+.message.assistant .message-content,
+.file-markdown-preview {
+  font-family:
+    "Picot CJK", -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
+    "Helvetica Neue", sans-serif;
 }
 
 /* Markdown */
