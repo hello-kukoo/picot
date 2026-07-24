@@ -586,12 +586,14 @@ export class FilePreviewPanel {
       tabEl.appendChild(closeBtn);
 
       tabEl.addEventListener("click", () => {
-        if (!this._interactionLocked) void this._selectTab(tab.id);
+        if (!this._interactionLocked) {
+          void this._selectTab(tab.id).then(() => this._renderTabBar());
+        }
       });
       tabEl.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          void this._selectTab(tab.id);
+          void this._selectTab(tab.id).then(() => this._renderTabBar());
           return;
         }
         this._onTabKeydown(event);

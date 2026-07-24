@@ -7117,6 +7117,11 @@ body.file-preview-resizing {
 .file-code-editor .cm-lineNumbers {
   min-width: var(--file-preview-line-number-gutter);
 }
+.file-code-editor .cm-gutters {
+  background: var(--bg-solid);
+  border-right: 1px solid var(--border);
+  color: var(--text-dim);
+}
 
 .file-code-editor .cm-scroller {
   font-family: "Picot Mono Nerd", "SF Mono", "Menlo", "Monaco", "Courier New", monospace;
