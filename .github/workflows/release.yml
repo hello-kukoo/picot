@@ -100,7 +100,8 @@ jobs:
           path: |
             .cache/pi-binaries
             .cache/terminal-fonts
-          key: embedded-assets-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/pi-version.json', 'scripts/terminal-font-version.json') }}
+            .cache/cjk-fonts
+          key: embedded-assets-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/pi-version.json', 'scripts/terminal-font-version.json', 'scripts/cjk-font-version.json') }}
 
       - name: Fetch embedded pi binary
         env:

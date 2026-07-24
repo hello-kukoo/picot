@@ -16,9 +16,13 @@ extensions/dist/
 src-tauri/resources/pi/
 .cache/pi-binaries/
 .cache/terminal-fonts/
+.cache/cjk-fonts/
 
 # Generated terminal font assets (produced by scripts/fetch-terminal-font.js)
 public/fonts/terminal/
+
+# Generated CJK font assets (produced by scripts/fetch-cjk-font.js)
+public/fonts/cjk/
 
 # Pi session exports
 pi-session-*.html
