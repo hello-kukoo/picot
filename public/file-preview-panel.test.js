@@ -144,6 +144,20 @@ describe("FilePreviewPanel", () => {
     p.destroy();
   });
 
+  test("opens source code files in edit mode by default", async () => {
+    const p = createPanel();
+    await p.openFile("/test/workspace/example.js");
+    expect(p.state.getActiveTab()?.mode).toBe("edit");
+    p.destroy();
+  });
+
+  test("opens markdown files in preview mode by default", async () => {
+    const p = createPanel();
+    await p.openFile("/test/workspace/README.md");
+    expect(p.state.getActiveTab()?.mode).toBe("preview");
+    p.destroy();
+  });
+
   test("uses the inline line input to navigate and then restores the button", () => {
     const p = createPanel();
     const goToLine = document.getElementById("file-preview-go-to-line");

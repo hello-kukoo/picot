@@ -11,8 +11,10 @@
  */
 
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { syntaxHighlighting } from "@codemirror/language";
 import { closeSearchPanel, openSearchPanel, search, searchKeymap } from "@codemirror/search";
 import { Compartment, EditorState } from "@codemirror/state";
+import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { languageExtensionForPath } from "./file-language.js";
 import { getLocale, onLocaleChange } from "./i18n.js";
@@ -71,6 +73,7 @@ export function createCodeEditor({
     searchPhrasesCompartment.of(EditorState.phrases.of(searchPhrasesForLocale(getLocale()))),
     wrapCompartment.of(wrapLines ? EditorView.lineWrapping : []),
     languageCompartment.of(languageExt ? [languageExt] : []),
+    syntaxHighlighting(oneDarkHighlightStyle),
     EditorView.updateListener.of((update) => {
       if (update.docChanged && typeof onChange === "function") {
         onChange(update.state.doc.toString());

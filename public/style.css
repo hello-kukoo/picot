@@ -3593,7 +3593,7 @@ body {
   border-radius: var(--radius-lg);
   word-wrap: break-word;
   overflow-wrap: break-word;
-  font-size: var(--font-size-md);
+  font-size: var(--font-size-lg);
   line-height: 1.6;
 }
 
@@ -3632,11 +3632,13 @@ body {
    codepoints resolve to the bundled LXGW WenKai Lite GB2312 subset before
    platform fallback can select PingFang/YaHei. Its unicode-range excludes
    ASCII, which then falls through to the system stack copied from body.
-   Scoped to assistant replies and Markdown preview only — body is untouched.
+   Scoped to assistant replies, the user message bubble, and Markdown
+   preview — body is untouched.
    Code blocks (<pre>/<code>) keep the browser UA monospace because font-family
    is not declared on them in author CSS; routing them to "Picot Mono Nerd" is
    a known Phase 2 item. */
 .message.assistant .message-content,
+.message.user .message-content,
 .file-markdown-preview {
   font-family:
     "Picot CJK", -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",

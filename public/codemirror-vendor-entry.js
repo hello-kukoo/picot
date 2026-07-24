@@ -36,6 +36,7 @@ export {
   StateEffect,
   StateField,
 } from "@codemirror/state";
+export { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 export {
   Decoration,
   EditorView,

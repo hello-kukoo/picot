@@ -188,3 +188,18 @@ describe("createCodeEditor", () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe("syntax highlighting wiring", () => {
+  const read = (rel) => readFileSync(join(process.cwd(), rel), "utf8");
+
+  test("code editor applies One Dark syntax highlighting", () => {
+    const src = read("public/code-editor.js");
+    expect(src).toContain("oneDarkHighlightStyle");
+    expect(src).toContain("syntaxHighlighting");
+
+    // vendor entry must re-export it so the browser bundle includes it
+    expect(read("public/codemirror-vendor-entry.js")).toContain("oneDarkHighlightStyle");
+    // import map must route the package to the same-origin vendor bundle
+    expect(read("public/index.html")).toContain('"@codemirror/theme-one-dark"');
+  });
+});

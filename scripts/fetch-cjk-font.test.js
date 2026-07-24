@@ -85,6 +85,7 @@ describe("CJK font distribution", () => {
 
     // selectors scoped to content surfaces
     expect(flat).toContain(".message.assistant .message-content");
+    expect(flat).toContain(".message.user .message-content");
     expect(flat).toContain(".file-markdown-preview");
 
     // body keeps its own system stack and is NOT given the CJK face
@@ -95,9 +96,10 @@ describe("CJK font distribution", () => {
     // Picot CJK is first for CJK; unicode-range makes ASCII fall through to
     // the unchanged system stack. Extract this exact rule to guard ordering.
     const contentBlock = (css.match(
-      /\.message\.assistant \.message-content,\s*\.file-markdown-preview\s*\{[^}]*\}/,
+      /\.message\.assistant \.message-content,\s*\.message\.user \.message-content,\s*\.file-markdown-preview\s*\{[^}]*\}/,
     ) || [""])[0];
     expect(contentBlock).toContain('"Picot CJK"');
+    expect(contentBlock).toContain(".message.user .message-content");
     expect(contentBlock.indexOf('"Picot CJK"')).toBeLessThan(contentBlock.indexOf("-apple-system"));
     expect(flat).toContain(
       '"Picot CJK", -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue"',

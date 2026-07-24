@@ -201,7 +201,10 @@ export class FilePreviewPanel {
     }
 
     this._captureActiveRenderer();
-    const tab = this.state.openFile(normalizedPath, metadata);
+    const defaultMode =
+      metadata.mode ??
+      (classifyFilePath(normalizedPath).contentType === "text" ? "edit" : "preview");
+    const tab = this.state.openFile(normalizedPath, { ...metadata, mode: defaultMode });
     this._openPanel();
     this._renderTabBar();
     await this._loadTabContent(tab);
