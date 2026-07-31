@@ -1001,12 +1001,34 @@
           <!-- File Browser (right sidebar) -->
           <div class="file-sidebar collapsed" id="file-sidebar">
             <div class="file-sidebar-header">
-              <span
-                class="file-sidebar-title"
-                id="file-sidebar-title"
-                data-i18n="files.title"
-                >Files</span
+              <div
+                class="file-sidebar-tabs"
+                role="tablist"
+                aria-label="Sidebar content"
               >
+                <button
+                  type="button"
+                  class="file-sidebar-tab active"
+                  id="file-sidebar-files-tab"
+                  role="tab"
+                  aria-selected="true"
+                  aria-controls="file-list"
+                  data-i18n="files.title"
+                >
+                  Files
+                </button>
+                <button
+                  type="button"
+                  class="file-sidebar-tab"
+                  id="file-sidebar-git-tab"
+                  role="tab"
+                  aria-selected="false"
+                  aria-controls="git-panel"
+                  data-i18n="git.panel"
+                >
+                  Git
+                </button>
+              </div>
               <button
                 class="icon-btn"
                 id="file-sidebar-up"
@@ -1077,6 +1099,7 @@
               title=""
             ></div>
             <div class="file-list" id="file-list"></div>
+            <div class="git-panel hidden" id="git-panel" role="tabpanel"></div>
           </div>
         </div>
       </div>

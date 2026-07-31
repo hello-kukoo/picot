@@ -563,6 +563,10 @@ impl PiManager {
     /// Returns `Err` (not `Ok(None)`) if no binary is found, so callers can
     /// surface a clear "run `bun run fetch:pi`" message rather than spawning
     /// a missing/stale binary.
+    pub fn bundled_pi_path(&self) -> Result<PathBuf, String> {
+        self.resolve_bundled_pi()
+    }
+
     fn resolve_bundled_pi(&self) -> Result<PathBuf, String> {
         let bin_name = if cfg!(target_os = "windows") {
             "pi.exe"

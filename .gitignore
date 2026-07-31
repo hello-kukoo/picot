@@ -30,3 +30,6 @@ public/fonts/cjk/
 
 # Frontend vendor bundles (produced by scripts/build-frontend.js)
 public/vendor/
+
+# Zed editor
+.zed/

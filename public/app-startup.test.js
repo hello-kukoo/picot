@@ -11,13 +11,18 @@ class FakeWebSocket extends EventTarget {
   static OPEN = 1;
   static CLOSING = 2;
   static CLOSED = 3;
+  static instances = [];
 
   constructor() {
     super();
     this.readyState = FakeWebSocket.CONNECTING;
+    this.sent = [];
+    FakeWebSocket.instances.push(this);
   }
 
-  send() {}
+  send(message) {
+    this.sent.push(JSON.parse(message));
+  }
 
   close() {
     this.readyState = FakeWebSocket.CLOSED;
@@ -91,4 +96,76 @@ test("initializes the application without reporting existing i18n keys as missin
 
   document.getElementById("settings-btn").click();
   expect(document.getElementById("settings-panel").classList.contains("hidden")).toBe(false);
+});
+
+test("switches the open file sidebar between Files and Git tabs", async () => {
+  await import("./app.js?git-sidebar-tabs");
+
+  const filesTab = document.getElementById("file-sidebar-files-tab");
+  const gitTab = document.getElementById("file-sidebar-git-tab");
+  const fileList = document.getElementById("file-list");
+  const gitPanel = document.getElementById("git-panel");
+
+  expect(filesTab).not.toBeNull();
+  expect(gitTab).not.toBeNull();
+  expect(filesTab.getAttribute("aria-selected")).toBe("true");
+
+  gitTab.click();
+  expect(gitTab.getAttribute("aria-selected")).toBe("true");
+  expect(fileList.classList.contains("hidden")).toBe(true);
+  expect(gitPanel.classList.contains("hidden")).toBe(false);
+  expect(gitPanel.textContent).toContain("No Git status loaded");
+
+  filesTab.click();
+  expect(fileList.classList.contains("hidden")).toBe(false);
+  expect(gitPanel.classList.contains("hidden")).toBe(true);
+});
+
+test("retries Git status when workspace generation arrives after opening Git", async () => {
+  await import("./app.js?git-status-after-bootstrap");
+  const socket = FakeWebSocket.instances.at(-1);
+  socket.readyState = FakeWebSocket.OPEN;
+
+  document.getElementById("file-sidebar-git-tab").click();
+  expect(socket.sent).toHaveLength(0);
+
+  socket.onmessage({ data: JSON.stringify({ type: "capabilities", class: "native" }) });
+  socket.onmessage({
+    data: JSON.stringify({ type: "owner_bootstrap", workspaceGeneration: 7, instances: [] }),
+  });
+
+  expect(socket.sent).toContainEqual({
+    type: "git_command",
+    requestId: "git-1",
+    workspaceGeneration: 7,
+    command: { type: "status" },
+  });
+});
+
+test("persists the selected sidebar tab and restores it on reload", async () => {
+  // Simulate a session where the user picked the Git tab, then reloads.
+  const storage = new Map([
+    ["pi-studio-file-sidebar", "open"],
+    ["pi-studio-file-sidebar-tab", "git"],
+  ]);
+  vi.stubGlobal("localStorage", {
+    getItem: (key) => storage.get(key) ?? null,
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  });
+
+  await import("./app.js?git-tab-persistence");
+
+  const gitTab = document.getElementById("file-sidebar-git-tab");
+  const gitPanel = document.getElementById("git-panel");
+  const fileList = document.getElementById("file-list");
+
+  // The stored Git tab must be restored on startup.
+  expect(gitTab.getAttribute("aria-selected")).toBe("true");
+  expect(gitPanel.classList.contains("hidden")).toBe(false);
+  expect(fileList.classList.contains("hidden")).toBe(true);
+
+  // Switching to Files must persist that choice.
+  document.getElementById("file-sidebar-files-tab").click();
+  expect(storage.get("pi-studio-file-sidebar-tab")).toBe("files");
 });

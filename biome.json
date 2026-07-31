@@ -14,7 +14,8 @@
       "!.worktrees",
       "!node_modules",
       "!public/vendor",
-      "!coverage"
+      "!coverage",
+      "!skill-install-prototype.html"
     ]
   },
   "formatter": {

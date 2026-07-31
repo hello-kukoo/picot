@@ -12,6 +12,8 @@ mod native_pi_manager;
 #[allow(dead_code)]
 mod command_policy;
 mod ephemeral_registry;
+mod git_pi_runner;
+mod git_service;
 mod pi_manager;
 mod pi_rpc_bridge;
 mod remote_auth;
@@ -29,6 +31,7 @@ use ephemeral_registry::{
     CleanupLease, CreateReservation, EphemeralKind, EphemeralRegistry, EphemeralUiPatch,
     OwnedProcess,
 };
+use git_service::GitService;
 use host_server::HostServer;
 use metadata_store::MetadataStore;
 use native_pi_manager::NativePiManager;
@@ -1756,8 +1759,15 @@ fn install_control_handler(
                             gen,
                             target_origin.clone(),
                         )?;
+                        if let Some(git_service) = app.try_state::<Arc<GitService>>() {
+                            git_service.inner().clear_workspace_state(owner.as_str());
+                        }
+                        broker.refresh_owner_bootstrap(&owner);
                         broker.set_active_port(target_port);
-                        Ok(serde_json::json!({ "targetOrigin": target_origin }))
+                        Ok(serde_json::json!({
+                            "targetOrigin": target_origin,
+                            "workspaceGeneration": gen
+                        }))
                     }
                     "workspace_transition_cancel" => {
                         let Some(owner) = ctx.owner_id.clone() else {
@@ -1771,6 +1781,9 @@ fn install_control_handler(
                             broker.unregister_port(target_port);
                         }
                         owner_registry.cancel_workspace_transition(&owner, gen)?;
+                        if let Some(git_service) = app.try_state::<Arc<GitService>>() {
+                            git_service.inner().clear_workspace_state(owner.as_str());
+                        }
                         Ok(Value::Null)
                     }
                     "window_close_cancel" => {
@@ -2261,6 +2274,9 @@ fn handle_window_destroyed(window: &tauri::Window) {
     if let Some(terminal_manager) = window.try_state::<TerminalManagerState>() {
         terminal_manager.kill_owner(&owner);
     }
+    if let Some(git_service) = window.try_state::<Arc<git_service::GitService>>() {
+        git_service.inner().clear_owner(owner.as_str());
+    }
     close_approvals().lock().unwrap().remove(&owner);
     registry.revoke_owner(&owner);
 }
@@ -2303,6 +2319,11 @@ fn main() {
             let owner_registry = Arc::new(WindowOwnerRegistry::default());
             let ephemeral_registry = Arc::new(EphemeralRegistry::default());
             broker.set_owner_registry(owner_registry.clone());
+            let git_service = Arc::new(git_service::GitService::new());
+            broker.set_git_service(git_service.clone());
+            if let Ok(binary) = manager.bundled_pi_path() {
+                broker.set_git_pi_binary(binary);
+            }
 
             let terminal_state_dir = app
                 .path()
@@ -2486,6 +2507,7 @@ fn main() {
             app.manage(owner_registry.clone());
             app.manage(ephemeral_registry.clone());
             app.manage(terminal_manager.clone());
+            app.manage(git_service.clone());
 
             if startup_ok {
                 let app_handle = app.handle().clone();

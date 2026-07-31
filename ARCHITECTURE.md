@@ -231,7 +231,13 @@ HTTP+WS server 有两条运行时路径：`Bun.serve`（生产环境，pi 通过
 **API 边界：** 任何新的 RPC 命令类型都放进 `handleCommand` **和**
 `wrap_upstream_message` 广播路径。新的 REST 端点放进 `handleApiRoute`。
 
-#### `extensions/` 的跨边界辅助模块
+#### Native broker Git panel boundary
+
+Git panel traffic is owner-scoped native broker traffic, not an embedded-server HTTP route. The broker validates the authenticated native client and workspace generation before invoking the host Git service, which derives the canonical workspace root from `WindowOwnerRegistry`. Git status is parsed from porcelain-v2 NUL-delimited output and rendered through DOM text nodes. Stage, Unstage, Discard and Commit all re-read current porcelain state and require the requested `group` to exactly match the entry's staged/unstaged classification; batch entries are validated atomically (all-or-nothing). Snapshot authorization binds owner/root/generation/HEAD/index-tree with a 5-minute TTL and max 8 per owner; the host derives paths, OIDs and staged diff itself — browser payloads never provide authoritative path, OID or diff content.
+
+The one-shot Pi commit-message runner receives a host-created private request file and isolation switches (`--no-session --no-tools --no-extensions --no-skills --no-prompt-templates --no-context-files`); it runs in its own Unix process group / Windows Job Object with a 60s deadline and bounded stdout/stderr. Commit enters a detached host-owned lifecycle after spawn: it is not cancelled by client disconnect or workspace transition, runs under a 5-minute hard deadline, records initial HEAD for reconciliation, and stores the outcome (`succeeded` / `failed` / `outcomeUnknown`) bound to owner/canonical-root/origin-generation for 10 minutes. A reconnecting client matching those three values recovers the pending outcome via `owner_bootstrap`; a client that has switched workspace or generation never receives the old result.
+
+### `extensions/` 的跨边界辅助模块
 
 - `request-access.ts` 是 HTTP 与 WebSocket 的 loopback 访问策略单一来源；
   Node HTTP 与 Bun Fetch 两条 adapter 路径必须共同调用它。
@@ -279,8 +285,9 @@ HTTP+WS server 有两条运行时路径：`Bun.serve`（生产环境，pi 通过
 按功能分组：
 
 - **入口 / 状态** —— `app.js`、`state.js`、`transport.js`、
-  `websocket-client.js`、`session-routing.js`。新增 transport 层的
-  消息类型时碰它们。
+`websocket-client.js`、`session-routing.js`。新增 transport 层的
+消息类型时碰它们。Git panel 使用独立的 `git-client.js` 和 native broker
+消息；不要把 Git 请求改成 `/api/*` 路由。
 - **聊天渲染** —— `message-renderer.js`、`tool-card.js`、`markdown.js`、
   `public/vendor/remend.js`（第三方流式 markdown 修复）。
 - **侧栏 / 文件工作区** —— `sidebar/index.js`、`recent-sessions.js`、

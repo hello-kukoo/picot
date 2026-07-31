@@ -9,9 +9,12 @@ Settings layout, theme tokens, localization, and interaction conventions.
 
 ## Goal
 
-Add **Settings → Skills**. It gives users a complete, grouped inventory of the
-skills Pi discovers for the running workspace, and lets them enable or disable
-a directory group or one skill by editing Pi's own settings files:
+Add **Settings → Skills**. Its final information architecture has three inner
+tabs: **Discovered** for the grouped top-level/linked inventory and its
+controls, **Install** for explicit linked-skill installation, and **Packages
+skills** for read-only configured-package inventory. Discovered lets users
+enable or disable a directory group or one top-level skill by editing Pi's own
+settings files:
 
 - Global: `~/.pi/agent/settings.json`
 - Current project: `<cwd>/.pi/settings.json`
@@ -29,7 +32,7 @@ configuration to take effect.
 | --- | --- |
 | Surface | A new `Skills` primary Settings navigation item, available at `#/settings/skills`; not an independent app route. |
 | Scopes | `Global` and `Current project` sub-tabs. Each controls only its corresponding settings file. |
-| Layout | Provider-settings-style expandable cards. One discovered group folder per card, and one row per skill. |
+| Layout | The **Discovered** tab uses provider-settings-style expandable cards: one discovered group folder per card and one row per skill. **Install** and **Packages skills** are specified in their extension designs. |
 | Group controls | A group card can enable or disable every discovered skill in its group. A mixed card explicitly displays its partial state. |
 | Skill controls | Every discovered `SKILL.md` has its own enable switch, even when disabled and absent from Pi's active command list. |
 | Persisted mechanism | Preserve unrelated settings; change only the `skills` array using Pi's `!`, `+`, and `-` semantics. Generated rules use portable POSIX paths relative to Pi's resource base directory. |
@@ -72,10 +75,11 @@ The inventory observes Pi's recursive discovery rules: a directory containing
 files are only valid in Pi's `.pi/skills` roots; hidden directories, `node_modules`,
 and entries ignored by `.gitignore`, `.ignore`, or `.fdignore` are excluded.
 
-Package-provided skills are not mutable through this page in the first version.
-They are neither assigned to an auto-discovery directory card nor silently
-rewritten in a package filter. If later shown, they must be labelled read-only
-and configured in the Packages UI.
+Package-provided skills are not mutable through the **Discovered** tab. They
+are neither assigned to a top-level auto-discovery directory card nor silently
+rewritten in a package filter. They are shown read-only in the dedicated
+**Packages skills** tab specified by
+[`2026-07-27-package-skills-tab-design.md`](2026-07-27-package-skills-tab-design.md).
 
 ### Pattern semantics
 
@@ -211,9 +215,10 @@ Settings → Skills page (browser)
 
 ### Frontend
 
-Create a dedicated `public/settings/skills-page.js` module. It owns DOM
-rendering, scope selection, card expansion state, request pending state, and
-inline error/status handling. `public/app.js` only wires the page into Settings
+Create a dedicated `public/settings/skills-page.js` module. It owns the three
+inner tabs, DOM rendering, scope selection, card expansion state, request
+pending state, and inline error/status handling. Focused submodules may own the
+Install and Packages skills tab behavior. `public/app.js` only wires the page into Settings
 navigation and calls its public setup/load functions. Add the static Settings
 tab shell to `public/index.html`, theme-compatible styles to `public/style.css`,
 and English/Chinese locale keys.
@@ -295,10 +300,11 @@ Add deterministic fixture tests for:
 
 ### Frontend tests
 
-Add jsdom tests for global/project selection, grouped provider-style card
-rendering, expanded/collapsed cards, all-on/all-off/mixed switches, pending
-controls, server-inventory re-render after save, trust warning, and inline
-failure display. Locale completeness tests must remain green.
+Add jsdom tests for three-tab navigation, global/project selection, grouped
+provider-style card rendering, expanded/collapsed cards, all-on/all-off/mixed
+switches, pending controls, server-inventory re-render after save, trust
+warning, and inline failure display. Locale completeness tests must remain
+green.
 
 ### Release checks
 

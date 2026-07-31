@@ -465,6 +465,39 @@ export class WebSocketClient extends EventTarget {
       return;
     }
 
+    if (message.type === "git_status" || message.type === "git_diff") {
+      this.dispatchEvent(
+        new CustomEvent(message.type === "git_status" ? "gitStatus" : "gitDiff", {
+          detail: message,
+        }),
+      );
+      return;
+    }
+    if (message.type === "git_ai_commit_message") {
+      this.dispatchEvent(new CustomEvent("gitAiCommitMessage", { detail: message }));
+      return;
+    }
+    if (message.type === "git_commit_confirmation_required") {
+      this.dispatchEvent(new CustomEvent("gitCommitConfirmationRequired", { detail: message }));
+      return;
+    }
+    if (message.type === "git_commit_result") {
+      this.dispatchEvent(new CustomEvent("gitCommitResult", { detail: message }));
+      return;
+    }
+    if (message.type === "git_commit_started") {
+      this.dispatchEvent(new CustomEvent("gitCommitStarted", { detail: message }));
+      return;
+    }
+    if (message.type === "git_command_ack") {
+      this.dispatchEvent(new CustomEvent("gitCommandAck", { detail: message }));
+      return;
+    }
+    if (message.type === "git_command_failed" || message.type === "git_ai_commit_message_failed") {
+      this.dispatchEvent(new CustomEvent("gitCommandFailed", { detail: message }));
+      return;
+    }
+
     // A sequenced event from one of this owner's ephemeral runtimes.
     if (message.type === "ephemeral_event") {
       this.dispatchEvent(new CustomEvent("ephemeralEvent", { detail: message }));

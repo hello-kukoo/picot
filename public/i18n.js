@@ -21,6 +21,16 @@ let currentLocale = "en";
 let currentPreference = "system";
 let localeLoadSequence = 0;
 const listeners = new Set();
+
+/**
+ * Inject messages for tests that cannot await initI18n (e.g. jsdom without
+ * fetch). Seeds both the English fallback and the active locale so t()
+ * resolves keys synchronously.
+ */
+export function setMessages(messages) {
+  enMessages = messages;
+  activeMessages = messages;
+}
 const warnedKeys = new Set();
 
 export const LANGUAGES = [

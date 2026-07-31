@@ -13,6 +13,7 @@
 import { classifyFilePath } from "./file-language.js";
 import { createFileRenderer } from "./file-preview-renderers.js";
 import { FileTabState } from "./file-tab-state.js";
+import { createGitDiffRenderer } from "./git-diff-renderer.js";
 import { onLocaleChange, t } from "./i18n.js";
 import { normalizeLocalPath } from "./workspace/path-utils.js";
 
@@ -98,6 +99,14 @@ export class FilePreviewPanel {
     this.tabBar = tabBar;
     this.content = content;
     this.mainContainer = mainContainer;
+    // The content region is the single tabpanel for every tab strip tab. It
+    // swaps which content is visible on activation rather than rendering one
+    // panel per tab, so the panel role + label live here permanently.
+    if (this.content) {
+      this.content.setAttribute("role", "tabpanel");
+      if (!this.content.id) this.content.id = "file-preview-tabpanel";
+      this.content.setAttribute("aria-label", t("files.preview.tabpanelLabel"));
+    }
     this.onOpenDesktop = onOpenDesktop || (() => {});
     this.onCopyText = onCopyText || ((text) => navigator.clipboard?.writeText(text));
     this.confirmDirty = confirmDirty || ((tabs, reason) => this._showDirtyDialog(tabs, reason));
@@ -132,6 +141,7 @@ export class FilePreviewPanel {
     // Transient (non-file) content tabs — Side Chats — projected into the same
     // tab strip as file tabs but never persisted to FileTabState.
     this.transientTabs = new Map();
+    this.diffTabs = new Map();
     // Discriminated active content: { kind: "file" | "transient", id } | null.
     this.activeContent = null;
     // Tab-bar actions (e.g. "New Side Chat") registered by an external manager.
@@ -162,6 +172,7 @@ export class FilePreviewPanel {
 
     this._abortAllTabLoads();
     this._destroyRenderer();
+    this.diffTabs.clear();
     this.workspaceRoot = normalized;
     this.state.load(normalized);
     this._renderTabBar();
@@ -230,6 +241,7 @@ export class FilePreviewPanel {
     this._renderTabBar();
     await this._loadTabContent(tab);
     this.activeContent = { kind: "file", id: tab.id };
+    this._renderTabBar();
     return tab;
   }
 
@@ -278,6 +290,20 @@ export class FilePreviewPanel {
 
   // ── Transient content tabs + close-risk participant APIs ────────────────
 
+  openDiff(descriptor) {
+    const id = "git-diff";
+    this.diffTabs.set(id, { ...descriptor, id });
+    this._deactivateCurrent();
+    this.activeContent = { kind: "diff", id };
+    this._destroyRenderer();
+    this.currentRenderer = createGitDiffRenderer(descriptor);
+    this.currentRenderer.mount(this.content);
+    this._openPanel();
+    this._renderTabBar();
+    this._renderToolbar();
+    return id;
+  }
+
   registerTransientTab(descriptor) {
     if (!descriptor?.id) return;
     this.transientTabs.set(descriptor.id, { ...descriptor });
@@ -292,7 +318,12 @@ export class FilePreviewPanel {
   }
 
   activateContent({ kind, id } = {}) {
-    if (kind !== "file" && kind !== "transient") return;
+    if (kind !== "file" && kind !== "transient" && kind !== "diff") return;
+    if (kind === "diff") {
+      const descriptor = this.diffTabs.get(id);
+      if (descriptor) this.openDiff(descriptor);
+      return;
+    }
     if (kind === "transient") {
       const entry = this.transientTabs.get(id);
       if (!entry) return;
@@ -317,6 +348,24 @@ export class FilePreviewPanel {
   requestCloseTransientTab(id) {
     const entry = this.transientTabs.get(id);
     return entry?.onRequestClose?.();
+  }
+
+  closeDiffTab(id) {
+    if (!this.diffTabs.has(id)) return false;
+    const wasActive = this.activeContent?.kind === "diff" && this.activeContent.id === id;
+    const ids = Array.from(this.diffTabs.keys());
+    const index = ids.indexOf(id);
+    this.diffTabs.delete(id);
+    if (wasActive) {
+      this._deactivateCurrent();
+      const next = ids[index + 1] || ids[index - 1];
+      if (next) this.activateContent({ kind: "diff", id: next });
+      else if (this.state.getActiveTab())
+        this.activateContent({ kind: "file", id: this.state.activeTabId });
+      else this._closePanel();
+    }
+    this._renderTabBar();
+    return true;
   }
 
   unregisterTransientTab(id) {
@@ -516,127 +565,168 @@ export class FilePreviewPanel {
     this._applyPanelWidth(this._availableWidth() * this.panelRatio);
   }
 
+  _createTabElement({
+    kind,
+    id,
+    label,
+    title,
+    icon,
+    statusBadge,
+    dirty,
+    conflict,
+    isActive,
+    onActivate,
+    onClose,
+  }) {
+    // Standard tabs pattern: the tab element carries role="tab" and roving
+    // tabindex. The close action is a sibling button (not a descendant), so
+    // the tab element has no interactive descendants — Enter/Space activation
+    // and keyboard close never conflict. Both controls live inside a shared
+    // item wrapper that only groups them visually.
+    const item = document.createElement("div");
+    item.className = "file-preview-tab-item";
+
+    const tabEl = document.createElement("button");
+    tabEl.type = "button";
+    tabEl.className = `file-preview-tab ${kind}-tab${isActive ? " active" : ""}`;
+    tabEl.dataset[kind === "diff" ? "diffId" : kind === "transient" ? "transientId" : "tabId"] = id;
+    tabEl.setAttribute("role", "tab");
+    tabEl.setAttribute("aria-selected", String(isActive));
+    tabEl.setAttribute("aria-controls", "file-preview-tabpanel");
+    tabEl.setAttribute("tabindex", isActive ? "0" : "-1");
+    if (title) tabEl.title = title;
+    tabEl.disabled = this._interactionLocked;
+
+    if (icon) {
+      const iconEl = document.createElement("span");
+      iconEl.className = "file-preview-tab-icon";
+      iconEl.textContent = icon;
+      iconEl.setAttribute("aria-hidden", "true");
+      tabEl.appendChild(iconEl);
+    }
+
+    const name = document.createElement("span");
+    name.className = "file-preview-tab-name";
+    name.textContent = label;
+    if (title) name.title = title;
+    tabEl.appendChild(name);
+
+    if (dirty) {
+      const dot = document.createElement("span");
+      dot.className = "file-preview-tab-dirty";
+      dot.textContent = "●";
+      dot.title = t("files.unsaved.title");
+      dot.setAttribute("aria-label", t("files.unsaved.title"));
+      tabEl.appendChild(dot);
+    }
+    if (conflict) {
+      const warning = document.createElement("span");
+      warning.className = "file-preview-tab-conflict";
+      warning.textContent = "⚠";
+      warning.title = t("files.preview.conflict");
+      warning.setAttribute("aria-label", t("files.preview.conflict"));
+      tabEl.appendChild(warning);
+    }
+    if (statusBadge) tabEl.appendChild(statusBadge);
+
+    tabEl.addEventListener("click", () => onActivate());
+    tabEl.addEventListener("keydown", (event) => this._onTabKeydown(event));
+
+    item.appendChild(tabEl);
+
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "file-preview-tab-close";
+    closeBtn.type = "button";
+    closeBtn.title = t("files.preview.close");
+    closeBtn.setAttribute("aria-label", t("files.preview.close"));
+    closeBtn.disabled = this._interactionLocked;
+    appendCloseIcon(closeBtn);
+    closeBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onClose();
+    });
+    item.appendChild(closeBtn);
+
+    return { item, tabEl };
+  }
+
   _renderTabBar() {
     if (!this.tabBar) return;
     this.tabBar.replaceChildren();
     this.tabBar.setAttribute("role", "tablist");
 
+    for (const [id, entry] of this.diffTabs) {
+      const isActive = this.activeContent?.kind === "diff" && this.activeContent.id === id;
+      const { item, tabEl } = this._createTabElement({
+        kind: "diff",
+        id,
+        label: entry.displayPath || "Diff",
+        isActive,
+        onActivate: () => this.activateContent({ kind: "diff", id }),
+        onClose: () => this.closeDiffTab(id),
+      });
+      this.tabBar.appendChild(item);
+      // Expose the tab element for keyboard navigation; the item wrapper only
+      // groups the tab and its close button.
+      void tabEl;
+    }
+
     // Transient (Side Chat) tabs render before file tabs and preserve
     // registration order. They are in-memory only — never FileTabState.
     for (const [id, entry] of this.transientTabs) {
-      const tabEl = document.createElement("div");
       const isActive = this.activeContent?.kind === "transient" && this.activeContent.id === id;
-      tabEl.className = `file-preview-tab transient-tab${isActive ? " active" : ""}`;
-      tabEl.dataset.transientId = id;
-      tabEl.setAttribute("role", "tab");
-      tabEl.setAttribute("tabindex", isActive ? "0" : "-1");
-      tabEl.setAttribute("aria-selected", String(isActive));
-
-      const name = document.createElement("span");
-      name.className = "file-preview-tab-name";
-      name.textContent = entry.title || "";
-      name.title = entry.fullTitle || entry.title || "";
-      tabEl.appendChild(name);
-
+      let statusBadge = null;
       if (entry.status === "streaming" || entry.unread) {
-        const status = document.createElement("span");
-        status.className = "transient-tab-status";
+        statusBadge = document.createElement("span");
+        statusBadge.className = "transient-tab-status";
         const label =
           entry.status === "streaming" ? t("ephemeral.generating") : t("ephemeral.unread");
-        status.textContent = entry.status === "streaming" ? "⋯" : "●";
-        status.title = label;
-        status.setAttribute("aria-label", label);
-        tabEl.appendChild(status);
+        statusBadge.textContent = entry.status === "streaming" ? "⋯" : "●";
+        statusBadge.title = label;
+        statusBadge.setAttribute("aria-label", label);
       }
-
-      const closeBtn = document.createElement("button");
-      closeBtn.className = "file-preview-tab-close";
-      closeBtn.type = "button";
-      closeBtn.title = t("files.preview.close");
-      closeBtn.setAttribute("aria-label", t("files.preview.close"));
-      closeBtn.disabled = this._interactionLocked;
-      appendCloseIcon(closeBtn);
-      closeBtn.addEventListener("click", (event) => {
-        event.stopPropagation();
-        this.requestCloseTransientTab(id);
+      const { item } = this._createTabElement({
+        kind: "transient",
+        id,
+        label: entry.title || "",
+        title: entry.fullTitle || entry.title || "",
+        statusBadge,
+        isActive,
+        onActivate: () => {
+          if (!this._interactionLocked) this.activateContent({ kind: "transient", id });
+        },
+        onClose: () => this.requestCloseTransientTab(id),
       });
-      tabEl.appendChild(closeBtn);
-
-      tabEl.addEventListener("click", () => {
-        if (!this._interactionLocked) this.activateContent({ kind: "transient", id });
-      });
-      tabEl.addEventListener("keydown", (event) => this._onTabKeydown(event));
-      this.tabBar.appendChild(tabEl);
+      this.tabBar.appendChild(item);
     }
 
     for (const tab of this.state.getTabs()) {
-      const tabEl = document.createElement("div");
       const isActive =
         this.activeContent?.kind === "file"
           ? this.activeContent.id === tab.id
           : this.activeContent == null && tab.id === this.state.activeTabId;
-      tabEl.className = `file-preview-tab${isActive ? " active" : ""}`;
-      tabEl.dataset.tabId = tab.id;
-      tabEl.setAttribute("role", "tab");
-      tabEl.setAttribute("tabindex", isActive ? "0" : "-1");
-      tabEl.setAttribute("aria-selected", String(isActive));
-
-      const icon = document.createElement("span");
-      icon.className = "file-preview-tab-icon";
-      icon.textContent = this._getFileIcon(tab.fileName);
-      icon.setAttribute("aria-hidden", "true");
-      tabEl.appendChild(icon);
-
-      const name = document.createElement("span");
-      name.className = "file-preview-tab-name";
-      name.textContent = tab.fileName;
-      name.title = tab.filePath;
-      tabEl.appendChild(name);
-
-      if (tab.dirty) {
-        const dot = document.createElement("span");
-        dot.className = "file-preview-tab-dirty";
-        dot.textContent = "●";
-        dot.title = t("files.unsaved.title");
-        dot.setAttribute("aria-label", t("files.unsaved.title"));
-        tabEl.appendChild(dot);
-      }
-      if (tab.conflict) {
-        const warning = document.createElement("span");
-        warning.className = "file-preview-tab-conflict";
-        warning.textContent = "⚠";
-        warning.title = t("files.preview.conflict");
-        warning.setAttribute("aria-label", t("files.preview.conflict"));
-        tabEl.appendChild(warning);
-      }
-
-      const closeBtn = document.createElement("button");
-      closeBtn.className = "file-preview-tab-close";
-      closeBtn.type = "button";
-      closeBtn.title = t("files.preview.close");
-      closeBtn.setAttribute("aria-label", t("files.preview.close"));
-      closeBtn.disabled = this._interactionLocked;
-      appendCloseIcon(closeBtn);
-      closeBtn.addEventListener("click", (event) => {
-        event.stopPropagation();
-        void this._closeTab(tab.id);
+      const { item, tabEl } = this._createTabElement({
+        kind: "file",
+        id: tab.id,
+        label: tab.fileName,
+        title: tab.filePath,
+        icon: this._getFileIcon(tab.fileName),
+        dirty: tab.dirty,
+        conflict: tab.conflict,
+        isActive,
+        onActivate: () => {
+          if (!this._interactionLocked) {
+            void this._selectTab(tab.id).then(() => this._renderTabBar());
+          }
+        },
+        onClose: () => void this._closeTab(tab.id),
       });
-      tabEl.appendChild(closeBtn);
-
-      tabEl.addEventListener("click", () => {
-        if (!this._interactionLocked) {
-          void this._selectTab(tab.id).then(() => this._renderTabBar());
-        }
-      });
+      // File tabs trigger re-render on activation, and the tab button now owns
+      // the keyboard activation so Enter/Space are handled by the button itself.
       tabEl.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          void this._selectTab(tab.id).then(() => this._renderTabBar());
-          return;
-        }
         this._onTabKeydown(event);
       });
-      this.tabBar.appendChild(tabEl);
+      this.tabBar.appendChild(item);
     }
 
     // Tab-bar actions (e.g. "New Side Chat") registered by an external manager.
@@ -720,7 +810,11 @@ export class FilePreviewPanel {
   async _selectTab(tabId) {
     const currentTab = this.state.getActiveTab();
     if (currentTab?.id === tabId) {
-      if (!this.currentRenderer) {
+      // The file is already the persisted active tab, but a transient (Side
+      // Chat) or diff view may be visually on top. Deactivate that overlay
+      // and remount the file renderer so the content area reflects the tab.
+      if (this.activeContent?.kind !== "file" || !this.currentRenderer) {
+        this._deactivateCurrent();
         const tab = this.state.getTab(tabId);
         if (tab) await this._mountRenderer(tab);
       }
@@ -785,6 +879,16 @@ export class FilePreviewPanel {
         Array.from(this.tabBar?.querySelectorAll("[data-transient-id]") || [])
           .find((tab) => tab.dataset.transientId === lastTransient)
           ?.focus();
+      } else {
+        this._closePanel();
+        if (wasActive) document.getElementById("file-sidebar-toggle")?.focus();
+      }
+    } else if (this.diffTabs.size > 0) {
+      // The last file tab closed but the Git diff tab remains: keep the panel
+      // open and reactivate the diff view instead of collapsing.
+      const lastDiff = Array.from(this.diffTabs.keys()).pop();
+      if (lastDiff) {
+        this.activateContent({ kind: "diff", id: lastDiff });
       } else {
         this._closePanel();
         if (wasActive) document.getElementById("file-sidebar-toggle")?.focus();
@@ -1315,8 +1419,10 @@ export class FilePreviewPanel {
   _renderToolbar() {
     const controls = this.controls;
     if (!controls) return;
-    controls.toolbar?.classList.toggle("hidden", !this.toolbarOpen);
-    controls.toolbarToggle?.setAttribute("aria-expanded", String(this.toolbarOpen));
+    const isDiff = this.activeContent?.kind === "diff";
+    controls.toolbar?.classList.toggle("hidden", isDiff || !this.toolbarOpen);
+    controls.toolbarToggle?.classList.toggle("hidden", isDiff);
+    controls.toolbarToggle?.setAttribute("aria-expanded", String(!isDiff && this.toolbarOpen));
 
     const tab = this.state.getActiveTab();
     const editable = this._isEditable(tab);
@@ -1351,7 +1457,10 @@ export class FilePreviewPanel {
       controls.goToLineInput.classList.toggle("hidden", !hasEditor || !this.goToLineInputOpen);
     }
     if (controls.copy) controls.copy.disabled = !hasText;
-    if (controls.openDesktop) controls.openDesktop.disabled = !tab;
+    if (controls.openDesktop) {
+      controls.openDesktop.disabled = isDiff || !tab;
+      controls.openDesktop.classList.toggle("hidden", isDiff);
+    }
     if (controls.wrap) controls.wrap.checked = this.wrapLines;
     if (controls.autoSave) controls.autoSave.checked = this.autoSaveEnabled;
     if (controls.status) {

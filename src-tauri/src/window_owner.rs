@@ -61,6 +61,12 @@ struct WorkspaceTransition {
     target_port: u16,
 }
 
+impl OwnerId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 impl WindowOwnerRegistry {
     pub fn create_owner(
         &self,

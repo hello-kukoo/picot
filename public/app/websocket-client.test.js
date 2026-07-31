@@ -209,6 +209,22 @@ describe("WebSocketClient control commands", () => {
     client.rejectAllControls(new Error("WebSocket disconnected"));
     await expect(result).rejects.toThrow("WebSocket disconnected");
   });
+
+  test("git_command_ack dispatches a correlated Git acknowledgement", () => {
+    const client = new WebSocketClient("ws://broker/ui-ws");
+    const acknowledgements = [];
+    client.addEventListener("gitCommandAck", (event) => acknowledgements.push(event.detail));
+
+    client.handleMessage({
+      type: "git_command_ack",
+      requestId: "git-7",
+      workspaceGeneration: 4,
+    });
+
+    expect(acknowledgements).toEqual([
+      { type: "git_command_ack", requestId: "git-7", workspaceGeneration: 4 },
+    ]);
+  });
 });
 
 describe("WebSocketClient broker routing", () => {

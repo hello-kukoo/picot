@@ -16,6 +16,8 @@ import { setupComposerCommandMenu } from "./composer-command-menu.js";
 import { setupComposerImageAttachments } from "./composer-image-attachments.js";
 import { EphemeralChatView } from "./ephemeral-chat-view.js";
 import { FilePreviewPanel } from "./file-preview-panel.js";
+import { GitClient } from "./git-client.js";
+import { GitPanel } from "./git-panel.js";
 import {
   getLanguagePreference,
   initI18n,
@@ -969,8 +971,30 @@ const fileSidebar = document.getElementById("file-sidebar");
 const fileSidebarToggle = document.getElementById("file-sidebar-toggle");
 const fileSidebarClose = document.getElementById("file-sidebar-close");
 const fileSidebarUp = document.getElementById("file-sidebar-up");
+const fileSidebarFilesTab = document.getElementById("file-sidebar-files-tab");
+const fileSidebarGitTab = document.getElementById("file-sidebar-git-tab");
 const fileList = document.getElementById("file-list");
 const fileSidebarPath = document.getElementById("file-sidebar-path");
+const gitPanelElement = document.getElementById("git-panel");
+const gitClient = new GitClient({
+  send: (message) => {
+    if (wsClient.ws && wsClient.ws.readyState === WebSocket.OPEN) {
+      wsClient.ws.send(JSON.stringify(message));
+    }
+  },
+});
+let latestGitDiffRequest = null;
+let latestGitDiffDescriptor = null;
+const gitPanel = new GitPanel({
+  container: gitPanelElement,
+  fileList,
+  client: gitClient,
+  openDiff: (entry) => filePreviewPanel.openDiff?.(entry),
+  onDiffRequest: (requestId, descriptor) => {
+    latestGitDiffRequest = requestId;
+    latestGitDiffDescriptor = descriptor || null;
+  },
+});
 const fileBrowser = new FileBrowser(fileList, fileSidebarPath, messageInput, {
   onFileSelect: (filePath, metadata) => {
     void filePreviewPanel.openFile(filePath, metadata);
@@ -1297,6 +1321,15 @@ wsClient.addEventListener("ownerBootstrap", async (event) => {
   // carry it as a compare-only attachment token (broker rejects a mismatch).
   if (typeof event.detail?.workspaceGeneration === "number") {
     terminalClient.setWorkspaceGeneration(event.detail.workspaceGeneration);
+    gitClient.setWorkspaceGeneration(event.detail.workspaceGeneration);
+    // Clear stale diff/AI/commit state so late responses from the previous
+    // workspace cannot leak into the new one.
+    latestGitDiffRequest = null;
+    latestGitDiffDescriptor = null;
+    gitPanel.aiSnapshot = null;
+    gitPanel.commitMessage = "";
+    gitPanel.pendingConfirmationToken = null;
+    if (!gitPanelElement.classList.contains("hidden")) void gitPanel.refresh();
     if (terminalPanel.toggleEl) terminalClient.requestList();
   }
   try {
@@ -1309,6 +1342,78 @@ wsClient.addEventListener("ownerBootstrap", async (event) => {
     if (quick) quickChatDialog.rebind(quick);
   } catch (err) {
     console.warn("[ephemeral] bootstrap fetch failed:", err);
+  }
+});
+// Unified generation guard: every async Git response (status, AI, commit, diff,
+// confirmation, failure, and write acknowledgement) must match the current
+// workspace generation. A late response from a previous workspace is silently
+// dropped so it can never overwrite the current UI state.
+const gitResponseMatchesGeneration = (detail) =>
+  detail?.workspaceGeneration != null && gitClient.generation === detail.workspaceGeneration;
+wsClient.addEventListener("gitStatus", (event) => {
+  if (!gitResponseMatchesGeneration(event.detail)) return;
+  gitPanel.setSnapshot(event.detail.snapshot);
+});
+wsClient.addEventListener("gitAiCommitMessage", (event) => {
+  if (!gitResponseMatchesGeneration(event.detail)) return;
+  // Out-of-order guard: a user can request AI twice in quick succession. The
+  // older request may resolve after the newer one and would otherwise
+  // overwrite the current dialog message and bound snapshot with stale data.
+  if (event.detail?.requestId !== gitPanel.pendingAiRequestId) return;
+  gitPanel.applyAiResult(event.detail?.snapshot, event.detail?.message);
+});
+wsClient.addEventListener("gitCommitConfirmationRequired", (event) => {
+  if (!gitResponseMatchesGeneration(event.detail)) return;
+  // A stale confirmation frame from commit A must not pollute the pending
+  // token of the currently-active commit B.
+  if (event.detail?.requestId !== gitPanel.pendingCommitRequestId) return;
+  gitPanel.applyConfirmationToken(event.detail?.confirmationToken);
+});
+wsClient.addEventListener("gitCommitStarted", (event) => {
+  if (!gitResponseMatchesGeneration(event.detail)) return;
+  // A delayed started frame from a superseded commit must not flip the current
+  // dialog back into the in-progress state.
+  if (event.detail?.requestId !== gitPanel.pendingCommitRequestId) return;
+  gitPanel.setCommitInProgress(true);
+});
+wsClient.addEventListener("gitDiff", (event) => {
+  const requestId = event.detail?.requestId;
+  const diff = event.detail?.diff;
+  if (!diff || !requestId || requestId !== latestGitDiffRequest) return;
+  if (!gitResponseMatchesGeneration(event.detail)) return;
+  filePreviewPanel.openDiff({ ...latestGitDiffDescriptor, ...diff });
+});
+wsClient.addEventListener("gitCommitResult", (event) => {
+  if (!gitResponseMatchesGeneration(event.detail)) return;
+  // A result frame from commit A must never close or clear the dialog state
+  // of a later commit B. Bind every result to the currently-pending request;
+  // applyCommitResult clears pendingCommitRequestId on acceptance.
+  if (event.detail?.requestId !== gitPanel.pendingCommitRequestId) return;
+  gitPanel.applyCommitResult(event.detail);
+  if (event.detail?.status === "succeeded") void gitPanel.refresh();
+});
+wsClient.addEventListener("gitCommandAck", (event) => {
+  if (!gitResponseMatchesGeneration(event.detail)) return;
+  if (!gitClient.consumeWriteAck(event.detail)) return;
+  void gitPanel.refresh();
+});
+wsClient.addEventListener("gitCommandFailed", (event) => {
+  console.warn("[git] command failed", event.detail);
+  if (!gitResponseMatchesGeneration(event.detail)) return;
+  gitClient.consumeWriteFailure(event.detail);
+  // Only AI generation failure opens the commit dialog with an empty message so
+  // the user can still write a commit message by hand.
+  if (event.detail?.type === "git_ai_commit_message_failed") {
+    // Out-of-order guard: ignore a stale AI failure that belongs to a request
+    // the user has already superseded with a newer one.
+    if (event.detail?.requestId !== gitPanel.pendingAiRequestId) return;
+    gitPanel.applyAiFailure(event.detail?.error || t("git.aiFailed"));
+    return;
+  }
+  // A commit failure (stale snapshot, hook rejection, invalid token) must end
+  // the in-progress state so the dialog is retryable, with the error surfaced.
+  if (event.detail?.requestId && event.detail.requestId === gitPanel.pendingCommitRequestId) {
+    gitPanel.applyCommitFailure(event.detail?.error);
   }
 });
 wsClient.addEventListener("ephemeralEvent", (event) => {
@@ -1394,6 +1499,32 @@ fileSidebarToggle.addEventListener("click", () => {
   }
   localStorage.setItem("pi-studio-file-sidebar", isCollapsed ? "closed" : "open");
 });
+
+const FILE_SIDEBAR_TAB_STORAGE_KEY = "pi-studio-file-sidebar-tab";
+
+function setFileSidebarTab(tab) {
+  const showGit = tab === "git";
+  fileSidebarFilesTab.classList.toggle("active", !showGit);
+  fileSidebarFilesTab.setAttribute("aria-selected", String(!showGit));
+  fileSidebarGitTab.classList.toggle("active", showGit);
+  fileSidebarGitTab.setAttribute("aria-selected", String(showGit));
+  fileSidebarPath.classList.toggle("hidden", showGit);
+  fileList.classList.toggle("hidden", showGit);
+  gitPanelElement.classList.toggle("hidden", !showGit);
+  fileSidebarUp.classList.toggle("hidden", showGit);
+  document.getElementById("file-sidebar-finder").classList.toggle("hidden", showGit);
+  localStorage.setItem(FILE_SIDEBAR_TAB_STORAGE_KEY, tab);
+  if (showGit) {
+    // Clear any stale snapshot from a previous workspace so the panel
+    // never shows old data while waiting for a fresh status response.
+    gitPanel.snapshot = null;
+    gitPanel.render();
+    void gitPanel.refresh();
+  }
+}
+
+fileSidebarFilesTab.addEventListener("click", () => setFileSidebarTab("files"));
+fileSidebarGitTab.addEventListener("click", () => setFileSidebarTab("git"));
 
 fileSidebarClose.addEventListener("click", () => {
   fileSidebar.classList.add("collapsed");
@@ -1589,7 +1720,15 @@ const fileSidebarIsOpen = localStorage.getItem("pi-studio-file-sidebar") === "op
 fileSidebarToggle.setAttribute("aria-pressed", String(fileSidebarIsOpen));
 if (fileSidebarIsOpen) {
   fileSidebar.classList.remove("collapsed");
-  refreshFileBrowserForWorkspace(getCurrentWorkspacePath(), { force: true });
+  // Restore the previously selected sidebar tab (Files or Git) so a reopen
+  // after close returns to the view the user left on. Defaults to Files.
+  setFileSidebarTab(localStorage.getItem(FILE_SIDEBAR_TAB_STORAGE_KEY) === "git" ? "git" : "files");
+  if (!gitPanelElement.classList.contains("hidden")) {
+    // setFileSidebarTab already requests Git status when the Git tab is
+    // restored; for Files, refresh the browser as before.
+  } else {
+    refreshFileBrowserForWorkspace(getCurrentWorkspacePath(), { force: true });
+  }
 }
 
 // Resizable sidebars — drag handle on inner edge, persisted to localStorage.
@@ -3697,14 +3836,34 @@ async function handleSessionSelectImpl(session, project) {
     // A workspace switch changes the HTTP origin that serves the file API.
     // Navigate before any branch can fall through to an in-process switch.
     const targetPort = targetLiveInstance?.port ?? foregroundPort;
-    if (typeof targetPort === "number" && targetPort !== getCurrentPort()) {
+    if (typeof targetPort === "number") {
       try {
-        await navigateToWorkspacePort(selectedWorkspacePath, targetPort);
-        return;
+        if (targetPort !== getCurrentPort()) {
+          await navigateToWorkspacePort(selectedWorkspacePath, targetPort);
+          return;
+        }
+        // A same-port workspace switch does not navigate, but it still must
+        // commit the owner workspace transition. Otherwise the broker keeps
+        // the first workspace's root and generation forever, and every Git
+        // status request continues to read that original repository.
+        const prepared = await transport.prepareWorkspaceTarget(selectedWorkspacePath, {
+          targetPort,
+          reuseExisting: true,
+        });
+        if (typeof prepared?.transitionGeneration !== "number") {
+          throw new Error("Workspace transition was not prepared");
+        }
+        await transport.commitWorkspaceTransition(prepared.transitionGeneration);
       } catch (error) {
-        console.error("[Session route] workspace navigation failed:", error);
+        console.error("[Session route] workspace transition failed:", error);
       }
     }
+    // Clear stale Git panel state so old workspace files never leak in.
+    gitPanel.snapshot = null;
+    gitPanel.selected = new Set();
+    gitPanel.commitMessage = "";
+    gitPanel.pendingConfirmationToken = null;
+    if (!gitPanelElement.classList.contains("hidden")) void gitPanel.refresh();
   } else {
     syncWorkspaceIndicatorFromInstances();
   }
@@ -4069,6 +4228,15 @@ function handleMirrorSync(data) {
     void refreshFileBrowserForWorkspace(syncWorkspacePath, { force: true }).catch((error) => {
       console.error("[App] Failed to refresh file browser after session switch:", error);
     });
+    // When the Git tab is visible, also refresh the Git panel state so it
+    // shows the new workspace's files instead of the old workspace's stale
+    // snapshot. The file browser refreshes automatically via
+    // refreshFileBrowserForWorkspace above; Git needs the same treatment.
+    gitPanel.snapshot = null;
+    gitPanel.selected = new Set();
+    gitPanel.commitMessage = "";
+    gitPanel.pendingConfirmationToken = null;
+    if (!gitPanelElement.classList.contains("hidden")) void gitPanel.refresh();
   }
   wsClient.setRoutingContext({
     workspaceId:

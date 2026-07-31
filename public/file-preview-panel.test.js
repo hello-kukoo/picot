@@ -16,6 +16,12 @@ beforeEach(async () => {
         json: async () => ({
           messages: { copied: "Copied!" },
           nav: { newSideChat: "New Side Chat" },
+          git: {
+            comparison: { staged: "Staged", changes: "Changes", untracked: "Untracked" },
+            diffOriginal: "Original",
+            diffModified: "Modified",
+            diffEmpty: "No changes to display",
+          },
           files: {
             preview: {
               close: "Close",
@@ -104,6 +110,7 @@ beforeEach(async () => {
     "file-preview-search",
     "file-preview-go-to-line",
     "file-preview-copy",
+    "file-preview-open",
   ]) {
     const button = document.createElement("button");
     button.id = id;
@@ -465,13 +472,14 @@ describe("FilePreviewPanel", () => {
     const p = createPanel();
     await p.openFile("/test/workspace/a.js");
     await p.openFile("/test/workspace/b.js");
-    const firstTab = tabBar.querySelector('[data-tab-id="file:/test/workspace/a.js"]');
+    // b.js was opened last, so it is the active tab.
+    const activeTab = tabBar.querySelector('[data-tab-id="file:/test/workspace/b.js"]');
 
-    expect(firstTab?.getAttribute("role")).toBe("tab");
-    expect(firstTab?.getAttribute("tabindex")).toBe("0");
-    firstTab?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(activeTab?.getAttribute("role")).toBe("tab");
+    expect(activeTab?.getAttribute("tabindex")).toBe("0");
+    activeTab?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await Promise.resolve();
-    expect(p.state.getActiveTab()?.filePath).toBe("/test/workspace/a.js");
+    expect(p.state.getActiveTab()?.filePath).toBe("/test/workspace/b.js");
 
     const initialRatio = p.panelRatio;
     resizer.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
@@ -607,9 +615,11 @@ describe("FilePreviewPanel transient tabs", () => {
         requested = true;
       },
     });
-    tabBar
-      .querySelector('.file-preview-tab[data-transient-id="sc1"] .file-preview-tab-close')
-      .click();
+    // The close button is a sibling of the tab control (not a descendant),
+    // so a descendant selector would return null.
+    const transientTab = tabBar.querySelector('.file-preview-tab[data-transient-id="sc1"]');
+    const closeBtn = transientTab?.parentElement.querySelector(".file-preview-tab-close");
+    closeBtn?.click();
     expect(requested).toBe(true);
     p.destroy();
   });
@@ -845,6 +855,165 @@ describe("FilePreviewPanel workspace restore", () => {
     expect(p.hasPersistedTabs("/ws/empty")).toBe(false);
     // Peeking must not load tabs into the active state.
     expect(p.state.getTabs().length).toBe(0);
+    p.destroy();
+  });
+});
+
+describe("FilePreviewPanel diff tabs", () => {
+  beforeEach(async () => {
+    await initI18n();
+  });
+
+  test("openDiff creates an in-memory diff tab that is never persisted", async () => {
+    const p = createPanel();
+    await p.setWorkspaceRoot("/ws/a");
+
+    const id = p.openDiff({
+      comparison: "staged",
+      pathBytesBase64: "YQ==",
+      displayPath: "a.js",
+      rawPatch: "@@ -1 +1 @@\n-old\n+new",
+    });
+
+    expect(p.diffTabs.has(id)).toBe(true);
+    expect(p.activeContent).toEqual({ kind: "diff", id });
+    // Diff tabs must never enter FileTabState/localStorage.
+    expect(p.state.getTabs().length).toBe(0);
+    p.destroy();
+  });
+
+  test("hides file-only controls while a diff is active", async () => {
+    const p = createPanel();
+    await p.setWorkspaceRoot("/ws/a");
+    p.toolbarOpen = true;
+    p.openDiff({
+      comparison: "staged",
+      pathBytesBase64: "YQ==",
+      displayPath: "a.js",
+      rawPatch: "@@ -1 +1 @@\n-old\n+new",
+    });
+
+    expect(p.controls.toolbarToggle.classList.contains("hidden")).toBe(true);
+    expect(p.controls.toolbar.classList.contains("hidden")).toBe(true);
+    expect(p.controls.openDesktop.classList.contains("hidden")).toBe(true);
+    p.destroy();
+  });
+
+  test("reuses one in-memory diff tab for successive files", async () => {
+    const p = createPanel();
+    await p.setWorkspaceRoot("/ws/a");
+
+    const firstId = p.openDiff({
+      comparison: "staged",
+      pathBytesBase64: "YQ==",
+      displayPath: "a.js",
+      rawPatch: "@@ -1 +1 @@\n-old\n+new",
+    });
+    const secondId = p.openDiff({
+      comparison: "changes",
+      pathBytesBase64: "Yg==",
+      displayPath: "b.js",
+      rawPatch: "@@ -1 +1 @@\n-old\n+new",
+    });
+
+    expect(secondId).toBe(firstId);
+    expect(p.diffTabs).toHaveLength(1);
+    expect(p.diffTabs.get(firstId)).toMatchObject({ displayPath: "b.js", comparison: "changes" });
+    p.destroy();
+  });
+
+  test("diff tabs clear on workspace switch and do not survive reload", async () => {
+    const p = createPanel();
+    await p.setWorkspaceRoot("/ws/a");
+
+    p.openDiff({
+      comparison: "changes",
+      pathBytesBase64: "Yg==",
+      displayPath: "b.js",
+      rawPatch: "@@ -1 +1 @@\n-x\n+y",
+    });
+    expect(p.diffTabs.size).toBe(1);
+
+    await p.setWorkspaceRoot("/ws/b");
+    expect(p.diffTabs.size).toBe(0);
+    expect(p.activeContent).not.toEqual(expect.objectContaining({ kind: "diff" }));
+    p.destroy();
+  });
+
+  test("opening a file while a diff is active switches the active tab to the file", async () => {
+    global.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: async () => ({ content: "x = 1\n", editable: true }),
+      }),
+    );
+    const p = createPanel();
+    await p.setWorkspaceRoot("/ws/a");
+
+    p.openDiff({
+      comparison: "staged",
+      pathBytesBase64: "YQ==",
+      displayPath: "a.js",
+      rawPatch: "@@ -1 +1 @@\n-old\n+new",
+    });
+
+    await p.openFile("/ws/a/b.js");
+
+    expect(p.activeContent).toEqual({ kind: "file", id: p.state.activeTabId });
+    const activeTab = tabBar.querySelector(".file-preview-tab.active");
+    expect(activeTab?.dataset.tabId).toBe(p.state.activeTabId);
+    p.destroy();
+  });
+
+  test("switching back to a file tab after toggling through diff remounts the file content", async () => {
+    global.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: async () => ({ content: "x = 1\n", editable: true }),
+      }),
+    );
+    const p = createPanel();
+    await p.setWorkspaceRoot("/ws/a");
+
+    const fileId = (await p.openFile("/ws/a/b.js")).id;
+    p.openDiff({
+      comparison: "staged",
+      pathBytesBase64: "YQ==",
+      displayPath: "a.js",
+      rawPatch: "@@ -1 +1 @@\n-old\n+new",
+    });
+    // Now diff is active; switch back to the file tab.
+    await p.activateContent({ kind: "file", id: fileId });
+
+    expect(p.activeContent).toEqual({ kind: "file", id: fileId });
+    expect(p.currentRenderer).not.toBeNull();
+    expect(content.children.length).toBeGreaterThan(0);
+    p.destroy();
+  });
+
+  test("clicking a file tab while a diff is active remounts the file via _selectTab", async () => {
+    global.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: async () => ({ content: "x = 1\n", editable: true }),
+      }),
+    );
+    const p = createPanel();
+    await p.setWorkspaceRoot("/ws/a");
+
+    const fileId = (await p.openFile("/ws/a/b.js")).id;
+    p.openDiff({
+      comparison: "staged",
+      pathBytesBase64: "YQ==",
+      displayPath: "a.js",
+      rawPatch: "@@ -1 +1 @@\n-old\n+new",
+    });
+    // Simulate the file-tab click handler path (_selectTab, not activateContent).
+    await p._selectTab(fileId);
+
+    expect(p.activeContent).toEqual({ kind: "file", id: fileId });
+    expect(p.currentRenderer).not.toBeNull();
+    expect(content.children.length).toBeGreaterThan(0);
     p.destroy();
   });
 });

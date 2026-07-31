@@ -1,6 +1,7 @@
 # Picot MarkItDown Office and Email Preview Design
 
 **Date:** 2026-07-26
+**Revised:** 2026-07-28 — extend dependency discovery to recognize a standalone `markitdown` CLI installed via `uv tool` / `pipx` / `pip --user` (the only viable path on PEP 668 externally-managed Python), and revise installation guidance to be PEP-668-safe.
 **Status:** Proposed — awaiting review
 **Scope:** Convert selected workspace Office and email files to Markdown for read-only preview.
 
@@ -16,6 +17,7 @@ This is a preview feature only. It does not edit, save, download, attach to prom
 - Python and MarkItDown are optional runtime dependencies. Picot detects them when a conversion preview is requested; it never installs or bundles them.
 - Missing Python, Python older than 3.10, missing MarkItDown, incompatible MarkItDown, unsupported input, conversion failure, timeout, and resource-limit failures all leave the file in the existing non-previewable state. Dependency failures also display reason-specific local guidance.
 - A successful conversion is rendered through Picot's existing Markdown sanitizer and Markdown renderer in a stricter converted-document mode, and is always read-only.
+- Picot discovers MarkItDown through two strategies: interpreter-based (`python3`/`python`/`py -3` with `import markitdown`) and, as a fallback, a standalone `markitdown` CLI on `PATH` (the install footprint of `uv tool` / `pipx` / `pip --user`, and the only viable path on PEP 668 externally-managed Python). Either strategy yields a working conversion; the interpreter strategy is preferred because it also surfaces a Python version for diagnostics.
 - MarkItDown is attempted for `DOC`, `DOCX`, `RTF`, `ODT`, `PPT`, `PPTX`, `ODP`, `XLS`, `XLSX`, `ODS`, `EML`, and `MSG`.
 - `CSV` retains its existing editable-text behavior and is never sent to MarkItDown. `MBOX` is excluded and remains non-previewable.
 - `DOCX`, `PPTX`, `XLSX`, `XLS`, and `MSG` are the stable conversion set. Every other listed suffix, including `EML` and `RTF`, is best-effort: Picot attempts conversion but does not claim native support. A non-zero exit or empty/whitespace-only result presents “cannot be previewed”; Picot does not attempt to judge the semantic quality of non-empty Markdown.
@@ -56,6 +58,8 @@ This module owns only MarkItDown process integration:
 It does not parse HTTP requests, resolve workspace paths, construct DOM, or persist cache entries. MarkItDown runs with plugins disabled and does not receive a local path, remote URL, cloud credential, or LLM configuration.
 
 Interpreter discovery is platform-aware and uses fixed command candidates only. macOS/Linux probes `python3` then `python`; Windows probes the Python launcher `py.exe` with `-3` before `python.exe`. Discovery resolves the successful candidate to an absolute executable path, runs a constant version script to distinguish a missing interpreter from Python older than 3.10, then distinguishes a missing package from an incompatible installation by checking the importable `MarkItDown` and `StreamInfo` APIs and verifying that `python -m markitdown --help` exposes the stdin `--extension` option. Compatibility is capability-based rather than tied to an arbitrary package version. The resolved executable, launcher prefix arguments, and display command are cached per embedded-server process.
+
+If no interpreter candidate exposes an importable MarkItDown, Picot falls back to discovering a standalone `markitdown` command on `PATH` (the install footprint of `uv tool`, `pipx`, and `pip --user` on externally-managed Python). This is the discovery path that succeeds when a user followed PEP 668 guidance and installed MarkItDown into an isolated environment rather than into the probed interpreter. Standalone-CLI discovery reads the command's first line, accepts only a single `#!` interpreter path that is absolute and `path.isAbsolute`, resolves it through `fs.realpath`, and then re-validates that interpreter with the same capability probes used for the interpreter candidates (version, `MarkItDown`/`StreamInfo` import, `--extension`/`-x` help, `sys.executable`). The standalone command is used only as a discovery bridge; conversion always runs the resolved absolute interpreter directly via `spawn`, so `py -3` launcher semantics are never re-injected. On Windows the standalone command is a `.exe`; Picot does not parse `~`-relative paths, CPython `-m` wrappers, or multi-argument shebangs. A standalone command that fails capability probing is treated as `markitdownMissing`/`markitdownIncompatible` exactly like an interpreter candidate, with the same diagnostic reason set.
 
 The host user's installed Python and MarkItDown package are trusted optional runtime dependencies; browser and workspace input cannot select an executable or alter probe code. After discovery, child processes use the resolved interpreter and a minimal environment containing only required locale, home, temporary-directory, and Windows system variables. They do not inherit `PYTHONPATH`, `PYTHONSTARTUP`, `EXIFTOOL_PATH`, proxy variables, cloud/LLM credentials, `LD_*`, or `DYLD_*` variables.
 
@@ -124,35 +128,40 @@ No new endpoint is added. `/api/files/raw` remains limited to its current image/
 
 ## 6. Runtime Dependency and Installation Guidance
 
-MarkItDown requires Python 3.10 or later. Picot checks for an interpreter and a MarkItDown installation only when a convertible file is opened.
+MarkItDown requires Python 3.10 or later. Picot checks for an interpreter and a MarkItDown installation only when a convertible file is opened. It discovers a usable MarkItDown through either of two strategies (§4.1): an interpreter candidate (`python3`/`python`/`py -3`) with `import markitdown`, or a standalone `markitdown` CLI on `PATH`. When neither succeeds, the file remains non-previewable with reason-specific guidance.
 
 Guidance distinguishes all four dependency reasons:
 
-- `pythonMissing`: instruct the user to install Python 3.10 or newer from the platform's official distribution channel; no unusable pip command is shown.
+- `pythonMissing`: instruct the user to install Python 3.10 or newer from the platform's official distribution channel; no pip/uv/pipx command is shown.
 - `pythonTooOld`: show only the detected Python `major.minor.patch` version (for example, `3.9.7`) and instruct the user to upgrade to Python 3.10 or newer; no filesystem path or other environment detail is returned.
-- `markitdownMissing`: use the successfully probed interpreter command to install the stable-format extras.
-- `markitdownIncompatible`: use that same interpreter command with `pip install --upgrade` and explain that Picot requires MarkItDown's stdin/extension conversion capability.
+- `markitdownMissing`: show a PEP 668-safe install command for the stable-format extras. On externally-managed Python (Homebrew, Debian/Ubuntu system Python, PEP 668 distros) a bare `pip install` is rejected, so guidance prefers isolated-environment installers. The install command is independent of which discovery strategy ultimately succeeded, because the user's job is to make MarkItDown importable or provide a standalone CLI — both forms satisfy discovery.
+- `markitdownIncompatible`: use the same install command with an `upgrade`/`reinstall` verb and explain that Picot requires MarkItDown's stdin/extension conversion capability.
 
-The install command covers DOCX, PPTX, XLSX/XLS, and MSG only:
+The install command covers DOCX, PPTX, XLSX/XLS, and MSG only. On macOS/Linux the primary recommendation is `uv tool install`, with `pipx install` as an alternative; on Windows the recommendation is `pipx install` with `uv tool install` as an alternative. Both install a standalone `markitdown` CLI that standalone-CLI discovery recognizes, and neither touches an externally-managed interpreter:
 
 ```shell
-# macOS / Linux, using whichever command passed discovery
-python3 -m pip install 'markitdown[docx,pptx,xlsx,xls,outlook]'
-python -m pip install 'markitdown[docx,pptx,xlsx,xls,outlook]'
+# macOS / Linux — preferred (uv)
+uv tool install 'markitdown[docx,pptx,xlsx,xls,outlook]'
+# macOS / Linux — alternative (pipx)
+pipx install 'markitdown[docx,pptx,xlsx,xls,outlook]'
 
-# Windows Python Launcher
+# Windows — preferred (pipx, available after `pipx ensurepath`)
+pipx install "markitdown[docx,pptx,xlsx,xls,outlook]"
+# Windows — alternative (uv)
+uv tool install "markitdown[docx,pptx,xlsx,xls,outlook]"
+```
+
+For users who prefer to install into a specific interpreter (for example a `python3 -m venv` they already manage), guidance may also show the interpreter-direct form as a secondary option, because interpreter-based discovery recognizes it directly:
+
+```shell
+# interpreter-direct (only when the interpreter is NOT externally managed)
+python3 -m pip install 'markitdown[docx,pptx,xlsx,xls,outlook]'
 py -3 -m pip install "markitdown[docx,pptx,xlsx,xls,outlook]"
 ```
 
-The UI shows only the applicable command, selected from the actual successful
-probe, and keeps it copyable as plain text. It is instructional only: Picot
-never runs it, never opens a terminal, and never writes into a Python
-environment.
+The UI shows only the commands applicable to the detected platform, keeps them copyable as plain text, and notes that Picot must be restarted after installation (the probe result is cached for the embedded-server process lifetime). It is instructional only: Picot never runs it, never opens a terminal, and never writes into a Python environment.
 
-A locally installed MarkItDown version may convert additional selected suffixes
-through its built-in converters. Picot still invokes its local-only conversion
-path with plugins disabled; it neither discovers nor trusts user-installed
-plugins. A failure is non-fatal and falls back to cannot-preview.
+A locally installed MarkItDown version may convert additional selected suffixes through its built-in converters. Picot still invokes its local-only conversion path with plugins disabled; it neither discovers nor trusts user-installed plugins. A failure is non-fatal and falls back to cannot-preview.
 
 ## 7. Error Handling and Resource Limits
 
@@ -240,11 +249,13 @@ converted-document remote-image policy in §4.7.
 
 - `extensions/markitdown-preview.test.ts` verifies two-stage
   interpreter/capability detection for macOS/Linux and Windows candidates,
-  exact no-filename stdin arguments, no-shell execution, the running input
+  standalone-CLI discovery (shebang parsing, realpath resolution, capability re-validation, rejection of relative/non-existent/multi-arg shebangs), exact no-filename stdin arguments, no-shell execution, the running input
   counter, application-level stdout/stderr limits that terminate the spawned
   child, timeout cleanup, concurrency-slot accounting,
   POSIX escalation, Windows process-tree termination arguments, cancellation,
-  and error mapping.
+  and error mapping. Standalone-CLI tests must not execute a real installed
+  `markitdown`; they inject a fake `readFile`/`realpath`/`spawn` fixture that
+  returns a controlled shebang line and scripted capability output.
 - `extensions/file-routes.test.ts` verifies the server allowlist, CSV text
   preservation, EML/RTF conversion classification, MBOX binary classification,
   outside-workspace rejection, allowed in-workspace symlink canonicalization,
@@ -283,6 +294,9 @@ local conversion, all four dependency-guidance states that can be reproduced on
 the host, a conversion-failure fallback, remote-image blocking, and cancellation
 without an error flash. The Windows check must cover discovery through `py -3`,
 paths inside a drive-letter workspace, and cancellation of an active conversion.
+In addition, verify standalone-CLI discovery on each platform by installing
+MarkItDown via `uv tool`/`pipx` (so no interpreter candidate exposes `import
+markitdown`) and confirming Picot recognizes the standalone `markitdown` command.
 Until automated Windows coverage exists, record this manual Windows run as a
 release gate.
 

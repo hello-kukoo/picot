@@ -1193,7 +1193,11 @@ function computeNextSkills(
 export async function mutateSkillEnabled(
   opts: MutateSkillEnabledOptions,
 ): Promise<SkillMutationResult> {
-  const settingsPath = settingsPathFor(opts.scope, { cwd: opts.cwd, agentDir: opts.agentDir });
+  const settingsPath = settingsPathFor(opts.scope, {
+    scope: opts.scope,
+    cwd: opts.cwd,
+    agentDir: opts.agentDir,
+  });
   return serialized(settingsPath, async () => {
     if (opts.scope === "project" && !opts.projectTrusted) {
       throw new Error("Project is not trusted; cannot mutate project skills");
