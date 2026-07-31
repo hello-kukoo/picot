@@ -43,13 +43,16 @@ import {
 } from "./session/routing.js";
 import { anchorHistoryToBottom } from "./session/scroll-anchor.js";
 import { setupSettingsEditors } from "./settings/editors.js";
+import { setupPackageSkillsTab } from "./settings/package-skills-tab.js";
 import {
   clearSettingsSaveMessage,
   setSettingsSaveButtonSaving,
   showSettingsSaveError,
   showSettingsSaveSuccess,
 } from "./settings/save-status.js";
+import { setupSkillsInstallTab } from "./settings/skills-install-tab.js";
 import { setupSkillsPage } from "./settings/skills-page.js";
+import { setupSkillsTabShell } from "./settings/skills-tab-shell.js";
 import {
   bindSuperAgentStartupToggle,
   renderThinkingEffort,
@@ -5602,6 +5605,30 @@ const skillsPage = setupSkillsPage({
   rpcCommand,
   showSuccess: (msg) => showSettingsSaveSuccess(skillsSaveMessageEl, msg),
   showError: (msg) => showSettingsSaveError(skillsSaveMessageEl, msg),
+});
+const packageSkillsPage = setupPackageSkillsTab({
+  container: document.getElementById("settings-package-skills"),
+  rpcCommand,
+});
+const skillsInstallPage = setupSkillsInstallTab({
+  container: document.getElementById("settings-install-skills"),
+  transport,
+  isProjectTrusted: () => skillsPage.isProjectTrusted(),
+  showSuccess: (msg) => showSettingsSaveSuccess(skillsSaveMessageEl, msg),
+  showError: (msg) => showSettingsSaveError(skillsSaveMessageEl, msg),
+});
+
+setupSkillsTabShell({
+  tabs: document.querySelectorAll("[data-skills-page-tab]"),
+  panels: {
+    discovered: document.getElementById("settings-skills"),
+    install: document.getElementById("settings-install-skills"),
+    packages: document.getElementById("settings-package-skills"),
+  },
+  activate: (name) => {
+    if (name === "install") return skillsInstallPage.activate();
+    if (name === "packages") return packageSkillsPage.activate();
+  },
 });
 
 // Expose rpcCommand for modules that need to send Pi commands without a

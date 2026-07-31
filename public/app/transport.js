@@ -132,6 +132,19 @@ export class WsTransport {
   pickFolder() {
     return this._control("pick_folder", {}, { timeoutMs: NO_TIMEOUT });
   }
+
+  pickSkillSource() {
+    return this._control("pick_skill_source", {}, { timeoutMs: NO_TIMEOUT });
+  }
+
+  scanSkillInstallSource(sourceId) {
+    return this._control("skill_scan_install_source", { sourceId }, { timeoutMs: NO_TIMEOUT });
+  }
+
+  installSkillLinks(request) {
+    return this._control("skill_install_links", request, { timeoutMs: NO_TIMEOUT });
+  }
+
   pickImageFiles(initialDir) {
     return this._control(
       "pick_image_files",

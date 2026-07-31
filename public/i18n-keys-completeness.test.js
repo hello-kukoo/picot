@@ -154,6 +154,7 @@ describe("JS t() literal key references", () => {
     "sidebar/index.js",
     "settings/editors.js",
     "settings/skills-page.js",
+    "settings/package-skills-tab.js",
     "settings/toggles.js",
     "settings/save-status.js",
     "packages/install-status.js",

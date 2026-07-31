@@ -1482,11 +1482,67 @@
             <h3 data-i18n="settings.skills.title">Skills</h3>
           </div>
           <div class="settings-body">
+            <div
+              class="skills-page-tabs"
+              role="tablist"
+              aria-label="Skills sections"
+            >
+              <button
+                type="button"
+                id="skills-page-tab-discovered"
+                class="skills-page-tab active"
+                role="tab"
+                aria-selected="true"
+                aria-controls="settings-skills"
+                data-skills-page-tab="discovered"
+                data-i18n="settings.skills.discovered"
+              >
+                Discovered
+              </button>
+              <button
+                type="button"
+                id="skills-page-tab-install"
+                class="skills-page-tab"
+                role="tab"
+                aria-selected="false"
+                aria-controls="settings-install-skills"
+                data-skills-page-tab="install"
+                data-i18n="settings.skills.install"
+              >
+                Install
+              </button>
+              <button
+                type="button"
+                id="skills-page-tab-packages"
+                class="skills-page-tab"
+                role="tab"
+                aria-selected="false"
+                aria-controls="settings-package-skills"
+                data-skills-page-tab="packages"
+                data-i18n="settings.skills.packages"
+              >
+                Packages
+              </button>
+            </div>
             <section
               id="settings-skills"
               class="settings-section skills-page"
               role="tabpanel"
-              aria-labelledby="skills-scope-tab-global"
+              aria-labelledby="skills-page-tab-discovered"
+              aria-live="polite"
+            ></section>
+            <section
+              id="settings-install-skills"
+              class="settings-section skills-install-page hidden"
+              role="tabpanel"
+              aria-labelledby="skills-page-tab-install"
+              aria-live="polite"
+            ></section>
+            <section
+              id="settings-package-skills"
+              class="settings-section package-skills-page hidden"
+              role="tabpanel"
+              aria-labelledby="skills-page-tab-packages"
               aria-live="polite"
             ></section>
             <div
