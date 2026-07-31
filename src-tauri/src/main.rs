@@ -19,6 +19,7 @@ mod pi_rpc_bridge;
 mod remote_auth;
 mod runtime_coordinator;
 mod settings_store;
+mod skill_source_registry;
 mod terminal_manager;
 mod terminal_output;
 mod terminal_profiles;
@@ -43,6 +44,7 @@ use pi_manager::{
 use remote_auth::RemoteAuth;
 use runtime_coordinator::RuntimeTarget;
 use serde_json::Value;
+use skill_source_registry::SkillSourceRegistry;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -62,6 +64,7 @@ type BrokerWsState = Arc<BrokerWs>;
 type NativePiManagerState = NativePiManager;
 #[allow(dead_code)]
 type OwnerRegistryState = Arc<WindowOwnerRegistry>;
+type SkillSourceRegistryState = Arc<SkillSourceRegistry>;
 type TerminalManagerState = Arc<TerminalManager>;
 #[allow(dead_code)]
 type EphemeralRegistryState = Arc<EphemeralRegistry>;
@@ -1225,6 +1228,164 @@ fn resolve_control_port(port: Option<u16>, broker: &BrokerWs) -> Result<u16, Str
 /// regardless of transport. Native ops (folder picker, devtools, updater,
 /// open-in-app/external) require an OS host and are only meaningful when this
 /// handler is installed — which is exactly what `capabilities.native` advertises.
+fn parse_skill_install_control_args(
+    args: &Value,
+) -> Result<(String, String, String, Value), String> {
+    let object = args
+        .as_object()
+        .ok_or_else(|| "invalid skill install request".to_string())?;
+    if object
+        .keys()
+        .any(|key| !["sourceId", "scope", "scanRevision", "selection"].contains(&key.as_str()))
+    {
+        return Err("invalid skill install request".to_string());
+    }
+    let source_id = object
+        .get("sourceId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .ok_or_else(|| "invalid skill install request".to_string())?
+        .to_string();
+    let scope = object
+        .get("scope")
+        .and_then(Value::as_str)
+        .filter(|value| *value == "global" || *value == "project")
+        .ok_or_else(|| "invalid skill install request".to_string())?
+        .to_string();
+    let revision = object
+        .get("scanRevision")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .ok_or_else(|| "invalid skill install request".to_string())?
+        .to_string();
+    let selection = object
+        .get("selection")
+        .filter(|value| value.is_array())
+        .filter(|value| {
+            value.as_array().is_some_and(|items| {
+                !items.is_empty()
+                    && items.len() <= 2_000
+                    && items.iter().all(|item| {
+                        let Some(candidate) = item.as_object() else {
+                            return false;
+                        };
+                        let valid_kind = matches!(
+                            candidate.get("kind").and_then(Value::as_str),
+                            Some("skill" | "group")
+                        );
+                        let valid_id = candidate
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .is_some_and(|id| !id.is_empty() && id.len() <= 128);
+                        valid_kind && valid_id
+                    })
+                    && {
+                        let mut seen = std::collections::HashSet::new();
+                        items.iter().all(|item| {
+                            let candidate = item.as_object().expect("checked above");
+                            seen.insert((
+                                candidate
+                                    .get("kind")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default(),
+                                candidate
+                                    .get("id")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default(),
+                            ))
+                        })
+                    }
+            })
+        })
+        .cloned()
+        .ok_or_else(|| "invalid skill install request".to_string())?;
+    Ok((source_id, scope, revision, selection))
+}
+
+async fn scan_skill_source_via_primary(
+    port: u16,
+    source_id: &str,
+    canonical_path: &std::path::Path,
+    install_secret: &str,
+) -> Result<Value, String> {
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|_| "skill source scan failed".to_string())?;
+    let response = client
+        .post(format!("http://127.0.0.1:{port}/api/skill-install-scan"))
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {install_secret}"),
+        )
+        .json(&serde_json::json!({
+            "sourceId": source_id,
+            "canonicalPath": canonical_path,
+        }))
+        .send()
+        .await
+        .map_err(|_| "skill source scan failed".to_string())?;
+    if !response.status().is_success() {
+        return Err("skill source scan failed".to_string());
+    }
+    let body: Value = response
+        .json()
+        .await
+        .map_err(|_| "skill source scan failed".to_string())?;
+    if body.get("success").and_then(Value::as_bool) != Some(true) {
+        return Err("skill source scan failed".to_string());
+    }
+    body.get("data")
+        .cloned()
+        .ok_or_else(|| "skill source scan failed".to_string())
+}
+
+async fn install_skill_links_via_primary(
+    port: u16,
+    source_id: &str,
+    canonical_path: &std::path::Path,
+    scope: &str,
+    scan_revision: &str,
+    selection: Value,
+    install_secret: &str,
+) -> Result<Value, String> {
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|_| "skill install failed".to_string())?;
+    let response = client
+        .post(format!("http://127.0.0.1:{port}/api/skill-install-links"))
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {install_secret}"),
+        )
+        .json(&serde_json::json!({
+            "sourceId": source_id,
+            "canonicalPath": canonical_path,
+            "scope": scope,
+            "scanRevision": scan_revision,
+            "selection": selection,
+        }))
+        .send()
+        .await
+        .map_err(|_| "skill install failed".to_string())?;
+    if !response.status().is_success() {
+        return Err("skill install failed".to_string());
+    }
+    let body: Value = response
+        .json()
+        .await
+        .map_err(|_| "skill install failed".to_string())?;
+    if body.get("success").and_then(Value::as_bool) != Some(true) {
+        return Err("skill install failed".to_string());
+    }
+    body.get("data")
+        .cloned()
+        .ok_or_else(|| "skill install failed".to_string())
+}
+
 fn install_control_handler(
     broker: &Arc<BrokerWs>,
     manager: Arc<PiManager>,
@@ -1315,6 +1476,37 @@ fn install_control_handler(
                     "get_pi_version" => Ok(Value::from(locked_pi_version())),
                     "get_app_version" => Ok(Value::from(env!("CARGO_PKG_VERSION"))),
                     "is_dev" => Ok(Value::from(cfg!(debug_assertions))),
+                    "pick_skill_source" => {
+                        if ctx.class != broker_ws::ClientClass::Native {
+                            return Err("native desktop owner required".to_string());
+                        }
+                        let owner = ctx.owner_id.ok_or("verified window owner required")?;
+                        let window_label = owner_registry
+                            .label_for_owner(&owner)
+                            .ok_or("verified window owner required")?;
+                        let (workspace_root, workspace_port) = owner_registry
+                            .current_workspace(&owner)
+                            .ok_or("workspace is not available")?;
+                        let generation = owner_registry
+                            .current_workspace_generation(&owner)
+                            .ok_or("workspace is not available")?;
+                        let selected = pick_folder_core(&app).await;
+                        let Some(path) = selected else {
+                            return Ok(Value::Null);
+                        };
+                        let source_id = app
+                            .try_state::<SkillSourceRegistryState>()
+                            .ok_or("skill source registry is not available")?
+                            .issue(
+                                owner,
+                                window_label,
+                                workspace_root,
+                                workspace_port,
+                                generation,
+                                PathBuf::from(path),
+                            )?;
+                        Ok(serde_json::json!({ "sourceId": source_id }))
+                    }
                     "pick_folder" => Ok(match pick_folder_core(&app).await {
                         Some(path) => Value::from(path),
                         None => Value::Null,
@@ -1345,6 +1537,84 @@ fn install_control_handler(
                         let port = resolve_control_port(arg_u16("port"), &broker)?;
                         open_devtools_core(port, &app)?;
                         Ok(Value::Null)
+                    }
+                    "skill_scan_install_source" => {
+                        if ctx.class != broker_ws::ClientClass::Native {
+                            return Err("native desktop owner required".to_string());
+                        }
+                        let owner = ctx.owner_id.ok_or("verified window owner required")?;
+                        let source_id = arg_str("sourceId").ok_or("sourceId is required")?;
+                        let window_label = owner_registry
+                            .label_for_owner(&owner)
+                            .ok_or("verified window owner required")?;
+                        let (workspace_root, workspace_port) = owner_registry
+                            .current_workspace(&owner)
+                            .ok_or("workspace is not available")?;
+                        let generation = owner_registry
+                            .current_workspace_generation(&owner)
+                            .ok_or("workspace is not available")?;
+                        let registry = app
+                            .try_state::<SkillSourceRegistryState>()
+                            .ok_or("skill source registry is not available")?;
+                        let binding = registry.resolve(
+                            &source_id,
+                            &owner,
+                            &window_label,
+                            &workspace_root,
+                            generation,
+                        )?;
+                        if binding.workspace_port != workspace_port {
+                            return Err("invalid or expired skill source".to_string());
+                        }
+                        scan_skill_source_via_primary(
+                            workspace_port,
+                            &binding.source_id,
+                            &binding.canonical_path,
+                            manager.install_secret(),
+                        )
+                        .await
+                    }
+                    "skill_install_links" => {
+                        if ctx.class != broker_ws::ClientClass::Native {
+                            return Err("native desktop owner required".to_string());
+                        }
+                        let owner = ctx.owner_id.ok_or("verified window owner required")?;
+                        let (source_id, scope, scan_revision, selection) =
+                            parse_skill_install_control_args(&args)?;
+                        let window_label = owner_registry
+                            .label_for_owner(&owner)
+                            .ok_or("verified window owner required")?;
+                        let (workspace_root, workspace_port) = owner_registry
+                            .current_workspace(&owner)
+                            .ok_or("workspace is not available")?;
+                        let generation = owner_registry
+                            .current_workspace_generation(&owner)
+                            .ok_or("workspace is not available")?;
+                        let registry = app
+                            .try_state::<SkillSourceRegistryState>()
+                            .ok_or("skill source registry is not available")?;
+                        let binding = registry.resolve(
+                            &source_id,
+                            &owner,
+                            &window_label,
+                            &workspace_root,
+                            generation,
+                        )?;
+                        if binding.workspace_port != workspace_port {
+                            return Err("invalid or expired skill source".to_string());
+                        }
+                        let result = install_skill_links_via_primary(
+                            workspace_port,
+                            &binding.source_id,
+                            &binding.canonical_path,
+                            &scope,
+                            &scan_revision,
+                            selection,
+                            manager.install_secret(),
+                        )
+                        .await?;
+                        registry.consume(&binding.source_id, &owner, generation)?;
+                        Ok(result)
                     }
                     "list_pi_packages" => {
                         let sources = manager.list_configured_package_sources()?;
@@ -1748,6 +2018,9 @@ fn install_control_handler(
                         if let Some(target_cwd) = owner_registry.pending_target_cwd(&owner) {
                             warm_side_chat_standby(manager.clone(), target_cwd);
                         }
+                        let prior_generation = owner_registry
+                            .current_workspace_generation(&owner)
+                            .ok_or("workspace is not available")?;
                         let target_origin = owner_registry
                             .pending_target_origin(&owner)
                             .ok_or("no pending workspace transition")?;
@@ -1759,6 +2032,9 @@ fn install_control_handler(
                             gen,
                             target_origin.clone(),
                         )?;
+                        if let Some(skill_sources) = app.try_state::<SkillSourceRegistryState>() {
+                            skill_sources.revoke_workspace(&owner, prior_generation);
+                        }
                         if let Some(git_service) = app.try_state::<Arc<GitService>>() {
                             git_service.inner().clear_workspace_state(owner.as_str());
                         }
@@ -2231,6 +2507,9 @@ fn handle_window_destroyed(window: &tauri::Window) {
             if let Some(broker) = window.try_state::<BrokerWsState>() {
                 broker.unregister_port(port);
             }
+            if let Some(skill_sources) = window.try_state::<SkillSourceRegistryState>() {
+                skill_sources.revoke_port(port);
+            }
         }
     }
 
@@ -2278,6 +2557,9 @@ fn handle_window_destroyed(window: &tauri::Window) {
         git_service.inner().clear_owner(owner.as_str());
     }
     close_approvals().lock().unwrap().remove(&owner);
+    if let Some(skill_sources) = window.try_state::<SkillSourceRegistryState>() {
+        skill_sources.revoke_owner(&owner);
+    }
     registry.revoke_owner(&owner);
 }
 
@@ -2318,6 +2600,7 @@ fn main() {
             let broker = Arc::new(BrokerWs::start().expect("failed to start broker websocket"));
             let owner_registry = Arc::new(WindowOwnerRegistry::default());
             let ephemeral_registry = Arc::new(EphemeralRegistry::default());
+            let skill_source_registry = Arc::new(SkillSourceRegistry::new());
             broker.set_owner_registry(owner_registry.clone());
             let git_service = Arc::new(git_service::GitService::new());
             broker.set_git_service(git_service.clone());
@@ -2418,6 +2701,7 @@ fn main() {
             let manager_for_exit = manager.clone();
             let broker_for_exit = broker.clone();
             let ephemeral_for_exit = ephemeral_registry.clone();
+            let app_for_exit = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 loop {
                     match exit_rx.recv().await {
@@ -2433,6 +2717,13 @@ fn main() {
                                 );
                             } else if !manager_for_exit.cleanup_exited_standby(exit) {
                                 broker_for_exit.unregister_port(exit.port);
+                            }
+                            // A terminated Pi port must never remain usable as a
+                            // target for a previously issued local skill source.
+                            // Registry lookup itself is owner/generation bound,
+                            // and this closes the process-lifetime dimension.
+                            if let Some(skill_sources) = app_for_exit.try_state::<SkillSourceRegistryState>() {
+                                skill_sources.revoke_port(exit.port);
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -2505,6 +2796,7 @@ fn main() {
             app.manage(manager.clone());
             app.manage(broker.clone());
             app.manage(owner_registry.clone());
+            app.manage(skill_source_registry.clone());
             app.manage(ephemeral_registry.clone());
             app.manage(terminal_manager.clone());
             app.manage(git_service.clone());

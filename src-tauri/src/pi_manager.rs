@@ -1,6 +1,9 @@
 // ABOUTME: Owns embedded Pi child processes, ports, identities, and RPC pipes.
 // ABOUTME: Provides safe spawn, routing, exit observation, and exact cleanup.
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use rand::rngs::OsRng;
+use rand::RngCore;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 #[cfg(target_os = "windows")]
@@ -14,8 +17,6 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use crate::native_pi_manager::NativeLaunchSpec;
-use rand::rngs::OsRng;
-use rand::RngCore;
 use tokio::sync::broadcast;
 
 #[cfg(target_os = "windows")]
@@ -23,6 +24,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 const QUICK_CHAT_TEMP_PREFIX: &str = "picot-quick-chat-";
 const QUICK_CHAT_TOKEN_BYTES: usize = 16;
+const SKILL_INSTALL_SECRET_BYTES: usize = 32;
 
 /// Generalized spawn request. The host owns every field; callers never inject
 /// capability, owner tokens, executables, or arbitrary flags through this.
@@ -93,6 +95,7 @@ pub struct PiManager {
     /// child, so a workspace transition cannot resurrect an old standby.
     standby_warming: Arc<Mutex<HashMap<StandbyWarmKey, u64>>>,
     next_standby_warm: AtomicU64,
+    install_secret: String,
 }
 
 /// Snapshot of `get_available_models` output, captured once per Pi process
@@ -483,6 +486,9 @@ impl PiManager {
     pub fn new(static_dir: PathBuf) -> Self {
         let (exit_sender, _) = broadcast::channel(64);
         let (rpc_output_sender, _) = broadcast::channel(128);
+        let mut install_secret_bytes = [0u8; SKILL_INSTALL_SECRET_BYTES];
+        OsRng.fill_bytes(&mut install_secret_bytes);
+        let install_secret = URL_SAFE_NO_PAD.encode(install_secret_bytes);
         Self {
             processes: Arc::new(Mutex::new(HashMap::new())),
             session_ports: Arc::new(Mutex::new(HashMap::new())),
@@ -496,7 +502,12 @@ impl PiManager {
             reserved_ports: Arc::new(Mutex::new(HashSet::new())),
             standby_warming: Arc::new(Mutex::new(HashMap::new())),
             next_standby_warm: AtomicU64::new(1),
+            install_secret,
         }
+    }
+
+    pub fn install_secret(&self) -> &str {
+        &self.install_secret
     }
 
     #[allow(dead_code)]
@@ -834,7 +845,7 @@ impl PiManager {
         // Ephemeral markers (kind, instance id, generation) are the only extra
         // environment the host may inject; they never include a capability or
         // owner token. The Pi agent root is host-owned and injected below.
-        for (key, value) in build_spawn_environment(spec)? {
+        for (key, value) in build_spawn_environment(spec, self.install_secret())? {
             child.env(key, value);
         }
         child
@@ -1545,7 +1556,10 @@ fn resolve_pi_agent_root() -> Result<PathBuf, String> {
 /// Copy caller-provided environment markers while keeping the agent root under
 /// host control. The canonical root is appended last so it cannot be replaced
 /// by an inherited or caller-provided value.
-fn build_spawn_environment(spec: &PiSpawnSpec) -> Result<Vec<(String, String)>, String> {
+fn build_spawn_environment(
+    spec: &PiSpawnSpec,
+    install_secret: &str,
+) -> Result<Vec<(String, String)>, String> {
     if spec
         .environment
         .iter()
@@ -1561,6 +1575,10 @@ fn build_spawn_environment(spec: &PiSpawnSpec) -> Result<Vec<(String, String)>, 
     environment.push((
         "PI_CODING_AGENT_DIR".to_string(),
         resolve_pi_agent_root()?.to_string_lossy().into_owned(),
+    ));
+    environment.push((
+        "PI_STUDIO_SKILL_INSTALL_SECRET".to_string(),
+        install_secret.to_string(),
     ));
     Ok(environment)
 }
@@ -2022,13 +2040,18 @@ No packages installed.";
 
         let mut rejected = spec(false, false, None);
         rejected.environment = vec![("PI_CODING_AGENT_DIR".into(), "/forbidden".into())];
-        let error = build_spawn_environment(&rejected).unwrap_err();
+        let error = build_spawn_environment(&rejected, "test-secret").unwrap_err();
         assert!(error.contains("PI_CODING_AGENT_DIR"));
 
         let mut accepted = spec(false, false, None);
         accepted.environment = vec![("PI_STUDIO_TEST".into(), "kept".into())];
-        let environment = build_spawn_environment(&accepted).expect("build spawn environment");
+        let environment =
+            build_spawn_environment(&accepted, "test-secret").expect("build spawn environment");
         assert!(environment.contains(&("PI_STUDIO_TEST".into(), "kept".into())));
+        assert!(environment.contains(&(
+            "PI_STUDIO_SKILL_INSTALL_SECRET".into(),
+            "test-secret".into()
+        )));
         assert_eq!(
             environment
                 .iter()
