@@ -156,6 +156,7 @@
       "conflict": "File modified externally",
       "conflictReload": "Reload",
       "conflictOverwrite": "Overwrite",
+      "tabpanelLabel": "File preview",
       "outsideWorkspace": "File is outside the active workspace",
       "unsupportedBinary": "This file cannot be previewed.",
       "tooLarge": "This file is too large to preview.",

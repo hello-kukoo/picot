@@ -23,16 +23,16 @@ const FOLDER_OPEN_ICON =
 const SECTION_CHEVRON_ICON =
   '<svg class="section-chevron-icon" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
 
-function createChevron() {
-  const chevron = document.createElement("span");
-  chevron.className = "chevron folder-icon";
-  chevron.setAttribute("aria-hidden", "true");
+export function createFolderIcon() {
+  const icon = document.createElement("span");
+  icon.className = "chevron folder-icon";
+  icon.setAttribute("aria-hidden", "true");
   const doc = new DOMParser().parseFromString(
     `${FOLDER_CLOSED_ICON}${FOLDER_OPEN_ICON}`,
     "text/html",
   );
-  chevron.append(...doc.body.childNodes);
-  return chevron;
+  icon.append(...doc.body.childNodes);
+  return icon;
 }
 
 /**
@@ -205,7 +205,7 @@ export function buildSidebarWorkspaceGroup({
   const header = document.createElement("div");
   header.className = "project-header workspace-header";
 
-  header.appendChild(createChevron());
+  header.appendChild(createFolderIcon());
 
   const nameEl = document.createElement("span");
   nameEl.className = "project-name workspace-name";

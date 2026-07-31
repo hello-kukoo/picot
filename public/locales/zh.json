@@ -156,6 +156,7 @@
       "conflict": "文件已被外部修改",
       "conflictReload": "重新加载",
       "conflictOverwrite": "覆盖",
+      "tabpanelLabel": "文件预览",
       "outsideWorkspace": "文件不在当前工作区内",
       "unsupportedBinary": "此文件无法预览。",
       "tooLarge": "此文件过大，无法预览。",
