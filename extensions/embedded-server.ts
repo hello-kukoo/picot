@@ -33,6 +33,7 @@
  */
 
 import { execFile, execFileSync } from "node:child_process";
+import { timingSafeEqual } from "node:crypto";
 import * as fs from "node:fs";
 import { realpath as realpathAsync } from "node:fs/promises";
 import * as http from "node:http";
@@ -76,6 +77,7 @@ import {
   serializeConversionOutcome,
 } from "./markitdown-preview.ts";
 import { getOpenCommand, resolveHomePath } from "./open-path.ts";
+import { buildPackageSkillInventory } from "./package-skill-inventory.ts";
 import { isPathWithinRoot } from "./path-safety.ts";
 import {
   buildTelegramDmConfig,
@@ -88,7 +90,14 @@ import {
 import { isLoopbackAddress, isLoopbackOnlyApiRequest } from "./request-access.ts";
 import { buildProjectSearchMatch } from "./session-search";
 import {
+  type InstallCandidateSelection,
+  type InstallHostSource,
+  installSkillLinks,
+  scanSkillInstallSource,
+} from "./skill-installation.ts";
+import {
   buildSkillInventory,
+  mutateClaudeSkillRoot,
   mutateSkillEnabled,
   type SkillScope,
   type SkillTarget,
@@ -837,6 +846,212 @@ export function parseSkillInventoryMutation(command: unknown): SkillInventoryMut
     throw new Error("Invalid skill inventory mutation");
   }
   return { scope, target: { kind: t.kind as "skill" | "group", id: t.id }, enabled: c.enabled };
+}
+
+/**
+ * Parse a `list_package_skill_inventory` request payload. Accepts only the two
+ * exact scope strings and rejects any extra path/owner/cwd/port fields so a
+ * browser cannot inject filesystem authority into this read-only command.
+ */
+export function parsePackageSkillInventoryRequest(command: unknown): {
+  scope: SkillScope;
+} {
+  if (typeof command !== "object" || command === null || Array.isArray(command)) {
+    throw new Error("Invalid package skill inventory request");
+  }
+  const c = command as Record<string, unknown>;
+  const knownKeys = new Set(["type", "scope"]);
+  for (const key of Object.keys(c)) {
+    if (!knownKeys.has(key)) {
+      throw new Error("Invalid package skill inventory request");
+    }
+  }
+  if (c.scope !== "global" && c.scope !== "project") {
+    throw new Error("Invalid package skill inventory request");
+  }
+  return { scope: c.scope };
+}
+
+/**
+ * Parse a `skill_add_root` request payload. Accepts only the two
+ * `(global,claude-global)` and `(project,claude-project)` pairs and rejects any
+ * extra path/settingsPath/cwd/owner/port fields so a browser cannot inject
+ * filesystem authority into this host-only mutation.
+ */
+export function parseSkillAddRootRequest(command: unknown): {
+  scope: SkillScope;
+  kind: "claude-global" | "claude-project";
+} {
+  if (typeof command !== "object" || command === null || Array.isArray(command)) {
+    throw new Error("Invalid skill add root request");
+  }
+  const c = command as Record<string, unknown>;
+  const knownKeys = new Set(["type", "scope", "kind"]);
+  for (const key of Object.keys(c)) {
+    if (!knownKeys.has(key)) {
+      throw new Error("Invalid skill add root request");
+    }
+  }
+  const scope = c.scope;
+  const kind = c.kind;
+  if (scope === "global" && kind === "claude-global") {
+    return { scope, kind };
+  }
+  if (scope === "project" && kind === "claude-project") {
+    return { scope, kind };
+  }
+  throw new Error("Invalid skill add root request");
+}
+
+/**
+ * Reject any Skills command (inventory, mutation, package, add-root) when
+ * running in an ephemeral Pi process. Unlike the generic
+ * `assertEphemeralCommandAllowed`, this gate is absolute: even an
+ * authenticated desktop owner cannot reach host paths or settings from an
+ * ephemeral runtime. Skills sources and settings are host-owned state that
+ * must never be read or written by a Side Chat / Quick Chat instance.
+ *
+ * Re-reads the ephemeral env at call time (rather than the module-level
+ * `EPHEMERAL_ENV` snapshot) so tests can toggle it without reloading.
+ */
+export function assertNonEphemeralSkillCommand(_commandName: string): void {
+  if (parseEphemeralEnv()) {
+    throw new Error("Skills commands are not available in temporary chat");
+  }
+}
+
+const INSTALL_SOURCE_ID_MAX = 128;
+const INSTALL_SECRET_MAX = 256;
+
+function constantTimeSecretEqual(received: string, expected: string): boolean {
+  const actual = Buffer.from(received, "utf8");
+  const target = Buffer.from(expected, "utf8");
+  return actual.length === target.length && timingSafeEqual(actual, target);
+}
+
+export function authorizeSkillInstallInternalRequest(
+  headers: Record<string, string | string[] | undefined>,
+  expectedSecret: string | undefined,
+): void {
+  if (
+    process.env.PI_STUDIO_EPHEMERAL_KIND !== undefined ||
+    process.env.PI_STUDIO_EPHEMERAL_INSTANCE_ID !== undefined ||
+    process.env.PI_STUDIO_EPHEMERAL_GENERATION !== undefined
+  ) {
+    throw new Error("Skills commands are not available in temporary chat");
+  }
+  if (!expectedSecret || expectedSecret.length > INSTALL_SECRET_MAX) {
+    throw new Error("Invalid skill install authorization");
+  }
+  const forbiddenAuthorityHeaders = [
+    "x-owner",
+    "x-window",
+    "x-workspace",
+    "x-workspace-generation",
+    "x-workspace-port",
+    "x-skill-source",
+  ];
+  if (Object.keys(headers).some((key) => forbiddenAuthorityHeaders.includes(key.toLowerCase()))) {
+    throw new Error("Invalid skill install authorization");
+  }
+  const header = headers.authorization;
+  const value = Array.isArray(header) ? header[0] : header;
+  if (typeof value !== "string" || !value.startsWith("Bearer ")) {
+    throw new Error("Invalid skill install authorization");
+  }
+  const bearer = value.slice("Bearer ".length);
+  if (
+    !bearer ||
+    bearer.length > INSTALL_SECRET_MAX ||
+    !constantTimeSecretEqual(bearer, expectedSecret)
+  ) {
+    throw new Error("Invalid skill install authorization");
+  }
+}
+
+export function parseSkillInstallScanInternalRequest(body: unknown): InstallHostSource {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new Error("Invalid skill install scan request");
+  }
+  const value = body as Record<string, unknown>;
+  const keys = Object.keys(value);
+  if (keys.some((key) => !["sourceId", "canonicalPath"].includes(key))) {
+    throw new Error("Invalid skill install scan request");
+  }
+  const sourceId = value.sourceId;
+  const canonicalPath = value.canonicalPath;
+  if (
+    typeof sourceId !== "string" ||
+    !sourceId ||
+    sourceId.length > INSTALL_SOURCE_ID_MAX ||
+    typeof canonicalPath !== "string" ||
+    !canonicalPath
+  ) {
+    throw new Error("Invalid skill install scan request");
+  }
+  return { sourceId, canonicalPath, candidateIdKey: "" };
+}
+
+export function parseSkillInstallLinksInternalRequest(body: unknown): {
+  source: InstallHostSource;
+  scope: SkillScope;
+  scanRevision: string;
+  selection: InstallCandidateSelection[];
+} {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new Error("Invalid skill install links request");
+  }
+  const value = body as Record<string, unknown>;
+  if (
+    Object.keys(value).some(
+      (key) => !["sourceId", "canonicalPath", "scope", "scanRevision", "selection"].includes(key),
+    )
+  ) {
+    throw new Error("Invalid skill install links request");
+  }
+  const source = parseSkillInstallScanInternalRequest({
+    sourceId: value.sourceId,
+    canonicalPath: value.canonicalPath,
+  });
+  const scope = value.scope;
+  const scanRevision = value.scanRevision;
+  const selection = value.selection;
+  const validSelection =
+    Array.isArray(selection) &&
+    selection.length > 0 &&
+    selection.length <= 2_000 &&
+    new Set(
+      selection.map((item) => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return "";
+        const candidate = item as Record<string, unknown>;
+        return `${String(candidate.kind)}:${String(candidate.id)}`;
+      }),
+    ).size === selection.length &&
+    selection.every((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+      const candidate = item as Record<string, unknown>;
+      return (
+        (candidate.kind === "skill" || candidate.kind === "group") &&
+        typeof candidate.id === "string" &&
+        candidate.id.length > 0 &&
+        candidate.id.length <= INSTALL_SOURCE_ID_MAX
+      );
+    });
+  if (
+    (scope !== "global" && scope !== "project") ||
+    typeof scanRevision !== "string" ||
+    !scanRevision ||
+    scanRevision.length > INSTALL_SOURCE_ID_MAX ||
+    !validSelection
+  ) {
+    throw new Error("Invalid skill install links request");
+  }
+  return {
+    source,
+    scope,
+    scanRevision,
+    selection: selection as InstallCandidateSelection[],
+  };
 }
 
 type UnifiedWS = {
@@ -1888,10 +2103,60 @@ export default function (pi: ExtensionAPI) {
           sendTo(ws, success("list_skills", { skills: normalizeSkillCommands(a.getCommands()) }));
           break;
         }
+        case "list_package_skill_inventory": {
+          const a = requireApi("list_package_skill_inventory");
+          if (!a) break;
+          try {
+            assertNonEphemeralSkillCommand("list_package_skill_inventory");
+            const req = parsePackageSkillInventoryRequest(command);
+            sendTo(
+              ws,
+              success(
+                "list_package_skill_inventory",
+                buildPackageSkillInventory({
+                  scope: req.scope,
+                  cwd: ctx?.cwd ?? process.cwd(),
+                  agentDir: PI_AGENT_ROOT,
+                  projectTrusted: ctx?.isProjectTrusted() ?? false,
+                }),
+              ),
+            );
+          } catch (e) {
+            sendTo(
+              ws,
+              error(
+                "list_package_skill_inventory",
+                e instanceof Error ? e.message : "failed to list package skills",
+              ),
+            );
+          }
+          break;
+        }
+        case "skill_add_root": {
+          try {
+            assertNonEphemeralSkillCommand("skill_add_root");
+            const req = parseSkillAddRootRequest(command);
+            const result = await mutateClaudeSkillRoot({
+              scope: req.scope,
+              cwd: ctx?.cwd ?? process.cwd(),
+              agentDir: PI_AGENT_ROOT,
+              projectTrusted: ctx?.isProjectTrusted() ?? false,
+              kind: req.kind,
+            });
+            sendTo(ws, success("skill_add_root", result));
+          } catch (e) {
+            sendTo(
+              ws,
+              error("skill_add_root", e instanceof Error ? e.message : "failed to add skill root"),
+            );
+          }
+          break;
+        }
         case "list_skill_inventory": {
           const a = requireApi("list_skill_inventory");
           if (!a) break;
           try {
+            assertNonEphemeralSkillCommand("list_skill_inventory");
             const scope = parseSkillInventoryScope(command.scope);
             sendTo(
               ws,
@@ -1920,6 +2185,7 @@ export default function (pi: ExtensionAPI) {
           const a = requireApi("set_skill_enabled");
           if (!a) break;
           try {
+            assertNonEphemeralSkillCommand("set_skill_enabled");
             const mutation = parseSkillInventoryMutation(command);
             const result = await mutateSkillEnabled({
               scope: mutation.scope,
@@ -2676,6 +2942,74 @@ export default function (pi: ExtensionAPI) {
     if (req.method === "OPTIONS") {
       res.writeHead(200);
       res.end();
+      return;
+    }
+
+    if (urlPath === "/api/skill-install-scan" && req.method === "POST") {
+      try {
+        authorizeSkillInstallInternalRequest(
+          req.headers,
+          process.env.PI_STUDIO_SKILL_INSTALL_SECRET,
+        );
+        const body = await readBoundedJsonBody(req, 16 * 1024);
+        const request = parseSkillInstallScanInternalRequest(body);
+        const scan = scanSkillInstallSource(
+          {
+            ...request,
+            candidateIdKey: process.env.PI_STUDIO_SKILL_INSTALL_SECRET ?? "",
+          },
+          {
+            cwd: process.cwd(),
+            agentDir: PI_AGENT_ROOT,
+            projectTrusted: true,
+            scope: "global",
+          },
+        );
+        res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify({ success: true, data: scan }));
+      } catch (error) {
+        const status = error instanceof BoundedBodyError ? 413 : 403;
+        res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(
+          JSON.stringify({ success: false, error: "Skill install scan unauthorized or invalid" }),
+        );
+      }
+      return;
+    }
+
+    if (urlPath === "/api/skill-install-links" && req.method === "POST") {
+      try {
+        authorizeSkillInstallInternalRequest(
+          req.headers,
+          process.env.PI_STUDIO_SKILL_INSTALL_SECRET,
+        );
+        const request = parseSkillInstallLinksInternalRequest(
+          await readBoundedJsonBody(req, 64 * 1024),
+        );
+        const currentCtx = globalState.getLatestCtx?.() ?? latestCtx;
+        const trusted = currentCtx?.isProjectTrusted() ?? false;
+        const result = await installSkillLinks({
+          source: {
+            ...request.source,
+            candidateIdKey: process.env.PI_STUDIO_SKILL_INSTALL_SECRET ?? "",
+          },
+          scope: request.scope,
+          scanRevision: request.scanRevision,
+          selection: request.selection,
+          context: {
+            cwd: currentCtx?.cwd ?? process.cwd(),
+            agentDir: PI_AGENT_ROOT,
+            projectTrusted: trusted,
+          },
+        });
+        res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify({ success: true, data: result }));
+      } catch {
+        res.writeHead(403, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(
+          JSON.stringify({ success: false, error: "Skill install links unauthorized or invalid" }),
+        );
+      }
       return;
     }
 
