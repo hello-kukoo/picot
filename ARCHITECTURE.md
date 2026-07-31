@@ -277,6 +277,46 @@ The one-shot Pi commit-message runner receives a host-created private request fi
   中的 `enableSkillCommands` 提升到顶层、`customDirectories` 转为 `skills`
   数组，避免覆盖丢失 `enableSkillCommands`。
 
+#### 三页签 Skills 资源边界
+
+Settings → Skills 固定为 **Discovered / Install / Packages**。每个页签拥有
+自己的 scope、load sequence 和本地展开/选择状态；`app.js` 只注入依赖并在首次
+选择时 lazy activate，不能把任一页签的数据或请求渲染到另一页签。
+
+- **Discovered**：`skill-discovery.ts` 收集 Pi、`.agents` 与仅限
+  `.claude/skills` 的候选；发现始终只读。`skill-inventory.ts` 使用 Pi 规则基准
+  计算状态。Claude root 只有通过 `skill_add_root {scope,kind}` 的显式确认才追加
+  `../../.claude/skills`（global）或 `../.claude/skills`（project）；等价 plain
+  path 的 canonical comparison 保持原始文本/顺序，glob 与 `!`/`+`/`-` 不会被当作
+  已配置 root。项目 Claude root 和所有项目 settings 写入都要求 retained Pi
+  context 信任项目。
+- **Packages**：`package-skill-inventory.ts` 仅从 global 或 trusted-project
+  `settings.json.packages[]` 推导 package roots、Pi-compatible identity、
+  `autoload:false` inheritance 和 manifest candidates。它绝不泛扫 npm/git/extensions，
+  不执行 package install/update，也不计算或编辑 `packages[].skills` 的 effective
+  enablement；UI 明确显示为 read-only **Bundled candidates**。
+- **Install**：浏览器先以 native `broker_control` 调用 `pick_skill_source`，只得到
+  opaque `sourceId`。`SkillSourceRegistry` 记录 canonical directory，但将 handle
+  绑定 owner、window label、canonical workspace、primary port、workspace generation；
+  TTL 是 10 分钟、每 owner 最多 8 条、同 window replacement 使旧 handle 失效。
+  owner/window/workspace transition/port exit/app restart 都会撤销相应 handle。
+  浏览器后续仅能发送 sourceId、scope、scanRevision、candidate/group IDs，永不发送
+  path、cwd、owner、port 或 secret。
+- **Install transport**：`skill_scan_install_source` 与 `skill_install_links` 是
+  `VerifiedClientContext::Native` 的 broker controls，不是 `/api/rpc` 或普通 WS
+  command。Rust 用 registry 当前 binding 和 `WindowOwnerRegistry::current_workspace`
+  的 primary port，经 `.no_proxy()` 向精确 Pi 进程请求
+  `POST /api/skill-install-scan` 或 `POST /api/skill-install-links`。内部 endpoint
+  要求 app-global `PI_STUDIO_SKILL_INSTALL_SECRET` 的 constant-time bearer；这个
+  32-byte secret 在 `PiManager::new()` 创建并注入每个 Pi process，永不日志化、序列化
+  或暴露给浏览器。LAN/mobile/Remote 和任一 ephemeral process 一律拒绝。
+- **Install consistency**：scan 的 candidate/group ID 是以 app-global secret HMAC
+  的 opaque value；scanRevision 包含 canonical source、canonical candidates、
+  `SKILL.md` content digest、frontmatter identity 与 group membership。确认写入前在
+  `${settingsPath}.lock` 内重新扫描并比对 revision，stale/invalid source 零写入；
+  所有缺失 plain path 只作一次 temp-file + rename 原子更新。成功（包括 idempotent
+  no-op）后才 consume handle，配置依然只在下一 Pi session/process 生效。
+
 ### `public/` —— vanilla-JS WebView 前端
 
 前端刻意保持无框架。**一个文件一个职责**。最后才读 `app.js` —— 它是

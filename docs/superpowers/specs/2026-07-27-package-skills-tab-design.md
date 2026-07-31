@@ -122,9 +122,16 @@ Notes:
 - The version portion of an npm spec and the ref portion of a git spec do not
   affect the install path; only `<name>` and `<host>/<path>` select it.
 - Git `host`/`path` normalization must match Pi's `parseGitUrl` for the SSH,
-  HTTPS, and shorthand forms Pi accepts. The resolution table above is
-  authoritative for the directory layout; the normalizer is a small, bounded
-  utility mirrored from Pi source.
+  HTTPS, and shorthand forms Pi accepts. **Source the normalizer from
+  `@earendil-works/pi-coding-agent`'s `utils/git.ts` rather than reimplementing
+  it.** Picot already depends on that package (`bun.lock`), and its bundled
+  sourcemap (`dist/utils/git.js.map` → `sourcesContent`) carries the
+  authoritative implementation; the npm-resolved module exports `parseGitUrl`
+  directly. The resolution table above is authoritative for the directory
+  layout; the imported normalizer is the bounded utility that feeds it. A
+  contract test must assert Picot's resolved `host`/`path` for SSH, HTTPS, and
+  shorthand fixtures equals Pi's `parseGitUrl` output for the same inputs, so
+  an upstream Pi change cannot silently drift.
 - A package source whose resolved directory does not exist (not yet installed,
   failed install, removed) is reported as a package-level diagnostic, not
   silently dropped. The user can see that they configured a package that is not
@@ -266,7 +273,7 @@ type PackageSkillInventory = {
   packages: Array<{
     id: string;
     source: string;
-    scope: "user" | "project";
+    scope: "global" | "project";
     packageRoot?: string;
     version?: string;
     skills: Array<{
@@ -415,8 +422,11 @@ Add deterministic fixtures for:
   `<agentDir>/npm/node_modules/<package-name>`;
 - trusted project npm source resolving to
   `<cwd>/.pi/npm/node_modules/<package-name>`;
-- global and trusted project git source roots; git source parser edge cases
-  (SSH, HTTPS, shorthand) mirrored from Pi `parseGitUrl`;
+- global and trusted project git source roots; git source parser contract
+  test asserting Picot's resolved `host`/`path` for SSH, HTTPS, and shorthand
+  fixtures equals `@earendil-works/pi-coding-agent`'s `parseGitUrl` output for
+  the same inputs (the normalizer is imported from that package, not
+  reimplemented);
 - global/project local package paths resolved relative to their respective
   settings bases;
 - package identity dedupe where project wins, matching project

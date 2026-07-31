@@ -156,12 +156,15 @@ settings entry as follows:
 
 If a source is outside the workspace but a valid relative path exists, it may
 still be stored relatively. The preview labels it as potentially invalid if the
-project or source directory is moved. When the target is Current project and
-the source canonical path lies under the user's home directory, the preview and
-confirmation use a stronger warning: the resulting project settings entry is
-machine-specific and, if committed to Git, will not resolve for other team
-members. The UI recommends Global install for that case but leaves the explicit
-project choice available. No path is rewritten merely to prefer an absolute
+project or source directory is moved. A stronger team-portability warning
+applies **only** under the precise condition
+`target = "project" ∧ canonicalSource is strictly under the host home
+directory ∧ canonicalSource is not under the project root`: the resulting
+project settings entry is machine-specific and, if committed to Git, will not
+resolve for other team members. It must not fire when the source is inside the
+project (even if also under the home directory), nor when the target is global.
+The UI recommends Global install for that case but leaves the explicit project
+choice available. No path is rewritten merely to prefer an absolute
 representation.
 
 ### 4. Preview and confirm
@@ -364,8 +367,11 @@ Add deterministic tests covering:
   symlink canonicalization;
 - scope-specific resource bases, POSIX relative serialization, and absolute
   fallback when a relative entry cannot round-trip to the selected source;
-- project-internal and project-external relative path preview annotations,
-  including the stronger home-directory-source / project-settings team warning;
+- project-internal and project-external relative path preview annotations;
+  the stronger team-portability warning fires only under
+  `target = "project" ∧ source under home ∧ source not under project`, and a
+  paired assertion confirms it does **not** fire for an in-project source (even
+  when the project is under the home directory) nor for a global target;
 - exact canonical-equivalence deduplication between existing absolute and
   generated relative configured paths, with no duplication or reordering;
 - settings preservation of unrelated keys, existing source paths, custom

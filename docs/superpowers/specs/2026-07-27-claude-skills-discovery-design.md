@@ -18,10 +18,16 @@ A workspace may contain `<cwd>/.claude/skills/` without a `.pi/` or
 roots, which do not include `.claude/skills`; therefore the Skills page does
 not show those skills.
 
-Pi itself also does not automatically load Claude Code skill roots. Pi loads
-them only when an explicit plain path is present in the relevant `skills` array
-in Pi settings. Showing a Claude root in Picot's inventory must not falsely
-claim that the current or next Pi process will load it before that path is
+This is an inventory gap, not a Pi limitation. Pi 0.82.0 documents Claude
+Code / Codex interoperability as an explicit configuration mechanism
+(`src-tauri/resources/pi/docs/skills.md`, "Using Skills from Other
+Harnesses"): add `~/.claude/skills` or `~/.codex/skills` to the `skills`
+array in settings. Pi deliberately does not auto-discover these roots,
+because cross-harness loading is an owner opt-in. Picot extends only its
+**inventory** with the Claude roots so the desktop owner can see them and
+explicitly enable them; it does not claim Pi auto-loads them. Showing a
+Claude root in Picot's inventory must not falsely claim that the current or
+next Pi process will load it before that documented plain-path entry is
 configured.
 
 ## Goal
@@ -44,7 +50,7 @@ atomic, idempotent settings mutation.
 | Disable | This version deliberately does not remove a user-approved Claude root plain path. Removing a shared plain path can affect every skill discovered below that root and must not be inferred from an individual row. The existing Configuration editor remains the explicit escape hatch until a separately designed root-removal flow exists. Per-skill and per-group `!`/`+`/`-` controls continue to apply after the root is enabled. |
 | Runtime application | Every successful enable reports `runtimeRestartRequired: true`; the change affects only a new session or restarted Pi process. |
 | Trust | A project Claude root and its enable action remain unavailable until `ctx.isProjectTrusted()` is true. Global enablement remains desktop-owner-only. |
-| Other harnesses | `.codex/skills` and all other harness-specific roots are out of scope for this version. |
+| Other harnesses | Only `.claude/skills` is an inventory extension root. `.codex/skills` and every other harness-specific root (including other `.claude/*` subdirectories such as `.claude/agents` or `.claude/extensions`) is out of scope and never auto-discovered. |
 
 ## Pi Compatibility Contract
 
