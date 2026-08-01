@@ -8734,9 +8734,10 @@ body.file-preview-resizing {
   margin-top: var(--space-0-5);
   color: var(--text-secondary);
   font-size: var(--font-size-sm);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.5;
+  /* auto-wrap: long descriptions wrap onto multiple lines instead of
+     truncating with an ellipsis, so the full text stays readable. */
+  overflow-wrap: anywhere;
 }
 .skills-shadowed-note {
   margin-top: var(--space-0-5);
@@ -8867,24 +8868,6 @@ body.file-preview-resizing {
   color: var(--text-dim);
   font-size: var(--font-size-sm);
 }
-.package-skills-scope-tabs {
-  display: flex;
-  gap: var(--space-1);
-  margin: var(--space-3) 0 var(--space-2);
-}
-.package-skills-scope-tab {
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--text-dim);
-  cursor: pointer;
-}
-.package-skills-scope-tab.active {
-  background: var(--accent);
-  color: var(--bg);
-  border-color: var(--accent);
-}
 .package-skills-card-list {
   display: grid;
   gap: var(--space-2);
@@ -8963,4 +8946,52 @@ body.file-preview-resizing {
   border-radius: var(--radius-md);
   color: var(--text-dim);
   font-size: var(--font-size-sm);
+}
+
+/* Skills page: package "Enable all" affordance (disabled placeholder) and
+   shared candidate-path line. The enable-all group spans the group header's
+   trailing columns (status + switch) so it lines up with the Discovered tab's
+   right-aligned switch. */
+.skills-group-enable-all {
+  grid-column: 3 / -1;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-2);
+}
+.skills-enable-all-label {
+  color: var(--text-dim);
+  font-size: var(--font-size-sm);
+}
+.skills-skill-path {
+  margin-top: var(--space-0-5);
+}
+.skills-skill-path code,
+.package-skills-candidate-relative {
+  color: var(--text-dim);
+  font-size: var(--font-size-xs);
+}
+.package-skills-card-scope,
+.package-skills-card-version,
+.package-skills-card-count {
+  color: var(--text-dim);
+  font-size: var(--font-size-xs);
+}
+.package-skills-card-scope + .package-skills-card-version,
+.package-skills-card-version + .package-skills-card-count,
+.package-skills-card-scope + .package-skills-card-count {
+  margin-left: var(--space-2);
+}
+.package-skills-bundled-note {
+  margin: var(--space-0-5) 0 0;
+  max-width: 560px;
+  color: var(--text-dim);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+.package-skills-not-installed,
+.package-skills-diagnostic {
+  grid-column: 1 / -1;
+  color: var(--text-dim);
+  font-size: var(--font-size-xs);
 }

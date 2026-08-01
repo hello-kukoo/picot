@@ -565,6 +565,7 @@
     },
     "skills": {
       "title": "Skills",
+      "sectionsAriaLabel": "Skills sections",
       "discovered": "Discovered",
       "install": "Install",
       "packages": "Packages",
@@ -607,12 +608,15 @@
       "projectUntrusted": "This project is not trusted. Install to the current project is unavailable.",
       "review": "Review installation",
       "confirmation": "Install {count} selected skills to {scope}?",
+      "confirmationHeading": "Confirm skill installation",
       "confirm": "Install selected skills",
       "cancel": "Cancel",
       "installing": "Installing…",
       "installFailed": "Failed to install selected skills.",
       "complete": "Installed {added} entries; {skipped} already configured.",
-      "restartRequired": "Saved. Start a new session or restart Pi for the change to take effect."
+      "restartRequired": "Saved. Start a new session or restart Pi for the change to take effect.",
+      "skill": "Skill",
+      "group": "Group"
     },
     "packageSkills": {
       "title": "Packages skills",
@@ -630,7 +634,8 @@
       "package": "Package",
       "canonicalPath": "Canonical path",
       "candidateCount": "{count} candidates",
-      "scopeSummary": "{count} packages"
+      "scopeSummary": "{count} packages",
+      "enableAll": "Enable all"
     }
   },
   "lanQr": {

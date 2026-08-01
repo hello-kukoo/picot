@@ -5626,6 +5626,7 @@ setupSkillsTabShell({
     packages: document.getElementById("settings-package-skills"),
   },
   activate: (name) => {
+    if (name === "discovered") return skillsPage.activate();
     if (name === "install") return skillsInstallPage.activate();
     if (name === "packages") return packageSkillsPage.activate();
   },

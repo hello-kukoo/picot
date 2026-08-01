@@ -39,5 +39,9 @@ export function setupSkillsTabShell({ tabs, panels, activate }) {
     });
   }
 
+  // Activate the default tab on init so its first panel (Discovered) loads
+  // its data instead of staying on the construction-time Loading placeholder.
+  select(selected);
+
   return { select, destroy: () => {} };
 }

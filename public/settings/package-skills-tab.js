@@ -1,5 +1,5 @@
-// ABOUTME: Renders the read-only Packages skills tab under Settings > Skills.
-// ABOUTME: Shows bundled skill candidates from configured Pi packages; no toggles or mutation.
+// ABOUTME: Renders the Packages skills tab under Settings > Skills.
+// ABOUTME: Shows bundled skill candidates from configured Pi packages. Switches are disabled placeholders.
 
 import { onLocaleChange, t } from "../i18n.js";
 
@@ -74,19 +74,19 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
 
   function renderLoading() {
     container.replaceChildren(
-      el("div", { class: "package-skills-loading", text: t("settings.packageSkills.loading") }),
+      el("div", { class: "skills-loading", text: t("settings.packageSkills.loading") }),
     );
   }
 
   function renderError(message) {
     errorMessage = message || t("settings.packageSkills.loadFailed");
     container.replaceChildren(
-      el("div", { class: "package-skills-error" }, [
+      el("div", { class: "skills-error" }, [
         el("span", { text: errorMessage }),
         el("button", {
           type: "button",
-          class: "package-skills-retry",
-          text: t("settings.packageSkills.retry"),
+          class: "skills-rescan",
+          text: t("settings.skills.rescan"),
           onClick: () => void load(scope),
         }),
       ]),
@@ -141,8 +141,8 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
 
   function renderScopeTabs() {
     const tabs = el("div", {
-      class: "package-skills-scope-tabs",
-      role: "tablist",
+      class: "skills-scope-tabs",
+      role: "group",
       aria: { label: t("settings.packageSkills.title") },
     });
     for (const s of ["global", "project"]) {
@@ -153,16 +153,15 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
           "button",
           {
             type: "button",
-            class: `package-skills-scope-tab${active ? " active" : ""}`,
-            role: "tab",
-            "aria-selected": String(active),
+            class: `skills-scope-tab${active ? " active" : ""}`,
+            "aria-pressed": String(active),
             dataset: { scope: s },
             onClick: () => {
               if (s !== scope) void load(s);
             },
           },
           [
-            t(`settings.packageSkills.${s}`),
+            t(`settings.skills.${s}`),
             count !== undefined ? el("small", { text: ` ${count}` }) : null,
           ],
         ),
@@ -171,21 +170,45 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
     return tabs;
   }
 
+  // A disabled placeholder switch: package candidates are read-only Bundled
+  // skills today, so neither a package nor an individual skill can be toggled
+  // here. The control is rendered to match the Discovered tab's layout, with a
+  // visible "Enable all" affordance on package headers, but stays disabled
+  // until enable/disable is implemented.
+  function renderDisabledSwitch(ariaLabel) {
+    const input = el("input", {
+      type: "checkbox",
+      class: "skills-switch",
+      disabled: true,
+      aria: { label: ariaLabel },
+    });
+    return input;
+  }
+
+  function renderEnableAllAffordance(card) {
+    // Visible "Enable all" label + a disabled switch, mirroring a group card's
+    // header control. Disabled because enable/disable is not yet wired.
+    return el("div", { class: "skills-group-enable-all" }, [
+      el("span", { class: "skills-enable-all-label", text: t("settings.packageSkills.enableAll") }),
+      renderDisabledSwitch(`${t("settings.packageSkills.enableAll")}: ${card.source}`),
+    ]);
+  }
+
   /**
    * @param {PackageSkillCard} card
    */
   function renderCard(card) {
     const expanded = expandedCards.has(card.id);
     const installed = Boolean(card.effectivePackageRoot);
-    const header = el("div", { class: "package-skills-card-header" }, [
+    const header = el("div", { class: "skills-group-header" }, [
       el("button", {
         type: "button",
-        class: `package-skills-expand${expanded ? "" : " collapsed"}`,
+        class: `skills-expand${expanded ? "" : " collapsed"}`,
         text: expanded ? "⌄" : "›",
         aria: {
           label: `${t("settings.packageSkills.package")}: ${card.source}`,
           expanded: String(expanded),
-          controls: `package-skills-card-list-${card.id}`,
+          controls: `skills-group-list-${card.id}`,
         },
         onClick: () => {
           if (expandedCards.has(card.id)) expandedCards.delete(card.id);
@@ -193,9 +216,9 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
           render();
         },
       }),
-      el("div", { class: "package-skills-card-info" }, [
-        el("div", { class: "package-skills-card-name", text: card.source }),
-        el("div", { class: "package-skills-card-meta" }, [
+      el("div", { class: "skills-group-info" }, [
+        el("div", { class: "skills-group-name", text: card.source }),
+        el("div", { class: "skills-group-source" }, [
           el("span", {
             class: "package-skills-card-scope",
             text: t(`settings.packageSkills.${card.scope}`),
@@ -209,6 +232,7 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
           }),
         ]),
       ]),
+      renderEnableAllAffordance(card),
     ]);
 
     if (!installed) {
@@ -227,8 +251,8 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
     const listing = el(
       "div",
       {
-        id: `package-skills-card-list-${card.id}`,
-        class: "package-skills-card-listing",
+        id: `skills-group-list-${card.id}`,
+        class: "skills-group-listing",
       },
       expanded && installed ? card.candidates.map((cand) => renderCandidate(cand)) : [],
     );
@@ -236,7 +260,7 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
     return el(
       "section",
       {
-        class: `package-skills-card${expanded ? "" : " closed"}${installed ? "" : " not-installed"}`,
+        class: `skills-group${expanded ? "" : " closed"}${installed ? "" : " not-installed"}`,
         dataset: { packageCard: card.id },
       },
       [header, listing],
@@ -247,29 +271,26 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
    * @param {PackageSkillCandidate} candidate
    */
   function renderCandidate(candidate) {
-    return el(
-      "div",
-      { class: "package-skills-candidate", dataset: { candidate: candidate.name } },
-      [
-        el("div", { class: "package-skills-candidate-info" }, [
-          el("div", { class: "package-skills-candidate-name", text: candidate.name }),
-          el("div", { class: "package-skills-candidate-description", text: candidate.description }),
-          el("div", { class: "package-skills-candidate-path" }, [
-            el("code", {
-              class: "package-skills-candidate-relative",
-              text: candidate.relativePath,
-              title: candidate.canonicalPath,
-              aria: {
-                label: `${t("settings.packageSkills.canonicalPath")}: ${candidate.canonicalPath}`,
-              },
-            }),
-          ]),
+    return el("div", { class: "skills-skill-row", dataset: { candidate: candidate.name } }, [
+      el("div", { class: "skills-skill-info" }, [
+        el("div", { class: "skills-skill-name", text: candidate.name }),
+        el("div", { class: "skills-skill-description", text: candidate.description }),
+        el("div", { class: "skills-skill-path" }, [
+          el("code", {
+            class: "package-skills-candidate-relative",
+            text: candidate.relativePath,
+            title: candidate.canonicalPath,
+            aria: {
+              label: `${t("settings.packageSkills.canonicalPath")}: ${candidate.canonicalPath}`,
+            },
+          }),
         ]),
         ...(candidate.diagnostics ?? []).map((d) =>
           el("div", { class: "package-skills-diagnostic", text: d.message }),
         ),
-      ],
-    );
+      ]),
+      renderDisabledSwitch(`${t("settings.skills.enableSkill")}: ${candidate.name}`),
+    ]);
   }
 
   function render() {
@@ -286,14 +307,14 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
     const fragment = document.createDocumentFragment();
 
     fragment.appendChild(
-      el("div", { class: "package-skills-header" }, [
+      el("div", { class: "skills-header" }, [
         el("div", {}, [
           el("h3", {
             class: "settings-section-title",
             text: t("settings.packageSkills.title"),
           }),
           el("p", {
-            class: "package-skills-intro",
+            class: "skills-intro",
             text: t("settings.packageSkills.description"),
           }),
           el("p", {
@@ -303,8 +324,8 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
         ]),
         el("button", {
           type: "button",
-          class: "package-skills-refresh",
-          text: t("settings.packageSkills.refresh"),
+          class: "skills-rescan",
+          text: t("settings.skills.rescan"),
           onClick: refresh,
         }),
       ]),
@@ -315,14 +336,14 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
     if (untrusted) {
       fragment.appendChild(
         el("div", {
-          class: "package-skills-notice",
+          class: "skills-notice",
           text: t("settings.packageSkills.projectUntrusted"),
         }),
       );
     } else {
       const emphasized = inventory.packages.filter((p) => p.scope === scope);
       fragment.appendChild(
-        el("div", { class: "package-skills-scope-meta" }, [
+        el("div", { class: "skills-scope-meta" }, [
           el("span", {
             text: t("settings.packageSkills.scopeSummary", { count: emphasized.length }),
           }),
@@ -341,10 +362,10 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
 
     if (inventory.packages.length === 0) {
       fragment.appendChild(
-        el("div", { class: "package-skills-empty", text: t("settings.packageSkills.empty") }),
+        el("div", { class: "skills-empty", text: t("settings.packageSkills.empty") }),
       );
     } else {
-      const list = el("div", { class: "package-skills-card-list" });
+      const list = el("div", { class: "skills-group-list" });
       for (const card of inventory.packages) list.appendChild(renderCard(card));
       fragment.appendChild(list);
     }

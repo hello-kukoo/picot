@@ -108,7 +108,7 @@ describe("skills install tab", () => {
     await vi.waitFor(() =>
       expect(container.querySelector("[data-install-node='group-1']")).not.toBeNull(),
     );
-    expect(container.querySelector("input[value='project']").disabled).toBe(true);
+    expect(container.querySelector("[data-scope='project']").disabled).toBe(true);
     const groupInput = container.querySelector("[data-install-node='group-1'] input");
     groupInput.checked = false;
     groupInput.dispatchEvent(new Event("change"));
@@ -145,5 +145,30 @@ describe("skills install tab", () => {
     await tab.activate();
     container.querySelector(".skills-install-choose").click();
     await vi.waitFor(() => expect(container.textContent).toContain("scan exploded"));
+  });
+
+  it("disables the choose button while scanning so scans cannot overlap", async () => {
+    let resolveScan;
+    const client = transport({
+      scanSkillInstallSource: vi.fn(() => new Promise((r) => (resolveScan = r))),
+    });
+    const tab = setupSkillsInstallTab({
+      container,
+      transport: client,
+      isProjectTrusted: () => true,
+    });
+    await tab.activate();
+    const choose = () => container.querySelector(".skills-install-choose");
+    choose().click();
+    await vi.waitFor(() => expect(client.scanSkillInstallSource).toHaveBeenCalledTimes(1));
+    // While scanning, the choose button is disabled, so a second click cannot
+    // start an overlapping scan. This is the primary race guard; the monotonic
+    // scanSeq counter inside chooseSource is defense-in-depth for any future
+    // code path that reaches chooseSource without the button gate.
+    expect(choose().disabled).toBe(true);
+    choose().click(); // ignored — button is disabled
+    expect(client.scanSkillInstallSource).toHaveBeenCalledTimes(1);
+    resolveScan(scan);
+    await vi.waitFor(() => expect(choose().disabled).toBe(false));
   });
 });

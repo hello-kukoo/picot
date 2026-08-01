@@ -189,6 +189,9 @@ describe("skills-page tree renderer", () => {
     ).toBe("/root/a/skills");
     expect(container.querySelector(`[data-skill-group="${BAOYU_GROUP_ID}"]`)).not.toBeNull();
     expect(container.querySelector('[data-skill-group-state="mixed"]').textContent).toBe("1/3");
+    // Groups start collapsed: skill rows are not rendered until the group is expanded.
+    expect(container.querySelectorAll("[data-skill-row]").length).toBe(0);
+    container.querySelector(`[data-skill-group="${BAOYU_GROUP_ID}"] .skills-expand`).click();
     expect(container.querySelectorAll("[data-skill-row]").length).toBe(3);
     expect(container.querySelectorAll(".skills-switch").length).toBe(4);
   });
@@ -241,6 +244,7 @@ describe("skills-page tree renderer", () => {
     const success = vi.fn();
     const page = setupSkillsPage({ container, rpcCommand, showSuccess: success });
     await page.load("global");
+    container.querySelector(`[data-skill-group="${BAOYU_GROUP_ID}"] .skills-expand`).click();
 
     const toggle = container.querySelector('[data-skill-toggle="diagram"] .skills-switch');
     toggle.checked = false;
@@ -286,6 +290,7 @@ describe("skills-page tree renderer", () => {
     };
     const page = setupSkillsPage({ container, rpcCommand: mockRpc(inventory) });
     await page.load("global");
+    container.querySelector(`[data-skill-group="${BAOYU_GROUP_ID}"] .skills-expand`).click();
     const row = container.querySelector('[data-skill-row="article"]');
     expect(row.querySelector(".skills-switch").disabled).toBe(true);
     expect(row.querySelector(".skills-shadowed-note").textContent).toBe("shadowed by winner");
@@ -342,7 +347,7 @@ describe("skills-page tree renderer", () => {
     const page = setupSkillsPage({ container, rpcCommand: mockRpc(makeInventory()) });
     await page.load("global");
     for (const fn of localeListeners) fn();
-    expect(container.querySelector('[role="tablist"]')).not.toBeNull();
+    expect(container.querySelector('[role="group"]')).not.toBeNull();
     expect(container.querySelector('[data-scope="global"]').classList.contains("active")).toBe(
       true,
     );

@@ -2,6 +2,7 @@
 // ABOUTME: Owns Claude root enablement and existing skill toggle/tree behavior.
 
 import { onLocaleChange, t } from "../i18n.js";
+import { manageModalDialog } from "./skills-modal.js";
 
 /**
  * @typedef {Object} SkillInventoryItem
@@ -111,11 +112,19 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
   let hasActivated = false;
   /** @type {Record<string, number>} */
   const scopeCounts = {};
-  const collapsedGroups = new Set();
+  // Groups start collapsed; a user expands one by adding its id here.
+  const expandedGroups = new Set();
   const pendingTargets = new Set();
   let loadSeq = 0;
   let errorMessage = null;
   let confirmingClaudeRoot = null;
+  let addingClaudeRoot = false;
+  let claudeRootOpenerSourceRoot = null;
+  /** Stable resolver for the root's Add button after a render rebuilds the DOM. */
+  const claudeRootOpener = () =>
+    [...container.querySelectorAll("[data-skill-root]")]
+      .find((root) => root.dataset.skillRoot === claudeRootOpenerSourceRoot)
+      ?.querySelector(".skills-add-root") ?? null;
   const unsubscribeLocale = onLocaleChange(() => render());
 
   function renderLoading() {
@@ -174,16 +183,21 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
   }
 
   function beginClaudeRootConfirmation(root) {
+    claudeRootOpenerSourceRoot = root.sourceRoot;
     confirmingClaudeRoot = root;
     render();
   }
 
   function cancelClaudeRootConfirmation() {
+    if (addingClaudeRoot) return;
     confirmingClaudeRoot = null;
     render();
   }
 
   async function addClaudeRoot(root) {
+    if (addingClaudeRoot) return;
+    addingClaudeRoot = true;
+    render();
     const mutationScope = scope;
     const mutationSeq = loadSeq;
     let response;
@@ -195,18 +209,24 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
       });
     } catch (error) {
       showError?.(error instanceof Error ? error.message : t("settings.skills.addRootFailed"));
+      addingClaudeRoot = false;
+      render();
       return;
     }
     if (!response?.success) {
       showError?.(response?.error || t("settings.skills.addRootFailed"));
+      addingClaudeRoot = false;
+      render();
       return;
     }
     if (scope !== mutationScope || loadSeq !== mutationSeq) {
+      addingClaudeRoot = false;
       if (scope === mutationScope) void load(scope);
       return;
     }
     inventory = response.data?.inventory ?? response.data;
     confirmingClaudeRoot = null;
+    addingClaudeRoot = false;
     showSuccess?.(t("settings.skills.rootAddedRestartRequired"));
     render();
   }
@@ -249,7 +269,7 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
   function renderScopeTabs() {
     const tabs = el("div", {
       class: "skills-scope-tabs",
-      role: "tablist",
+      role: "group",
       aria: { label: t("settings.skills.title") },
     });
     for (const s of ["global", "project"]) {
@@ -261,8 +281,7 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
           {
             type: "button",
             class: `skills-scope-tab${active ? " active" : ""}`,
-            role: "tab",
-            "aria-selected": String(active),
+            "aria-pressed": String(active),
             dataset: { scope: s },
             onClick: () => {
               if (s !== scope) void load(s);
@@ -382,7 +401,7 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
   }
 
   function renderGroupNode(group, parentDisabled) {
-    const expanded = !collapsedGroups.has(group.id);
+    const expanded = expandedGroups.has(group.id);
     const leaves = flatLeaves(group);
     const enabled = leaves.filter((i) => i.status === "enabled").length;
     const groupPending = pendingTargets.has(group.id);
@@ -399,8 +418,8 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
           controls: `skills-group-list-${group.id}`,
         },
         onClick: () => {
-          if (collapsedGroups.has(group.id)) collapsedGroups.delete(group.id);
-          else collapsedGroups.add(group.id);
+          if (expandedGroups.has(group.id)) expandedGroups.delete(group.id);
+          else expandedGroups.add(group.id);
           render();
         },
       }),
@@ -518,25 +537,44 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
     );
 
     if (confirmingClaudeRoot) {
+      const dialogId = "skills-claude-root-confirm";
       fragment.appendChild(
-        el("div", { class: "skills-add-root-confirmation", role: "alertdialog" }, [
-          el("p", { text: t("settings.skills.addRootConfirmation") }),
-          el("code", { text: confirmingClaudeRoot.sourceRoot }),
-          el("code", { text: confirmingClaudeRoot.settingsPath || "" }),
-          el("code", { text: confirmingClaudeRoot.recommendedEntry || "" }),
-          el("button", {
-            type: "button",
-            class: "skills-add-root-confirm",
-            text: t("settings.skills.addRootConfirm"),
-            onClick: () => void addClaudeRoot(confirmingClaudeRoot),
-          }),
-          el("button", {
-            type: "button",
-            class: "skills-add-root-cancel",
-            text: t("settings.skills.addRootCancel"),
-            onClick: cancelClaudeRootConfirmation,
-          }),
-        ]),
+        el(
+          "div",
+          {
+            class: "skills-add-root-confirmation",
+            role: "alertdialog",
+            "aria-modal": "true",
+            "aria-labelledby": `${dialogId}-title`,
+            "aria-describedby": `${dialogId}-desc`,
+          },
+          [
+            el("h4", {
+              id: `${dialogId}-title`,
+              class: "skills-add-root-confirmation-title",
+              text: t("settings.skills.addRootConfirmation"),
+            }),
+            el("div", { id: `${dialogId}-desc` }, [
+              el("code", { text: confirmingClaudeRoot.sourceRoot }),
+              el("code", { text: confirmingClaudeRoot.settingsPath || "" }),
+              el("code", { text: confirmingClaudeRoot.recommendedEntry || "" }),
+            ]),
+            el("button", {
+              type: "button",
+              class: "skills-add-root-confirm",
+              text: t("settings.skills.addRootConfirm"),
+              disabled: addingClaudeRoot ? "disabled" : undefined,
+              onClick: () => void addClaudeRoot(confirmingClaudeRoot),
+            }),
+            el("button", {
+              type: "button",
+              class: "skills-add-root-cancel",
+              text: t("settings.skills.addRootCancel"),
+              disabled: addingClaudeRoot ? "disabled" : undefined,
+              onClick: cancelClaudeRootConfirmation,
+            }),
+          ],
+        ),
       );
     }
 
@@ -563,6 +601,17 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
 
     container.replaceChildren(fragment);
     container.scrollTop = scrollTop;
+    if (confirmingClaudeRoot) {
+      manageModalDialog(container.querySelector(".skills-add-root-confirmation"), {
+        initialFocus: container.querySelector(".skills-add-root-confirm"),
+        restoreFocusTo: claudeRootOpener,
+        inertRoot: document.body,
+        owner: "skills-discovered",
+        onCancel: cancelClaudeRootConfirmation,
+      });
+    } else {
+      manageModalDialog(null, { owner: "skills-discovered" });
+    }
   }
 
   function destroy() {

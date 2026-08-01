@@ -70,4 +70,27 @@ describe("Discovered Skills tab", () => {
       kind: "claude-global",
     });
   });
+
+  it("allows only one Claude root mutation while confirmation is submitting", async () => {
+    let resolveMutation;
+    const rpcCommand = vi
+      .fn()
+      .mockResolvedValueOnce({ success: true, data: inventory() })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveMutation = resolve;
+          }),
+      );
+    const tab = setupDiscoveredSkillsTab({ container, rpcCommand });
+    await tab.activate();
+    container.querySelector(".skills-add-root").click();
+    const confirm = container.querySelector(".skills-add-root-confirm");
+    confirm.click();
+    confirm.click();
+    expect(rpcCommand).toHaveBeenCalledTimes(2);
+    expect(container.querySelector(".skills-add-root-confirm").disabled).toBe(true);
+    resolveMutation({ success: true, data: { inventory: inventory({ roots: [] }) } });
+    await vi.waitFor(() => expect(container.querySelector(".skills-add-root-confirm")).toBeNull());
+  });
 });

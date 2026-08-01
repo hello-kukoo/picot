@@ -106,7 +106,7 @@ describe("setupPackageSkillsTab — loading & first activation", () => {
     );
     const tab = setupPackageSkillsTab({ container, rpcCommand });
     const activating = tab.activate();
-    expect(container.querySelector(".package-skills-loading")).toBeTruthy();
+    expect(container.querySelector(".skills-loading")).toBeTruthy();
     resolveRpc();
     await activating;
   });
@@ -137,7 +137,7 @@ describe("setupPackageSkillsTab — card rendering", () => {
     const tab2 = setupPackageSkillsTab({ container: c2, rpcCommand: rpc2 });
     await tab2.activate();
     expect(c2.querySelector('[data-package-card="npm:pkg"]')).toBeTruthy();
-    expect(c2.querySelector(".package-skills-card-name").textContent).toBe("npm:pkg");
+    expect(c2.querySelector(".skills-group-name").textContent).toBe("npm:pkg");
     expect(c2.querySelector(".package-skills-card-version").textContent).toBe("v1.2.3");
     // The count element renders (the localized label is covered by the
     // i18n-keys-completeness test); assert the card carries one candidate.
@@ -155,13 +155,11 @@ describe("setupPackageSkillsTab — card rendering", () => {
     // Candidate not visible until expanded.
     expect(container.querySelector('[data-candidate="alpha"]')).toBeNull();
     // Expand.
-    container.querySelector(".package-skills-expand").click();
+    container.querySelector(".skills-expand").click();
     const cand = container.querySelector('[data-candidate="alpha"]');
     expect(cand).toBeTruthy();
-    expect(cand.querySelector(".package-skills-candidate-name").textContent).toBe("alpha");
-    expect(cand.querySelector(".package-skills-candidate-description").textContent).toBe(
-      "alpha skill",
-    );
+    expect(cand.querySelector(".skills-skill-name").textContent).toBe("alpha");
+    expect(cand.querySelector(".skills-skill-description").textContent).toBe("alpha skill");
     expect(cand.querySelector(".package-skills-candidate-relative").textContent).toBe("skills/a");
     // Canonical path is available as an accessible label/title, not echoed as text.
     expect(cand.querySelector("code").title).toContain("SKILL.md");
@@ -217,7 +215,7 @@ describe("setupPackageSkillsTab — trust gating", () => {
     );
     const tab = setupPackageSkillsTab({ container, rpcCommand });
     await tab.setScope("project");
-    expect(container.querySelector(".package-skills-notice")).toBeTruthy();
+    expect(container.querySelector(".skills-notice")).toBeTruthy();
     // No package card or path leaks.
     expect(container.querySelector("[data-package-card]")).toBeNull();
     expect(container.textContent).not.toContain("/secret");
@@ -233,9 +231,11 @@ describe("setupPackageSkillsTab — no mutation contract", () => {
     for (const call of rpcCommand.mock.calls) {
       expect(call[0].type).toBe("list_package_skill_inventory");
     }
-    // No toggle/install/delete/filter editor exists in the rendered DOM.
+    // No mutation/toggle/install/delete/filter editor exists. Package
+    // candidates render a disabled placeholder switch (enable/disable is not
+    // implemented); assert there is no ENABLED checkbox a user could act on.
     const { container } = setup();
-    expect(container.querySelector('input[type="checkbox"]')).toBeNull();
+    expect(container.querySelector('input[type="checkbox"]:not([disabled])')).toBeNull();
     expect(container.querySelector("button.package-skills-toggle")).toBeNull();
   });
 });
@@ -247,7 +247,7 @@ describe("setupPackageSkillsTab — empty & error states", () => {
     const rpcCommand = rpcReturning(makeInventory({ packages: [] }));
     const tab = setupPackageSkillsTab({ container, rpcCommand });
     await tab.activate();
-    expect(container.querySelector(".package-skills-empty")).toBeTruthy();
+    expect(container.querySelector(".skills-empty")).toBeTruthy();
   });
 
   it("shows an error state with retry on failure", async () => {
@@ -256,7 +256,7 @@ describe("setupPackageSkillsTab — empty & error states", () => {
     const rpcCommand = vi.fn(async () => ({ success: false, error: "boom" }));
     const tab = setupPackageSkillsTab({ container, rpcCommand });
     await tab.activate();
-    expect(container.querySelector(".package-skills-error")).toBeTruthy();
-    expect(container.querySelector(".package-skills-retry")).toBeTruthy();
+    expect(container.querySelector(".skills-error")).toBeTruthy();
+    expect(container.querySelector(".skills-rescan")).toBeTruthy();
   });
 });

@@ -565,6 +565,7 @@
     },
     "skills": {
       "title": "技能",
+      "sectionsAriaLabel": "技能页面分区",
       "discovered": "已发现",
       "install": "安装",
       "packages": "软件包",
@@ -607,12 +608,15 @@
       "projectUntrusted": "当前项目尚未受信任，不能安装到当前项目。",
       "review": "确认安装",
       "confirmation": "将 {count} 个已选技能安装到 {scope}？",
+      "confirmationHeading": "确认安装技能",
       "confirm": "安装已选技能",
       "cancel": "取消",
       "installing": "正在安装…",
       "installFailed": "安装已选技能失败。",
       "complete": "已安装 {added} 项；{skipped} 项已配置。",
-      "restartRequired": "已保存。新建会话或重启 Pi 后生效。"
+      "restartRequired": "已保存。新建会话或重启 Pi 后生效。",
+      "skill": "技能",
+      "group": "分组"
     },
     "packageSkills": {
       "title": "包技能",
@@ -630,7 +634,8 @@
       "package": "包",
       "canonicalPath": "规范路径",
       "candidateCount": "{count} 个候选",
-      "scopeSummary": "{count} 个包"
+      "scopeSummary": "{count} 个包",
+      "enableAll": "全部启用"
     }
   },
   "lanQr": {
