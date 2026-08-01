@@ -644,11 +644,27 @@ export function collectPackageSkillCandidates(
   const packageRoot = pkg.installedRoot;
   if (!packageRoot) return [];
   const manifest = readPiManifest(packageRoot);
+  // Distinguish three cases, matching Pi's collectDefaultResources:
+  //   - pi.skills undefined → conventional <packageRoot>/skills/ fallback;
+  //   - pi.skills is an array (including []) → strict manifest processing;
+  //   - pi.skills is any other type → record a diagnostic and fall back to
+  //     conventional, matching Pi's defensive behavior for malformed manifests.
   const manifestSkillsRaw = manifest?.skills;
-  const manifestEntries: string[] =
-    Array.isArray(manifestSkillsRaw) && manifestSkillsRaw.every((s) => typeof s === "string")
+  let manifestEntries: string[];
+  let manifestDeclared = false;
+  if (Array.isArray(manifestSkillsRaw)) {
+    manifestDeclared = true;
+    manifestEntries = manifestSkillsRaw.every((s) => typeof s === "string")
       ? (manifestSkillsRaw as string[])
       : [];
+  } else {
+    manifestEntries = [];
+    if (manifestSkillsRaw !== undefined) {
+      diagnostics.push({
+        message: `pi.skills must be a string array; got ${typeof manifestSkillsRaw}, falling back to skills/`,
+      });
+    }
+  }
 
   const discoveryRoot: SkillDiscoveryRoot = {
     dir: packageRoot,
@@ -659,7 +675,7 @@ export function collectPackageSkillCandidates(
   };
 
   let collected: DiscoveredSkill[];
-  if (manifestEntries.length > 0) {
+  if (manifestDeclared || manifestEntries.length > 0) {
     // Source entries (plain paths + globs) resolve to files/dirs under the
     // package root, then the shared collector walks them. A malicious or
     // compromised package manifest could declare a parent-directory glob or
@@ -806,7 +822,11 @@ export function buildPackageSkillInventory(
     };
   });
 
-  return { scope: options.scope, trusted, packages, diagnostics };
+  // Only packages that actually contribute skills are shown — a configured
+  // but skill-less package (uninstalled, empty manifest, or no skills/ dir)
+  // adds noise to the Skills page, so drop it here rather than in the UI.
+  const packagesWithSkills = packages.filter((p) => p.candidates.length > 0);
+  return { scope: options.scope, trusted, packages: packagesWithSkills, diagnostics };
 }
 
 /** Read the version from a package's package.json, if present. */

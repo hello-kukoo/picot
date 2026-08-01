@@ -10,6 +10,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { minimatch } from "minimatch";
 import {
+  canonicalizeExistingPath,
   discoverSkillsFromRoot as discoverSharedFromRoot,
   type DiscoveredSkill as SharedDiscoveredSkill,
   type SkillDiagnostic as SharedSkillDiagnostic,
@@ -359,6 +360,17 @@ function isEnabledByOverrides(
 
 // ── Precedence (mirrors Pi resourcePrecedenceRank) ────────────────────
 
+/**
+ * Canonicalize an existing path for identity comparison. Uses realpath when
+ * the path exists (resolving symlinks) and falls back to the lexical resolve
+ * otherwise — matching `canonicalizeExistingPath` in the shared discovery
+ * module. Two skills settings entries that alias the same directory via
+ * different symlink spellings must be treated as the same root.
+ */
+function canonicalExistingPath(p: string): string {
+  return canonicalizeExistingPath(resolve(p));
+}
+
 function precedenceRank(scope: "user" | "project", source: "auto" | "local"): number {
   const scopeBase = scope === "project" ? 0 : 2;
   return scopeBase + (source === "local" ? 0 : 1);
@@ -548,6 +560,7 @@ function detectConfiguredForPi(
       ? join(opts.agentDir, "settings.json")
       : join(opts.cwd, CONFIG_DIR_NAME, "settings.json");
   const fileSettings = readSettingsSkills(settingsPath);
+  const claudeRootCanonical = canonicalExistingPath(claudeBase);
   return fileSettings.skills.some((entry) => {
     if (isOverride(entry) || isPlainGlob(entry)) return false;
     const expanded =
@@ -558,7 +571,7 @@ function detectConfiguredForPi(
           dir === join(home, ".claude", "skills") ? opts.agentDir : join(opts.cwd, CONFIG_DIR_NAME),
           expanded,
         );
-    return resolve(resolved) === claudeBase;
+    return canonicalExistingPath(resolved) === claudeRootCanonical;
   });
 }
 
@@ -907,7 +920,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
  * keeps Picot from silently dropping `enableSkillCommands` when it rewrites
  * settings.json. The rest of this module assumes `skills` is a string[].
  */
-function migrateLegacySkills(settings: Record<string, unknown>): Record<string, unknown> {
+export function migrateLegacySkills(settings: Record<string, unknown>): Record<string, unknown> {
   const skills = settings.skills;
   if (!isPlainObject(skills)) return settings;
   const legacy = skills as { enableSkillCommands?: unknown; customDirectories?: unknown };
@@ -1207,6 +1220,7 @@ export async function mutateClaudeSkillRoot(
       const currentSkills = Array.isArray(original.skills)
         ? (original.skills.filter((s) => typeof s === "string") as string[])
         : [];
+      const claudeRootCanonical = canonicalExistingPath(claudeRoot);
       // Skip override and glob entries; only plain paths can match the Claude root.
       const hasCanonical = currentSkills.some((entry) => {
         if (isOverride(entry) || isPlainGlob(entry)) return false;
@@ -1218,7 +1232,7 @@ export async function mutateClaudeSkillRoot(
               : entry;
         const baseDir = scope === "global" ? opts.agentDir : join(opts.cwd, CONFIG_DIR_NAME);
         const resolved = isAbsolute(expanded) ? resolve(expanded) : resolve(baseDir, expanded);
-        return resolve(resolved) === resolve(claudeRoot);
+        return canonicalExistingPath(resolved) === claudeRootCanonical;
       });
       const nextSkills = hasCanonical ? currentSkills : [...currentSkills, recommendedEntry];
       writeSettingsAtomically(settingsPath, { ...original, skills: nextSkills });

@@ -1,7 +1,14 @@
 // ABOUTME: Locks the authenticated skill install scanner's tree, preview, and revision semantics.
 // ABOUTME: Verifies opaque IDs, nested groups, selected-root handling, and stale revisions.
 
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -152,7 +159,7 @@ describe("buildSkillInstallPreview", () => {
       options(root),
     );
     expect(preview.additions).toEqual(["../../review"]);
-    expect(preview.settingsPath).toBe(join(root, ".pi", "agent", "settings.json"));
+    expect(preview.settingsPath).toBe(join(realpathSync(root), ".pi", "agent", "settings.json"));
   });
 
   it("serializes a selected skill relative to the project settings base", () => {
@@ -163,7 +170,7 @@ describe("buildSkillInstallPreview", () => {
     const preview = buildSkillInstallPreview(scan, "project", [selected], options(root));
     expect(preview.additions).toHaveLength(1);
     expect(preview.additions[0]).toMatch(/^\.\.\//);
-    expect(preview.settingsPath).toBe(join(root, ".pi", "settings.json"));
+    expect(preview.settingsPath).toBe(join(realpathSync(root), ".pi", "settings.json"));
   });
 
   it("rejects unknown selections and untrusted project preview", () => {
@@ -178,5 +185,30 @@ describe("buildSkillInstallPreview", () => {
         projectTrusted: false,
       }),
     ).toThrow(/trusted/);
+  });
+
+  it("treats legacy skills.customDirectories as already-configured paths", () => {
+    // Pi and Picot migrate legacy { skills: { enableSkillCommands, customDirectories } }
+    // into skills: string[]. The preview must see the same migrated list, so a
+    // source skill directory already listed in customDirectories is reported as
+    // skipped, not added. Build the fixture under a realpath-canonical base so
+    // macOS /var→/private/var symlink redirection does not desync additions
+    // from dedup.
+    const root = realpathSync(fixture());
+    const opts = { cwd: root, agentDir: join(root, ".pi", "agent"), projectTrusted: true };
+    const settingsPath = join(opts.agentDir, "settings.json");
+    mkdirSync(opts.agentDir, { recursive: true });
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        skills: { enableSkillCommands: false, customDirectories: ["../../review"] },
+      }),
+    );
+    const scan = scanSkillInstallSource(source(root), opts);
+    const selected = scan.defaultSelection.find((item) => item.kind === "skill");
+    if (!selected) throw new Error("expected skill");
+    const preview = buildSkillInstallPreview(scan, "global", [selected], opts);
+    expect(preview.additions).toEqual([]);
+    expect(preview.skippedEntries).toHaveLength(1);
   });
 });

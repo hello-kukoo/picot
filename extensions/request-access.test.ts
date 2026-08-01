@@ -50,6 +50,8 @@ describe("isLoopbackOnlyApiRequest", () => {
     ["GET", "/api/home"],
     ["GET", "/api/file-mentions?workspaceRoot=%2Frepo&query=%40src"],
     ["GET", "/api/files?scope=picker&path=%2F"],
+    ["POST", "/api/skill-install-scan"],
+    ["POST", "/api/skill-install-links"],
   ])("requires loopback for %s %s", (method, urlPath) => {
     expect(isLoopbackOnlyApiRequest(urlPath, method)).toBe(true);
   });

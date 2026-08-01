@@ -3,7 +3,7 @@
 
 import { createHash, createHmac } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, type Stats, statSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import {
   canonicalizeExistingPath,
   type DiscoveredSkill,
@@ -12,6 +12,7 @@ import {
   toPosixPath,
 } from "./skill-discovery.ts";
 import {
+  migrateLegacySkills,
   readSettingsObject,
   withSettingsLock,
   writeSettingsAtomically,
@@ -96,6 +97,32 @@ function existingCanonical(path: string): string {
     return realpathSync(path);
   } catch {
     return canonicalizeExistingPath(path);
+  }
+}
+
+/**
+ * Canonicalize a path even when it does not yet exist: realpath the longest
+ * existing ancestor and re-append the missing tail. This keeps symlinked
+ * prefixes (e.g. macOS TMPDIR `/var` → `/private/var`) consistent with
+ * realpath'd skill targets, so `path.relative(baseDir, target)` does not bail
+ * out to an absolute path when baseDir and target live under different
+ * spellings of the same real directory.
+ */
+function canonicalizePath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    const resolved = resolve(p);
+    const segments = resolved.split(sep);
+    for (let i = segments.length - 1; i > 0; i -= 1) {
+      const ancestor = segments.slice(0, i).join(sep) || sep;
+      try {
+        return join(realpathSync(ancestor), ...segments.slice(i));
+      } catch {
+        // ancestor does not exist either; keep walking up
+      }
+    }
+    return resolved;
   }
 }
 
@@ -283,9 +310,15 @@ function commonDirectory(paths: string[]): string {
 
 function settingsSkills(settingsPath: string): string[] {
   if (!existsSync(settingsPath)) return [];
+  let text: string;
+  try {
+    text = readFileSync(settingsPath, "utf8");
+  } catch {
+    return [];
+  }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(settingsPath, "utf8"));
+    parsed = JSON.parse(text);
   } catch (error) {
     const message = error instanceof Error ? error.message : "invalid JSON";
     throw new Error(`Pi settings must be valid JSON: ${message}`);
@@ -293,7 +326,11 @@ function settingsSkills(settingsPath: string): string[] {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("Pi settings must be a JSON object");
   }
-  const skills = (parsed as { skills?: unknown }).skills;
+  // Migrate legacy { skills: { enableSkillCommands, customDirectories } }
+  // before reading, so preview dedup sees the same effective source list as
+  // the actual mutation write (which goes through readSettingsObject).
+  const migrated = migrateLegacySkills({ ...(parsed as Record<string, unknown>) });
+  const skills = (migrated as { skills?: unknown }).skills;
   return Array.isArray(skills)
     ? skills.filter((item): item is string => typeof item === "string")
     : [];
@@ -317,7 +354,9 @@ export function buildSkillInstallPreview(
   if (!isInstallSelectionValid(scan, selection)) {
     throw new Error("Invalid skill install selection");
   }
-  const baseDir = scope === "global" ? context.agentDir : join(context.cwd, ".pi");
+  const baseDir = canonicalizePath(
+    scope === "global" ? context.agentDir : join(context.cwd, ".pi"),
+  );
   const settingsPath = join(baseDir, "settings.json");
   const nodes = nodeById(scan);
   const selectedPaths = new Set<string>();
@@ -368,13 +407,21 @@ export async function installSkillLinks(options: {
   if (scope === "project" && !context.projectTrusted) {
     throw new Error("Project is not trusted");
   }
-  const baseDir = scope === "global" ? context.agentDir : join(context.cwd, ".pi");
+  const baseDir = canonicalizePath(
+    scope === "global" ? context.agentDir : join(context.cwd, ".pi"),
+  );
   const settingsPath = join(baseDir, "settings.json");
+  // The expensive rescan (recursive directory walk + per-skill content hash)
+  // runs OUTSIDE the settings lock so it cannot keep the lock held long
+  // enough for a stale-lock takeover to delete a still-live lock. The
+  // freshness check (revision === scanRevision) is content-addressed, so a
+  // source that changed between the user's scan and install is still rejected.
+  // The in-lock work is limited to read → preview → merge → atomic write.
+  const freshScan = scanSkillInstallSource(source, context);
+  if (freshScan.scanRevision !== scanRevision || freshScan.sourceId !== source.sourceId) {
+    throw new Error("Skill install source changed; rescan and confirm again");
+  }
   return await withSettingsLock(settingsPath, () => {
-    const freshScan = scanSkillInstallSource(source, context);
-    if (freshScan.scanRevision !== scanRevision || freshScan.sourceId !== source.sourceId) {
-      throw new Error("Skill install source changed; rescan and confirm again");
-    }
     const preview = buildSkillInstallPreview(freshScan, scope, selection, context);
     const original = readSettingsObject(settingsPath);
     const currentSkills = Array.isArray(original.skills)

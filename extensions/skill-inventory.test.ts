@@ -914,6 +914,28 @@ describe("mutateClaudeSkillRoot — atomic enablement", () => {
     expect(settings.skills).not.toContain("../../.claude/skills");
   });
 
+  it("is canonical-idempotent for a symlink-aliased root", async () => {
+    const opts = makeClaudeOpts();
+    const home = opts.homeDir;
+    // ~/.claude/skills-real is the real dir; ~/.claude/skills is a symlink to it.
+    const realDir = join(home, ".claude", "skills-real");
+    mkdirSync(realDir, { recursive: true });
+    const linkDir = join(home, ".claude", "skills");
+    try {
+      symlinkSync(realDir, linkDir, "dir");
+    } catch {
+      return; // symlink not supported on this platform / without privileges
+    }
+    // settings.json already points at the real dir via absolute path.
+    writeJson(join(opts.agentDir, "settings.json"), { skills: [realDir] });
+    await mutateClaudeSkillRoot({ ...opts, kind: "claude-global" });
+    const settings = readJson(join(opts.agentDir, "settings.json"));
+    // The existing alias resolves to the same canonical root; do not append
+    // the recommended relative entry.
+    expect(settings.skills).toContain(realDir);
+    expect(settings.skills).not.toContain("../../.claude/skills");
+  });
+
   it("rejects unknown kind", async () => {
     const opts = makeOptions();
     await expect(mutateClaudeSkillRoot({ ...opts, kind: "bogus" as never })).rejects.toThrow();

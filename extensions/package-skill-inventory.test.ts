@@ -8,9 +8,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildPackageSkillInventory,
   type ConfiguredPackageEntry,
+  collectPackageSkillCandidates,
   dedupeConfiguredPackages,
   packageIdentity,
   parsePackageSource,
+  type ResolvedPackage,
   resolveInstalledPackageRoot,
 } from "./package-skill-inventory.ts";
 
@@ -62,6 +64,11 @@ function makeInstalledNpm(agentDir: string, name: string, version = "1.0.0"): vo
   const dir = join(agentDir, "npm", "node_modules", name);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "package.json"), JSON.stringify({ name, version }));
+  // Default skill so the package contributes skills and is not omitted by
+  // the buildPackageSkillInventory filter (used by settings-parsing tests).
+  const skillDir = join(dir, "skills", name);
+  mkdirSync(skillDir, { recursive: true });
+  writeFileSync(join(skillDir, "SKILL.md"), `---\nname: ${name}\ndescription: ${name}\n---\nbody`);
 }
 
 // ── parsePackageSource ────────────────────────────────────────────────
@@ -414,16 +421,41 @@ describe("settings packages[] forms", () => {
 
 // ── not-installed diagnostic ──────────────────────────────────────────
 
-describe("missing installed roots", () => {
-  it("retains a package card with a not-installed diagnostic", () => {
+describe("packages without skills are omitted", () => {
+  it("omits an uninstalled package without leaking sibling dirs", () => {
     const o = opts({ scope: "global" });
     writeSettings(o.agentDir, ["npm:never-installed"]);
     const inv = buildPackageSkillInventory(o);
-    const card = inv.packages.find((p) => p.identity === "npm:never-installed");
-    expect(card).toBeDefined();
-    expect(card?.diagnostics.some((d) => /not.*install/i.test(d.message))).toBe(true);
+    // No skills => not listed. (Uninstalled packages never have skills.)
+    expect(inv.packages.find((p) => p.identity === "npm:never-installed")).toBeUndefined();
     // Never walks sibling package directories.
     expect(existsSync(join(o.agentDir, "git", "github.com"))).toBe(false);
+  });
+
+  it("omits an installed package that exposes no skills", () => {
+    const o = opts({ scope: "global" });
+    const root = join(o.agentDir, "npm", "node_modules", "pkg");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "pkg", version: "1.0.0" }));
+    writeSettings(o.agentDir, ["npm:pkg"]);
+    const inv = buildPackageSkillInventory(o);
+    expect(inv.packages.find((p) => p.identity === "npm:pkg")).toBeUndefined();
+  });
+
+  it("retains a package that contributes skills", () => {
+    const o = opts({ scope: "global" });
+    const root = join(o.agentDir, "npm", "node_modules", "pkg");
+    mkdirSync(join(root, "skills", "a"), { recursive: true });
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ name: "pkg", version: "1.0.0", pi: { skills: ["./skills"] } }),
+    );
+    writeFileSync(join(root, "skills", "a", "SKILL.md"), "---\nname: a\ndescription: a\n---\nbody");
+    writeSettings(o.agentDir, ["npm:pkg"]);
+    const inv = buildPackageSkillInventory(o);
+    const card = inv.packages.find((p) => p.identity === "npm:pkg");
+    expect(card).toBeDefined();
+    expect(card?.candidates.length).toBeGreaterThan(0);
   });
 });
 
@@ -628,8 +660,9 @@ describe("collectPackageSkillCandidates — pi.skills manifest", () => {
     writeSettings(o.agentDir, ["npm:pkg"]);
     const inv = buildPackageSkillInventory(o);
     const card = inv.packages.find((p) => p.identity === "npm:pkg");
-    expect(card?.candidates.some((c) => c.name === "leaked")).toBe(false);
-    expect(card?.diagnostics.some((d) => /outside.*package|escape/i.test(d.message))).toBe(true);
+    expect(card).toBeUndefined();
+    // And nothing leaked into any listed candidate.
+    expect(inv.packages.flatMap((p) => p.candidates).some((c) => c.name === "leaked")).toBe(false);
   });
 
   it("refuses an absolute manifest entry outside the package root", () => {
@@ -644,8 +677,44 @@ describe("collectPackageSkillCandidates — pi.skills manifest", () => {
     writeSettings(o.agentDir, ["npm:pkg"]);
     const inv = buildPackageSkillInventory(o);
     const card = inv.packages.find((p) => p.identity === "npm:pkg");
-    expect(card?.candidates.some((c) => c.name === "ext")).toBe(false);
-    expect(card?.diagnostics.some((d) => /outside.*package|escape/i.test(d.message))).toBe(true);
+    expect(card).toBeUndefined();
+    // And nothing leaked into any listed candidate.
+    expect(inv.packages.flatMap((p) => p.candidates).some((c) => c.name === "ext")).toBe(false);
+  });
+
+  it("records a diagnostic when a manifest entry is refused (collector level)", () => {
+    const o = opts({ scope: "global" });
+    const pkgRoot = join(o.agentDir, "npm", "node_modules", "pkg");
+    const outside = join(o.agentDir, "outside");
+    // Create the outside target so the manifest glob actually matches and the
+    // collector reaches the containment check that records the diagnostic.
+    mkdirSync(join(outside, "ext"), { recursive: true });
+    writeFileSync(
+      join(outside, "ext", "SKILL.md"),
+      "---\nname: ext\ndescription: should-not-appear\n---\nbody",
+    );
+    mkdirSync(pkgRoot, { recursive: true });
+    writeFileSync(
+      join(pkgRoot, "package.json"),
+      JSON.stringify({
+        name: "pkg",
+        version: "1.0.0",
+        pi: { skills: [`${outside.replace(/\\/g, "/")}/**`] },
+      }),
+    );
+    const parsed = parsePackageSource("npm:pkg");
+    const resolved: ResolvedPackage = {
+      parsed,
+      identity: packageIdentity(parsed),
+      scope: "global",
+      sourceScope: "global",
+      source: "npm:pkg",
+      autoload: false,
+      installedRoot: pkgRoot,
+    };
+    const diags = [];
+    collectPackageSkillCandidates(resolved, diags);
+    expect(diags.some((d) => /outside.*package|escape/i.test(d.message))).toBe(true);
   });
 });
 
@@ -667,7 +736,7 @@ describe("collectPackageSkillCandidates — conventional fallback", () => {
     expect(card?.candidates.map((c) => c.name)).toEqual(["conv"]);
   });
 
-  it("falls back to conventional when pi.skills is empty", () => {
+  it("collects no candidates when pi.skills is an explicit empty array", () => {
     const o = opts({ scope: "global" });
     const root = join(o.agentDir, "npm", "node_modules", "pkg");
     mkdirSync(join(root, "skills", "conv"), { recursive: true });
@@ -682,18 +751,18 @@ describe("collectPackageSkillCandidates — conventional fallback", () => {
     writeSettings(o.agentDir, ["npm:pkg"]);
     const inv = buildPackageSkillInventory(o);
     const card = inv.packages.find((p) => p.identity === "npm:pkg");
-    expect(card?.candidates.map((c) => c.name)).toEqual(["conv"]);
+    // pi.skills is an explicit empty array → no candidates → omitted.
+    expect(card).toBeUndefined();
   });
 
-  it("renders an empty-but-installed package compactly", () => {
+  it("omits an empty-manifest installed package", () => {
     const o = opts({ scope: "global" });
     const root = join(o.agentDir, "npm", "node_modules", "pkg");
     mkdirSync(root, { recursive: true });
     writeFileSync(join(root, "package.json"), JSON.stringify({ name: "pkg", version: "1.0.0" }));
     writeSettings(o.agentDir, ["npm:pkg"]);
     const inv = buildPackageSkillInventory(o);
-    const card = inv.packages.find((p) => p.identity === "npm:pkg");
-    expect(card?.candidates).toEqual([]);
+    expect(inv.packages.find((p) => p.identity === "npm:pkg")).toBeUndefined();
   });
 });
 

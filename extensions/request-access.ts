@@ -23,6 +23,12 @@ const LOOPBACK_ONLY_ROUTES = new Set([
   "GET /api/super-agent/projects",
   "GET /api/home",
   "GET /api/file-mentions",
+  // Skills install transport is host-to-primary only: it scans arbitrary
+  // local directories and writes settings, so it must never be reachable
+  // from the LAN surface. The Bearer secret is a defense-in-depth second
+  // factor, not the boundary itself.
+  "POST /api/skill-install-scan",
+  "POST /api/skill-install-links",
 ]);
 
 function isLoopbackIpv4(value: string): boolean {
