@@ -18,6 +18,7 @@ mod pi_manager;
 mod pi_rpc_bridge;
 mod remote_auth;
 mod runtime_coordinator;
+mod session_ui_profile_store;
 mod settings_store;
 mod skill_source_registry;
 mod terminal_manager;
@@ -44,6 +45,7 @@ use pi_manager::{
 use remote_auth::RemoteAuth;
 use runtime_coordinator::RuntimeTarget;
 use serde_json::Value;
+use session_ui_profile_store::{validate_session_path, SessionUiProfileStore};
 use skill_source_registry::SkillSourceRegistry;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
@@ -1201,6 +1203,49 @@ async fn download_and_install_update_core(
 
 // ─── Broker control handler ──────────────────────────────────────────────────
 
+fn require_native_owner(ctx: &broker_ws::VerifiedClientContext) -> Result<(), String> {
+    if ctx.class == broker_ws::ClientClass::Native && ctx.owner_id.is_some() {
+        Ok(())
+    } else {
+        Err("native desktop owner required".to_string())
+    }
+}
+
+fn current_owner_session(
+    owner_registry: &WindowOwnerRegistry,
+    broker: &BrokerWs,
+    owner: &window_owner::OwnerId,
+    expected_session: Option<&str>,
+) -> Result<String, String> {
+    let (workspace, primary_port) = owner_registry
+        .current_workspace(owner)
+        .ok_or("workspace is not available")?;
+    let session = if let Some(expected) = expected_session {
+        let port = broker
+            .port_for_session(expected)
+            .ok_or("session route is not available")?;
+        let session = broker
+            .session_for_port(port)
+            .ok_or("session route is not available")?;
+        if session != expected {
+            return Err("session route changed; retry profile operation".to_string());
+        }
+        session
+    } else {
+        broker
+            .session_for_port(primary_port)
+            .ok_or("current session route is not available")?
+    };
+    let session_path = std::path::Path::new(&session);
+    let session_workspace = extract_session_cwd(&session_path.to_path_buf())
+        .map(PathBuf::from)
+        .ok_or("session workspace is not available")?;
+    if fs::canonicalize(session_workspace).ok() != fs::canonicalize(workspace).ok() {
+        return Err("session is outside the verified workspace".to_string());
+    }
+    Ok(session)
+}
+
 /// Resolve a control command's target port: prefer the explicit port from the
 /// request, else fall back to the broker's active port.
 fn resolve_control_port(port: Option<u16>, broker: &BrokerWs) -> Result<u16, String> {
@@ -1391,6 +1436,7 @@ fn install_control_handler(
     manager: Arc<PiManager>,
     owner_registry: Arc<WindowOwnerRegistry>,
     ephemeral_registry: Arc<EphemeralRegistry>,
+    session_ui_profiles: Arc<SessionUiProfileStore>,
     app: AppHandle,
 ) {
     let broker_for_handler = broker.clone();
@@ -1403,6 +1449,7 @@ fn install_control_handler(
             let broker = broker_for_handler.clone();
             let owner_registry = owner_registry.clone();
             let ephemeral_registry = ephemeral_registry.clone();
+            let session_ui_profiles = session_ui_profiles.clone();
             let app = app.clone();
             Box::pin(async move {
                 let arg = |key: &str| args.get(key).cloned().unwrap_or(Value::Null);
@@ -1624,6 +1671,51 @@ fn install_control_handler(
                         .cached_models()
                         .map(|c| c.payload)
                         .unwrap_or(Value::Null)),
+                    "session_ui_profile_load" => {
+                        require_native_owner(&ctx)?;
+                        let owner = ctx
+                            .owner_id
+                            .as_ref()
+                            .ok_or("verified window owner required")?;
+                        let expected =
+                            arg_str("expectedSessionId").ok_or("expectedSessionId is required")?;
+                        validate_session_path(&expected)?;
+                        let session_path = current_owner_session(
+                            &owner_registry,
+                            &broker,
+                            owner,
+                            Some(&expected),
+                        )?;
+                        serde_json::to_value(session_ui_profiles.load(&session_path)?)
+                            .map_err(|error| error.to_string())
+                    }
+                    "session_ui_profile_save" => {
+                        require_native_owner(&ctx)?;
+                        let owner = ctx
+                            .owner_id
+                            .as_ref()
+                            .ok_or("verified window owner required")?;
+                        let expected =
+                            arg_str("expectedSessionId").ok_or("expectedSessionId is required")?;
+                        validate_session_path(&expected)?;
+                        let session_path = current_owner_session(
+                            &owner_registry,
+                            &broker,
+                            owner,
+                            Some(&expected),
+                        )?;
+                        let provider = arg_str("provider").ok_or("provider is required")?;
+                        let model_id = arg_str("modelId").ok_or("modelId is required")?;
+                        let thinking =
+                            arg_str("thinkingLevel").unwrap_or_else(|| "off".to_string());
+                        serde_json::to_value(session_ui_profiles.save(
+                            &session_path,
+                            &provider,
+                            &model_id,
+                            &thinking,
+                        )?)
+                        .map_err(|error| error.to_string())
+                    }
                     "install_pi_package" => {
                         let source = arg_str("source").unwrap_or_default();
                         if source.trim().is_empty() {
@@ -2628,11 +2720,18 @@ fn main() {
                     .unwrap_or_else(|_| Value::Array(Vec::new()))
             }));
             std::env::set_var("PI_STUDIO_BROKER_PORT", broker.port().to_string());
+            let profile_path = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("Cannot resolve Picot app data directory: {error}"))?
+                .join("session-ui-profiles.json");
+            let session_ui_profiles = Arc::new(SessionUiProfileStore::open(profile_path)?);
             install_control_handler(
                 &broker,
                 manager.clone(),
                 owner_registry.clone(),
                 ephemeral_registry.clone(),
+                session_ui_profiles.clone(),
                 app.handle().clone(),
             );
 
@@ -2798,6 +2897,7 @@ fn main() {
             app.manage(owner_registry.clone());
             app.manage(skill_source_registry.clone());
             app.manage(ephemeral_registry.clone());
+            app.manage(session_ui_profiles.clone());
             app.manage(terminal_manager.clone());
             app.manage(git_service.clone());
 

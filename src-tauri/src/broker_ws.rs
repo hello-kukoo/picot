@@ -443,6 +443,24 @@ impl BrokerWs {
         self.ensure_upstream(port);
     }
 
+    /// Return the learned session route currently bound to a Pi port.
+    /// Callers use this only after selecting a verified owner workspace port;
+    /// the browser never supplies the returned path.
+    pub fn session_for_port(&self, port: u16) -> Option<String> {
+        self.inner
+            .routes
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|(session, routed_port)| (*routed_port == port).then(|| session.clone()))
+    }
+
+    /// Resolve a session hint to the host-learned route port. The caller must
+    /// still validate that the resolved route belongs to its verified owner.
+    pub fn port_for_session(&self, session_id: &str) -> Option<u16> {
+        self.inner.routes.lock().unwrap().get(session_id).copied()
+    }
+
     /// Like `register_session` but does NOT promote this port to active_port.
     /// Use for background/dedicated session processes that should not become
     /// the default command target.
@@ -1764,6 +1782,20 @@ mod tests {
 
         assert_eq!(rekeyed["instanceId"], "chat-42");
         assert_eq!(rekeyed["generation"], 7);
+    }
+
+    #[test]
+    fn session_for_port_returns_only_the_current_route() {
+        let broker = BrokerWs {
+            port: 49000,
+            inner: Arc::new(BrokerInner::default()),
+        };
+        broker.register_session(47821, "/tmp/session-a.jsonl");
+        assert_eq!(
+            broker.session_for_port(47821).as_deref(),
+            Some("/tmp/session-a.jsonl")
+        );
+        assert_eq!(broker.session_for_port(47822), None);
     }
 
     #[test]
