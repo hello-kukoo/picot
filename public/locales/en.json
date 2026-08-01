@@ -21,7 +21,7 @@
     "openInApp": "Open in {app}",
     "sideChat": "Side Chat",
     "quickChat": "Quick Chat",
-    "newSideChat": "New Side Chat"
+    "newSideChat": "Open Side Chat"
   },
   "git": {
     "currentBranch": "Current git branch",
@@ -728,7 +728,6 @@
     "startingQuickChat": "Starting Quick Chat…",
     "tokens": "tokens",
     "sideChat": "Side Chat",
-    "sideChatLimit": "Side Chat limit reached",
     "quickChat": "Quick Chat",
     "minimize": "Minimize",
     "close": "Close",

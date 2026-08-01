@@ -42,6 +42,7 @@ import {
   shouldSuppressFileBrowserLoad,
 } from "./session/routing.js";
 import { anchorHistoryToBottom } from "./session/scroll-anchor.js";
+import { SessionUiStateStore } from "./session-ui-state.js";
 import { setupSettingsEditors } from "./settings/editors.js";
 import { setupPackageSkillsTab } from "./settings/package-skills-tab.js";
 import {
@@ -165,7 +166,21 @@ const navigateInWindow = (url, metadata = {}) => {
       console.error("[navigation] rejected cross-origin target");
       return;
     }
-    targetUrl = withFocusParam(metadata.targetCwd, currentFocusProject, parsed);
+    const requestedFocusId = currentUrl.searchParams.get(FOCUS_WORKSPACE_PARAM);
+    // During a cross-port navigation (e.g. switching to a freshly spawned pi
+    // port), currentFocusProject has not been re-resolved yet on the new page
+    // load. Fall back to the focusWorkspaceId the current URL still carries so
+    // focus survives the port hop; withFocusParam re-encodes it onto the target
+    // URL only when targetCwd matches that project's path, and strips it
+    // otherwise. Once the new page boots and resolveFocusState runs,
+    // currentFocusProject is repopulated from the sidebar and this fallback is
+    // no longer exercised.
+    const focusProject =
+      currentFocusProject ||
+      (requestedFocusId?.startsWith("workspace:")
+        ? { path: requestedFocusId.slice("workspace:".length) }
+        : null);
+    targetUrl = withFocusParam(metadata.targetCwd, focusProject, parsed);
     if (mobileClientMode) targetUrl.searchParams.set("mobile", "1");
   } catch {
     console.error("[navigation] rejected invalid target");
@@ -696,6 +711,18 @@ async function stopSuperAgentPortsFromUrl() {
 // UI elements
 const messageInput = document.getElementById("message-input");
 const chatForm = document.getElementById("chat-form");
+const sessionUiState = new SessionUiStateStore({
+  profileClient: {
+    load: () => transport.loadSessionUiProfile(wsClient.sessionId),
+    save: (profile) => transport.saveSessionUiProfile(wsClient.sessionId, profile),
+  },
+});
+let activeUiSessionFile = null;
+// Monotonic counter bumped whenever restoreSessionUiState binds a different
+// session. applySessionUiProfile captures it before each await and bails when
+// the token changes, so a profile restore that resumes after the user has
+// switched sessions cannot clobber the new session's model/thinking display.
+let uiSessionGeneration = 0;
 const sendBtn = document.getElementById("send-btn");
 const abortBtn = document.getElementById("abort-btn");
 const statusIndicator = document.getElementById("status-indicator");
@@ -1048,24 +1075,9 @@ const createEphemeralView = (runtime) =>
   });
 
 async function getActiveSessionStartupProfile() {
-  try {
-    const response = await fetch("/api/rpc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "get_state" }),
-    });
-    const payload = await response.json();
-    const model = payload.success ? payload.data?.model : null;
-    if (model?.provider && model?.id) {
-      return {
-        provider: model.provider,
-        modelId: model.id,
-        thinkingLevel: payload.data.thinkingLevel || "off",
-      };
-    }
-  } catch {
-    // Fall back to the latest UI state if the active session is briefly reloading.
-  }
+  if (!activeUiSessionFile) return null;
+  const profile = await sessionUiState.loadProfile();
+  if (profile) return profile;
   const model = availableModels.find((entry) => entry.id === currentModelId);
   if (!model?.provider || !model?.id) return null;
   return {
@@ -1447,14 +1459,6 @@ document.getElementById("side-chat-btn")?.addEventListener("click", () => {
 document.getElementById("quick-chat-btn")?.addEventListener("click", () => {
   if (nativeAvailable()) void quickChatDialog.open();
 });
-filePreviewPanel.registerTabBarAction("new-side-chat", {
-  labelKey: "nav.newSideChat",
-  icon: "chat-plus",
-  onClick: () => {
-    if (nativeAvailable()) void sideChatManager.createAdditional();
-  },
-});
-filePreviewPanel.setTabBarActionVisible?.("new-side-chat", nativeAvailable());
 
 async function refreshFileBrowserForWorkspace(
   path = getCurrentWorkspacePath(),
@@ -2409,6 +2413,7 @@ async function refreshSidebarForNewSession(event = null, attempt = 0) {
     );
     if (found) {
       sidebar.setActive(liveFile);
+      restoreSessionUiState(liveFile);
       resolveAndApplyFocus();
       pendingNewSessionRefresh = false;
       pendingNewSessionPreviousFile = null;
@@ -2762,10 +2767,11 @@ messageInput.addEventListener("keydown", (e) => {
   }
 });
 
-// Auto-resize textarea
+// Auto-resize textarea and keep the draft isolated from the active session.
 messageInput.addEventListener("input", () => {
   messageInput.style.height = "auto";
   messageInput.style.height = `${Math.min(messageInput.scrollHeight, 160)}px`;
+  persistComposerDraft();
 });
 
 // ═══════════════════════════════════════
@@ -2856,6 +2862,7 @@ function sendMessage() {
 
   messageInput.value = "";
   messageInput.style.height = "auto";
+  if (activeUiSessionFile) sessionUiState.clearDraft(activeUiSessionFile);
 
   const cmd = {
     type: "prompt",
@@ -3349,6 +3356,7 @@ function openModelDropdown() {
           refreshModelInfo: fetchModelInfo,
           applySelectedModel: (selectedModel) => {
             currentModelId = selectedModel.id;
+            saveCurrentSessionProfile();
             updateModelLabel();
             if (selectedModel.contextWindow) {
               contextWindowSize = selectedModel.contextWindow;
@@ -3402,6 +3410,7 @@ thinkingBtn.addEventListener("click", async () => {
   const data = await rpcCommand({ type: "cycle_thinking_level" }, "Cycling thinking…");
   if (data?.success && data.data?.level) {
     currentThinkingLevel = data.data.level;
+    saveCurrentSessionProfile();
     updateThinkingBtn();
   }
 });
@@ -3597,6 +3606,92 @@ setupSidebarSearchControl({
  * Clears renderers/state, unmarks the active sidebar item and refreshes the list
  * so the newly created session shows up once pi writes its first message to disk.
  */
+function setComposerDraft(value) {
+  messageInput.value = value || "";
+  messageInput.style.height = "auto";
+  messageInput.style.height = `${Math.min(messageInput.scrollHeight, 160)}px`;
+}
+
+function persistComposerDraft() {
+  if (activeUiSessionFile) sessionUiState.saveDraft(activeUiSessionFile, messageInput.value);
+}
+
+function restoreSessionUiState(sessionFile) {
+  const next = sessionFile || null;
+  // Bump the guard token only when the bound session actually changes, so
+  // repeated restores of the same session don't needlessly invalidate an
+  // in-flight profile restore.
+  if (next !== activeUiSessionFile) {
+    activeUiSessionFile = next;
+    uiSessionGeneration += 1;
+  }
+  setComposerDraft(activeUiSessionFile ? sessionUiState.loadDraft(activeUiSessionFile) : "");
+}
+
+function saveCurrentSessionProfile() {
+  if (!activeUiSessionFile) return;
+  const model = availableModels.find((entry) => entry.id === currentModelId);
+  if (!model?.provider || !model.id) return;
+  void sessionUiState.saveProfile({
+    provider: model.provider,
+    modelId: model.id,
+    thinkingLevel: currentThinkingLevel || "off",
+  });
+}
+
+async function applySessionUiProfile(sessionFile) {
+  // pi's set_model / set_thinking_level reconfigure the harness bound to the
+  // CURRENT active session (writes are deferred to that session's pending
+  // writes when mid-turn), not a global defaults file. Because this runs in
+  // the foreground mirror_sync path, the active pi session is the one we just
+  // restored, so the profile sticks to its session and never leaks into Pi's
+  // global config or another session.
+  restoreSessionUiState(sessionFile);
+  const generation = uiSessionGeneration;
+  const profile = await sessionUiState.loadProfile();
+  if (!profile || generation !== uiSessionGeneration) return;
+  const model = availableModels.find(
+    (entry) => entry.provider === profile.provider && entry.id === profile.modelId,
+  );
+  if (!model) {
+    // availableModels may not have loaded yet (cold mirror_sync racing the
+    // /api/models fetch). Log instead of silently dropping the context window.
+    console.warn(
+      "[session-ui] profile model not yet in registry:",
+      `${profile.provider}/${profile.modelId}`,
+    );
+  }
+  const modelResult = await rpcCommand(
+    { type: "set_model", provider: profile.provider, modelId: profile.modelId },
+    null,
+    true,
+  );
+  // The user may have switched sessions while set_model was in flight. If so,
+  // abandon this restore so it cannot overwrite the now-active session's UI.
+  if (generation !== uiSessionGeneration) return;
+  if (modelResult?.success) {
+    currentModelId = profile.modelId;
+    updateModelLabel();
+    const contextWindow = model?.contextWindow;
+    if (contextWindow) {
+      contextWindowSize = contextWindow;
+      updateTokenUsage();
+    }
+  }
+  if (profile.thinkingLevel) {
+    const thinkingResult = await rpcCommand(
+      { type: "set_thinking_level", level: profile.thinkingLevel },
+      null,
+      true,
+    );
+    if (generation !== uiSessionGeneration) return;
+    if (thinkingResult?.success) {
+      currentThinkingLevel = profile.thinkingLevel;
+      updateThinkingBtn();
+    }
+  }
+}
+
 async function resetUiForNewSession() {
   pendingNewSessionPreviousFile =
     mirrorActiveSessionFile ||
@@ -3612,6 +3707,7 @@ async function resetUiForNewSession() {
   mirrorActiveSessionFile = null;
   viewingActiveSession = true;
   pendingSessionSwitchPath = null;
+  restoreSessionUiState(null);
   updateMirrorInputState();
   updateUI();
 
@@ -3801,7 +3897,9 @@ async function handleSessionSelectImpl(session, project) {
     });
     pendingSessionSwitchPath = null;
   }
+  persistComposerDraft();
   sidebar.setActive(session.filePath);
+  restoreSessionUiState(session.filePath);
   resolveAndApplyFocus();
   updateSuperAgentActiveState(session, project);
   const targetLiveInstance = liveInstances.find(
@@ -4173,6 +4271,7 @@ function handleMirrorSync(data) {
     },
     setSidebarActive: (filePath) => {
       sidebar.setActive(filePath);
+      restoreSessionUiState(filePath);
       resolveAndApplyFocus();
     },
   });
@@ -4280,6 +4379,7 @@ function handleMirrorSync(data) {
     currentThinkingLevel = data.thinkingLevel;
     updateThinkingBtn();
   }
+  void applySessionUiProfile(data.sessionFile || null);
 
   // Clear and render message history
   clearConversationRenderers();
@@ -5376,7 +5476,6 @@ wsClient.addEventListener("capabilities", () => {
   const showEphemeral = nativeAvailable();
   document.getElementById("side-chat-btn")?.classList.toggle("hidden", !showEphemeral);
   document.getElementById("quick-chat-btn")?.classList.toggle("hidden", !showEphemeral);
-  filePreviewPanel.setTabBarActionVisible?.("new-side-chat", showEphemeral);
 });
 
 function buildThemeGrid() {

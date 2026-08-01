@@ -21,14 +21,14 @@ test("loads regular and bold bundled faces before resolving", async () => {
   const load = vi.fn().mockResolvedValue([]);
   Object.defineProperty(document, "fonts", { configurable: true, value: { load } });
 
-  await loadTerminalFont({ family: TERMINAL_FONT_FAMILY, fontSize: 16 });
+  await loadTerminalFont({ family: TERMINAL_FONT_FAMILY, fontSize: 15 });
 
-  expect(load).toHaveBeenCalledWith('16px "Picot Mono Nerd"');
-  expect(load).toHaveBeenCalledWith('700 16px "Picot Mono Nerd"');
+  expect(load).toHaveBeenCalledWith('15px "Picot Mono Nerd"');
+  expect(load).toHaveBeenCalledWith('700 15px "Picot Mono Nerd"');
 });
 
 test("exports the bundled family with monospace fallbacks", () => {
   expect(TERMINAL_FONT_STACK).toContain(`"${TERMINAL_FONT_FAMILY}"`);
   expect(TERMINAL_FONT_STACK).toContain("monospace");
-  expect(DEFAULT_TERMINAL_FONT_SIZE).toBe(14);
+  expect(DEFAULT_TERMINAL_FONT_SIZE).toBe(15);
 });

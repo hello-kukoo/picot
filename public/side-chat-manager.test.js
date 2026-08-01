@@ -136,11 +136,28 @@ describe("SideChatManager create + quota", () => {
     expect(setThinking).toHaveBeenCalledWith("high");
   });
 
-  it("enforces the five-instance quota", async () => {
+  it("limits new Side Chat creation to one instance", async () => {
     const { manager } = makeManager();
-    for (let i = 0; i < 5; i += 1) await manager.create();
-    const sixth = await manager.create();
-    expect(sixth).toBeNull();
+    const first = await manager.create();
+    const second = await manager.create();
+    expect(first).not.toBeNull();
+    expect(second).toBeNull();
+  });
+
+  it("opens the existing chat instead of creating another one", async () => {
+    const { manager, transport, filePreviewPanel } = makeManager();
+    await manager.create();
+    filePreviewPanel.panelOpen = false;
+    filePreviewPanel.activeContent = null;
+
+    const result = await manager.openMostRecent();
+
+    expect(result).toMatchObject({ instanceId: "sc-1" });
+    expect(transport.createEphemeral).toHaveBeenCalledTimes(1);
+    expect(filePreviewPanel.activateContent).toHaveBeenLastCalledWith({
+      kind: "transient",
+      id: "sc-1",
+    });
   });
 
   it("suppresses a repeated in-flight create", async () => {

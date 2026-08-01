@@ -297,7 +297,7 @@ async function spawnFreshSession({
       }
       dismissOverlay = runOnBeforeSwap(onBeforeSwap, label);
       await transport.commitWorkspaceTransition(prepared.transitionGeneration);
-    } else {
+    } else if (!canActivateInPlace) {
       dismissOverlay = runOnBeforeSwap(onBeforeSwap, label);
     }
     console.debug(`[Session route] ${debugTag}:parallel-created`, {

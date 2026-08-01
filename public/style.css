@@ -8295,17 +8295,22 @@ body.file-preview-resizing {
 }
 .terminal-panel.enlarged {
   position: absolute;
-  inset: 0;
+  top: var(--terminal-header-offset, 0px);
+  right: 0;
+  bottom: 0;
+  left: 0;
   height: auto !important;
   z-index: 100;
   border-top: none;
 }
 .terminal-resizer {
+  flex: 0 0 2px;
   height: 2px;
   cursor: row-resize;
   background: var(--border);
 }
 .terminal-tab-bar {
+  flex: 0 0 36px;
   display: flex;
   align-items: center;
   gap: var(--space-1);
@@ -8341,6 +8346,12 @@ body.file-preview-resizing {
 }
 
 /* Terminal tab bar — mirrors the file-preview/editor tab style. */
+.terminal-tab-item {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-radius: var(--radius-sm);
+}
 .terminal-tab {
   display: flex;
   align-items: center;
@@ -8355,7 +8366,7 @@ body.file-preview-resizing {
   border: none;
   background: transparent;
 }
-.terminal-tab:hover {
+.terminal-tab-item:hover {
   background: var(--bg-glass-hover);
 }
 .terminal-tab.active {
@@ -8384,10 +8395,10 @@ body.file-preview-resizing {
   transition: opacity 0.1s var(--ease);
   font-size: var(--font-size-sm);
 }
-.terminal-tab:hover .terminal-tab-close,
-.terminal-tab.active .terminal-tab-close,
-.terminal-tab:hover .terminal-tab-restart,
-.terminal-tab.active .terminal-tab-restart {
+.terminal-tab-item:hover .terminal-tab-close,
+.terminal-tab-item.active .terminal-tab-close,
+.terminal-tab-item:hover .terminal-tab-restart,
+.terminal-tab-item.active .terminal-tab-restart {
   opacity: 1;
 }
 .terminal-tab-close:hover,

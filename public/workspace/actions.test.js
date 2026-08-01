@@ -48,7 +48,7 @@ function makeTransport(newPort = 47826, brokerWsUrl) {
 }
 
 describe("startInWindowNewSession parallel-spawn", () => {
-  it("waits for health and dismisses the overlay when activating in-place", async () => {
+  it("waits for health without showing a swap overlay when activating in-place", async () => {
     const transport = makeTransport();
     const dismiss = vi.fn();
     const onBeforeSwap = vi.fn(() => dismiss);
@@ -71,7 +71,8 @@ describe("startInWindowNewSession parallel-spawn", () => {
       expect.objectContaining({ waitForHealth: true, openWindow: false }),
     );
     expect(onParallelSessionCreated).toHaveBeenCalledWith(47826, "/work");
-    expect(dismiss).toHaveBeenCalledTimes(1);
+    expect(onBeforeSwap).not.toHaveBeenCalled();
+    expect(dismiss).not.toHaveBeenCalled();
   });
 
   it("cancels a cross-workspace transition when ephemeral settlement is rejected", async () => {
@@ -126,7 +127,7 @@ describe("startInWindowNewSession parallel-spawn", () => {
 
     expect(ok).toBe(false);
     expect(renderError).toHaveBeenCalled();
-    expect(dismiss).toHaveBeenCalled();
+    expect(dismiss).not.toHaveBeenCalled();
   });
 
   it("uses in-place new_session when not streaming (no overlay)", async () => {
@@ -410,7 +411,7 @@ describe("navigation propagates the broker WS url", () => {
 });
 
 describe("startNewProjectChat parallel-spawn", () => {
-  it("waits for health and dismisses overlay on in-place activation", async () => {
+  it("waits for health without an overlay on in-place activation", async () => {
     const transport = makeTransport();
     const dismiss = vi.fn();
     const onParallelSessionCreated = vi.fn().mockResolvedValue(undefined);
@@ -433,7 +434,7 @@ describe("startNewProjectChat parallel-spawn", () => {
       "/work",
       expect.objectContaining({ waitForHealth: true }),
     );
-    expect(dismiss).toHaveBeenCalledTimes(1);
+    expect(dismiss).not.toHaveBeenCalled();
   });
 });
 

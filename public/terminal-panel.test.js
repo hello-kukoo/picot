@@ -84,6 +84,61 @@ test("body resize refits xterm and destroy disconnects the observer", () => {
   vi.unstubAllGlobals();
 });
 
+test("terminal tab close control is a sibling of the tab button", () => {
+  const { panel } = mountedPanel();
+  panel.setTabs([
+    { terminalId: "t1", generation: 1, label: "zsh", profileId: "default", status: "running" },
+  ]);
+
+  const tabButton = panel.tabButtons.get("t1");
+  const close = panel.root.querySelector(".terminal-tab-close");
+
+  expect(tabButton).not.toBeNull();
+  expect(close).not.toBeNull();
+  expect(close.parentElement).toBe(tabButton.parentElement);
+  expect(tabButton.contains(close)).toBe(false);
+});
+
+test("enlarging keeps the terminal tab bar and panel controls mounted", async () => {
+  const { panel } = mountedPanel();
+  await panel.expand();
+  panel.setTabs([
+    { terminalId: "t1", generation: 1, label: "zsh", profileId: "default", status: "running" },
+  ]);
+
+  panel.toggleEnlarge();
+
+  expect(panel.root.classList.contains("enlarged")).toBe(true);
+  expect(panel.root.querySelector(".terminal-tab-bar")).not.toBeNull();
+  expect(panel.root.querySelector(".terminal-tab")).not.toBeNull();
+  expect(panel.root.querySelector("[data-terminal-new-tab]")).not.toBeNull();
+  expect(panel.root.querySelector("[data-terminal-enlarge]")).not.toBeNull();
+  expect(panel.root.querySelector("[data-terminal-collapse]")).not.toBeNull();
+  expect(panel.root.querySelector(".terminal-body")).not.toBeNull();
+
+  panel.toggleEnlarge();
+  expect(panel.root.classList.contains("enlarged")).toBe(false);
+});
+
+test("enlarged panel reserves the header offset and controls remain interactive", async () => {
+  const header = document.createElement("div");
+  header.className = "header";
+  document.body.appendChild(header);
+  Object.defineProperty(header, "offsetHeight", { configurable: true, value: 42 });
+  const { panel } = mountedPanel();
+  await panel.expand();
+
+  expect(panel.root.style.getPropertyValue("--terminal-header-offset")).toBe("42px");
+  panel.toggleEnlarge();
+  expect(panel.root.classList.contains("enlarged")).toBe(true);
+  expect(panel.root.style.getPropertyValue("--terminal-header-offset")).toBe("42px");
+
+  panel.enlargeButton.click();
+  expect(panel.root.classList.contains("enlarged")).toBe(false);
+  panel.root.querySelector("[data-terminal-collapse]").click();
+  expect(panel.root.classList.contains("hidden")).toBe(true);
+});
+
 test("closing a running tab requires confirmation", () => {
   const close = vi.fn();
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
@@ -92,12 +147,12 @@ test("closing a running tab requires confirmation", () => {
     { terminalId: "t1", generation: 1, label: "zsh", profileId: "default", status: "running" },
   ]);
 
-  panel.tabButtons.get("t1").querySelector(".terminal-tab-close").click();
+  panel.tabButtons.get("t1").parentElement.querySelector(".terminal-tab-close").click();
 
   expect(confirm).toHaveBeenCalledTimes(1);
   expect(close).not.toHaveBeenCalled();
   confirm.mockReturnValue(true);
-  panel.tabButtons.get("t1").querySelector(".terminal-tab-close").click();
+  panel.tabButtons.get("t1").parentElement.querySelector(".terminal-tab-close").click();
   expect(close).toHaveBeenCalledWith("t1", 1);
   confirm.mockRestore();
 });

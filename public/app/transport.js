@@ -161,6 +161,14 @@ export class WsTransport {
     return this._control("get_cached_models", {});
   }
 
+  loadSessionUiProfile(expectedSessionId) {
+    return this._control("session_ui_profile_load", { expectedSessionId });
+  }
+
+  saveSessionUiProfile(expectedSessionId, profile) {
+    return this._control("session_ui_profile_save", { expectedSessionId, ...profile });
+  }
+
   openInApp(path, { appName = null, command = null } = {}) {
     return this._control("open_in_app", { path, appName, command });
   }

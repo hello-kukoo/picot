@@ -53,6 +53,26 @@ describe("WsTransport", () => {
     expect(ws.sendControl).toHaveBeenCalledWith("fork", { entryId: "entry-123", port: 47822 }, {});
   });
 
+  test("session UI profile methods use native host control commands", async () => {
+    const ws = fakeWsClient();
+    const transport = new WsTransport(ws, {});
+    const profile = { provider: "anthropic", modelId: "claude-sonnet", thinkingLevel: "high" };
+
+    await transport.loadSessionUiProfile("/sessions/a.jsonl");
+    await transport.saveSessionUiProfile("/sessions/a.jsonl", profile);
+
+    expect(ws.sendControl).toHaveBeenCalledWith(
+      "session_ui_profile_load",
+      { expectedSessionId: "/sessions/a.jsonl" },
+      {},
+    );
+    expect(ws.sendControl).toHaveBeenCalledWith(
+      "session_ui_profile_save",
+      { expectedSessionId: "/sessions/a.jsonl", ...profile },
+      {},
+    );
+  });
+
   test("native ops map to their control commands", async () => {
     const ws = fakeWsClient();
     const transport = createTransport({ wsClient: ws, env: { location: { port: "47821" } } });

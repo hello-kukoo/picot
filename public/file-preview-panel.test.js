@@ -496,17 +496,38 @@ describe("FilePreviewPanel", () => {
     p.destroy();
   });
 
-  test("renders the New Side Chat tab action as a localized icon button", () => {
+  test("registerTabBarAction renders an icon button and invokes onClick", () => {
+    const onClick = vi.fn();
     const p = createPanel();
-    p.registerTabBarAction("new-side-chat", {
+    p.registerTabBarAction("demo-action", {
       labelKey: "nav.newSideChat",
       icon: "chat-plus",
-      onClick: vi.fn(),
+      onClick,
     });
-    const action = tabBar.querySelector('[data-action-id="new-side-chat"]');
+
+    const action = tabBar.querySelector('[data-action-id="demo-action"]');
+    expect(action).not.toBeNull();
+    // labelKey is resolved through i18n; the fixture maps nav.newSideChat to a string.
     expect(action.getAttribute("aria-label")).toBe("New Side Chat");
+    // An icon action renders an SVG and carries no visible text label.
     expect(action.querySelector("svg")).not.toBeNull();
     expect(action.textContent.trim()).toBe("");
+    expect(action.disabled).toBe(false);
+
+    action.click();
+    expect(onClick).toHaveBeenCalledTimes(1);
+
+    // Disabling the action both gates the click handler and reflects disabled state.
+    p.setTabBarActionEnabled("demo-action", false, "busy");
+    const updated = tabBar.querySelector('[data-action-id="demo-action"]');
+    expect(updated.disabled).toBe(true);
+    expect(updated.title).toBe("busy");
+    updated.click();
+    expect(onClick).toHaveBeenCalledTimes(1);
+
+    // Hiding the action removes it from the rendered tab bar entirely.
+    p.setTabBarActionVisible("demo-action", false);
+    expect(tabBar.querySelector('[data-action-id="demo-action"]')).toBeNull();
     p.destroy();
   });
 

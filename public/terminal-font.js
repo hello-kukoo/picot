@@ -4,7 +4,7 @@
 export const TERMINAL_FONT_FAMILY = "Picot Mono Nerd";
 export const TERMINAL_FONT_STACK =
   '"Picot Mono Nerd", ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Mono", Consolas, "Liberation Mono", monospace';
-export const DEFAULT_TERMINAL_FONT_SIZE = 14;
+export const DEFAULT_TERMINAL_FONT_SIZE = 15;
 
 /**
  * Resolve both regular and bold faces so xterm's normal and ANSI-bold cells use

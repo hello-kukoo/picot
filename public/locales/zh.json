@@ -21,7 +21,7 @@
     "openInApp": "在 {app} 中打开",
     "sideChat": "侧边聊天",
     "quickChat": "快速聊天",
-    "newSideChat": "新建侧边聊天"
+    "newSideChat": "打开侧边聊天"
   },
   "git": {
     "currentBranch": "当前 Git 分支",
@@ -728,7 +728,6 @@
     "startingQuickChat": "正在启动快速聊天…",
     "tokens": "令牌",
     "sideChat": "侧边聊天",
-    "sideChatLimit": "已达到侧边聊天上限",
     "quickChat": "快速聊天",
     "minimize": "最小化",
     "close": "关闭",

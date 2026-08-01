@@ -4,7 +4,7 @@
 import { EphemeralChatRuntime } from "./ephemeral-chat-runtime.js";
 import { t } from "./i18n.js";
 
-const SIDE_CHAT_QUOTA = 5;
+const SIDE_CHAT_QUOTA = 1;
 const MAX_TITLE_GRAPHEMES = 40;
 
 /** Collapse whitespace and grapheme-safe-truncate a Side Chat title. */
@@ -35,7 +35,7 @@ export class SideChatManager {
     filePreviewPanel,
     confirmDiscard,
     createView,
-    getStartupProfile = () => null,
+    getStartupProfile = async () => null,
   }) {
     this.transport = transport;
     this.filePreviewPanel = filePreviewPanel;
@@ -127,14 +127,6 @@ export class SideChatManager {
       this.filePreviewPanel.activateContent({ kind: "transient", id: last });
     }
     return this.chats.get(last)?.descriptor || null;
-  }
-
-  toggleMostRecent() {
-    return this.openMostRecent();
-  }
-
-  createAdditional() {
-    return this.create();
   }
 
   async close(instanceId) {
@@ -356,10 +348,7 @@ export class SideChatManager {
   }
 
   _updateQuotaUi() {
-    this.filePreviewPanel.setTabBarActionEnabled?.(
-      "new-side-chat",
-      !this._locked && !this._creating && this.chats.size < SIDE_CHAT_QUOTA,
-      this.chats.size >= SIDE_CHAT_QUOTA ? t("ephemeral.sideChatLimit") : "",
-    );
+    // The header button is the sole Side Chat entry point. Keep this method as
+    // a state-refresh hook for callers that rebind or close a runtime.
   }
 }

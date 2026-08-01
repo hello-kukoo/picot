@@ -4,6 +4,16 @@
 
 import { t } from "./i18n.js";
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function createSvgElement(tag, attributes = {}) {
+  const element = document.createElementNS(SVG_NS, tag);
+  for (const [name, value] of Object.entries(attributes)) {
+    element.setAttribute(name, String(value));
+  }
+  return element;
+}
+
 const MIN_HEIGHT_PX = 160;
 const DEFAULT_HEIGHT_RATIO = 0.3;
 const MAX_HEIGHT_RATIO = 0.7;
@@ -38,6 +48,7 @@ export class TerminalPanel {
     this.tabBarEl = null;
     this.bodyEl = null;
     this.resizeObserver = null;
+    this.headerResizeObserver = null;
     this.unsubscribeLocale = null;
     if (subscribeLocale) {
       this.unsubscribeLocale = subscribeLocale(() => this.applyLocale());
@@ -56,22 +67,22 @@ export class TerminalPanel {
     this.toggleEl.setAttribute("aria-pressed", "false");
     this.toggleEl.setAttribute("aria-label", t("terminal.toggle"));
     this.toggleEl.setAttribute("title", t("terminal.toggle"));
-    this.toggleEl.innerHTML = `
-      <svg
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        aria-hidden="true"
-      >
-        <rect x="3.5" y="4.5" width="17" height="15" rx="3" />
-        <path d="M7 15h10" />
-      </svg>
-    `;
+    const toggleIcon = createSvgElement("svg", {
+      width: 16,
+      height: 16,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": 2,
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      "aria-hidden": "true",
+    });
+    toggleIcon.append(
+      createSvgElement("rect", { x: 3.5, y: 4.5, width: 17, height: 15, rx: 3 }),
+      createSvgElement("path", { d: "M7 15h10" }),
+    );
+    this.toggleEl.appendChild(toggleIcon);
     this.toggleEl.addEventListener("click", () => this.toggle());
 
     this.root = document.createElement("section");
@@ -112,8 +123,24 @@ export class TerminalPanel {
     this.enlargeButton.dataset.terminalEnlarge = "";
     this.enlargeButton.title = t("terminal.enlarge");
     this.enlargeButton.setAttribute("aria-label", t("terminal.enlarge"));
-    this.enlargeButton.innerHTML =
-      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
+    const enlargeIcon = createSvgElement("svg", {
+      width: 14,
+      height: 14,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": 2,
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      "aria-hidden": "true",
+    });
+    enlargeIcon.append(
+      createSvgElement("path", { d: "M8 3H5a2 2 0 0 0-2 2v3" }),
+      createSvgElement("path", { d: "M21 8V5a2 2 0 0 0-2-2h-3" }),
+      createSvgElement("path", { d: "M3 16v3a2 2 0 0 0 2 2h3" }),
+      createSvgElement("path", { d: "M16 21h3a2 2 0 0 0 2-2v-3" }),
+    );
+    this.enlargeButton.appendChild(enlargeIcon);
     this.enlargeButton.addEventListener("click", () => this.toggleEnlarge());
 
     const newTabButton = document.createElement("button");
@@ -129,7 +156,22 @@ export class TerminalPanel {
     this.root.append(resizer, this.tabBarEl, this.bodyEl);
     toggleContainer.appendChild(this.toggleEl);
     panelContainer.appendChild(this.root);
+    this._watchHeaderHeight(panelContainer);
     this.applyLocale();
+  }
+
+  _watchHeaderHeight(panelContainer) {
+    const header = panelContainer.querySelector?.(".header");
+    if (!header || !this.root) return;
+    const sync = () => {
+      const height = header.getBoundingClientRect?.().height || header.offsetHeight || 0;
+      this.root.style.setProperty("--terminal-header-offset", `${Math.ceil(height)}px`);
+    };
+    sync();
+    if (typeof ResizeObserver !== "undefined") {
+      this.headerResizeObserver = new ResizeObserver(sync);
+      this.headerResizeObserver.observe(header);
+    }
   }
 
   isExpanded() {
@@ -313,10 +355,12 @@ export class TerminalPanel {
 
   _renderTabBar() {
     if (!this.tabBarEl) return;
-    for (const btn of this.tabButtons.values()) btn.remove();
+    for (const btn of this.tabButtons.values()) btn.parentElement?.remove();
     this.tabButtons.clear();
     const newTabBtn = this.tabBarEl.querySelector("[data-terminal-new-tab]");
     for (const tab of this.tabs) {
+      const item = document.createElement("div");
+      item.className = "terminal-tab-item";
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "terminal-tab";
@@ -324,6 +368,7 @@ export class TerminalPanel {
       btn.setAttribute("role", "tab");
       const active = tab.terminalId === this.activeTerminalId;
       btn.classList.toggle("active", active);
+      item.classList.toggle("active", active);
       btn.setAttribute("aria-selected", active ? "true" : "false");
       btn.tabIndex = active ? 0 : -1;
       btn.addEventListener("keydown", (event) => this._tabKeydown(event, tab.terminalId));
@@ -342,7 +387,6 @@ export class TerminalPanel {
         if (live && !window.confirm(`Close ${tab.label || "terminal"}?`)) return;
         this.client?.close?.(tab.terminalId, tab.generation);
       });
-      btn.appendChild(close);
       const restart = document.createElement("span");
       restart.className = "terminal-tab-restart";
       restart.textContent = "↻";
@@ -351,13 +395,13 @@ export class TerminalPanel {
         event.stopPropagation();
         this.client?.restart?.(tab.terminalId, tab.generation);
       });
-      btn.appendChild(restart);
       btn.addEventListener("click", () => this.setActiveTerminalId(tab.terminalId));
+      item.append(btn, close, restart);
       this.tabButtons.set(tab.terminalId, btn);
       if (newTabBtn) {
-        this.tabBarEl.insertBefore(btn, newTabBtn);
+        this.tabBarEl.insertBefore(item, newTabBtn);
       } else {
-        this.tabBarEl.appendChild(btn);
+        this.tabBarEl.appendChild(item);
       }
     }
     this._applyActiveContainer();
@@ -371,6 +415,9 @@ export class TerminalPanel {
       const active = id === terminalId;
       btn.classList.toggle("active", active);
       btn.setAttribute("aria-selected", active ? "true" : "false");
+      // Mirror active onto the wrapping item so CSS can target close/restart
+      // via a robust descendant selector instead of a fragile sibling one.
+      btn.parentElement?.classList.toggle("active", active);
     }
     this._applyActiveContainer();
     // The newly-shown xterm must refit to its container and take focus so the
@@ -409,9 +456,11 @@ export class TerminalPanel {
   destroy() {
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
+    this.headerResizeObserver?.disconnect();
+    this.headerResizeObserver = null;
     this.unsubscribeLocale?.();
     this.unsubscribeLocale = null;
-    for (const btn of this.tabButtons.values()) btn.remove();
+    for (const btn of this.tabButtons.values()) btn.parentElement?.remove();
     for (const el of this.tabContainers.values()) el.remove();
     this.tabButtons.clear();
     this.tabContainers.clear();
