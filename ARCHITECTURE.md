@@ -294,7 +294,9 @@ Settings → Skills 固定为 **Discovered / Install / Packages**。每个页签
   `settings.json.packages[]` 推导 package roots、Pi-compatible identity、
   `autoload:false` inheritance 和 manifest candidates。它绝不泛扫 npm/git/extensions，
   不执行 package install/update，也不计算或编辑 `packages[].skills` 的 effective
-  enablement；UI 明确显示为 read-only **Bundled candidates**。
+  enablement；UI 明确显示为 read-only **Bundled candidates**。Inventory 只返回实际贡献 skill 的
+  package（`candidates.length > 0`）——未安装、空 `pi.skills` 清单或无 `skills/` 目录的
+  package 一律过滤掉，不出现在 UI。
 - **Install**：浏览器先以 native `broker_control` 调用 `pick_skill_source`，只得到
   opaque `sourceId`。`SkillSourceRegistry` 记录 canonical directory，但将 handle
   绑定 owner、window label、canonical workspace、primary port、workspace generation；
@@ -310,12 +312,27 @@ Settings → Skills 固定为 **Discovered / Install / Packages**。每个页签
   要求 app-global `PI_STUDIO_SKILL_INSTALL_SECRET` 的 constant-time bearer；这个
   32-byte secret 在 `PiManager::new()` 创建并注入每个 Pi process，永不日志化、序列化
   或暴露给浏览器。LAN/mobile/Remote 和任一 ephemeral process 一律拒绝。
+- **Install endpoints are loopback-only.** 两条安装路由必须登记在
+  `extensions/request-access.ts` 的 `LOOPBACK_ONLY_ROUTES`，作为网络边界本身；
+  Bearer secret 是纵深防御第二因子，不能替代边界。scan 能递归读取任意本地目录，
+  install 能写入 settings，绝不可暴露在 LAN surface。
 - **Install consistency**：scan 的 candidate/group ID 是以 app-global secret HMAC
   的 opaque value；scanRevision 包含 canonical source、canonical candidates、
-  `SKILL.md` content digest、frontmatter identity 与 group membership。确认写入前在
-  `${settingsPath}.lock` 内重新扫描并比对 revision，stale/invalid source 零写入；
-  所有缺失 plain path 只作一次 temp-file + rename 原子更新。成功（包括 idempotent
-  no-op）后才 consume handle，配置依然只在下一 Pi session/process 生效。
+  `SKILL.md` content digest、frontmatter identity 与 group membership。昂贵的 rescan
+  （递归遍历 + 逐文件内容哈希）在 settings 锁外执行，锁内仅做 read→preview→merge→
+  atomic write；内容寻址的 revision 检查仍拒绝 scan 与 install 之间源变动的 TOCTOU。
+  stale/invalid source 零写入；所有缺失 plain path 只作一次 temp-file + rename
+  原子更新。成功（包括 idempotent no-op）后才 consume handle，配置依然只在下一 Pi
+  session/process 生效。
+- **Manifest `pi.skills` 空数组是显式禁用，不是 conventional fallback。**
+  `package-skill-inventory.ts` 必须区分三种情况：`pi.skills === undefined` 才
+  fallback 到 `<packageRoot>/skills/`；`Array.isArray(pi.skills)`（含空数组）严格
+  按清单处理（空数组 = 零 candidate）；非数组类型记录诊断后保守 fallback。这与 Pi
+  `collectDefaultResources` 的 truthiness 语义一致。
+- **Claude root 幂等用 canonical（realpath）比较。** `detectConfiguredForPi` 与
+  `mutateClaudeSkillRoot` 判断既有 plain entry 是否指向同一 root 时，必须对双方
+  都走 `canonicalizeExistingPath`（realpath 成功解析 symlink，失败回退到 lexical
+  resolve）；否则不同 symlink spelling 会被误判为未配置而重复写入。
 
 ### `public/` —— vanilla-JS WebView 前端
 
