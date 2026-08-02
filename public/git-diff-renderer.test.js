@@ -70,4 +70,28 @@ describe("git diff renderer", () => {
     createGitDiffRenderer({ rawPatch: "raw", truncated: true }).mount(container);
     expect(container.querySelector("pre")?.textContent).toBe("raw");
   });
+
+  it("uses shared logical grid rows when line wrapping is enabled", () => {
+    const container = document.createElement("div");
+    createGitDiffRenderer({
+      patch: "@@ -1,2 +1,2 @@\n-a very long original line\n-b\n+a very long updated line\n+c",
+      wrapLines: true,
+    }).mount(container);
+
+    const rows = container.querySelectorAll(".git-diff-row");
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.querySelectorAll(".git-diff-cell")).toHaveLength(2);
+    }
+    expect(container.querySelector(".git-diff-columns")?.classList.contains("wrap-lines")).toBe(
+      true,
+    );
+  });
+
+  it("keeps the two independent columns when line wrapping is disabled", () => {
+    const container = document.createElement("div");
+    createGitDiffRenderer({ patch: "@@ -1 +1 @@\n-old\n+new", wrapLines: false }).mount(container);
+    expect(container.querySelectorAll(".git-diff-row")).toHaveLength(0);
+    expect(container.querySelectorAll(".git-diff-column")).toHaveLength(2);
+  });
 });

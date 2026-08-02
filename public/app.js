@@ -5,6 +5,7 @@
  * Main App - Ties everything together
  */
 
+import { createCompactCoordinator } from "./compact-coordinator.js";
 import { repaintContextViz, setupContextViz } from "./ui/context-viz.js";
 import "./cost/dashboard.js";
 import { StateManager } from "./app/state.js";
@@ -832,6 +833,13 @@ let unreadCount = 0;
 let isScrolledUp = false;
 let lastSentMessage = null; // Track to avoid duplicate rendering in mirror mode
 let lastUsage = null; // Full usage object for context visualiser
+let contextVizController = null;
+const compactCoordinator = createCompactCoordinator({
+  // An RPC acknowledgement only confirms dispatch. Keep status ownership with
+  // the lifecycle coordinator rather than briefly reporting it as completed.
+  send: () => rpcCommand({ type: "compact" }, undefined, true),
+  onState: () => syncCompactControls(),
+});
 let mirrorActiveSessionFile = null; // The live session file path from the TUI
 let viewingActiveSession = true; // Whether we're viewing the live session or a historical one
 let isMirrorMode = false; // Set when mirror_sync received
@@ -2267,6 +2275,7 @@ function handleBackgroundRPCEvent(sessionFile, event) {
 }
 
 function handleCompactionStart() {
+  compactCoordinator.started();
   const el = document.createElement("div");
   el.className = "system-message compaction-message";
   el.id = "compaction-indicator";
@@ -2378,17 +2387,31 @@ async function updateSuperAgentTask(port, taskId, updateTask) {
 }
 
 function handleCompactionEnd(event) {
+  const succeeded = event.success !== false && !event.error;
+  compactCoordinator.ended({ success: succeeded, error: event.error });
   const indicator = document.getElementById("compaction-indicator");
-  if (indicator) {
-    indicator.textContent = event.summary
-      ? t("status.compactedWithSummary", { summary: event.summary })
-      : t("status.compacted");
-    indicator.classList.add("compaction-done");
+  if (succeeded) {
+    if (indicator) {
+      indicator.textContent = event.summary
+        ? t("status.compactedWithSummary", { summary: event.summary })
+        : t("status.compacted");
+      indicator.classList.add("compaction-done");
+    }
+    // Pi has replaced its context; until it supplies usage again, the old
+    // number is provably stale and must not remain visible.
+    lastInputTokens = 0;
+    lastUsage = null;
+    updateTokenUsage();
+    return;
   }
-  // Reset token tracking — next message will update
-  lastInputTokens = 0;
-  updateTokenUsage();
-  hideCompactButton();
+
+  const error = event.error || event.summary || t("errors.compactionFailed");
+  if (indicator) {
+    indicator.textContent = t("errors.compactionFailedDetail", { error });
+    indicator.classList.add("compaction-done");
+  } else {
+    messageRenderer.renderError(t("errors.compactionFailedDetail", { error }));
+  }
 }
 
 /**
@@ -2996,7 +3019,7 @@ const commands = [
     icon: "🗜️",
     label: t("input.compact"),
     desc: t("input.compactDesc"),
-    action: () => rpcCommand({ type: "compact" }, t("status.compacting")),
+    action: () => requestCompact(),
   },
   {
     icon: "📋",
@@ -4381,7 +4404,9 @@ function handleMirrorSync(data) {
   }
   void applySessionUiProfile(data.sessionFile || null);
 
-  // Clear and render message history
+  // Clear and render message history. A lifecycle event from the previous
+  // route must not leave the newly selected session's compact controls busy.
+  compactCoordinator.reset();
   clearConversationRenderers();
   sessionTotalCost = 0;
   lastInputTokens = 0;
@@ -4610,7 +4635,16 @@ function updateCostDisplay() {
 }
 
 function updateTokenUsage() {
-  if (lastInputTokens > 0 && contextWindowSize > 0) {
+  if (lastInputTokens <= 0) {
+    tokenUsageEl.replaceChildren();
+    tokenUsageEl.removeAttribute("title");
+    tokenUsageEl.classList.remove("visible", "warning", "critical");
+    hideCompactButton();
+    contextVizController?.invalidateUsage();
+    return;
+  }
+
+  if (contextWindowSize > 0) {
     const pct = Math.round((lastInputTokens / contextWindowSize) * 100);
     tokenUsageEl.textContent = `${pct}%`;
     tokenUsageEl.classList.add("visible");
@@ -4629,27 +4663,50 @@ function updateTokenUsage() {
     } else {
       hideCompactButton();
     }
-  } else if (lastInputTokens > 0) {
-    // No context window info yet, just show raw tokens
+  } else {
+    // No context window info yet, just show raw tokens and suppress the
+    // threshold-based action because no percentage can be computed.
     tokenUsageEl.textContent = `${(lastInputTokens / 1000).toFixed(1)}k`;
     tokenUsageEl.classList.add("visible");
     tokenUsageEl.classList.remove("warning", "critical");
+    hideCompactButton();
   }
+
+  // Keep an open context popover in sync with fresh usage so the breakdown
+  // does not freeze on the snapshot taken when the popover was opened.
+  const popover = document.getElementById("context-viz");
+  if (popover && !popover.classList.contains("hidden")) contextVizController?.sync();
+}
+
+function requestCompact() {
+  void compactCoordinator.request().then((accepted) => {
+    statusText.textContent = accepted ? t("status.compacting") : t("status.failed");
+  });
+}
+
+function syncCompactControls() {
+  const btn = document.getElementById("compact-btn");
+  if (btn) {
+    const busy = compactCoordinator.busy;
+    btn.disabled = busy;
+    btn.textContent = busy ? t("status.compacting") : t("misc.compact");
+  }
+  contextVizController?.sync();
 }
 
 function showCompactButton() {
-  if (document.getElementById("compact-btn")) return;
+  const existing = document.getElementById("compact-btn");
+  if (existing) {
+    syncCompactControls();
+    return;
+  }
   const btn = document.createElement("button");
   btn.id = "compact-btn";
   btn.className = "compact-btn";
-  btn.textContent = t("misc.compact");
   btn.title = t("misc.compactTitle");
-  btn.addEventListener("click", () => {
-    rpcCommand({ type: "compact" }, t("status.compacting"));
-    hideCompactButton();
-  });
-  // Insert next to token usage in header
+  btn.addEventListener("click", () => requestCompact());
   tokenUsageEl.parentElement.insertBefore(btn, tokenUsageEl.nextSibling);
+  syncCompactControls();
 }
 
 function hideCompactButton() {
@@ -5731,11 +5788,7 @@ setupSkillsTabShell({
   },
 });
 
-// Expose rpcCommand for modules that need to send Pi commands without a
-// circular import (e.g. the context-viz compact button).
-window.__picotRpcCommand = rpcCommand;
-
-setupContextViz({
+contextVizController = setupContextViz({
   tokenUsageEl,
   contextViz: document.getElementById("context-viz"),
   contextBar: document.getElementById("context-bar"),
@@ -5744,6 +5797,8 @@ setupContextViz({
   contextVizTotal: document.getElementById("context-viz-total"),
   getUsage: () => lastUsage,
   getContextWindowSize: () => contextWindowSize,
+  requestCompact,
+  getCompactState: () => compactCoordinator.state,
 });
 
 setupVoiceInput({

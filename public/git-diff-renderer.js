@@ -53,13 +53,23 @@ function parsePatch(patch) {
   return rows.slice(0, MAX_ALIGNED_ROWS);
 }
 
+function createDiffCell(cell) {
+  const el = document.createElement("div");
+  el.className = `git-diff-cell ${cell?.kind || "blank"}`;
+  const gutter = document.createElement("span");
+  gutter.className = "git-diff-gutter";
+  gutter.textContent = cell?.line === null || cell?.line === undefined ? "" : String(cell.line);
+  el.append(gutter, document.createTextNode(cell?.text || ""));
+  return el;
+}
+
 export function createGitDiffRenderer(initialDescriptor = {}) {
   let descriptor = initialDescriptor;
   let root;
   const render = (container) => {
     root = container;
     container.replaceChildren();
-    container.className = "git-diff-renderer";
+    container.className = `git-diff-renderer${descriptor.wrapLines ? " wrap-lines" : ""}`;
     const toolbar = document.createElement("header");
     toolbar.className = "git-diff-toolbar";
     const path = document.createElement("span");
@@ -96,7 +106,29 @@ export function createGitDiffRenderer(initialDescriptor = {}) {
       return;
     }
     const columns = document.createElement("div");
-    columns.className = "git-diff-columns";
+    columns.className = `git-diff-columns${descriptor.wrapLines ? " wrap-lines" : ""}`;
+    if (descriptor.wrapLines) {
+      const headers = document.createElement("div");
+      headers.className = "git-diff-column-headers";
+      for (const label of ["Original", "Modified"]) {
+        const header = document.createElement("div");
+        header.className = "git-diff-column-header";
+        header.textContent = label === "Original" ? t("git.diffOriginal") : t("git.diffModified");
+        headers.append(header);
+      }
+      columns.append(headers);
+      for (const row of rows) {
+        const rowEl = document.createElement("div");
+        rowEl.className = "git-diff-row";
+        for (const cell of [row.original, row.current]) {
+          rowEl.append(createDiffCell(cell));
+        }
+        columns.append(rowEl);
+      }
+      container.append(columns);
+      return;
+    }
+
     const original = document.createElement("div");
     const current = document.createElement("div");
     original.className = "git-diff-column git-diff-original";
@@ -111,19 +143,8 @@ export function createGitDiffRenderer(initialDescriptor = {}) {
       column.append(header);
     }
     for (const row of rows) {
-      for (const [column, cell] of [
-        [original, row.original],
-        [current, row.current],
-      ]) {
-        const el = document.createElement("div");
-        el.className = `git-diff-cell ${cell?.kind || "blank"}`;
-        const gutter = document.createElement("span");
-        gutter.className = "git-diff-gutter";
-        gutter.textContent =
-          cell?.line === null || cell?.line === undefined ? "" : String(cell.line);
-        el.append(gutter, document.createTextNode(cell?.text || ""));
-        column.append(el);
-      }
+      original.append(createDiffCell(row.original));
+      current.append(createDiffCell(row.current));
     }
     let syncing = false;
     let syncFrame = null;
@@ -144,7 +165,7 @@ export function createGitDiffRenderer(initialDescriptor = {}) {
   return {
     mount: render,
     update(next) {
-      descriptor = next || descriptor;
+      descriptor = { ...descriptor, ...(next || {}) };
       if (root) render(root);
     },
     destroy() {

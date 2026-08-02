@@ -27,8 +27,10 @@ test("first native expansion lazily creates one default tab", async () => {
   const { panel, client } = mountedPanel();
   expect(panel.toggleEl.classList.contains("panel-toggle-btn")).toBe(true);
   expect(panel.toggleEl.getAttribute("aria-label")).toBe("terminal.toggle");
-  expect(panel.toggleEl.querySelector('rect[x="3.5"]')).not.toBeNull();
-  expect(panel.toggleEl.querySelector('path[d="M7 15h10"]')).not.toBeNull();
+  expect(
+    panel.toggleEl.querySelector('svg[viewBox="0 0 24 24"][aria-hidden="true"]'),
+  ).not.toBeNull();
+  expect(panel.toggleEl.querySelector('svg[stroke="currentColor"]')).not.toBeNull();
   expect(panel.toggleEl.dataset.terminalCount).toBeUndefined();
   expect(panel.isExpanded()).toBe(false);
   await panel.expand();

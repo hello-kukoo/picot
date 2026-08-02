@@ -34,6 +34,8 @@ beforeEach(async () => {
               saved: "Saved",
               saving: "Saving…",
               unsupportedBinary: "Unsupported binary",
+              preview: "Preview",
+              edit: "Edit",
               markitdown: {
                 pythonMissing: "Install Python 3.10 or later to preview this file.",
                 pythonTooOld: "Python {version} is too old. Install Python 3.10 or later.",
@@ -104,7 +106,6 @@ beforeEach(async () => {
   for (const id of [
     "file-preview-toolbar-toggle",
     "file-preview-mode-preview",
-    "file-preview-mode-edit",
     "file-preview-save",
     "file-preview-reload",
     "file-preview-search",
@@ -120,6 +121,12 @@ beforeEach(async () => {
   goToLineInput.id = "file-preview-go-to-line-input";
   goToLineInput.className = "hidden";
   document.body.appendChild(goToLineInput);
+  for (const id of ["file-preview-wrap", "file-preview-autosave"]) {
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.id = id;
+    document.body.appendChild(checkbox);
+  }
 });
 
 afterEach(() => {
@@ -166,7 +173,7 @@ describe("FilePreviewPanel", () => {
       renderAs: "markdown",
     });
     expect(content.querySelector(".file-markdown-preview")).not.toBeNull();
-    expect(document.getElementById("file-preview-mode-edit").disabled).toBe(true);
+    expect(document.getElementById("file-preview-mode-preview").disabled).toBe(true);
     p.destroy();
   });
 
@@ -393,15 +400,66 @@ describe("FilePreviewPanel", () => {
     p.destroy();
   });
 
-  test("edit control switches an editable text tab into edit mode", async () => {
+  test("opens an editable text tab directly in edit mode", async () => {
     const p = createPanel();
     await p.openFile("/test/workspace/main.js");
 
-    document.getElementById("file-preview-mode-edit").click();
-    await Promise.resolve();
-
     expect(p.state.getActiveTab()?.mode).toBe("edit");
     expect(content.querySelector(".cm-content")?.getAttribute("contenteditable")).toBe("true");
+    p.destroy();
+  });
+
+  test("opens editor controls and enables wrapping by default for editable files", async () => {
+    const p = createPanel();
+    await p.openFile("/test/workspace/main.js");
+
+    expect(p.toolbarOpen).toBe(true);
+    expect(p.wrapLines).toBe(true);
+    expect(document.getElementById("file-preview-toolbar").classList.contains("hidden")).toBe(
+      false,
+    );
+    p.destroy();
+  });
+
+  test("preserves an explicit disabled line-wrap preference", async () => {
+    const values = new Map([["picot-preview-wrap", "false"]]);
+    const storage = {
+      getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, String(value)),
+      removeItem: (key) => values.delete(key),
+    };
+    const p = createPanel({ storage });
+    await p.openFile("/test/workspace/main.js");
+
+    expect(p.wrapLines).toBe(false);
+    p.destroy();
+  });
+
+  test("shows the active file path relative to its workspace", async () => {
+    const pathBar = document.createElement("div");
+    pathBar.id = "file-preview-path";
+    document.body.appendChild(pathBar);
+    const p = createPanel();
+    await p.setWorkspaceRoot("/test/workspace");
+    await p.openFile("/test/workspace/src/main.js");
+
+    expect(pathBar.textContent).toBe("src/main.js");
+    expect(pathBar.title).toBe("src/main.js");
+    p.destroy();
+  });
+
+  test("uses one icon button to switch editable Markdown between preview and edit", async () => {
+    const p = createPanel();
+    await p.openFile("/test/workspace/README.md");
+    const mode = document.getElementById("file-preview-mode-preview");
+
+    expect(p.state.getActiveTab()?.mode).toBe("preview");
+    expect(mode.getAttribute("aria-pressed")).toBe("false");
+    expect(mode.querySelector("svg")).not.toBeNull();
+    mode.click();
+    await Promise.resolve();
+    expect(p.state.getActiveTab()?.mode).toBe("edit");
+    expect(mode.getAttribute("aria-pressed")).toBe("true");
     p.destroy();
   });
 
@@ -903,7 +961,7 @@ describe("FilePreviewPanel diff tabs", () => {
     p.destroy();
   });
 
-  test("hides file-only controls while a diff is active", async () => {
+  test("shows the Wrap control but hides file-only controls while a diff is active", async () => {
     const p = createPanel();
     await p.setWorkspaceRoot("/ws/a");
     p.toolbarOpen = true;
@@ -915,8 +973,26 @@ describe("FilePreviewPanel diff tabs", () => {
     });
 
     expect(p.controls.toolbarToggle.classList.contains("hidden")).toBe(true);
-    expect(p.controls.toolbar.classList.contains("hidden")).toBe(true);
+    expect(p.controls.toolbar.classList.contains("hidden")).toBe(false);
+    expect(p.controls.wrap.checked).toBe(true);
+    expect(p.controls.wrap.classList.contains("hidden")).toBe(false);
     expect(p.controls.openDesktop.classList.contains("hidden")).toBe(true);
+    p.destroy();
+  });
+
+  test("updates the active diff when its Wrap preference changes", async () => {
+    const p = createPanel();
+    await p.setWorkspaceRoot("/ws/a");
+    p.openDiff({
+      comparison: "staged",
+      displayPath: "a.js",
+      rawPatch: "@@ -1 +1 @@\n-old\n+new",
+    });
+
+    p.controls.wrap.checked = false;
+    p.controls.wrap.dispatchEvent(new Event("change"));
+    expect(content.querySelectorAll(".git-diff-row")).toHaveLength(0);
+    expect(content.querySelectorAll(".git-diff-column")).toHaveLength(2);
     p.destroy();
   });
 

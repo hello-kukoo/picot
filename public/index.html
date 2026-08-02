@@ -885,70 +885,52 @@
               aria-label="Editor controls"
               data-i18n-aria-label="files.preview.showControls"
             >
-              <fieldset
-                class="file-preview-mode"
-                aria-label="View mode"
-                data-i18n-aria-label="files.preview.mode"
-              >
-                <button
-                  type="button"
-                  id="file-preview-mode-preview"
-                  data-i18n="files.preview.preview"
-                >
-                  Preview
-                </button>
-                <button
-                  type="button"
-                  id="file-preview-mode-edit"
-                  data-i18n="files.preview.edit"
-                >
-                  Edit
-                </button>
-              </fieldset>
               <button
                 type="button"
+                class="icon-btn"
+                id="file-preview-mode-preview"
+                title="Edit"
+                data-i18n-title="files.preview.edit"
+                aria-label="Edit"
+                data-i18n-aria-label="files.preview.edit"
+                aria-pressed="false"
+              ></button>
+              <button
+                type="button"
+                class="icon-btn"
                 id="file-preview-save"
-                title="Save"
+                title="Save file"
                 data-i18n-title="files.preview.save"
-                aria-label="Save"
+                aria-label="Save file"
                 data-i18n-aria-label="files.preview.save"
-                data-i18n="files.preview.save"
-              >
-                Save
-              </button>
+              ></button>
               <button
                 type="button"
+                class="icon-btn"
                 id="file-preview-reload"
-                title="Reload from disk"
+                title="Reload"
                 data-i18n-title="files.preview.conflictReload"
-                aria-label="Reload from disk"
+                aria-label="Reload"
                 data-i18n-aria-label="files.preview.conflictReload"
-                data-i18n="files.preview.conflictReload"
-              >
-                Reload
-              </button>
+              ></button>
               <button
                 type="button"
+                class="icon-btn"
                 id="file-preview-search"
                 title="Find"
                 data-i18n-title="files.preview.find"
                 aria-label="Find"
                 data-i18n-aria-label="files.preview.find"
-                data-i18n="files.preview.find"
-              >
-                Find
-              </button>
+              ></button>
               <button
                 type="button"
+                class="icon-btn"
                 id="file-preview-go-to-line"
                 title="Go to line"
                 data-i18n-title="files.preview.goToLine"
                 aria-label="Go to line"
                 data-i18n-aria-label="files.preview.goToLine"
-                data-i18n="files.preview.goToLine"
-              >
-                Line
-              </button>
+              ></button>
               <input
                 type="text"
                 class="file-preview-go-to-line-input hidden"
@@ -962,15 +944,13 @@
               />
               <button
                 type="button"
+                class="icon-btn"
                 id="file-preview-copy"
-                title="Copy all"
+                title="Copy file content"
                 data-i18n-title="files.preview.copyContent"
-                aria-label="Copy all"
+                aria-label="Copy file content"
                 data-i18n-aria-label="files.preview.copyContent"
-                data-i18n="files.preview.copyContent"
-              >
-                Copy
-              </button>
+              ></button>
               <label class="file-preview-toolbar-check"
                 ><input type="checkbox" id="file-preview-wrap" /><span
                   data-i18n="files.preview.lineWrap"
@@ -989,6 +969,7 @@
                 aria-live="polite"
               ></span>
             </div>
+            <div class="file-preview-path hidden" id="file-preview-path"></div>
             <div class="file-preview-content" id="file-preview-content"></div>
           </section>
 

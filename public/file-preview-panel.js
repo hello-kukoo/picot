@@ -15,70 +15,19 @@ import { createFileRenderer } from "./file-preview-renderers.js";
 import { FileTabState } from "./file-tab-state.js";
 import { createGitDiffRenderer } from "./git-diff-renderer.js";
 import { onLocaleChange, t } from "./i18n.js";
-import { normalizeLocalPath } from "./workspace/path-utils.js";
+import { createIcon, setButtonIcon } from "./icons.js";
+import { normalizeLocalPath, relativeLocalPath } from "./workspace/path-utils.js";
 
 const AUTO_SAVE_DELAY = 1500;
 const DEFAULT_PANEL_RATIO = 0.42;
 const MIN_PANEL_WIDTH = 320;
-const SVG_NS = "http://www.w3.org/2000/svg";
 
 function appendCloseIcon(button) {
-  const svg = document.createElementNS(SVG_NS, "svg");
-  for (const [name, value] of Object.entries({
-    "aria-hidden": "true",
-    width: "10",
-    height: "10",
-    viewBox: "0 0 24 24",
-    fill: "none",
-    stroke: "currentColor",
-    "stroke-width": "2.5",
-    "stroke-linecap": "round",
-  })) {
-    svg.setAttribute(name, value);
-  }
-  const firstLine = document.createElementNS(SVG_NS, "line");
-  firstLine.setAttribute("x1", "18");
-  firstLine.setAttribute("y1", "6");
-  firstLine.setAttribute("x2", "6");
-  firstLine.setAttribute("y2", "18");
-  const secondLine = document.createElementNS(SVG_NS, "line");
-  secondLine.setAttribute("x1", "6");
-  secondLine.setAttribute("y1", "6");
-  secondLine.setAttribute("x2", "18");
-  secondLine.setAttribute("y2", "18");
-  svg.append(firstLine, secondLine);
-  button.appendChild(svg);
+  setButtonIcon(button, "x", { size: 10 });
 }
 
 function appendTabBarActionIcon(button, icon) {
-  if (icon !== "chat-plus") return;
-  const svg = document.createElementNS(SVG_NS, "svg");
-  for (const [name, value] of Object.entries({
-    "aria-hidden": "true",
-    width: "14",
-    height: "14",
-    viewBox: "0 0 24 24",
-    fill: "none",
-    stroke: "currentColor",
-    "stroke-width": "2",
-    "stroke-linecap": "round",
-    "stroke-linejoin": "round",
-  })) {
-    svg.setAttribute(name, value);
-  }
-  for (const d of [
-    "M12 19v-6",
-    "M9 8V2",
-    "M15 8V2",
-    "M18 8v5a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V8Z",
-    "M19 18h4",
-    "m-2-2 2 2-2 2",
-  ]) {
-    const path = document.createElementNS(SVG_NS, "path");
-    path.setAttribute("d", d);
-    svg.appendChild(path);
-  }
-  button.appendChild(svg);
+  if (icon === "chat-plus") button.appendChild(createIcon("message-square-plus", { size: 14 }));
 }
 
 export class FilePreviewPanel {
@@ -237,6 +186,7 @@ export class FilePreviewPanel {
       metadata.mode ??
       (classifyFilePath(normalizedPath).contentType === "text" ? "edit" : "preview");
     const tab = this.state.openFile(normalizedPath, { ...metadata, mode: defaultMode });
+    this._openToolbarForEditorTab(tab);
     this._openPanel();
     this._renderTabBar();
     await this._loadTabContent(tab);
@@ -296,7 +246,7 @@ export class FilePreviewPanel {
     this._deactivateCurrent();
     this.activeContent = { kind: "diff", id };
     this._destroyRenderer();
-    this.currentRenderer = createGitDiffRenderer(descriptor);
+    this.currentRenderer = createGitDiffRenderer({ ...descriptor, wrapLines: this.wrapLines });
     this.currentRenderer.mount(this.content);
     this._openPanel();
     this._renderTabBar();
@@ -1304,8 +1254,8 @@ export class FilePreviewPanel {
     this.controls = {
       toolbar: document.getElementById("file-preview-toolbar"),
       toolbarToggle: document.getElementById("file-preview-toolbar-toggle"),
+      path: document.getElementById("file-preview-path"),
       preview: document.getElementById("file-preview-mode-preview"),
-      edit: document.getElementById("file-preview-mode-edit"),
       save: document.getElementById("file-preview-save"),
       reload: document.getElementById("file-preview-reload"),
       search: document.getElementById("file-preview-search"),
@@ -1318,6 +1268,19 @@ export class FilePreviewPanel {
       status: document.getElementById("file-preview-status"),
     };
 
+    for (const [control, icon] of [
+      [this.controls.preview, "pencil"],
+      [this.controls.save, "save"],
+      [this.controls.reload, "refresh"],
+      [this.controls.search, "search"],
+      [this.controls.goToLine, "list"],
+      [this.controls.copy, "copy"],
+      [this.controls.openDesktop, "external-link"],
+      [this.controls.toolbarToggle, "sliders"],
+    ]) {
+      setButtonIcon(control, icon, { size: 14 });
+    }
+
     this._listen(document.getElementById("file-preview-enlarge"), "click", () => this.enlarge());
     this._listen(document.getElementById("file-preview-collapse"), "click", () => this.collapse());
     this._listen(document.getElementById("file-preview-close"), "click", () => {
@@ -1327,8 +1290,10 @@ export class FilePreviewPanel {
       this.toolbarOpen = !this.toolbarOpen;
       this._renderToolbar();
     });
-    this._listen(this.controls.preview, "click", () => void this._setMode("preview"));
-    this._listen(this.controls.edit, "click", () => void this._setMode("edit"));
+    this._listen(this.controls.preview, "click", () => {
+      const mode = this.state.getActiveTab()?.mode === "edit" ? "preview" : "edit";
+      void this._setMode(mode);
+    });
     this._listen(this.controls.save, "click", () => {
       const tab = this.state.getActiveTab();
       if (tab) void this._saveTab(tab.id);
@@ -1362,6 +1327,8 @@ export class FilePreviewPanel {
     this._listen(this.controls.wrap, "change", (event) => {
       this.wrapLines = Boolean(event.target.checked);
       this.currentRenderer?.setWrapLines?.(this.wrapLines);
+      if (this.activeContent?.kind === "diff")
+        this.currentRenderer?.update?.({ wrapLines: this.wrapLines });
       this._savePreferences();
       this._renderToolbar();
     });
@@ -1416,16 +1383,30 @@ export class FilePreviewPanel {
     }, 1200);
   }
 
+  _openToolbarForEditorTab(tab) {
+    const classification = tab && classifyFilePath(tab.filePath);
+    // The initial open occurs before the bounded content request has filled
+    // `tab.content`/`editable`; classification is the only safe signal here.
+    if (["markdown", "text"].includes(classification?.contentType)) this.toolbarOpen = true;
+  }
+
   _renderToolbar() {
     const controls = this.controls;
     if (!controls) return;
     const isDiff = this.activeContent?.kind === "diff";
-    controls.toolbar?.classList.toggle("hidden", isDiff || !this.toolbarOpen);
     controls.toolbarToggle?.classList.toggle("hidden", isDiff);
     controls.toolbarToggle?.setAttribute("aria-expanded", String(!isDiff && this.toolbarOpen));
+    if (isDiff) this.currentRenderer?.update?.({ wrapLines: this.wrapLines });
 
     const tab = this.state.getActiveTab();
     const editable = this._isEditable(tab);
+    const relativePath = tab ? relativeLocalPath(tab.filePath, this.workspaceRoot) : null;
+    if (controls.path) {
+      const displayPath = relativePath ?? normalizeLocalPath(tab?.filePath || "");
+      controls.path.textContent = displayPath;
+      controls.path.title = displayPath;
+      controls.path.classList.toggle("hidden", isDiff || !tab || !displayPath);
+    }
     const hasText = typeof tab?.content === "string" && !tab?.isBinary;
     const contentType = tab ? classifyFilePath(tab.filePath).contentType : "";
     const hasEditor =
@@ -1434,16 +1415,35 @@ export class FilePreviewPanel {
       contentType !== "pdf" &&
       contentType !== "convertible" &&
       (contentType !== "markdown" || tab.mode === "edit");
+    const editorToolbarVisible = isDiff || (editable && ["markdown", "text"].includes(contentType));
+    controls.toolbar?.classList.toggle(
+      "hidden",
+      !editorToolbarVisible || (!isDiff && !this.toolbarOpen),
+    );
+
+    for (const control of [
+      controls.preview,
+      controls.save,
+      controls.reload,
+      controls.search,
+      controls.goToLine,
+      controls.goToLineInput,
+      controls.copy,
+      controls.openDesktop,
+      controls.autoSave,
+    ]) {
+      control?.classList.toggle("hidden", isDiff);
+    }
 
     if (controls.preview) {
-      controls.preview.disabled = !hasText;
-      controls.preview.classList.toggle("active", tab?.mode !== "edit");
-      controls.preview.setAttribute("aria-pressed", String(tab?.mode !== "edit"));
-    }
-    if (controls.edit) {
-      controls.edit.disabled = !editable;
-      controls.edit.classList.toggle("active", tab?.mode === "edit");
-      controls.edit.setAttribute("aria-pressed", String(tab?.mode === "edit"));
+      const editing = tab?.mode === "edit";
+      controls.preview.disabled = !editable;
+      controls.preview.classList.toggle("active", editing);
+      controls.preview.setAttribute("aria-pressed", String(editing));
+      setButtonIcon(controls.preview, editing ? "eye" : "pencil", { size: 14 });
+      const nextAction = t(editing ? "files.preview.preview" : "files.preview.edit");
+      controls.preview.title = nextAction;
+      controls.preview.setAttribute("aria-label", nextAction);
     }
     if (controls.save) controls.save.disabled = !tab?.dirty || !editable || tab.saving;
     if (controls.reload) controls.reload.disabled = !tab || tab.loading;
@@ -1629,7 +1629,8 @@ export class FilePreviewPanel {
       this.panelRatio = Number.isFinite(storedRatio)
         ? Math.max(0.2, Math.min(0.7, storedRatio))
         : DEFAULT_PANEL_RATIO;
-      this.wrapLines = storage.getItem("picot-preview-wrap") === "true";
+      const storedWrap = storage.getItem("picot-preview-wrap");
+      this.wrapLines = storedWrap === null ? true : storedWrap === "true";
       this.autoSaveEnabled = storage.getItem("picot-preview-autosave") !== "false";
     } catch {
       this.panelRatio = DEFAULT_PANEL_RATIO;

@@ -3,16 +3,7 @@
 // ABOUTME: Remote/LAN/mobile clients render no terminal surface at all.
 
 import { t } from "./i18n.js";
-
-const SVG_NS = "http://www.w3.org/2000/svg";
-
-function createSvgElement(tag, attributes = {}) {
-  const element = document.createElementNS(SVG_NS, tag);
-  for (const [name, value] of Object.entries(attributes)) {
-    element.setAttribute(name, String(value));
-  }
-  return element;
-}
+import { createIcon, setButtonIcon } from "./icons.js";
 
 const MIN_HEIGHT_PX = 160;
 const DEFAULT_HEIGHT_RATIO = 0.3;
@@ -67,22 +58,7 @@ export class TerminalPanel {
     this.toggleEl.setAttribute("aria-pressed", "false");
     this.toggleEl.setAttribute("aria-label", t("terminal.toggle"));
     this.toggleEl.setAttribute("title", t("terminal.toggle"));
-    const toggleIcon = createSvgElement("svg", {
-      width: 16,
-      height: 16,
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": 2,
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      "aria-hidden": "true",
-    });
-    toggleIcon.append(
-      createSvgElement("rect", { x: 3.5, y: 4.5, width: 17, height: 15, rx: 3 }),
-      createSvgElement("path", { d: "M7 15h10" }),
-    );
-    this.toggleEl.appendChild(toggleIcon);
+    this.toggleEl.appendChild(createIcon("sliders", { size: 16 }));
     this.toggleEl.addEventListener("click", () => this.toggle());
 
     this.root = document.createElement("section");
@@ -114,7 +90,7 @@ export class TerminalPanel {
     closeButton.type = "button";
     closeButton.className = "terminal-collapse";
     closeButton.dataset.terminalCollapse = "";
-    closeButton.textContent = "×";
+    setButtonIcon(closeButton, "x", { size: 16 });
     closeButton.addEventListener("click", () => this.collapse());
 
     this.enlargeButton = document.createElement("button");
@@ -123,31 +99,14 @@ export class TerminalPanel {
     this.enlargeButton.dataset.terminalEnlarge = "";
     this.enlargeButton.title = t("terminal.enlarge");
     this.enlargeButton.setAttribute("aria-label", t("terminal.enlarge"));
-    const enlargeIcon = createSvgElement("svg", {
-      width: 14,
-      height: 14,
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": 2,
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      "aria-hidden": "true",
-    });
-    enlargeIcon.append(
-      createSvgElement("path", { d: "M8 3H5a2 2 0 0 0-2 2v3" }),
-      createSvgElement("path", { d: "M21 8V5a2 2 0 0 0-2-2h-3" }),
-      createSvgElement("path", { d: "M3 16v3a2 2 0 0 0 2 2h3" }),
-      createSvgElement("path", { d: "M16 21h3a2 2 0 0 0 2-2v-3" }),
-    );
-    this.enlargeButton.appendChild(enlargeIcon);
+    this.enlargeButton.appendChild(createIcon("maximize", { size: 14 }));
     this.enlargeButton.addEventListener("click", () => this.toggleEnlarge());
 
     const newTabButton = document.createElement("button");
     newTabButton.type = "button";
     newTabButton.className = "terminal-new-tab";
     newTabButton.dataset.terminalNewTab = "";
-    newTabButton.textContent = "+";
+    newTabButton.appendChild(createIcon("plus", { size: 16 }));
     newTabButton.title = t("terminal.newTab");
     newTabButton.addEventListener("click", () => {
       if (!this.locked) this.client?.create?.("default");
@@ -379,7 +338,7 @@ export class TerminalPanel {
       const close = document.createElement("button");
       close.type = "button";
       close.className = "terminal-tab-close";
-      close.textContent = "×";
+      setButtonIcon(close, "x", { size: 12 });
       close.setAttribute("aria-label", "Close terminal tab");
       close.addEventListener("click", (event) => {
         event.stopPropagation();

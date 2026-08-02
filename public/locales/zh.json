@@ -277,6 +277,8 @@
   },
   "errors": {
     "newSessionOnlyNative": "仅原生主机支持新建会话。",
+    "compactionFailed": "上下文压缩失败。",
+    "compactionFailedDetail": "上下文压缩失败：{error}",
     "newSessionPathUnavailable": "启动新会话失败：当前工作区路径不可用",
     "newSessionNavUnavailable": "启动新会话失败：导航不可用",
     "newSessionFailed": "启动新会话失败",

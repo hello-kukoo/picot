@@ -277,6 +277,8 @@
   },
   "errors": {
     "newSessionOnlyNative": "New session is only supported with a native host.",
+    "compactionFailed": "Context compaction failed.",
+    "compactionFailedDetail": "Context compaction failed: {error}",
     "newSessionPathUnavailable": "Failed to start new session: current workspace path is unavailable",
     "newSessionNavUnavailable": "Failed to start new session: navigation is unavailable",
     "newSessionFailed": "Failed to start new session",

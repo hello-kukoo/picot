@@ -43,6 +43,19 @@ export function normalizeLocalPath(value) {
   return joinRoot(root, parts);
 }
 
+/**
+ * Return a workspace-relative path only when both normalized paths share the
+ * same canonical root and the file is contained by that root.
+ */
+export function relativeLocalPath(filePath, workspaceRoot) {
+  const file = normalizeLocalPath(filePath);
+  const root = normalizeLocalPath(workspaceRoot);
+  if (!file || !root) return null;
+  if (file === root) return "";
+  const prefix = root.endsWith("/") ? root : `${root}/`;
+  return file.startsWith(prefix) ? file.slice(prefix.length) : null;
+}
+
 export function basenameLocalPath(value) {
   const normalized = normalizeLocalPath(value);
   if (!normalized || normalized === "/" || /^[A-Za-z]:\/$/.test(normalized)) return normalized;

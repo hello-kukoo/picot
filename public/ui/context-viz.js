@@ -9,6 +9,8 @@ export function setupContextViz({
   contextVizTotal,
   getUsage,
   getContextWindowSize,
+  requestCompact = () => false,
+  getCompactState = () => "idle",
 }) {
   function formatTokens(n) {
     if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -19,7 +21,13 @@ export function setupContextViz({
   function updateContextViz() {
     const lastUsage = getUsage();
     const contextWindowSize = getContextWindowSize();
-    if (!lastUsage || !contextWindowSize) return;
+    if (!lastUsage || !contextWindowSize) {
+      contextBar.replaceChildren();
+      contextLegend.replaceChildren();
+      contextVizUsed.textContent = "";
+      contextVizTotal.textContent = "";
+      return;
+    }
 
     const input = lastUsage.input || 0;
     const cacheRead = lastUsage.cacheRead || 0;
@@ -34,7 +42,7 @@ export function setupContextViz({
       { key: "free", label: t("context.available"), tokens: free, color: "free" },
     ];
 
-    contextBar.innerHTML = "";
+    contextBar.replaceChildren();
     for (const seg of segments) {
       if (seg.tokens <= 0) continue;
       const pct = (seg.tokens / total) * 100;
@@ -45,18 +53,20 @@ export function setupContextViz({
       contextBar.appendChild(el);
     }
 
-    contextLegend.innerHTML = "";
+    contextLegend.replaceChildren();
     for (const seg of segments) {
       const item = document.createElement("div");
       item.className = "context-legend-item";
-      item.innerHTML = `
-      <span class="context-legend-left">
-        <span class="context-legend-dot ${seg.color}"></span>
-        ${seg.label}
-      </span>
-      <span class="context-legend-value">${formatTokens(seg.tokens)}</span>
-    `;
-      contextLegend.appendChild(item);
+      const left = document.createElement("span");
+      left.className = "context-legend-left";
+      const dot = document.createElement("span");
+      dot.className = `context-legend-dot ${seg.color}`;
+      left.append(dot, document.createTextNode(seg.label));
+      const value = document.createElement("span");
+      value.className = "context-legend-value";
+      value.textContent = formatTokens(seg.tokens);
+      item.append(left, value);
+      contextLegend.append(item);
     }
 
     const pct = Math.round((totalUsed / total) * 100);
@@ -99,30 +109,33 @@ export function setupContextViz({
     }
   });
 
-  _updateFn = updateContextViz;
-
-  // Compact button inside the context-viz dialog. Calls Pi's /compact
-  // command and hides the popover; the next token-usage update re-opens it
-  // if the user clicks the pill again.
   const compactBtn = document.getElementById("context-viz-compact");
+
+  function sync() {
+    updateContextViz();
+    if (!compactBtn) return;
+    const busy = getCompactState() !== "idle";
+    compactBtn.disabled = busy;
+    compactBtn.textContent = busy ? t("status.compacting") : t("misc.compact");
+    compactBtn.setAttribute("aria-busy", String(busy));
+  }
+
   if (compactBtn) {
     compactBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      contextViz.classList.add("hidden");
-      // Defer to the global rpcCommand so status text and i18n are handled
-      // by the same path as the Commands menu entry.
-      const rpc = window.__picotRpcCommand;
-      if (typeof rpc === "function") {
-        rpc({ type: "compact" }, t("status.compacting"));
-      } else {
-        fetch("/api/rpc", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type: "compact" }),
-        });
-      }
+      if (getCompactState() === "idle") requestCompact();
+      sync();
     });
   }
+
+  _updateFn = sync;
+  return {
+    sync,
+    invalidateUsage() {
+      contextViz.classList.add("hidden");
+      updateContextViz();
+    },
+  };
 }
 
 let _updateFn = null;
