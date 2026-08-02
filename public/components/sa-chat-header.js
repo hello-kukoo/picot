@@ -1,3 +1,5 @@
+import { createIcon } from "../icons.js";
+
 /**
  * <sa-chat-header> Web Component
  *
@@ -11,42 +13,53 @@
 class SAChatHeader extends HTMLElement {
   connectedCallback() {
     this.classList.add("header", "super-agent-chat-header");
-    this.innerHTML = `
-      <div class="header-left">
-        <button class="sidebar-toggle sa-sidebar-delegate" title="Toggle sidebar" aria-label="Toggle sidebar">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="3" y1="6" x2="21" y2="6"/>
-            <line x1="3" y1="12" x2="21" y2="12"/>
-            <line x1="3" y1="18" x2="21" y2="18"/>
-          </svg>
-        </button>
-        <button class="icon-btn lan-qr-btn hidden" data-action="lan-qr" title="Show mobile QR code" aria-label="Show mobile QR code">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
-            <line x1="12" y1="18" x2="12.01" y2="18"/>
-          </svg>
-        </button>
-        <div class="status">
-          <span class="status-indicator connected" id="sa-status-indicator"></span>
-          <span class="status-text" id="sa-status-text">Listening</span>
-        </div>
-      </div>
-      <div class="header-right">
-        <button class="pill sa-service-pill" data-action="telegram" disabled aria-disabled="true" title="Telegram is not configured">
-          <span class="sa-service-dot sa-dot-telegram"></span>Telegram
-        </button>
-        <button class="icon-btn sa-runtime-toggle" data-action="runtime" title="Task board" aria-label="Toggle task board">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-            stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="4" width="18" height="16" rx="2"/>
-            <path d="M9 4v16"/>
-            <path d="M15 8h3"/>
-            <path d="M15 12h3"/>
-            <path d="M15 16h3"/>
-          </svg>
-        </button>
-      </div>
-    `;
+    const headerLeft = document.createElement("div");
+    headerLeft.className = "header-left";
+    const sidebarButton = createHeaderButton(
+      "sidebar-toggle sa-sidebar-delegate",
+      "Toggle sidebar",
+      "menu",
+      18,
+    );
+    const lanButton = createHeaderButton(
+      "icon-btn lan-qr-btn hidden",
+      "Show mobile QR code",
+      "smartphone",
+      16,
+    );
+    lanButton.dataset.action = "lan-qr";
+    const status = document.createElement("div");
+    status.className = "status";
+    const indicator = document.createElement("span");
+    indicator.className = "status-indicator connected";
+    indicator.id = "sa-status-indicator";
+    const statusText = document.createElement("span");
+    statusText.className = "status-text";
+    statusText.id = "sa-status-text";
+    statusText.textContent = "Listening";
+    status.append(indicator, statusText);
+    headerLeft.append(sidebarButton, lanButton, status);
+
+    const headerRight = document.createElement("div");
+    headerRight.className = "header-right";
+    const telegram = document.createElement("button");
+    telegram.className = "pill sa-service-pill";
+    telegram.dataset.action = "telegram";
+    telegram.disabled = true;
+    telegram.setAttribute("aria-disabled", "true");
+    telegram.title = "Telegram is not configured";
+    const telegramDot = document.createElement("span");
+    telegramDot.className = "sa-service-dot sa-dot-telegram";
+    telegram.append(telegramDot, "Telegram");
+    const runtimeButton = createHeaderButton(
+      "icon-btn sa-runtime-toggle",
+      "Toggle task board",
+      "panel-right",
+      14,
+    );
+    runtimeButton.dataset.action = "runtime";
+    headerRight.append(telegram, runtimeButton);
+    this.replaceChildren(headerLeft, headerRight);
 
     // Delegate sidebar toggle to the real button in .header (which has the listener)
     this.querySelector(".sa-sidebar-delegate").addEventListener("click", () => {
@@ -141,6 +154,16 @@ function isConfiguredAccount(account) {
 function capitalize(value) {
   const text = String(value || "");
   return text ? text[0].toUpperCase() + text.slice(1) : text;
+}
+
+function createHeaderButton(className, label, iconName, size) {
+  const button = document.createElement("button");
+  button.className = className;
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  const icon = createIcon(iconName, { size });
+  if (icon) button.appendChild(icon);
+  return button;
 }
 
 customElements.define("sa-chat-header", SAChatHeader);

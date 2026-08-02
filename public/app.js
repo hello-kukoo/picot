@@ -7,6 +7,7 @@
 
 import { createCompactCoordinator } from "./compact-coordinator.js";
 import { repaintContextViz, setupContextViz } from "./ui/context-viz.js";
+import { createHeaderStatusBar } from "./ui/header-status-bar.js";
 import "./cost/dashboard.js";
 import { StateManager } from "./app/state.js";
 import { initTransport } from "./app/transport.js";
@@ -27,6 +28,7 @@ import {
   setLocale,
   t,
 } from "./i18n.js";
+import { createIcon, replaceButtonGlyph, setButtonIcon } from "./icons.js";
 import { processImageFile, processImagePayload } from "./image-attachments.js";
 import { selectModel } from "./models/selection.js";
 import { renderPackageInstallFailure } from "./packages/install-status.js";
@@ -725,7 +727,9 @@ let activeUiSessionFile = null;
 // switched sessions cannot clobber the new session's model/thinking display.
 let uiSessionGeneration = 0;
 const sendBtn = document.getElementById("send-btn");
+setButtonIcon(sendBtn, "send", { size: 16 });
 const abortBtn = document.getElementById("abort-btn");
+setButtonIcon(abortBtn, "square", { size: 16, filled: true });
 const statusIndicator = document.getElementById("status-indicator");
 const statusText = document.getElementById("status-text");
 const skillSlashMenu = document.getElementById("skill-slash-menu");
@@ -768,19 +772,34 @@ function insertTaskPrompt(task) {
   messageInput.focus();
 }
 const openFolderBtn = document.getElementById("open-folder-btn");
+setButtonIcon(openFolderBtn, "folder-plus", { size: 16 });
 const sidebarEl = document.getElementById("sidebar");
 const sidebarToggle = document.getElementById("sidebar-toggle");
+setButtonIcon(sidebarToggle, "menu", { size: 16 });
 const sidebarOverlay = document.getElementById("sidebar-overlay");
 
 const refreshSessionsBtn = document.getElementById("refresh-sessions-btn");
 const sessionSearchInput = document.getElementById("session-search-input");
 const sessionSearchClearBtn = document.getElementById("session-search-clear");
+setButtonIcon(sessionSearchClearBtn, "x", { size: 12 });
 const typingIndicator = document.getElementById("typing-indicator");
 
 const sessionCostEl = document.getElementById("session-cost");
+const sessionUsageEl = document.getElementById("session-usage");
 const tokenUsageEl = document.getElementById("token-usage");
+setButtonIcon(refreshSessionsBtn, "refresh-cw", { size: 16 });
+setButtonIcon(document.getElementById("quick-chat-btn"), "message-circle", { size: 16 });
 const _scrollBottomBtn = document.getElementById("scroll-bottom-btn"); // hidden legacy stub, unused
 const scrollBottomBadge = document.getElementById("scroll-bottom-badge");
+for (const target of [
+  scrollBottomBadge?.querySelector(".scroll-bottom-badge-icon"),
+  document.querySelector("#scroll-bottom-btn .scroll-bottom-icon"),
+]) {
+  const icon = createIcon("arrow-down", {
+    size: target === scrollBottomBadge?.querySelector(".scroll-bottom-badge-icon") ? 10 : 16,
+  });
+  if (target && icon) target.replaceChildren(icon);
+}
 const _scrollPrevBtn = document.getElementById("scroll-prev-btn"); // hidden legacy stub, unused
 const convNavEl = document.getElementById("conv-nav");
 const convNavTrack = document.getElementById("conv-nav-track");
@@ -824,7 +843,6 @@ let isAutoRetrying = false;
 // True when the most recent assistant turn ended with stopReason "error"
 // (e.g. a rate-limit 429). Cleared once a fresh run starts or succeeds.
 let lastTurnErrored = false;
-let sessionTotalCost = 0;
 let lastInputTokens = 0;
 let contextWindowSize = 0; // fetched from model info
 const originalTitle = document.title;
@@ -1007,8 +1025,19 @@ function setWorkspaceLaunchInProgress(inProgress) {
 // File browser
 const fileSidebar = document.getElementById("file-sidebar");
 const fileSidebarToggle = document.getElementById("file-sidebar-toggle");
+setButtonIcon(fileSidebarToggle, "panel-right", { size: 16 });
 const fileSidebarClose = document.getElementById("file-sidebar-close");
 const fileSidebarUp = document.getElementById("file-sidebar-up");
+const fileSidebarFinder = document.getElementById("file-sidebar-finder");
+for (const [button, iconName, size] of [
+  [fileSidebarClose, "x", 16],
+  [fileSidebarUp, "arrow-up", 16],
+  [fileSidebarFinder, "folder-open", 16],
+  [document.getElementById("lan-qr-modal-close"), "x", 14],
+  [document.getElementById("config-editor-close"), "x", 14],
+]) {
+  if (button) setButtonIcon(button, iconName, { size });
+}
 const fileSidebarFilesTab = document.getElementById("file-sidebar-files-tab");
 const fileSidebarGitTab = document.getElementById("file-sidebar-git-tab");
 const fileList = document.getElementById("file-list");
@@ -1044,12 +1073,18 @@ setupResizablePanel(fileSidebar, {
   minWidth: 280,
   maxWidth: 560,
 });
+const sideChatButton = document.getElementById("side-chat-btn");
+const syncSideChatButton = ({ panelOpen, activeContent } = {}) => {
+  const active = panelOpen === true && activeContent?.kind === "transient";
+  sideChatButton?.setAttribute("aria-pressed", String(active));
+};
 const filePreviewPanel = new FilePreviewPanel({
   panel: document.getElementById("file-preview-panel"),
   resizer: document.getElementById("file-preview-resizer"),
   tabBar: document.getElementById("file-preview-tabs"),
   content: document.getElementById("file-preview-content"),
   mainContainer: document.querySelector(".main"),
+  onStateChange: syncSideChatButton,
   onOpenDesktop: (filePath) => {
     fetch("/api/open", {
       method: "POST",
@@ -1461,9 +1496,11 @@ wsClient.addEventListener("windowCloseRequest", (event) => {
   windowCloseCoordinator.handleHostCloseRequest(event.detail?.requestId);
 });
 
-document.getElementById("side-chat-btn")?.addEventListener("click", () => {
+sideChatButton?.addEventListener("click", () => {
   if (nativeAvailable()) void sideChatManager.openMostRecent();
 });
+setButtonIcon(sideChatButton, "message-square", { size: 16 });
+syncSideChatButton(filePreviewPanel);
 document.getElementById("quick-chat-btn")?.addEventListener("click", () => {
   if (nativeAvailable()) void quickChatDialog.open();
 });
@@ -1594,6 +1631,7 @@ const headerOpenApp = {
   apps: [],
   selectedId: localStorage.getItem(HEADER_OPEN_APP_STORAGE_KEY) || null,
 };
+setButtonIcon(headerOpenApp.toggle, "chevron-down", { size: 10 });
 
 function getSelectedOpenApp() {
   return (
@@ -2201,7 +2239,7 @@ function handleRPCEvent(event) {
       handleMessageUpdate(event);
       break;
     case "message_end":
-      handleMessageEnd(event.message);
+      handleMessageEnd(event.message, eventSessionFile);
       if (pendingNewSessionRefresh) {
         refreshSidebarForNewSession(event).catch(() => {});
       }
@@ -2401,6 +2439,7 @@ function handleCompactionEnd(event) {
     // number is provably stale and must not remain visible.
     lastInputTokens = 0;
     lastUsage = null;
+    headerStatusBar?.sync({ currentUsage: null });
     updateTokenUsage();
     return;
   }
@@ -2438,6 +2477,10 @@ async function refreshSidebarForNewSession(event = null, attempt = 0) {
       sidebar.setActive(liveFile);
       restoreSessionUiState(liveFile);
       resolveAndApplyFocus();
+      // The new session may not have had a stable identity when its first
+      // assistant event arrived. Once the persisted file is known, hydrate
+      // the authoritative aggregate for the new session.
+      void hydrateHeaderSessionStats();
       pendingNewSessionRefresh = false;
       pendingNewSessionPreviousFile = null;
       return;
@@ -2641,7 +2684,7 @@ function handleMessageUpdate(event) {
   }
 }
 
-function handleMessageEnd(message) {
+function handleMessageEnd(message, eventSessionFile = null) {
   if (message?.role === "assistant" && message?.stopReason === "error") {
     const provider = message?.provider ? String(message.provider) : "unknown";
     const model = message?.model ? String(message.model) : "unknown";
@@ -2672,15 +2715,28 @@ function handleMessageEnd(message) {
     currentStreamingElement = null;
     currentStreamingThinking = "";
 
-    // Track session cost and tokens
-    if (usage?.cost?.total) {
-      sessionTotalCost += usage.cost.total;
-    }
+    // Track current-context usage only. Session aggregate cost/tokens have a
+    // single owner in headerStatusBar and are never derived from rendering.
     if (usage?.input) {
       lastInputTokens = usage.input + (usage.cacheRead || 0);
       lastUsage = usage;
     }
-    updateCostDisplay();
+    // Extend the authoritative session aggregate with this live completion
+    // only. If the session identity has not hydrated yet, request the
+    // authoritative snapshot instead of risking an unscoped increment.
+    const sessionFile = eventSessionFile || activeSessionFileForStatusBar();
+    const applied = headerStatusBar?.applyLiveUsage(
+      {
+        input: usage?.input || 0,
+        output: usage?.output || 0,
+        cacheRead: usage?.cacheRead || 0,
+        cacheWrite: usage?.cacheWrite || 0,
+        cost: { total: usage?.cost?.total || 0 },
+      },
+      { sessionFile },
+    );
+    if (applied === false) void hydrateHeaderSessionStats();
+    headerStatusBar?.sync({ currentUsage: lastUsage });
     updateTokenUsage();
     showNewMessageBadge();
   }
@@ -2802,6 +2858,7 @@ messageInput.addEventListener("input", () => {
 // ═══════════════════════════════════════
 
 const attachBtn = document.getElementById("attach-btn");
+setButtonIcon(attachBtn, "plus", { size: 16 });
 const imageInput = document.getElementById("image-input");
 const imagePreviews = document.getElementById("image-previews");
 const composerCard = document.getElementById("composer-card");
@@ -2936,7 +2993,9 @@ function renderQueuedMessages() {
     const cancel = document.createElement("button");
     cancel.className = "queued-msg-cancel";
     cancel.title = t("queue.cancelTitle");
-    cancel.textContent = "×";
+    cancel.setAttribute("aria-label", t("queue.cancelTitle"));
+    const cancelIcon = createIcon("x", { size: 14 });
+    if (cancelIcon) cancel.appendChild(cancelIcon);
     cancel.addEventListener("click", () => {
       messageQueue.splice(i, 1);
       renderQueuedMessages();
@@ -3010,37 +3069,38 @@ abortBtn.addEventListener("click", () => {
 // ═══════════════════════════════════════
 
 const commandBtn = document.getElementById("command-btn");
+setButtonIcon(commandBtn, "bot", { size: 16 });
 const commandPalette = document.getElementById("command-palette");
 const commandPaletteOverlay = document.getElementById("command-palette-overlay");
 const commandList = document.getElementById("command-list");
 
 const commands = [
   {
-    icon: "🗜️",
+    icon: "text-collapse",
     label: t("input.compact"),
     desc: t("input.compactDesc"),
     action: () => requestCompact(),
   },
   {
-    icon: "📋",
+    icon: "clipboard",
     label: t("input.exportHtml"),
     desc: t("input.exportHtmlDesc"),
     action: () => rpcExportHtml(),
   },
   {
-    icon: "📊",
+    icon: "bar-chart",
     label: t("input.sessionStats"),
     desc: t("input.sessionStatsDesc"),
     action: () => showSessionStats(),
   },
   {
-    icon: "⬇️",
+    icon: "chevrons-down",
     label: t("input.expandAllTools"),
     desc: t("input.expandAllToolsDesc"),
     action: () => toolCardRenderer.expandAll(),
   },
   {
-    icon: "⬆️",
+    icon: "chevrons-up",
     label: t("input.collapseAllTools"),
     desc: t("input.collapseAllToolsDesc"),
     action: () => toolCardRenderer.collapseAll(),
@@ -3053,6 +3113,7 @@ const mainCommandMenu = setupComposerCommandMenu({
   getCommands: () => commands,
   document,
   overlay: commandPaletteOverlay,
+  createIcon,
 });
 commandPaletteOverlay.addEventListener("click", mainCommandMenu.close);
 
@@ -3128,6 +3189,14 @@ async function showSessionStats() {
 const modelDropdown = document.getElementById("model-dropdown");
 const modelDropdownBtn = document.getElementById("model-dropdown-btn");
 const modelDropdownLabel = document.getElementById("model-dropdown-label");
+const modelDropdownChevron = modelDropdownBtn?.querySelector(".model-dropdown-chevron");
+if (modelDropdownChevron) {
+  const icon = createIcon("chevron-down", { size: 10 });
+  if (icon) {
+    icon.classList.add("model-dropdown-chevron");
+    modelDropdownChevron.replaceWith(icon);
+  }
+}
 const modelDropdownMenu = document.getElementById("model-dropdown-menu");
 const thinkingBtn = document.getElementById("thinking-btn");
 function formatCompactThinkingLevelLabel(level) {
@@ -3564,11 +3633,22 @@ refreshSessionsBtn.addEventListener("click", () => {
     location.reload();
     return;
   }
-  refreshSessionsBtn.classList.add("spinning");
-  sidebar.loadSessions().then(() => {
-    setTimeout(() => refreshSessionsBtn.classList.remove("spinning"), 600);
-    if (isMirrorMode) updateMirrorLiveIndicator();
-  });
+  // Static glyph policy: refresh never spins. A pending refresh disables the
+  // button and flips aria-busy so assistive tech announces the busy state.
+  refreshSessionsBtn.disabled = true;
+  refreshSessionsBtn.setAttribute("aria-busy", "true");
+  sidebar
+    .loadSessions()
+    .then(() => {
+      if (isMirrorMode) updateMirrorLiveIndicator();
+    })
+    .catch((error) => {
+      console.error("[Sessions] refresh failed:", error);
+    })
+    .finally(() => {
+      refreshSessionsBtn.disabled = false;
+      refreshSessionsBtn.removeAttribute("aria-busy");
+    });
 });
 
 // Swipe from left edge to open sidebar on mobile
@@ -3743,6 +3823,9 @@ async function resetUiForNewSession() {
   updateMirrorInputState();
   updateUI();
 
+  // A brand-new session starts with no prior aggregate or context usage.
+  resetHeaderStatusBar();
+
   // Mark that the next assistant turn should refresh the sidebar, since pi
   // doesn't persist a brand-new session to disk until the first message round-trip.
   pendingNewSessionRefresh = true;
@@ -3804,9 +3887,8 @@ async function newSession() {
   }
 
   if (canUseSessionControl()) {
-    sessionTotalCost = 0;
     lastInputTokens = 0;
-    updateCostDisplay();
+    resetHeaderStatusBar();
     updateTokenUsage();
     try {
       await transport.newSession(getActivePort());
@@ -3824,9 +3906,8 @@ async function newSession() {
 
   // Browser/dev fallback: classic in-place "new session" against the same
   // pi process (no Tauri windows available in this mode).
-  sessionTotalCost = 0;
   lastInputTokens = 0;
-  updateCostDisplay();
+  resetHeaderStatusBar();
   updateTokenUsage();
   const data = await rpcCommand({ type: "new_session" }, t("status.startingNewSession"));
   if (data?.success === false || data?.data?.cancelled) {
@@ -4014,9 +4095,8 @@ async function handleSessionSelectImpl(session, project) {
     selectedSession: session.filePath,
     targetLiveInstance,
   });
-  sessionTotalCost = 0;
   lastInputTokens = 0;
-  updateCostDisplay();
+  resetHeaderStatusBar();
   updateTokenUsage();
 
   // Native host: switch session via control command to the current pi instance
@@ -4425,15 +4505,17 @@ function handleMirrorSync(data) {
   // route must not leave the newly selected session's compact controls busy.
   compactCoordinator.reset();
   clearConversationRenderers();
-  sessionTotalCost = 0;
   lastInputTokens = 0;
+  // Reset the aggregate before history replay; the authoritative hydration
+  // runs after render so replayed totals never double-count.
+  resetHeaderStatusBar();
 
   // Keep Welcome stable when there are already sessions in the sidebar and
   // the user has not explicitly selected one yet.
   if (!sidebar.activeSessionFile && hasAnySessionsLoaded()) {
     renderWorkspaceWelcome();
-    updateCostDisplay();
     updateTokenUsage();
+    void hydrateHeaderSessionStats();
     return;
   }
 
@@ -4443,8 +4525,10 @@ function handleMirrorSync(data) {
     renderWorkspaceWelcome();
   }
 
-  updateCostDisplay();
   updateTokenUsage();
+  // Hydrate the aggregate from the authoritative server totals now that
+  // history replay is done. Repeated mirror syncs replace (never accumulate).
+  void hydrateHeaderSessionStats();
 }
 
 // Mark sessions in the sidebar with a green dot only when actively streaming
@@ -4562,10 +4646,8 @@ function renderSessionHistory(entries, { searchQuery = "" } = {}) {
           true,
         );
 
-        // Track cost and tokens from history
-        if (msg.usage?.cost?.total) {
-          sessionTotalCost += msg.usage.cost.total;
-        }
+        // History rendering updates current context only. Session aggregate
+        // totals come from get_session_stats, never from replay.
         if (msg.usage?.input) {
           lastInputTokens = msg.usage.input + (msg.usage.cacheRead || 0);
           lastUsage = msg.usage;
@@ -4609,7 +4691,6 @@ function renderSessionHistory(entries, { searchQuery = "" } = {}) {
     messageRenderer.highlightSearchQuery(searchQuery);
   }
 
-  updateCostDisplay();
   updateTokenUsage();
   fetchContextWindow();
 
@@ -4642,21 +4723,11 @@ function abortCurrentRun() {
   }
 }
 
-function updateCostDisplay() {
-  if (sessionTotalCost > 0) {
-    sessionCostEl.textContent = t("usage.costSub", { amount: `$${sessionTotalCost.toFixed(4)}` });
-    sessionCostEl.classList.add("visible");
-  } else {
-    sessionCostEl.classList.remove("visible");
-  }
-}
-
 function updateTokenUsage() {
   if (lastInputTokens <= 0) {
     tokenUsageEl.replaceChildren();
     tokenUsageEl.removeAttribute("title");
     tokenUsageEl.classList.remove("visible", "warning", "critical");
-    hideCompactButton();
     contextVizController?.invalidateUsage();
     return;
   }
@@ -4675,24 +4746,23 @@ function updateTokenUsage() {
       used: (lastInputTokens / 1000).toFixed(1),
       limit: (contextWindowSize / 1000).toFixed(0),
     });
-    if (pct >= 80) {
-      showCompactButton();
-    } else {
-      hideCompactButton();
-    }
+    // Compact lives only in the context popover now; the header threshold
+    // just colors the pill. Clicking it opens the popover with the action.
   } else {
     // No context window info yet, just show raw tokens and suppress the
     // threshold-based action because no percentage can be computed.
     tokenUsageEl.textContent = `${(lastInputTokens / 1000).toFixed(1)}k`;
     tokenUsageEl.classList.add("visible");
     tokenUsageEl.classList.remove("warning", "critical");
-    hideCompactButton();
   }
 
   // Keep an open context popover in sync with fresh usage so the breakdown
   // does not freeze on the snapshot taken when the popover was opened.
   const popover = document.getElementById("context-viz");
   if (popover && !popover.classList.contains("hidden")) contextVizController?.sync();
+  // Mirror the current-context signal into the aggregate status bar so its
+  // threshold classes (warning/critical) track the same usage value.
+  headerStatusBar?.sync({ currentUsage: lastUsage });
 }
 
 function requestCompact() {
@@ -4702,33 +4772,8 @@ function requestCompact() {
 }
 
 function syncCompactControls() {
-  const btn = document.getElementById("compact-btn");
-  if (btn) {
-    const busy = compactCoordinator.busy;
-    btn.disabled = busy;
-    btn.textContent = busy ? t("status.compacting") : t("misc.compact");
-  }
+  // Compact lives only in the context popover; keep its busy state in sync.
   contextVizController?.sync();
-}
-
-function showCompactButton() {
-  const existing = document.getElementById("compact-btn");
-  if (existing) {
-    syncCompactControls();
-    return;
-  }
-  const btn = document.createElement("button");
-  btn.id = "compact-btn";
-  btn.className = "compact-btn";
-  btn.title = t("misc.compactTitle");
-  btn.addEventListener("click", () => requestCompact());
-  tokenUsageEl.parentElement.insertBefore(btn, tokenUsageEl.nextSibling);
-  syncCompactControls();
-}
-
-function hideCompactButton() {
-  const btn = document.getElementById("compact-btn");
-  if (btn) btn.remove();
 }
 
 async function fetchContextWindow() {
@@ -4741,12 +4786,14 @@ let lanUrl = "";
 let lanUrls = [];
 
 const lanQrBtn = document.getElementById("lan-qr-btn");
+setButtonIcon(lanQrBtn, "smartphone", { size: 16 });
 const lanQrModal = document.getElementById("lan-qr-modal");
 const lanQrModalBackdrop = document.getElementById("lan-qr-modal-backdrop");
 const lanQrModalClose = document.getElementById("lan-qr-modal-close");
 const lanQrLoading = document.getElementById("lan-qr-loading");
 const lanQrImage = document.getElementById("lan-qr-image");
 const lanQrOpenLink = document.getElementById("lan-qr-open-link");
+replaceButtonGlyph(lanQrOpenLink, "external-link", { size: 14 });
 let lanQrUrl = "";
 
 function updateLanQrButton(url = "") {
@@ -4902,9 +4949,15 @@ wsClient.addEventListener("sessionSwitch", () => {
 // ═══════════════════════════════════════
 
 const settingsBtn = document.getElementById("settings-btn");
+replaceButtonGlyph(settingsBtn, "settings", { size: 18 });
 const settingsPanel = document.getElementById("settings-panel");
 const settingsOverlay = document.getElementById("settings-overlay");
 const settingsClose = document.getElementById("settings-close");
+const settingsBackIcon = settingsClose?.querySelector(".settings-nav-back-icon");
+if (settingsBackIcon) {
+  const icon = createIcon("chevron-left", { size: 14 });
+  if (icon) settingsBackIcon.replaceChildren(icon);
+}
 const settingsNavItems = Array.from(document.querySelectorAll(".settings-nav-item"));
 const settingsTabs = Array.from(document.querySelectorAll(".settings-tab"));
 const themeGrid = document.getElementById("theme-grid");
@@ -5163,44 +5216,9 @@ function showExternalLinkToast(url) {
   setTimeout(() => toast.remove(), 8000);
 }
 
-const BROWSE_LINK_PATHS = {
-  npm: [{ d: "M0 0v24h24v-24h-24zm19.2 19.2h-2.4v-9.6h-4.8v9.6h-7.2v-14.4h14.4v14.4z" }],
-  github: [
-    {
-      d: "M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z",
-    },
-  ],
-  link: [
-    { d: "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" },
-    { d: "M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" },
-  ],
-};
-
 function createBrowseIcon(kind) {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  const isLink = kind === "link";
-  for (const [name, value] of Object.entries({
-    viewBox: "0 0 24 24",
-    width: "14",
-    height: "14",
-    fill: isLink ? "none" : "currentColor",
-    ...(isLink
-      ? {
-          stroke: "currentColor",
-          "stroke-width": "2",
-          "stroke-linecap": "round",
-          "stroke-linejoin": "round",
-        }
-      : {}),
-  })) {
-    svg.setAttribute(name, value);
-  }
-  for (const attrs of BROWSE_LINK_PATHS[kind] || BROWSE_LINK_PATHS.link) {
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", attrs.d);
-    svg.appendChild(path);
-  }
-  return svg;
+  const iconName = kind === "link" ? "link" : "external-link";
+  return createIcon(iconName, { size: 14 });
 }
 
 function createBrowseLinkButton(kind, label, url) {
@@ -5225,14 +5243,12 @@ function buildBrowseLinks(pkg) {
   container.className = "pkg-browse-links";
 
   const npmUrl = links.npm || `https://www.npmjs.com/package/${encodeURIComponent(pkg.name)}`;
-  container.appendChild(createBrowseLinkButton("npm", "npm", npmUrl));
+  container.appendChild(createBrowseLinkButton("link", "npm", npmUrl));
 
   const repo = normalizeRepoUrl(links.repository);
   if (repo) {
     const isGithub = /github\.com/i.test(repo);
-    container.appendChild(
-      createBrowseLinkButton(isGithub ? "github" : "link", isGithub ? "GitHub" : "repo", repo),
-    );
+    container.appendChild(createBrowseLinkButton("link", isGithub ? "GitHub" : "repo", repo));
   }
 
   const homepage = normalizeRepoUrl(links.homepage);
@@ -5351,6 +5367,7 @@ function renderBrowsePagination(totalPages) {
     btn.disabled = disabled;
     if (!disabled && !active) btn.addEventListener("click", () => goTo(page));
     browsePaginationEl.appendChild(btn);
+    return btn;
   };
 
   const addEllipsis = () => {
@@ -5360,7 +5377,9 @@ function renderBrowsePagination(totalPages) {
     browsePaginationEl.appendChild(span);
   };
 
-  addBtn("‹", browsePage - 1, { disabled: browsePage <= 1 });
+  const previous = addBtn("", browsePage - 1, { disabled: browsePage <= 1 });
+  const previousIcon = createIcon("chevron-left", { size: 14 });
+  if (previousIcon) previous.replaceChildren(previousIcon);
 
   const pages = new Set([1, totalPages, browsePage]);
   for (let d = 1; d <= 2; d++) {
@@ -5376,7 +5395,9 @@ function renderBrowsePagination(totalPages) {
     prev = p;
   }
 
-  addBtn("›", browsePage + 1, { disabled: browsePage >= totalPages });
+  const next = addBtn("", browsePage + 1, { disabled: browsePage >= totalPages });
+  const nextIcon = createIcon("chevron-right", { size: 14 });
+  if (nextIcon) next.replaceChildren(nextIcon);
 }
 
 function createBrowseRow(pkg) {
@@ -5568,8 +5589,8 @@ function buildThemeGrid() {
       colors.appendChild(dot);
     }
     btn.appendChild(colors);
-    btn.addEventListener("click", () => {
-      applyTheme(id);
+    btn.addEventListener("click", (event) => {
+      applyTheme(id, { origin: { x: event.clientX, y: event.clientY } });
       // Re-apply the Picot theme to every live xterm instance.
       const xtermTheme = picotThemeToXterm();
       for (const entry of terminalClient.tabs.values()) {
@@ -5824,10 +5845,58 @@ contextVizController = setupContextViz({
   getCompactState: () => compactCoordinator.state,
 });
 
+// Session-aggregate header row (IN/OUT/CACHE/cost) — separate from the
+// current-context lastUsage lifecycle so Compact can invalidate stale
+// context without fabricating usage.
+const headerStatusBar = createHeaderStatusBar({
+  sessionCostEl,
+  sessionUsageEl,
+  tokenUsageEl,
+  getContextWindowSize: () => contextWindowSize,
+  t,
+});
+
+/** Monotonic generation for invalidating stale stats responses on switches. */
+let statsHydrationGeneration = 0;
+
+function resetHeaderStatusBar() {
+  statsHydrationGeneration += 1;
+  headerStatusBar?.reset();
+}
+
+/** Current active session file, for aggregate-vs-session identity checks. */
+function activeSessionFileForStatusBar() {
+  return mirrorActiveSessionFile || sidebar.activeSessionFile || null;
+}
+
+/** Hydrate the authoritative session aggregate from get_session_stats. */
+async function hydrateHeaderSessionStats() {
+  const generation = ++statsHydrationGeneration;
+  try {
+    const data = await rpcCommand({ type: "get_session_stats" }, null, true);
+    if (!data?.success || !data.data) return;
+    // Drop a response whose session changed, or that lost a generation race
+    // against a newer session switch / mirror sync.
+    if (generation !== statsHydrationGeneration) return;
+    if (!data.data.sessionFile) return;
+    const activeSessionFile = activeSessionFileForStatusBar();
+    if (!activeSessionFile || data.data.sessionFile !== activeSessionFile) return;
+    headerStatusBar?.hydrateSessionStats({
+      sessionFile: data.data.sessionFile,
+      tokens: data.data.tokens,
+      cost: data.data.cost,
+    });
+  } catch (error) {
+    // Aggregate hydration is best-effort; the current-context path still works.
+    console.warn("[header-status] failed to hydrate session stats:", error);
+  }
+}
+
 setupVoiceInput({
   micBtn: document.getElementById("mic-btn"),
   messageInput,
 });
+setButtonIcon(document.getElementById("mic-btn"), "mic", { size: 16 });
 
 // ═══════════════════════════════════════
 // Initialize
@@ -5844,9 +5913,15 @@ if (isMobile()) {
 
   // Toggle via chevron
   const contextToggle = document.getElementById("mobile-context-toggle");
+  const syncContextToggleIcon = () => {
+    const iconName = mobileBar.classList.contains("collapsed") ? "chevron-down" : "chevron-up";
+    setButtonIcon(contextToggle, iconName, { size: 12 });
+  };
+  syncContextToggleIcon();
   contextToggle.addEventListener("click", () => {
     mobileBar.classList.toggle("collapsed");
     contextToggle.classList.toggle("flipped", !mobileBar.classList.contains("collapsed"));
+    syncContextToggleIcon();
   });
 }
 

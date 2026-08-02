@@ -193,7 +193,11 @@ body {
 }
 
 .focus-back-icon {
-  font-size: var(--font-size-lg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
   line-height: 1;
 }
 
@@ -754,6 +758,18 @@ body {
   line-height: 1;
 }
 
+.workspace-more-actions-btn svg,
+.workspace-focus-btn svg,
+.focus-back-icon svg,
+.settings-nav-back-icon svg,
+.queued-msg-cancel svg,
+.image-preview-remove svg,
+.terminal-tab-restart svg {
+  display: block;
+}
+
+.workspace-more-actions-btn:hover,
+.workspace-more-actions-btn:focus-visible,
 .workspace-focus-btn:hover,
 .workspace-focus-btn:focus-visible {
   background: var(--bg-glass-hover);
@@ -1027,7 +1043,15 @@ body {
   right: 0;
 }
 
-.session-pin-icon,
+.session-pin-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: currentColor;
+}
+
 .context-menu-pin-icon {
   display: inline-block;
   width: 16px;
@@ -1044,7 +1068,7 @@ body {
 }
 
 .session-pin-btn[aria-pressed="true"] .session-pin-icon {
-  background-color: var(--accent);
+  color: var(--accent);
 }
 
 .session-archive-btn svg {
@@ -1720,28 +1744,6 @@ body {
 }
 
 /* Compact button — appears at 80% context */
-.compact-btn {
-  font-size: var(--font-size-sm);
-  padding: var(--space-1) var(--space-2);
-  background: rgba(248, 113, 113, 0.12);
-  border: 1px solid rgba(248, 113, 113, 0.25);
-  border-radius: var(--radius-pill);
-  color: var(--error);
-  cursor: pointer;
-  transition:
-    background var(--duration) var(--ease),
-    color var(--duration) var(--ease),
-    border-color var(--duration) var(--ease),
-    box-shadow var(--duration) var(--ease);
-  animation: fadeIn 0.3s var(--ease);
-  margin-left: 6px;
-}
-
-.compact-btn:hover {
-  background: rgba(248, 113, 113, 0.2);
-  border-color: rgba(248, 113, 113, 0.4);
-}
-
 /* Compaction system messages */
 .compaction-message {
   text-align: center;
@@ -2041,8 +2043,11 @@ body {
 }
 
 .settings-nav-back-icon {
-  font-size: var(--font-size-lg);
-  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
   opacity: 0.7;
 }
 
@@ -3576,6 +3581,9 @@ body {
 }
 
 .queued-msg-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: none;
   border: none;
   color: var(--text-dim);
@@ -4458,6 +4466,7 @@ body.hide-thinking .thinking-block {
 
 .image-preview-remove {
   position: absolute;
+  padding: 0;
   top: 2px;
   right: 2px;
   width: 18px;
@@ -4904,7 +4913,9 @@ body.hide-thinking .thinking-block {
   transition: transform 0.1s var(--ease);
 }
 
-.send-icon {
+.send-icon,
+#send-btn > svg,
+.ephemeral-send > svg {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -5678,7 +5689,10 @@ body.hide-thinking .thinking-block {
 .git-tree-file-icon {
   flex: none;
   width: 20px;
-  text-align: center;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   opacity: 0.6;
 }
 .git-tree-label {
@@ -6066,6 +6080,31 @@ body.is-resizing-side-panel {
   border-bottom: 0;
 }
 
+.file-sidebar-header .file-sidebar-action {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+}
+
+.file-sidebar-header .file-sidebar-action:hover,
+.file-sidebar-header .file-sidebar-action:focus-visible {
+  background: var(--bg-glass-hover);
+  color: var(--text-primary);
+}
+
+.file-sidebar-header .file-sidebar-action:focus-visible {
+  outline: 2px solid var(--accent, #0a84ff);
+  outline-offset: 1px;
+}
+
+.file-sidebar-header .file-sidebar-action svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
 .file-sidebar-path {
   padding: var(--space-1) var(--space-3);
   font-size: var(--font-size-sm);
@@ -6124,10 +6163,12 @@ body.file-dragging * {
   cursor: copy !important;
 }
 .file-icon {
-  font-size: var(--font-size-md);
   width: 20px;
-  text-align: center;
+  height: 20px;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   opacity: 0.6;
 }
 
@@ -7521,7 +7562,11 @@ body.file-preview-resizing {
 }
 
 .file-preview-tab-icon {
-  font-size: var(--font-size-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
   line-height: 1;
 }
 
@@ -8275,7 +8320,7 @@ body.file-preview-resizing {
 /* ── Panel toggles (native workspace toolbar) ─────────────────────────────
    These two controls follow the supplied compact outlined-panel reference:
    the terminal uses a horizontal divider and the file browser uses a
-   vertical divider. Side Chat intentionally keeps its existing icon button. */
+   vertical divider. Side Chat follows the same active-panel toggle contract. */
 .panel-toggle-btn,
 .terminal-toggle {
   display: inline-flex;
@@ -8417,6 +8462,7 @@ body.file-preview-resizing {
 }
 .terminal-tab-close,
 .terminal-tab-restart {
+  appearance: none;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -8431,6 +8477,10 @@ body.file-preview-resizing {
   opacity: 0;
   transition: opacity 0.1s var(--ease);
   font-size: var(--font-size-sm);
+}
+.terminal-tab-close svg,
+.terminal-tab-restart svg {
+  display: block;
 }
 .terminal-tab-item:hover .terminal-tab-close,
 .terminal-tab-item.active .terminal-tab-close,
@@ -9042,4 +9092,95 @@ body.file-preview-resizing {
   grid-column: 1 / -1;
   color: var(--text-dim);
   font-size: var(--font-size-xs);
+}
+
+/* ─── Theme transition: reduced-motion-safe circle reveal ─── */
+/* Unwound only when document.startViewTransition is available AND the user
+   has not requested reduced motion (see themes.js::withViewTransition). The
+   click origin flows in via the --theme-transition-x/y custom properties
+   (center fallback 50%/50%). */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+::view-transition-new(root) {
+  mask: radial-gradient(
+    circle at var(--theme-transition-x, 50%) var(--theme-transition-y, 50%),
+    #000 0%,
+    #000 35%,
+    transparent 60%
+  );
+  animation: picot-theme-reveal 450ms ease-out;
+}
+@keyframes picot-theme-reveal {
+  from {
+    mask: radial-gradient(
+      circle at var(--theme-transition-x, 50%) var(--theme-transition-y, 50%),
+      #000 0%,
+      transparent 0%
+    );
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none !important;
+    mask: none !important;
+  }
+}
+
+/* ─── Header action controls: 32px scoped target (Dr. Lin decision) ─── */
+/* Only action controls inside the main .header are 32px. Sidebar, File
+   Preview, Terminal, dialogs, and panel controls retain their existing
+   scoped sizing until their own visual slice is approved. Do not globally
+   resize .icon-btn. */
+.header .icon-btn,
+.header-right .icon-btn,
+.header-left .icon-btn {
+  width: 32px;
+  height: 32px;
+}
+.header .icon-btn:hover,
+.header-right .icon-btn:hover,
+.header-left .icon-btn:hover {
+  background: var(--bg-glass-hover);
+  color: var(--text-primary);
+}
+.header .icon-btn:active,
+.header-right .icon-btn:active,
+.header-left .icon-btn:active {
+  transform: translateY(0.5px);
+}
+.header .icon-btn:disabled,
+.header-right .icon-btn:disabled,
+.header-left .icon-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.header .icon-btn:focus-visible,
+.header-right .icon-btn:focus-visible,
+.header-left .icon-btn:focus-visible {
+  outline: 2px solid var(--accent, #0a84ff);
+  outline-offset: 1px;
+}
+
+/* ─── Header status bar: session aggregate + context pills ─── */
+.header-status-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.session-usage {
+  font-variant-numeric: tabular-nums;
+  color: var(--header-pill-text, var(--text-dim));
+}
+.session-usage:not(.visible) {
+  display: none;
+}
+@media (max-width: 1100px) {
+  /* Constrained width: hide the aggregate row before context/cost. */
+  .session-usage {
+    display: none;
+  }
 }

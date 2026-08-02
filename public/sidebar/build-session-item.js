@@ -86,6 +86,10 @@ export function buildSessionItem({
     const pinIcon = document.createElement("span");
     pinIcon.className = "session-pin-icon";
     pinIcon.setAttribute("aria-hidden", "true");
+    if (typeof createIcon === "function") {
+      const pinGlyph = createIcon("pin", { size: 13 });
+      if (pinGlyph) pinIcon.replaceChildren(pinGlyph);
+    }
     pinBtn.appendChild(pinIcon);
     pinBtn.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -123,7 +127,13 @@ export function buildSessionItem({
     const renameLabel = t("sidebar.rename");
     renameBtn.title = renameLabel;
     renameBtn.setAttribute("aria-label", renameLabel);
-    renameBtn.textContent = "✎";
+    if (typeof createIcon === "function") {
+      const renameIcon = createIcon("pencil", { size: 13 });
+      if (renameIcon) renameBtn.replaceChildren(renameIcon);
+      else renameBtn.replaceChildren();
+    } else {
+      renameBtn.replaceChildren();
+    }
     renameBtn.addEventListener("click", (event) => {
       event.stopPropagation();
       onRename(session.filePath, session, item);
@@ -138,7 +148,7 @@ export function buildSessionItem({
     const deleteLabel = t("sidebar.deleteSession");
     deleteBtn.title = deleteLabel;
     deleteBtn.setAttribute("aria-label", deleteLabel);
-    if (typeof createIcon === "function") deleteBtn.appendChild(createIcon("trash"));
+    if (typeof createIcon === "function") deleteBtn.appendChild(createIcon("trash-2"));
     deleteBtn.addEventListener("click", (event) => {
       event.stopPropagation();
       if (typeof onDelete === "function") onDelete(session.filePath);

@@ -66,8 +66,10 @@
   "usage": {
     "contextTokens": "Context: {used}k / {limit}k tokens",
     "sessionCostTitle": "Session cost",
+    "sessionUsageTitle": "Session tokens (input / output / cache)",
     "contextTitle": "Context usage",
-    "costSub": "{amount} (sub)"
+    "costSub": "{amount} (sub)",
+    "summary": "In {in} · Out {out} · Cache {cache}"
   },
   "context": {
     "cached": "Cached",
@@ -114,7 +116,8 @@
     "copyMessage": "Copy message",
     "thinking": "Thinking",
     "copy": "Copy",
-    "copied": "Copied!"
+    "copied": "Copied!",
+    "scrollToBottom": "Scroll to latest message"
   },
   "tools": {
     "copyOutput": "Copy output",
@@ -716,7 +719,8 @@
     "model": "model",
     "compact": "Compact",
     "compactTitle": "Context is over 80% — compact to save tokens",
-    "qrUnavailable": "QR code unavailable"
+    "qrUnavailable": "QR code unavailable",
+    "toggleContextControls": "Toggle context controls"
   },
   "browse": {
     "openExternalPrompt": "Open this link in a new tab:"

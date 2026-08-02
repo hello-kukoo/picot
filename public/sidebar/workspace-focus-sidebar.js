@@ -1,6 +1,7 @@
 // ABOUTME: Task-workbench sidebar shown when a workspace enters Focus mode.
 // ABOUTME: Renders back/new-task controls, a workspace info card, and a session list.
 import { t } from "../i18n.js";
+import { createIcon } from "../icons.js";
 
 const INITIAL_LIMIT = 5;
 const STEP = 10;
@@ -66,7 +67,8 @@ export class WorkspaceFocusSidebar {
     const backIcon = document.createElement("span");
     backIcon.className = "focus-back-icon";
     backIcon.setAttribute("aria-hidden", "true");
-    backIcon.textContent = "‹";
+    const backGlyph = createIcon("chevron-left", { size: 14 });
+    if (backGlyph) backIcon.appendChild(backGlyph);
     back.appendChild(backIcon);
     const backLabel = document.createElement("span");
     backLabel.textContent = t("workspace.back");

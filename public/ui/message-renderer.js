@@ -5,6 +5,7 @@
  */
 
 import { onLocaleChange, t } from "../i18n.js";
+import { createIcon, setButtonIcon } from "../icons.js";
 import { renderMarkdown, renderStreamingMarkdown, renderUserMarkdown } from "./markdown.js";
 
 export class MessageRenderer {
@@ -217,7 +218,7 @@ export class MessageRenderer {
     const markup = `
       <div class="message-content${streamingClass}">${contentHtml}</div>
       ${usageHtml}
-      ${!isStreaming ? `<button class="message-copy-btn" aria-label="${this.escapeHtml(t("messages.copyMessage"))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>` : ""}
+      ${!isStreaming ? `<button class="message-copy-btn" aria-label="${this.escapeHtml(t("messages.copyMessage"))}"></button>` : ""}
     `;
     this._replaceMarkup(div, markup);
 
@@ -342,10 +343,8 @@ export class MessageRenderer {
       const btn = document.createElement("button");
       btn.className = "message-copy-btn";
       btn.setAttribute("aria-label", t("messages.copyMessage"));
-      this._appendMarkup(
-        btn,
-        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
-      );
+      const icon = createIcon("copy", { size: 12 });
+      if (icon) btn.appendChild(icon);
       messageElement.appendChild(btn);
       this._setupCopyBtn(messageElement);
     }
@@ -394,6 +393,7 @@ export class MessageRenderer {
   _setupCopyBtn(messageEl) {
     const btn = messageEl.querySelector(".message-copy-btn");
     if (!btn) return;
+    setButtonIcon(btn, "copy", { size: 12 });
     btn.addEventListener("click", () => {
       const text = this._copyableText(messageEl);
       if (!text) return;
@@ -429,10 +429,8 @@ export class MessageRenderer {
     const button = document.createElement("button");
     button.className = "message-copy-btn";
     button.setAttribute("aria-label", t("messages.copyMessage"));
-    this._appendMarkup(
-      button,
-      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9v1"/></svg>',
-    );
+    const icon = createIcon("copy", { size: 12 });
+    if (icon) button.appendChild(icon);
     return button;
   }
 

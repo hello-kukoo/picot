@@ -1,56 +1,10 @@
 /**
  * File Browser — right sidebar file tree with drag-and-drop
  */
+
+import { createFileTypeIcon } from "../file-type-icons.js";
 import { onLocaleChange, t } from "../i18n.js";
 import { normalizeLocalPath, parentLocalPath } from "./path-utils.js";
-
-const FILE_ICONS = {
-  // Folders
-  directory: "📁",
-  // Code
-  js: "📄",
-  ts: "📄",
-  jsx: "📄",
-  tsx: "📄",
-  py: "🐍",
-  rb: "💎",
-  go: "📄",
-  rs: "🦀",
-  // Web
-  html: "🌐",
-  css: "🎨",
-  svg: "🎨",
-  // Data
-  json: "📋",
-  yaml: "📋",
-  yml: "📋",
-  toml: "📋",
-  xml: "📋",
-  csv: "📋",
-  // Docs
-  md: "📝",
-  txt: "📝",
-  rst: "📝",
-  // Images
-  png: "🖼️",
-  jpg: "🖼️",
-  jpeg: "🖼️",
-  gif: "🖼️",
-  webp: "🖼️",
-  ico: "🖼️",
-  // Config
-  env: "🔒",
-  gitignore: "🔒",
-  lock: "🔒",
-  // Default
-  default: "📄",
-};
-
-function getFileIcon(name, isDirectory) {
-  if (isDirectory) return FILE_ICONS.directory;
-  const ext = name.split(".").pop()?.toLowerCase() || "";
-  return FILE_ICONS[ext] || FILE_ICONS.default;
-}
 
 function formatSize(bytes) {
   if (bytes == null) return "";
@@ -176,12 +130,11 @@ export class FileBrowser {
       el.dataset.name = item.name;
       el.dataset.isDirectory = item.isDirectory ? "true" : "false";
 
-      const icon = getFileIcon(item.name, item.isDirectory);
       const size = item.isDirectory ? "" : formatSize(item.size);
 
       const iconEl = document.createElement("span");
       iconEl.className = "file-icon";
-      iconEl.textContent = icon;
+      iconEl.appendChild(createFileTypeIcon({ name: item.name, isDirectory: item.isDirectory }));
       el.appendChild(iconEl);
 
       const nameEl = document.createElement("span");

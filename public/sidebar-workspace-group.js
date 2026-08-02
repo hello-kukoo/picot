@@ -2,13 +2,7 @@
 // ABOUTME: Safe textContent-only rendering with disclosure semantics and inert hostile labels.
 
 import { t } from "./i18n.js";
-
-/**
- * Static plus-icon SVG for the new-chat button. This is a fixed constant —
- * never interpolated with dynamic values — so innerHTML is safe here.
- */
-const NEW_CHAT_ICON =
-  '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+import { createIcon } from "./icons.js";
 
 const FOLDER_CLOSED_ICON =
   '<svg class="folder-closed-icon" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>';
@@ -18,10 +12,7 @@ const FOLDER_OPEN_ICON =
 
 // Static disclosure arrow for the four section headers (RECENT, PINNED,
 // PROJECTS, ARCHIVED). Points right when collapsed; CSS rotates it 90deg to
-// point down when expanded. Fixed markup — never interpolated — so the
-// DOMParser innerHTML path is safe.
-const SECTION_CHEVRON_ICON =
-  '<svg class="section-chevron-icon" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
+// point down when expanded.
 
 export function createFolderIcon() {
   const icon = document.createElement("span");
@@ -44,8 +35,8 @@ export function createSectionChevron() {
   const chevron = document.createElement("span");
   chevron.className = "chevron section-chevron";
   chevron.setAttribute("aria-hidden", "true");
-  const doc = new DOMParser().parseFromString(SECTION_CHEVRON_ICON, "text/html");
-  chevron.append(...doc.body.childNodes);
+  const icon = createIcon("chevron-right", { size: 16 });
+  if (icon) chevron.appendChild(icon);
   return chevron;
 }
 
@@ -234,7 +225,9 @@ export function buildSidebarWorkspaceGroup({
     moreActionsBtn.className = "workspace-more-actions-btn";
     moreActionsBtn.title = label;
     moreActionsBtn.setAttribute("aria-label", label);
-    moreActionsBtn.textContent = "…";
+    const moreIcon = createIcon("ellipsis", { size: 14 });
+    if (moreIcon) moreActionsBtn.replaceChildren(moreIcon);
+    else moreActionsBtn.replaceChildren();
     moreActionsBtn.addEventListener("click", (event) => {
       event.stopPropagation();
       onMoreActions(event);
@@ -249,8 +242,8 @@ export function buildSidebarWorkspaceGroup({
     newChatBtn.className = "project-new-chat-btn workspace-new-chat-btn";
     newChatBtn.title = label;
     newChatBtn.setAttribute("aria-label", label);
-    const newChatIconDoc = new DOMParser().parseFromString(NEW_CHAT_ICON, "text/html");
-    newChatBtn.append(...newChatIconDoc.body.childNodes);
+    const newChatIcon = createIcon("plus", { size: 12 });
+    if (newChatIcon) newChatBtn.replaceChildren(newChatIcon);
     newChatBtn.addEventListener("click", (event) => {
       event.stopPropagation();
       onNewChat(event);
@@ -265,7 +258,9 @@ export function buildSidebarWorkspaceGroup({
     focusBtn.className = "workspace-focus-btn";
     focusBtn.title = label;
     focusBtn.setAttribute("aria-label", label);
-    focusBtn.textContent = "→";
+    const focusIcon = createIcon("chevron-right", { size: 14 });
+    if (focusIcon) focusBtn.replaceChildren(focusIcon);
+    else focusBtn.replaceChildren();
     focusBtn.addEventListener("click", (event) => {
       event.stopPropagation();
       onFocus(event);

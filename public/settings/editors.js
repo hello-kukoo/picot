@@ -1,4 +1,5 @@
 import { onLocaleChange, t } from "../i18n.js";
+import { createIcon } from "../icons.js";
 
 export function setupSettingsEditors({
   rpcCommand,
@@ -117,7 +118,9 @@ export function setupSettingsEditors({
       t("settings.apiKeys.toggleModels", { provider: p.displayName || p.provider }),
     );
     toggle.setAttribute("aria-expanded", "false");
-    toggle.textContent = "▼";
+    const toggleIcon = createIcon("chevron-down", { size: 12 });
+    if (toggleIcon) toggle.replaceChildren(toggleIcon);
+    else toggle.replaceChildren();
 
     const info = document.createElement("div");
     info.className = "api-key-row-info";

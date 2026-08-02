@@ -2,6 +2,7 @@
 // ABOUTME: Shows bundled skill candidates from configured Pi packages. Switches are disabled placeholders.
 
 import { onLocaleChange, t } from "../i18n.js";
+import { createIcon } from "../icons.js";
 
 /**
  * @typedef {Object} PackageSkillCandidate
@@ -201,21 +202,24 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
     const expanded = expandedCards.has(card.id);
     const installed = Boolean(card.effectivePackageRoot);
     const header = el("div", { class: "skills-group-header" }, [
-      el("button", {
-        type: "button",
-        class: `skills-expand${expanded ? "" : " collapsed"}`,
-        text: expanded ? "⌄" : "›",
-        aria: {
-          label: `${t("settings.packageSkills.package")}: ${card.source}`,
-          expanded: String(expanded),
-          controls: `skills-group-list-${card.id}`,
+      el(
+        "button",
+        {
+          type: "button",
+          class: `skills-expand${expanded ? "" : " collapsed"}`,
+          aria: {
+            label: `${t("settings.packageSkills.package")}: ${card.source}`,
+            expanded: String(expanded),
+            controls: `skills-group-list-${card.id}`,
+          },
+          onClick: () => {
+            if (expandedCards.has(card.id)) expandedCards.delete(card.id);
+            else expandedCards.add(card.id);
+            render();
+          },
         },
-        onClick: () => {
-          if (expandedCards.has(card.id)) expandedCards.delete(card.id);
-          else expandedCards.add(card.id);
-          render();
-        },
-      }),
+        createIcon("chevron-down", { size: 14 }),
+      ),
       el("div", { class: "skills-group-info" }, [
         el("div", { class: "skills-group-name", text: card.source }),
         el("div", { class: "skills-group-source" }, [

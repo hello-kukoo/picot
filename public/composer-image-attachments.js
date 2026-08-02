@@ -1,6 +1,8 @@
 // ABOUTME: Reusable image-attachment composer setup: attach button, file input,
 // ABOUTME: preview rendering, paste handler, and pending-image collection with cleanup.
 
+import { createIcon } from "./icons.js";
+
 /**
  * Wires the attach-button / file-input / preview / paste flow for a composer.
  * Returns a cleanup function and a getter for the current pending images.
@@ -136,7 +138,8 @@ export function setupComposerImageAttachments(opts) {
       removeButton.type = "button";
       removeButton.className = "image-preview-remove";
       removeButton.dataset.index = String(i);
-      removeButton.textContent = "✕";
+      const removeIcon = createIcon("x", { size: 14, document: doc });
+      if (removeIcon) removeButton.appendChild(removeIcon);
       removeButton.addEventListener("click", () => {
         pendingImages.splice(i, 1);
         renderPreviews();

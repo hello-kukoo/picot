@@ -11,6 +11,7 @@
  * The host page should listen: el.addEventListener('sa-dispatch', e => ...)
  */
 
+import { createIcon } from "../icons.js";
 import {
   ACTIVE_TASK_STATUSES,
   markTaskFinished,
@@ -56,26 +57,48 @@ class SuperAgentRuntime extends HTMLElement {
   // ── Rendering ─────────────────────────────────────────────────────────────
 
   _render() {
-    this.innerHTML = `
-      <div class="runtime-header app-side-panel-header" id="runtime-header">
-        <span class="runtime-title">Tasks</span>
-        <button class="icon-btn app-side-panel-close-btn" data-collapse-btn title="Close" aria-label="Close activity panel">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18"/>
-            <line x1="6" y1="6" x2="18" y2="18"/>
-          </svg>
-        </button>
-      </div>
-      <div class="runtime-filters" data-filters>
-        <button class="runtime-filter active" data-filter="all">All</button>
-        <button class="runtime-filter" data-filter="pending">Pending <span data-pending-count>0</span></button>
-        <button class="runtime-filter" data-filter="running">Running <span data-running-count>0</span></button>
-        <button class="runtime-filter" data-filter="done">Done <span data-done-count>0</span></button>
-      </div>
-      <div class="runtime-task-list" data-task-list></div>
-      <div class="runtime-bulk-actions" data-bulk-actions></div>
-    `;
+    const header = document.createElement("div");
+    header.className = "runtime-header app-side-panel-header";
+    header.id = "runtime-header";
+    const title = document.createElement("span");
+    title.className = "runtime-title";
+    title.textContent = "Tasks";
+    const close = createRuntimeButton("", "collapse", "icon-btn app-side-panel-close-btn", "x", 14);
+    close.dataset.collapseBtn = "";
+    close.title = "Close";
+    close.setAttribute("aria-label", "Close activity panel");
+    header.append(title, close);
+
+    const filters = document.createElement("div");
+    filters.className = "runtime-filters";
+    filters.dataset.filters = "";
+    for (const [filter, label, countAttribute] of [
+      ["all", "All", null],
+      ["pending", "Pending", "pendingCount"],
+      ["running", "Running", "runningCount"],
+      ["done", "Done", "doneCount"],
+    ]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `runtime-filter${filter === "all" ? " active" : ""}`;
+      button.dataset.filter = filter;
+      button.textContent = label;
+      if (countAttribute) {
+        const count = document.createElement("span");
+        count.dataset[countAttribute] = "";
+        count.textContent = "0";
+        button.append(" ", count);
+      }
+      filters.appendChild(button);
+    }
+
+    const taskList = document.createElement("div");
+    taskList.className = "runtime-task-list";
+    taskList.dataset.taskList = "";
+    const bulkActions = document.createElement("div");
+    bulkActions.className = "runtime-bulk-actions";
+    bulkActions.dataset.bulkActions = "";
+    this.replaceChildren(header, filters, taskList, bulkActions);
 
     // Default closed; only reopen automatically when the user explicitly left it open.
     if (localStorage.getItem("sa-runtime-collapsed") !== "0") {
@@ -295,30 +318,36 @@ class SuperAgentRuntime extends HTMLElement {
   _renderTasks() {
     const list = this.querySelector("[data-task-list]");
     if (!list) return;
+    list.replaceChildren();
 
     if (!this._hasLoadedOnce) {
-      list.innerHTML = `<div style="padding:20px 0;text-align:center;font-size:12px;color:var(--text-dim)">
-        Connecting…
-      </div>`;
+      const empty = document.createElement("div");
+      empty.className = "runtime-empty";
+      empty.textContent = "Connecting…";
+      list.appendChild(empty);
       return;
     }
 
     const order = { pending: 0, needs_input: 1, blocked: 2, running: 3, failed: 4, done: 5 };
-    let filtered = this._tasks.filter((t) => {
-      if (this._filter === "all") return true;
-      if (this._filter === "running") return ACTIVE_TASK_STATUSES.has(t.status);
-      return t.status === this._filter;
-    });
-    filtered = [...filtered].sort((a, b) => (order[a.status] ?? 4) - (order[b.status] ?? 4));
+    const filtered = [...this._tasks]
+      .filter((task) => {
+        if (this._filter === "all") return true;
+        if (this._filter === "running") return ACTIVE_TASK_STATUSES.has(task.status);
+        return task.status === this._filter;
+      })
+      .sort((a, b) => (order[a.status] ?? 4) - (order[b.status] ?? 4));
 
     if (filtered.length === 0) {
-      list.innerHTML = `<div style="padding:20px 0;text-align:center;font-size:12px;color:var(--text-dim)">
-        No tasks${this._filter !== "all" ? ` with status "${this._filter}"` : ""}…
-      </div>`;
+      const empty = document.createElement("div");
+      empty.className = "runtime-empty";
+      empty.textContent = `No tasks${this._filter !== "all" ? ` with status "${this._filter}"` : ""}…`;
+      list.appendChild(empty);
       return;
     }
 
-    list.innerHTML = filtered.map((t) => this._cardHtml(t)).join("");
+    filtered.forEach((task) => {
+      list.appendChild(this._buildCard(task));
+    });
     this._bindCardEvents(list);
   }
 
@@ -329,144 +358,204 @@ class SuperAgentRuntime extends HTMLElement {
       (task) => task.status === "pending" && isDispatchableProjectPath(task.targetProject),
     ).length;
     const done = this._tasks.filter((task) => task.status === "done").length;
-    container.innerHTML = `
-      <button class="sa-btn sa-btn-approve" data-action="approve-all" type="button" ${ready === 0 ? "disabled" : ""}>Approve ${ready}</button>
-      <button class="sa-btn sa-btn-dismiss" data-action="clear-done" type="button" ${done === 0 ? "disabled" : ""}>Clear Done</button>
-    `;
-    container.querySelector('[data-action="approve-all"]')?.addEventListener("click", (event) => {
+    container.replaceChildren();
+
+    const approve = createRuntimeButton(`Approve ${ready}`, "approve-all", "sa-btn sa-btn-approve");
+    approve.disabled = ready === 0;
+    const clear = createRuntimeButton("Clear Done", "clear-done", "sa-btn sa-btn-dismiss");
+    clear.disabled = done === 0;
+    container.append(approve, clear);
+    approve.addEventListener("click", (event) => {
       event.stopPropagation();
       this._approveAll();
     });
-    container.querySelector('[data-action="clear-done"]')?.addEventListener("click", (event) => {
+    clear.addEventListener("click", (event) => {
       event.stopPropagation();
       this._clearDone();
     });
   }
 
-  _cardHtml(task) {
+  _buildCard(task) {
     const isExpanded = this._expandedTaskIds.has(task.id);
+    const card = document.createElement("div");
+    card.className = `runtime-task-card status-${task.status} ${isExpanded ? "is-expanded" : "is-collapsed"}`;
+    card.dataset.taskId = String(task.id);
+    card.setAttribute("role", "button");
+    card.tabIndex = 0;
+    card.setAttribute("aria-expanded", String(isExpanded));
+
+    const header = document.createElement("div");
+    header.className = "runtime-task-header";
+    const status = document.createElement("span");
+    status.className = "runtime-status-dot";
+    const title = document.createElement("span");
+    title.className = "runtime-task-title";
+    title.textContent = task.title || "(untitled)";
+    const expandIcon = document.createElement("span");
+    expandIcon.className = "runtime-task-expand-icon";
+    expandIcon.setAttribute("aria-hidden", "true");
+    header.append(status, title, this._quickActions(task), expandIcon);
+    card.appendChild(header);
+
+    if (!isExpanded) return card;
+
+    const body = document.createElement("div");
+    if (task.description) {
+      const description = document.createElement("div");
+      description.className = "runtime-task-desc";
+      description.appendChild(formatTaskDescription(task.description));
+      body.appendChild(description);
+    }
+    const source = sourceNode(task);
+    if (source) body.appendChild(source);
+
     const hasTargetProject = isDispatchableProjectPath(task.targetProject);
     const projectName = task.targetProject?.split("/").pop() || "";
-    let body = "";
-
-    if (isExpanded) {
-      if (task.description) {
-        body += `<div class="runtime-task-desc">${formatTaskDescription(task.description)}</div>`;
-      }
-      body += sourceHtml(task);
-
-      if (task.status === "pending") {
-        body += this._projectPickerHtml(task);
-        body += `
-          <div class="runtime-approve-row">
-            <button class="sa-btn" data-action="prompt-task" data-task-id="${task.id}">Prompt AI</button>
-            ${
-              hasTargetProject
-                ? `<button class="sa-btn sa-btn-approve" data-action="approve" data-task-id="${task.id}">Approve</button>`
-                : ""
-            }
-            <button class="sa-btn sa-btn-dismiss" data-action="dismiss" data-task-id="${task.id}">✕</button>
-          </div>`;
-      } else if (task.status === "done" || task.status === "running") {
-        if (hasTargetProject) {
-          body += `<div class="runtime-task-target">Target: <strong>${esc(projectName)}</strong></div>`;
-        }
-        if (task.dispatch?.childPort) {
-          body += `<div class="runtime-approve-row">
-            <button class="sa-btn" data-action="view-session" data-task-id="${escAttr(task.id)}">View Session →</button>
-            ${task.status === "running" ? `<button class="sa-btn sa-btn-dismiss" data-action="force-cancel" data-task-id="${escAttr(task.id)}">Force Cancel</button>` : ""}
-          </div>`;
-        } else if (task.status === "running") {
-          body += `<div class="runtime-approve-row">
-            <button class="sa-btn sa-btn-dismiss" data-action="force-cancel" data-task-id="${escAttr(task.id)}">Force Cancel</button>
-          </div>`;
-        }
-      } else if (
-        task.status === "failed" ||
-        task.status === "blocked" ||
-        task.status === "needs_input"
-      ) {
-        body += `<div class="runtime-task-error">${esc(task.result?.failReason || task.failReason || "Waiting for input.")}</div>`;
-        if (hasTargetProject) {
-          body += `<div class="runtime-task-target">Project: <strong>${esc(projectName)}</strong></div>`;
-          body += `
-            <div class="runtime-approve-row">
-              <button class="sa-btn sa-btn-approve" data-action="retry" data-task-id="${task.id}">Retry</button>
-              <button class="sa-btn sa-btn-dismiss" data-action="dismiss" data-task-id="${task.id}">Dismiss</button>
-            </div>`;
-        } else {
-          body += `
-            <div class="runtime-task-missing-target">Choose a project when creating this task.</div>
-            <div class="runtime-approve-row">
-              <button class="sa-btn sa-btn-dismiss" data-action="dismiss" data-task-id="${task.id}">Dismiss</button>
-            </div>`;
-        }
-      }
-      body += this._historyHtml(task);
-    }
-
-    return this._cardShell(task, body, isExpanded);
-  }
-
-  _cardShell(task, body, isExpanded = true) {
-    return `<div class="runtime-task-card status-${task.status} ${isExpanded ? "is-expanded" : "is-collapsed"}"
-      data-task-id="${task.id}" role="button" tabindex="0" aria-expanded="${isExpanded}">
-      <div class="runtime-task-header">
-        <span class="runtime-status-dot"></span>
-        <span class="runtime-task-title">${esc(task.title || "(untitled)")}</span>
-        ${this._quickActionsHtml(task)}
-        <span class="runtime-task-expand-icon" aria-hidden="true"></span>
-      </div>
-      ${body}
-    </div>`;
-  }
-
-  _quickActionsHtml(task) {
-    const actions = [];
     if (task.status === "pending") {
-      actions.push(
-        `<button class="sa-btn" data-action="prompt-task" data-task-id="${escAttr(task.id)}" type="button">Prompt AI</button>`,
+      body.appendChild(this._projectPicker(task));
+      const actions = document.createElement("div");
+      actions.className = "runtime-approve-row";
+      actions.appendChild(
+        createRuntimeButton("Prompt AI", "prompt-task", "sa-btn", null, 14, task.id),
       );
-      if (isDispatchableProjectPath(task.targetProject)) {
-        actions.push(
-          `<button class="sa-btn sa-btn-approve" data-action="approve" data-task-id="${escAttr(task.id)}" type="button">Approve</button>`,
+      if (hasTargetProject) {
+        actions.appendChild(
+          createRuntimeButton("Approve", "approve", "sa-btn sa-btn-approve", null, 14, task.id),
         );
       }
-      actions.push(
-        `<button class="sa-btn sa-btn-dismiss" data-action="dismiss" data-task-id="${escAttr(task.id)}" type="button">Dismiss</button>`,
+      actions.appendChild(
+        createRuntimeButton("Dismiss", "dismiss", "sa-btn sa-btn-dismiss", "x", 14, task.id),
+      );
+      body.appendChild(actions);
+    } else if (task.status === "done" || task.status === "running") {
+      if (hasTargetProject) body.appendChild(targetNode("Target", projectName));
+      if (task.dispatch?.childPort) {
+        const actions = document.createElement("div");
+        actions.className = "runtime-approve-row";
+        actions.appendChild(
+          createRuntimeButton(
+            "View Session",
+            "view-session",
+            "sa-btn",
+            "arrow-right",
+            14,
+            task.id,
+            true,
+          ),
+        );
+        if (task.status === "running") {
+          actions.appendChild(
+            createRuntimeButton(
+              "Force Cancel",
+              "force-cancel",
+              "sa-btn sa-btn-dismiss",
+              null,
+              14,
+              task.id,
+            ),
+          );
+        }
+        body.appendChild(actions);
+      } else if (task.status === "running") {
+        const actions = document.createElement("div");
+        actions.className = "runtime-approve-row";
+        actions.appendChild(
+          createRuntimeButton(
+            "Force Cancel",
+            "force-cancel",
+            "sa-btn sa-btn-dismiss",
+            null,
+            14,
+            task.id,
+          ),
+        );
+        body.appendChild(actions);
+      }
+    } else if (["failed", "blocked", "needs_input"].includes(task.status)) {
+      const error = document.createElement("div");
+      error.className = "runtime-task-error";
+      error.textContent = task.result?.failReason || task.failReason || "Waiting for input.";
+      body.appendChild(error);
+      if (hasTargetProject) {
+        body.appendChild(targetNode("Project", projectName));
+        const actions = document.createElement("div");
+        actions.className = "runtime-approve-row";
+        actions.appendChild(
+          createRuntimeButton("Retry", "retry", "sa-btn sa-btn-approve", null, 14, task.id),
+        );
+        actions.appendChild(
+          createRuntimeButton("Dismiss", "dismiss", "sa-btn sa-btn-dismiss", null, 14, task.id),
+        );
+        body.appendChild(actions);
+      } else {
+        const missing = document.createElement("div");
+        missing.className = "runtime-task-missing-target";
+        missing.textContent = "Choose a project when creating this task.";
+        const actions = document.createElement("div");
+        actions.className = "runtime-approve-row";
+        actions.appendChild(
+          createRuntimeButton("Dismiss", "dismiss", "sa-btn sa-btn-dismiss", null, 14, task.id),
+        );
+        body.append(missing, actions);
+      }
+    }
+    const history = this._history(task);
+    if (history) body.appendChild(history);
+    card.appendChild(body);
+    return card;
+  }
+
+  _quickActions(task) {
+    const wrapper = document.createElement("span");
+    wrapper.className = "runtime-quick-actions";
+    if (task.status === "pending") {
+      wrapper.appendChild(
+        createRuntimeButton("Prompt AI", "prompt-task", "sa-btn", null, 14, task.id),
+      );
+      if (isDispatchableProjectPath(task.targetProject)) {
+        wrapper.appendChild(
+          createRuntimeButton("Approve", "approve", "sa-btn sa-btn-approve", null, 14, task.id),
+        );
+      }
+      wrapper.appendChild(
+        createRuntimeButton("Dismiss", "dismiss", "sa-btn sa-btn-dismiss", null, 14, task.id),
       );
     } else if (task.status === "done") {
-      actions.push(
-        `<button class="sa-btn sa-btn-dismiss" data-action="dismiss" data-task-id="${escAttr(task.id)}" type="button">Clear</button>`,
+      wrapper.appendChild(
+        createRuntimeButton("Clear", "dismiss", "sa-btn sa-btn-dismiss", null, 14, task.id),
       );
     }
-    if (actions.length === 0) return "";
-    return `<span class="runtime-quick-actions">${actions.join("")}</span>`;
+    return wrapper;
   }
 
-  _historyHtml(task) {
-    if (!Array.isArray(task.events) || task.events.length === 0) return "";
-    const open = this._historyTaskIds.has(task.id);
-    const items = open
-      ? `<div class="runtime-task-history-list">
-          ${task.events
-            .map(
-              (event) => `<div class="runtime-task-history-item">
-                <span>${esc(formatHistoryTimestamp(event.at))}</span>
-                <strong>${esc(event.type || event.status || "event")}</strong>
-                <p>${esc(event.message || event.status || "")}</p>
-              </div>`,
-            )
-            .join("")}
-        </div>`
-      : "";
-    return `<div class="runtime-task-history">
-      <button class="sa-btn" data-action="toggle-history" data-task-id="${escAttr(task.id)}" type="button">History</button>
-      ${items}
-    </div>`;
+  _history(task) {
+    if (!Array.isArray(task.events) || task.events.length === 0) return null;
+    const container = document.createElement("div");
+    container.className = "runtime-task-history";
+    container.appendChild(
+      createRuntimeButton("History", "toggle-history", "sa-btn", null, 14, task.id),
+    );
+    if (this._historyTaskIds.has(task.id)) {
+      const list = document.createElement("div");
+      list.className = "runtime-task-history-list";
+      task.events.forEach((event) => {
+        const item = document.createElement("div");
+        item.className = "runtime-task-history-item";
+        const at = document.createElement("span");
+        at.textContent = formatHistoryTimestamp(event.at);
+        const type = document.createElement("strong");
+        type.textContent = event.type || event.status || "event";
+        const message = document.createElement("p");
+        message.textContent = event.message || event.status || "";
+        item.append(at, type, message);
+        list.appendChild(item);
+      });
+      container.appendChild(list);
+    }
+    return container;
   }
 
-  _projectPickerHtml(task) {
+  _projectPicker(task) {
     const targetProject = String(task.targetProject || "");
     const projectOptions = [...this._projects];
     if (targetProject && !projectOptions.some((project) => project.cwd === targetProject)) {
@@ -476,26 +565,31 @@ class SuperAgentRuntime extends HTMLElement {
         status: "unknown",
       });
     }
-    const options = [
-      `<option value="">Choose a project…</option>`,
-      ...projectOptions.map((project) => {
-        const selected = project.cwd === targetProject ? " selected" : "";
-        const status = project.status === "running" ? " · running" : "";
-        return `<option value="${escAttr(project.cwd)}"${selected}>${esc(project.name || project.cwd)}${status}</option>`;
-      }),
-    ].join("");
-    const hint = targetProject
-      ? `Project: ${esc(targetProject.split("/").pop() || targetProject)}`
+    const label = document.createElement("label");
+    label.className = "runtime-project-picker";
+    const hint = document.createElement("span");
+    hint.textContent = targetProject
+      ? `Project: ${targetProject.split("/").pop() || targetProject}`
       : this._projectsLoadedOnce
         ? "Choose a project before approval."
         : "Loading projects…";
-    return `
-      <label class="runtime-project-picker">
-        <span>${hint}</span>
-        <select class="runtime-project-select" data-action="select-project" data-task-id="${escAttr(task.id)}">
-          ${options}
-        </select>
-      </label>`;
+    const select = document.createElement("select");
+    select.className = "runtime-project-select";
+    select.dataset.action = "select-project";
+    select.dataset.taskId = String(task.id);
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = "Choose a project…";
+    select.appendChild(empty);
+    projectOptions.forEach((project) => {
+      const option = document.createElement("option");
+      option.value = project.cwd;
+      option.textContent = `${project.name || project.cwd}${project.status === "running" ? " · running" : ""}`;
+      option.selected = project.cwd === targetProject;
+      select.appendChild(option);
+    });
+    label.append(hint, select);
+    return label;
   }
 
   _bindCardEvents(list) {
@@ -572,35 +666,78 @@ function isDispatchableProjectPath(path) {
   return normalized.includes("/") && !normalized.endsWith("/.pi/agent/super-agent");
 }
 
-function sourceHtml(task) {
-  if (!task.source || task.source.channel === "local") return "";
-  return `<div class="runtime-task-source">Source: ${esc(task.source.channel)}</div>`;
+function createRuntimeButton(
+  label,
+  action,
+  className,
+  iconName = null,
+  size = 14,
+  taskId = null,
+  iconAfter = false,
+) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  if (action) button.dataset.action = action;
+  if (taskId !== null && taskId !== undefined) button.dataset.taskId = String(taskId);
+  const text = document.createElement("span");
+  text.textContent = label;
+  const icon = iconName ? createIcon(iconName, { size }) : null;
+  if (iconAfter && icon) button.append(text, icon);
+  else if (icon) button.append(icon, text);
+  else if (label) button.appendChild(text);
+  return button;
+}
+
+function targetNode(label, value) {
+  const target = document.createElement("div");
+  target.className = "runtime-task-target";
+  target.append(`${label}: `);
+  const strong = document.createElement("strong");
+  strong.textContent = value;
+  target.appendChild(strong);
+  return target;
+}
+
+function sourceNode(task) {
+  if (!task.source || task.source.channel === "local") return null;
+  const source = document.createElement("div");
+  source.className = "runtime-task-source";
+  source.textContent = `Source: ${task.source.channel}`;
+  return source;
+}
+
+function appendTaskInline(parent, text) {
+  const parts = String(text).split(/(\*\*[^*]+\*\*)/g);
+  parts.forEach((part) => {
+    if (!part) return;
+    const bold = part.match(/^\*\*([^*]+)\*\*$/);
+    if (bold) {
+      const strong = document.createElement("strong");
+      strong.textContent = bold[1];
+      parent.appendChild(strong);
+    } else {
+      parent.appendChild(document.createTextNode(part));
+    }
+  });
 }
 
 function formatTaskDescription(description) {
-  const lines = normalizeTaskDescription(description);
-  if (lines.length === 0) return "";
-
-  return lines
-    .map((line) => {
-      const heading = line.match(/^#{1,6}\s+(.+)$/);
-      if (heading) {
-        return `<div class="runtime-task-section-title">${renderTaskInline(heading[1])}</div>`;
-      }
-
-      const bullet = line.match(/^[-*]\s+(.+)$/);
-      if (bullet) {
-        return `<div class="runtime-task-list-item">${renderTaskInline(bullet[1])}</div>`;
-      }
-
-      const numbered = line.match(/^\d+\.\s+(.+)$/);
-      if (numbered) {
-        return `<div class="runtime-task-list-item">${renderTaskInline(numbered[1])}</div>`;
-      }
-
-      return `<div class="runtime-task-paragraph">${renderTaskInline(line)}</div>`;
-    })
-    .join("");
+  const fragment = document.createDocumentFragment();
+  for (const line of normalizeTaskDescription(description)) {
+    const heading = line.match(/^#{1,6}\s+(.+)$/);
+    const bullet = line.match(/^[-*]\s+(.+)$/);
+    const numbered = line.match(/^\d+\.\s+(.+)$/);
+    const element = document.createElement("div");
+    element.className = heading
+      ? "runtime-task-section-title"
+      : bullet || numbered
+        ? "runtime-task-list-item"
+        : "runtime-task-paragraph";
+    appendTaskInline(element, heading?.[1] || bullet?.[1] || numbered?.[1] || line);
+    fragment.appendChild(element);
+  }
+  return fragment;
 }
 
 function normalizeTaskDescription(description) {
@@ -612,22 +749,6 @@ function normalizeTaskDescription(description) {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
-}
-
-function renderTaskInline(text) {
-  return esc(text).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-}
-
-function esc(str) {
-  return String(str ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-function escAttr(str) {
-  return esc(str).replace(/'/g, "&#39;");
 }
 
 function isTypingTarget(target) {

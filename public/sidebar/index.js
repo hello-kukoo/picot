@@ -6,6 +6,7 @@
  */
 
 import { onLocaleChange, t } from "../i18n.js";
+import { createIcon } from "../icons.js";
 import { createPinnedItemsStore } from "../pinned-items.js";
 import {
   readRecentSessions,
@@ -27,8 +28,6 @@ import {
   getSessionDisplayTitle,
 } from "./build-session-item.js";
 
-const SVG_NS = "http://www.w3.org/2000/svg";
-
 function readJsonArray(key) {
   try {
     const value = JSON.parse(localStorage.getItem(key) || "[]");
@@ -38,35 +37,10 @@ function readJsonArray(key) {
   }
 }
 
-function createSvgIcon(kind) {
-  const svg = document.createElementNS(SVG_NS, "svg");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("aria-hidden", "true");
-  svg.setAttribute("focusable", "false");
-  const elements =
-    kind === "archive"
-      ? [
-          ["rect", { x: "3", y: "4", width: "18", height: "4", rx: "1.5" }],
-          ["path", { d: "M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8" }],
-          ["path", { d: "M10 12h4" }],
-        ]
-      : kind === "folder"
-        ? [
-            [
-              "path",
-              { d: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" },
-            ],
-          ]
-        : [
-            ["path", { d: "M6 7h12l-1 14H7z" }],
-            ["path", { d: "M4 7h16M9 7V4h6v3" }],
-          ];
-  for (const [tag, attrs] of elements) {
-    const element = document.createElementNS(SVG_NS, tag);
-    for (const [name, value] of Object.entries(attrs)) element.setAttribute(name, value);
-    svg.appendChild(element);
-  }
-  return svg;
+function createActionIcon(kind, options = {}) {
+  const size = typeof options === "number" ? options : options.size || 16;
+  const iconName = kind === "folder" ? "folder" : kind === "archive" ? "archive" : kind;
+  return createIcon(iconName, { size });
 }
 
 function appendHighlightedText(container, text, query) {
@@ -477,7 +451,9 @@ export class SessionSidebar {
     const header = document.createElement("div");
     header.className = "project-header search-results-header";
     const searchIcon = document.createElement("span");
-    searchIcon.textContent = "🔍";
+    searchIcon.setAttribute("aria-hidden", "true");
+    const searchGlyph = createActionIcon("search", 14);
+    if (searchGlyph) searchIcon.appendChild(searchGlyph);
     const label = document.createElement("span");
     label.textContent = t("sidebar.messageMatches");
     const count = document.createElement("span");
@@ -520,7 +496,8 @@ export class SessionSidebar {
       renameButton.className = "session-rename-btn";
       renameButton.title = t("sidebar.rename");
       renameButton.setAttribute("aria-label", t("sidebar.renameSessionAriaLabel"));
-      renameButton.textContent = "✎";
+      const renameIcon = createActionIcon("pencil", 13);
+      if (renameIcon) renameButton.appendChild(renameIcon);
       renameButton.addEventListener("click", (event) => {
         event.stopPropagation();
         this.startRename(item, {
@@ -684,7 +661,7 @@ export class SessionSidebar {
     const isPinned = this.pinStore.isWorkspacePinned(workspace.workspaceId);
     const items = [
       {
-        iconClass: "context-menu-pin-icon",
+        iconKind: "pin",
         label: isPinned ? t("sidebar.unpinWorkspace") : t("sidebar.pinWorkspace"),
         action: () => {
           this.quickInfo.close();
@@ -716,7 +693,10 @@ export class SessionSidebar {
       const icon = document.createElement("span");
       icon.className = `context-menu-icon${item.iconClass ? ` ${item.iconClass}` : ""}`;
       icon.setAttribute("aria-hidden", "true");
-      if (item.iconKind) icon.appendChild(createSvgIcon(item.iconKind));
+      if (item.iconKind) {
+        const iconNode = createActionIcon(item.iconKind);
+        if (iconNode) icon.appendChild(iconNode);
+      }
       const label = document.createElement("span");
       label.textContent = item.label;
       row.append(icon, label);
@@ -1005,7 +985,7 @@ export class SessionSidebar {
       onDelete,
       onRename: (filePath, session, item) => this.renameSession(filePath, session, item),
       onContextMenu: (event, item, session) => this.showSessionContextMenu(event, item, session),
-      createIcon: createSvgIcon,
+      createIcon: createActionIcon,
     });
   }
 
@@ -1025,7 +1005,8 @@ export class SessionSidebar {
     header.className = "project-header super-agent-pinned-header";
     const star = document.createElement("span");
     star.className = "fav-star";
-    star.textContent = "★";
+    const starIcon = createActionIcon("pin", 14);
+    if (starIcon) star.appendChild(starIcon);
     const title = document.createElement("span");
     title.textContent = "Agent Inbox";
     const count = document.createElement("span");

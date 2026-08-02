@@ -1,3 +1,5 @@
+import { createIcon } from "../icons.js";
+
 function titleCaseSkillName(name) {
   return name
     .split(/[-_]/)
@@ -20,12 +22,8 @@ function scopeLabel(scope) {
   return "Personal";
 }
 
-function cubeIcon() {
-  return `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="m12 2.8 8 4.6v9.2l-8 4.6-8-4.6V7.4l8-4.6Z" />
-      <path d="m4.3 7.6 7.7 4.5 7.7-4.5M12 12.1v8.7M8 5.1l8 4.6" />
-    </svg>`;
+function cubeIcon(doc) {
+  return createIcon("box", { size: 16, document: doc });
 }
 
 export function setupSkillSlashCommand({ input, container, loadSkills }) {
@@ -45,7 +43,7 @@ export function setupSkillSlashCommand({ input, container, loadSkills }) {
     matches = [];
     selectedIndex = 0;
     container.classList.add("hidden");
-    container.innerHTML = "";
+    container.replaceChildren();
     input.removeAttribute("aria-activedescendant");
     input.setAttribute("aria-expanded", "false");
   }
@@ -93,7 +91,7 @@ export function setupSkillSlashCommand({ input, container, loadSkills }) {
     });
     selectedIndex = Math.min(selectedIndex, Math.max(matches.length - 1, 0));
 
-    container.innerHTML = "";
+    container.replaceChildren();
     const heading = document.createElement("div");
     heading.className = "skill-slash-heading";
     heading.textContent = "Skills";
@@ -113,14 +111,20 @@ export function setupSkillSlashCommand({ input, container, loadSkills }) {
         option.classList.toggle("selected", index === selectedIndex);
         option.setAttribute("role", "option");
         option.setAttribute("aria-selected", String(index === selectedIndex));
-        option.innerHTML = `
-          <span class="skill-slash-icon">${cubeIcon()}</span>
-          <span class="skill-slash-name"></span>
-          <span class="skill-slash-description"></span>
-          <span class="skill-slash-scope"></span>`;
-        option.querySelector(".skill-slash-name").textContent = titleCaseSkillName(skill.name);
-        option.querySelector(".skill-slash-description").textContent = skill.description;
-        option.querySelector(".skill-slash-scope").textContent = scopeLabel(skill.scope);
+        const icon = document.createElement("span");
+        icon.className = "skill-slash-icon";
+        const iconSvg = cubeIcon(document);
+        if (iconSvg) icon.appendChild(iconSvg);
+        const name = document.createElement("span");
+        name.className = "skill-slash-name";
+        name.textContent = titleCaseSkillName(skill.name);
+        const description = document.createElement("span");
+        description.className = "skill-slash-description";
+        description.textContent = skill.description;
+        const scope = document.createElement("span");
+        scope.className = "skill-slash-scope";
+        scope.textContent = scopeLabel(skill.scope);
+        option.append(icon, name, description, scope);
         option.addEventListener("mouseenter", () => {
           selectedIndex = index;
           updateSelection();

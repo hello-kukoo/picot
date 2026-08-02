@@ -1,50 +1,11 @@
 // ABOUTME: Owns the Git tab, status groups, and safe user-visible Git actions.
 // ABOUTME: Renders untrusted repository paths with DOM text nodes and delegates writes to GitClient.
 
+import { createFileTypeIcon } from "./file-type-icons.js";
 import { t } from "./i18n.js";
 import { createSectionChevron } from "./sidebar-workspace-group.js";
 
 const GROUPS = ["staged", "changes", "untracked", "conflicted"];
-
-// Extension-based emoji icons — mirrors the File Browser tree so Git entries
-// share the same visual vocabulary as regular workspace files.
-const FILE_ICONS = {
-  js: "📄",
-  ts: "📄",
-  jsx: "📄",
-  tsx: "📄",
-  py: "🐍",
-  rb: "💎",
-  go: "📄",
-  rs: "🦀",
-  html: "🌐",
-  css: "🎨",
-  svg: "🎨",
-  json: "📋",
-  yaml: "📋",
-  yml: "📋",
-  toml: "📋",
-  xml: "📋",
-  csv: "📋",
-  md: "📝",
-  txt: "📝",
-  rst: "📝",
-  png: "🖼️",
-  jpg: "🖼️",
-  jpeg: "🖼️",
-  gif: "🖼️",
-  webp: "🖼️",
-  ico: "🖼️",
-  env: "🔒",
-  gitignore: "🔒",
-  lock: "🔒",
-  default: "📄",
-};
-
-function getFileIcon(name) {
-  const ext = name.split(".").pop()?.toLowerCase() || "";
-  return FILE_ICONS[ext] || FILE_ICONS.default;
-}
 
 export class GitPanel {
   constructor({ container, client, openDiff, onDiffRequest, onStatus, fileList } = {}) {
@@ -518,7 +479,13 @@ export class GitPanel {
       const icon = document.createElement("span");
       icon.className = "git-tree-folder-icon";
       icon.setAttribute("aria-hidden", "true");
-      icon.textContent = this.folded.has(dirKey) ? "📁" : "📂";
+      icon.appendChild(
+        createFileTypeIcon({
+          name: segment,
+          isDirectory: true,
+          expanded: !this.folded.has(dirKey),
+        }),
+      );
       const label = document.createElement("span");
       label.className = "git-tree-label";
       label.textContent = `${prefix ? `${prefix}/` : ""}${segment}`;
@@ -548,7 +515,7 @@ export class GitPanel {
       const icon = document.createElement("span");
       icon.className = "git-tree-file-icon";
       icon.setAttribute("aria-hidden", "true");
-      icon.textContent = getFileIcon(fileName);
+      icon.appendChild(createFileTypeIcon({ name: fileName }));
       const label = document.createElement("span");
       label.className = "git-tree-label";
       label.textContent = fileName;

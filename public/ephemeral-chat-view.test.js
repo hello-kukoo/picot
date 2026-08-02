@@ -164,8 +164,11 @@ describe("EphemeralChatView", () => {
     expect(palette.classList.contains("hidden")).toBe(false);
     expect(palette.querySelector(".command-palette-header").textContent).toBe("Commands");
     expect(
-      Array.from(palette.querySelectorAll(".command-icon")).map((icon) => icon.textContent),
-    ).toEqual(["🗜️", "📋", "📊", "⬇️", "⬆️"]);
+      Array.from(palette.querySelectorAll(".command-icon svg")).map((icon) =>
+        icon.getAttribute("aria-hidden"),
+      ),
+    ).toHaveLength(5);
+    expect(palette.querySelectorAll(".command-icon svg")[0]).not.toBeNull();
     expect(palette.querySelector(".command-desc").textContent).toBe("Compact the context");
     expect(palette.querySelector('[aria-disabled="true"]').textContent).toContain("Export HTML");
     view.destroy();

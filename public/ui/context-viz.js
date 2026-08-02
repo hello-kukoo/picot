@@ -1,4 +1,5 @@
 import { t } from "../i18n.js";
+import { createIcon } from "../icons.js";
 
 export function setupContextViz({
   tokenUsageEl,
@@ -116,7 +117,11 @@ export function setupContextViz({
     if (!compactBtn) return;
     const busy = getCompactState() !== "idle";
     compactBtn.disabled = busy;
-    compactBtn.textContent = busy ? t("status.compacting") : t("misc.compact");
+    const compactIcon = createIcon("text-collapse", { size: 14 });
+    const compactLabel = document.createTextNode(busy ? t("status.compacting") : t("misc.compact"));
+    compactBtn.replaceChildren();
+    if (compactIcon) compactBtn.append(compactIcon, compactLabel);
+    else compactBtn.appendChild(compactLabel);
     compactBtn.setAttribute("aria-busy", String(busy));
   }
 

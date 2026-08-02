@@ -58,7 +58,7 @@ export class TerminalPanel {
     this.toggleEl.setAttribute("aria-pressed", "false");
     this.toggleEl.setAttribute("aria-label", t("terminal.toggle"));
     this.toggleEl.setAttribute("title", t("terminal.toggle"));
-    this.toggleEl.appendChild(createIcon("sliders", { size: 16 }));
+    this.toggleEl.appendChild(createIcon("terminal", { size: 16 }));
     this.toggleEl.addEventListener("click", () => this.toggle());
 
     this.root = document.createElement("section");
@@ -194,9 +194,11 @@ export class TerminalPanel {
     }
     this.enlargeButton?.classList.toggle("enlarged", this.enlarged);
     const labelKey = this.enlarged ? "terminal.restore" : "terminal.enlarge";
+    const iconName = this.enlarged ? "minimize" : "maximize";
     this.enlargeButton?.setAttribute("aria-label", t(labelKey));
     if (this.enlargeButton) {
       this.enlargeButton.title = t(labelKey);
+      setButtonIcon(this.enlargeButton, iconName, { size: 14 });
     }
     this.client?.refitAll?.();
   }
@@ -346,9 +348,11 @@ export class TerminalPanel {
         if (live && !window.confirm(`Close ${tab.label || "terminal"}?`)) return;
         this.client?.close?.(tab.terminalId, tab.generation);
       });
-      const restart = document.createElement("span");
+      const restart = document.createElement("button");
+      restart.type = "button";
       restart.className = "terminal-tab-restart";
-      restart.textContent = "↻";
+      setButtonIcon(restart, "rotate-cw", { size: 12 });
+      restart.setAttribute("aria-label", t("terminal.retry"));
       restart.title = t("terminal.retry");
       restart.addEventListener("click", (event) => {
         event.stopPropagation();

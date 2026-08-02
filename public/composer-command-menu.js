@@ -8,6 +8,7 @@ export function setupComposerCommandMenu({
   getCommands,
   document: doc,
   overlay = null,
+  createIcon = null,
 }) {
   const close = () => {
     menu.classList.add("hidden");
@@ -27,7 +28,17 @@ export function setupComposerCommandMenu({
       } else {
         const icon = doc.createElement("div");
         icon.className = "command-icon";
-        icon.textContent = command.icon || "";
+        // Command icons are registry names rendered as SVG; fall back to raw
+        // text only when a command supplies a literal glyph string.
+        const iconNode =
+          typeof createIcon === "function" && command.icon
+            ? createIcon(command.icon, { size: 16 })
+            : null;
+        if (iconNode) {
+          icon.appendChild(iconNode);
+        } else {
+          icon.textContent = command.icon || "";
+        }
         const details = doc.createElement("div");
         const label = doc.createElement("div");
         label.className = "command-label";

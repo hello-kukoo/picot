@@ -17,15 +17,48 @@ test("file sidebar uses the outlined panel toolbar control", () => {
 
   expect(button?.classList.contains("panel-toggle-btn")).toBe(true);
   expect(button?.getAttribute("aria-label")).toBe("Toggle file browser");
-  expect(button?.querySelector('rect[x="3.5"]')).not.toBeNull();
-  expect(button?.querySelector('path[d="M17 5v14"]')).not.toBeNull();
+  // Static HTML carries an inline panel SVG; at runtime app.js replaces it
+  // with the shared registry glyph (panel-right) via setButtonIcon.
+  expect(appJs).toContain('setButtonIcon(fileSidebarToggle, "panel-right"');
 });
 
-test("Side Chat keeps its existing icon button styling", () => {
+test("Side Chat mirrors Terminal's active panel toggle contract", () => {
   const button = document.querySelector("#side-chat-btn");
 
   expect(button?.classList.contains("icon-btn")).toBe(true);
-  expect(button?.classList.contains("panel-toggle-btn")).toBe(false);
+  expect(button?.classList.contains("panel-toggle-btn")).toBe(true);
+  expect(button?.getAttribute("aria-pressed")).toBe("false");
+  expect(appJs).toContain('setButtonIcon(sideChatButton, "message-square"');
+  expect(appJs).toContain('activeContent?.kind === "transient"');
+  expect(appJs).toContain("onStateChange: syncSideChatButton");
+});
+
+test("sidebar action buttons share the main panel toggle visual contract", () => {
+  for (const id of ["open-folder-btn", "quick-chat-btn", "refresh-sessions-btn"]) {
+    expect(document.querySelector(`#${id}`)?.classList.contains("panel-toggle-btn")).toBe(true);
+  }
+  expect(appJs).toContain('setButtonIcon(openFolderBtn, "folder-plus", { size: 16 });');
+  expect(appJs).toContain('setButtonIcon(refreshSessionsBtn, "refresh-cw", { size: 16 });');
+  expect(appJs).toContain(
+    'setButtonIcon(document.getElementById("quick-chat-btn"), "message-circle", { size: 16 });',
+  );
+  expect(appJs).toContain('setButtonIcon(lanQrBtn, "smartphone"');
+  expect(styleCss).toContain(".lan-qr-btn");
+  expect(styleCss).toContain(".panel-toggle-btn:hover");
+  expect(styleCss).toContain('.panel-toggle-btn[aria-pressed="true"]');
+});
+
+test("File panel actions share the same scoped button treatment", () => {
+  for (const id of ["file-sidebar-up", "file-sidebar-finder", "file-sidebar-close"]) {
+    const button = document.querySelector(`#${id}`);
+    expect(button?.classList.contains("file-sidebar-action")).toBe(true);
+    expect(button?.querySelector("svg")).toBeNull();
+  }
+  expect(appJs).toContain('[fileSidebarClose, "x", 16]');
+  expect(appJs).toContain('[fileSidebarUp, "arrow-up", 16]');
+  expect(appJs).toContain('[fileSidebarFinder, "folder-open", 16]');
+  expect(styleCss).toContain(".file-sidebar-header .file-sidebar-action");
+  expect(styleCss).toContain(".file-sidebar-header .file-sidebar-action svg");
 });
 
 test("toolbar orders Side Chat, Terminal Panel, then File Browser", () => {

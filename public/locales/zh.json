@@ -66,8 +66,10 @@
   "usage": {
     "contextTokens": "上下文：{used}k / {limit}k 令牌",
     "sessionCostTitle": "会话成本",
+    "sessionUsageTitle": "会话令牌（输入 / 输出 / 缓存）",
     "contextTitle": "上下文用量",
-    "costSub": "{amount}（订阅）"
+    "costSub": "{amount}（订阅）",
+    "summary": "入 {in} · 出 {out} · 缓存 {cache}"
   },
   "context": {
     "cached": "已缓存",
@@ -114,7 +116,8 @@
     "copyMessage": "复制消息",
     "thinking": "思考中",
     "copy": "复制",
-    "copied": "已复制！"
+    "copied": "已复制！",
+    "scrollToBottom": "滚动到最新消息"
   },
   "tools": {
     "copyOutput": "复制输出",
@@ -716,7 +719,8 @@
     "model": "模型",
     "compact": "压缩",
     "compactTitle": "上下文已超过 80% — 压缩以节省令牌",
-    "qrUnavailable": "二维码不可用"
+    "qrUnavailable": "二维码不可用",
+    "toggleContextControls": "切换上下文控制"
   },
   "browse": {
     "openExternalPrompt": "在新标签页打开此链接："

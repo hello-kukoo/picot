@@ -57,7 +57,7 @@ describe("buildSessionItem action visibility", () => {
     expect(item.querySelector(".session-archive-btn")).toBeNull();
     const del = item.querySelector(".session-delete-btn");
     expect(del).toBeTruthy();
-    expect(del.querySelector("[data-icon='trash']")).toBeTruthy();
+    expect(del.querySelector("[data-icon='trash-2']")).toBeTruthy();
   });
 });
 

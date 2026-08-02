@@ -5,6 +5,7 @@ import { setupVoiceInput } from "./app/voice-input.js";
 import { setupComposerCommandMenu } from "./composer-command-menu.js";
 import { setupComposerImageAttachments } from "./composer-image-attachments.js";
 import { onLocaleChange, t } from "./i18n.js";
+import { createIcon } from "./icons.js";
 import { processImageFile, processImagePayload } from "./image-attachments.js";
 import { setupAtFileMention } from "./ui/at-file-mention.js";
 import { DialogHandler } from "./ui/dialogs.js";
@@ -14,47 +15,9 @@ import { ToolCardRenderer } from "./ui/tool-card.js";
 // Monotonic counter guarantees unique mention-popup ids across ephemeral views.
 let ephemeralPopupSeq = 0;
 
-const SVG_NS = "http://www.w3.org/2000/svg";
-
-function appendIcon(doc, button, paths, { fill = "none", strokeWidth = "2" } = {}) {
-  const svg = doc.createElementNS(SVG_NS, "svg");
-  svg.setAttribute("aria-hidden", "true");
-  svg.setAttribute("width", "16");
-  svg.setAttribute("height", "16");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("fill", fill);
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", strokeWidth);
-  svg.setAttribute("stroke-linecap", "round");
-  svg.setAttribute("stroke-linejoin", "round");
-  for (const d of paths) {
-    const path = doc.createElementNS(SVG_NS, "path");
-    path.setAttribute("d", d);
-    svg.appendChild(path);
-  }
-  button.replaceChildren(svg);
-}
-
-function appendSendIcon(doc, button) {
-  const svg = doc.createElementNS(SVG_NS, "svg");
-  svg.setAttribute("aria-hidden", "true");
-  svg.setAttribute("width", "16");
-  svg.setAttribute("height", "16");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("fill", "none");
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "2.5");
-  svg.setAttribute("stroke-linecap", "round");
-  svg.setAttribute("stroke-linejoin", "round");
-  const line = doc.createElementNS(SVG_NS, "line");
-  line.setAttribute("x1", "12");
-  line.setAttribute("y1", "19");
-  line.setAttribute("x2", "12");
-  line.setAttribute("y2", "5");
-  const chevron = doc.createElementNS(SVG_NS, "polyline");
-  chevron.setAttribute("points", "5 12 12 5 19 12");
-  svg.append(line, chevron);
-  button.replaceChildren(svg);
+function setRegistryIcon(doc, button, name, options = {}) {
+  const icon = createIcon(name, { ...options, document: doc });
+  if (icon) button.replaceChildren(icon);
 }
 
 /**
@@ -140,7 +103,7 @@ export class EphemeralChatView {
     attachBtn.type = "button";
     attachBtn.className = "input-icon-btn ephemeral-attach";
     attachBtn.dataset.role = "ephemeral-attach";
-    appendIcon(doc, attachBtn, ["M12 5v14", "M5 12h14"]);
+    setRegistryIcon(doc, attachBtn, "plus", { size: 16 });
     this._attachBtn = attachBtn;
     toolbarLeft.appendChild(attachBtn);
 
@@ -151,12 +114,7 @@ export class EphemeralChatView {
     const commandsLabel = t("input.commands");
     this._commandBtn.title = commandsLabel;
     this._commandBtn.setAttribute("aria-label", commandsLabel);
-    appendIcon(doc, this._commandBtn, [
-      "M12 22v-5",
-      "M9 8V2",
-      "M15 8V2",
-      "M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z",
-    ]);
+    setRegistryIcon(doc, this._commandBtn, "bot", { size: 16 });
     toolbarLeft.appendChild(this._commandBtn);
 
     this._modelDropdown = doc.createElement("div");
@@ -168,21 +126,9 @@ export class EphemeralChatView {
     this._modelLabel = doc.createElement("span");
     this._modelLabel.className = "model-dropdown-label";
     this._modelBtn.appendChild(this._modelLabel);
-    const chevron = doc.createElementNS(SVG_NS, "svg");
-    chevron.classList.add("model-dropdown-chevron");
-    chevron.setAttribute("aria-hidden", "true");
-    chevron.setAttribute("width", "10");
-    chevron.setAttribute("height", "6");
-    chevron.setAttribute("viewBox", "0 0 10 6");
-    chevron.setAttribute("fill", "none");
-    const chevronPath = doc.createElementNS(SVG_NS, "path");
-    chevronPath.setAttribute("d", "M1 1L5 5L9 1");
-    chevronPath.setAttribute("stroke", "currentColor");
-    chevronPath.setAttribute("stroke-width", "1.5");
-    chevronPath.setAttribute("stroke-linecap", "round");
-    chevronPath.setAttribute("stroke-linejoin", "round");
-    chevron.appendChild(chevronPath);
-    this._modelBtn.appendChild(chevron);
+    const chevron = createIcon("chevron-down", { size: 10, document: doc });
+    chevron?.classList.add("model-dropdown-chevron");
+    if (chevron) this._modelBtn.appendChild(chevron);
     this._modelMenu = doc.createElement("div");
     this._modelMenu.className = "model-dropdown-menu hidden";
     this._modelDropdown.append(this._modelBtn, this._modelMenu);
@@ -197,11 +143,7 @@ export class EphemeralChatView {
     this._micBtn = doc.createElement("button");
     this._micBtn.type = "button";
     this._micBtn.className = "input-mic-btn ephemeral-mic";
-    appendIcon(doc, this._micBtn, [
-      "M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z",
-      "M19 10v2a7 7 0 0 1-14 0v-2",
-      "M12 19v3",
-    ]);
+    setRegistryIcon(doc, this._micBtn, "mic", { size: 16 });
     toolbarRight.appendChild(this._micBtn);
 
     this._sendBtn = doc.createElement("button");
@@ -262,6 +204,7 @@ export class EphemeralChatView {
       getCommands: () => this._sideCommands(),
       document: this._doc,
       overlay: this._commandOverlay,
+      createIcon,
     });
 
     this._onRenderState = (event) => this._render(event.detail);
@@ -421,20 +364,20 @@ export class EphemeralChatView {
   _sideCommands() {
     return [
       {
-        icon: "🗜️",
+        icon: "text-collapse",
         label: t("input.compact"),
         desc: t("input.compactDesc"),
         action: () => this.runtime.runCommand("compact"),
       },
       {
-        icon: "📋",
+        icon: "clipboard",
         label: t("input.exportHtml"),
         desc: t("input.exportHtmlDesc"),
         action: () => {},
         disabled: true,
       },
       {
-        icon: "📊",
+        icon: "bar-chart",
         label: t("input.sessionStats"),
         desc: t("input.sessionStatsDesc"),
         action: async () => {
@@ -450,13 +393,13 @@ export class EphemeralChatView {
         },
       },
       {
-        icon: "⬇️",
+        icon: "chevrons-down",
         label: t("input.expandAllTools"),
         desc: t("input.expandAllToolsDesc"),
         action: () => this.toolCardRenderer?.expandAll(),
       },
       {
-        icon: "⬆️",
+        icon: "chevrons-up",
         label: t("input.collapseAllTools"),
         desc: t("input.collapseAllToolsDesc"),
         action: () => this.toolCardRenderer?.collapseAll(),
@@ -609,12 +552,9 @@ export class EphemeralChatView {
     this._sendBtn.title = sendLabel;
     this._sendBtn.setAttribute("aria-label", sendLabel);
     if (state?.isStreaming) {
-      appendIcon(this._doc, this._sendBtn, ["M4 4h16v16H4z"], {
-        fill: "currentColor",
-        strokeWidth: "2.5",
-      });
+      setRegistryIcon(this._doc, this._sendBtn, "square", { size: 16, filled: true });
     } else {
-      appendSendIcon(this._doc, this._sendBtn);
+      setRegistryIcon(this._doc, this._sendBtn, "arrow-up", { size: 16 });
     }
     const voiceLabel = t("voice.voiceInput");
     this._micBtn.title = voiceLabel;

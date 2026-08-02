@@ -1,6 +1,11 @@
 // ABOUTME: Renders collapsible tool execution cards and their streaming output.
 // ABOUTME: Uses container-level event delegation so dynamically added cards need no per-element listeners.
 
+// ABOUTME: Renders tool-call cards (bash, edit, etc.) with collapsible args/output.
+// ABOUTME: Copy output uses the shared action-icon registry.
+
+import { setButtonIcon } from "../icons.js";
+
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 import { onLocaleChange, t } from "../i18n.js";
@@ -164,30 +169,7 @@ export class ToolCardRenderer {
     const label = t("tools.copyOutput");
     copyButton.title = label;
     copyButton.setAttribute("aria-label", label);
-
-    const svg = document.createElementNS(SVG_NS, "svg");
-    for (const [name, value] of [
-      ["width", "13"],
-      ["height", "13"],
-      ["viewBox", "0 0 24 24"],
-      ["fill", "none"],
-      ["stroke", "currentColor"],
-      ["stroke-width", "2"],
-      ["stroke-linecap", "round"],
-      ["stroke-linejoin", "round"],
-    ]) {
-      svg.setAttribute(name, value);
-    }
-    const rect = document.createElementNS(SVG_NS, "rect");
-    rect.setAttribute("width", "14");
-    rect.setAttribute("height", "14");
-    rect.setAttribute("x", "8");
-    rect.setAttribute("y", "8");
-    rect.setAttribute("rx", "2");
-    const path = document.createElementNS(SVG_NS, "path");
-    path.setAttribute("d", "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2");
-    svg.append(rect, path);
-    copyButton.appendChild(svg);
+    setButtonIcon(copyButton, "copy", { size: 13 });
     // Click handling is delegated to the container listener; no per-button
     // listener is needed here.
     return copyButton;

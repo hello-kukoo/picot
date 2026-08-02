@@ -153,6 +153,31 @@ function createPanel(options = {}) {
 }
 
 describe("FilePreviewPanel", () => {
+  test("reports transient panel activation and close state changes", () => {
+    const onStateChange = vi.fn();
+    const p = createPanel({ onStateChange });
+    p.registerTransientTab({
+      id: "side-1",
+      title: "Side Chat",
+      contentElement: document.createElement("div"),
+      onActivate: () => {},
+      onDeactivate: () => {},
+    });
+
+    p.activateContent({ kind: "transient", id: "side-1" });
+    expect(onStateChange).toHaveBeenLastCalledWith({
+      panelOpen: true,
+      activeContent: { kind: "transient", id: "side-1" },
+    });
+
+    p.hidePanel();
+    expect(onStateChange).toHaveBeenLastCalledWith({
+      panelOpen: false,
+      activeContent: null,
+    });
+    p.destroy();
+  });
+
   test("renders converted responses as read-only Markdown", async () => {
     global.fetch = vi.fn(() =>
       Promise.resolve({

@@ -2,6 +2,7 @@
 // ABOUTME: Owns Claude root enablement and existing skill toggle/tree behavior.
 
 import { onLocaleChange, t } from "../i18n.js";
+import { createIcon } from "../icons.js";
 import { manageModalDialog } from "./skills-modal.js";
 
 /**
@@ -408,21 +409,24 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
     const groupDisabled = parentDisabled || group.ambiguous || groupPending;
 
     const header = el("div", { class: "skills-group-header" }, [
-      el("button", {
-        type: "button",
-        class: `skills-expand${expanded ? "" : " collapsed"}`,
-        text: expanded ? "⌄" : "›",
-        aria: {
-          label: `${t("settings.skills.source")}: ${group.ruleBaseRelativePath}`,
-          expanded: String(expanded),
-          controls: `skills-group-list-${group.id}`,
+      el(
+        "button",
+        {
+          type: "button",
+          class: `skills-expand${expanded ? "" : " collapsed"}`,
+          aria: {
+            label: `${t("settings.skills.source")}: ${group.ruleBaseRelativePath}`,
+            expanded: String(expanded),
+            controls: `skills-group-list-${group.id}`,
+          },
+          onClick: () => {
+            if (expandedGroups.has(group.id)) expandedGroups.delete(group.id);
+            else expandedGroups.add(group.id);
+            render();
+          },
         },
-        onClick: () => {
-          if (expandedGroups.has(group.id)) expandedGroups.delete(group.id);
-          else expandedGroups.add(group.id);
-          render();
-        },
-      }),
+        createIcon("chevron-down", { size: 14 }),
+      ),
       el("div", { class: "skills-group-info" }, [
         el("div", { class: "skills-group-name", text: group.name }),
         el("div", { class: "skills-group-source", text: group.ruleBaseRelativePath }),

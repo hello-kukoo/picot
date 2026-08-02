@@ -10,25 +10,11 @@ const MIN_DIALOG_HEIGHT = 280;
 const RECOVERY_AREA = 48;
 const RESIZE_DIRECTIONS = ["n", "ne", "e", "se", "s", "sw", "w", "nw"];
 
-const SVG_NS = "http://www.w3.org/2000/svg";
+import { createIcon } from "./icons.js";
 
-function appendTitleIcon(button, paths) {
-  const svg = document.createElementNS(SVG_NS, "svg");
-  svg.setAttribute("aria-hidden", "true");
-  svg.setAttribute("width", "14");
-  svg.setAttribute("height", "14");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("fill", "none");
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "2");
-  svg.setAttribute("stroke-linecap", "round");
-  svg.setAttribute("stroke-linejoin", "round");
-  for (const d of paths) {
-    const path = document.createElementNS(SVG_NS, "path");
-    path.setAttribute("d", d);
-    svg.appendChild(path);
-  }
-  button.replaceChildren(svg);
+function appendTitleIcon(button, iconName) {
+  const icon = createIcon(iconName, { size: 14 });
+  if (icon) button.replaceChildren(icon);
 }
 
 export class QuickChatDialog {
@@ -230,15 +216,11 @@ export class QuickChatDialog {
     this._titleActions = doc.createElement("div");
     this._titleActions.className = "quick-chat-title-actions";
     this._titleActions.append(
-      this._titleButton("quick-chat-new", "ephemeral.newChat", ["M12 5v14", "M5 12h14"], () =>
-        this.replace(),
-      ),
-      this._titleButton("quick-chat-minimize", "ephemeral.minimize", ["M5 12h14"], () =>
+      this._titleButton("quick-chat-new", "ephemeral.newChat", "plus", () => this.replace()),
+      this._titleButton("quick-chat-minimize", "ephemeral.minimize", "minus", () =>
         this.minimize(),
       ),
-      this._titleButton("quick-chat-close", "ephemeral.close", ["M18 6 6 18", "M6 6 18 18"], () =>
-        this.close(),
-      ),
+      this._titleButton("quick-chat-close", "ephemeral.close", "x", () => this.close()),
     );
     title.appendChild(this._titleActions);
     this._dialog.appendChild(title);
@@ -295,13 +277,13 @@ export class QuickChatDialog {
     this._chip.addEventListener("click", () => this.restore());
   }
 
-  _titleButton(role, labelKey, paths, onClick) {
+  _titleButton(role, labelKey, iconName, onClick) {
     const btn = globalThis.document.createElement("button");
     btn.type = "button";
     btn.className = "quick-chat-title-btn";
     btn.dataset.role = role;
     btn.dataset.i18nKey = labelKey;
-    appendTitleIcon(btn, paths);
+    appendTitleIcon(btn, iconName);
     btn.addEventListener("click", (event) => {
       event.stopPropagation();
       onClick();

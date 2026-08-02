@@ -13,6 +13,7 @@
 import { classifyFilePath } from "./file-language.js";
 import { createFileRenderer } from "./file-preview-renderers.js";
 import { FileTabState } from "./file-tab-state.js";
+import { createFileTypeIcon } from "./file-type-icons.js";
 import { createGitDiffRenderer } from "./git-diff-renderer.js";
 import { onLocaleChange, t } from "./i18n.js";
 import { createIcon, setButtonIcon } from "./icons.js";
@@ -39,6 +40,7 @@ export class FilePreviewPanel {
     mainContainer,
     onOpenDesktop,
     onCopyText,
+    onStateChange,
     confirmDirty,
     resolveConflict,
     storage,
@@ -58,6 +60,7 @@ export class FilePreviewPanel {
     }
     this.onOpenDesktop = onOpenDesktop || (() => {});
     this.onCopyText = onCopyText || ((text) => navigator.clipboard?.writeText(text));
+    this.onStateChange = onStateChange || (() => {});
     this.confirmDirty = confirmDirty || ((tabs, reason) => this._showDirtyDialog(tabs, reason));
     this.resolveConflict = resolveConflict || ((tab) => this._showConflictDialog(tab));
 
@@ -290,6 +293,7 @@ export class FilePreviewPanel {
       this._deactivateCurrent();
       void this._selectTab(id).then(() => {
         this.activeContent = { kind: "file", id };
+        this._notifyStateChange();
         this._renderTabBar();
       });
     }
@@ -447,6 +451,13 @@ export class FilePreviewPanel {
     this.activeContent = null;
   }
 
+  _notifyStateChange() {
+    this.onStateChange({
+      panelOpen: this.panelOpen,
+      activeContent: this.activeContent,
+    });
+  }
+
   _openPanel() {
     this.panelOpen = true;
     this.panel?.classList.remove("collapsed");
@@ -454,6 +465,7 @@ export class FilePreviewPanel {
     this._updatePanelWidth();
     this._updateControlButtons();
     this._renderToolbar();
+    this._notifyStateChange();
   }
 
   _closePanel() {
@@ -468,6 +480,7 @@ export class FilePreviewPanel {
     this.content?.replaceChildren();
     this._updateControlButtons();
     this._renderToolbar();
+    this._notifyStateChange();
   }
 
   _destroyRenderer() {
@@ -521,6 +534,7 @@ export class FilePreviewPanel {
     label,
     title,
     icon,
+    iconIsElement,
     statusBadge,
     dirty,
     conflict,
@@ -550,8 +564,12 @@ export class FilePreviewPanel {
     if (icon) {
       const iconEl = document.createElement("span");
       iconEl.className = "file-preview-tab-icon";
-      iconEl.textContent = icon;
       iconEl.setAttribute("aria-hidden", "true");
+      if (iconIsElement && icon instanceof Node) {
+        iconEl.appendChild(icon);
+      } else {
+        iconEl.textContent = icon;
+      }
       tabEl.appendChild(iconEl);
     }
 
@@ -661,6 +679,7 @@ export class FilePreviewPanel {
         label: tab.fileName,
         title: tab.filePath,
         icon: this._getFileIcon(tab.fileName),
+        iconIsElement: true,
         dirty: tab.dirty,
         conflict: tab.conflict,
         isActive,
@@ -732,29 +751,7 @@ export class FilePreviewPanel {
   }
 
   _getFileIcon(fileName) {
-    const ext = (fileName.split(".").pop() || "").toLowerCase();
-    const iconMap = {
-      js: "📄",
-      ts: "📄",
-      jsx: "📄",
-      tsx: "📄",
-      py: "🐍",
-      r: "📊",
-      json: "📋",
-      yaml: "📋",
-      yml: "📋",
-      md: "📝",
-      markdown: "📝",
-      html: "🌐",
-      css: "🎨",
-      png: "🖼️",
-      jpg: "🖼️",
-      jpeg: "🖼️",
-      gif: "🖼️",
-      svg: "🎨",
-      pdf: "📕",
-    };
-    return iconMap[ext] || "📄";
+    return createFileTypeIcon({ name: fileName });
   }
 
   async _selectTab(tabId) {
@@ -1254,6 +1251,9 @@ export class FilePreviewPanel {
     this.controls = {
       toolbar: document.getElementById("file-preview-toolbar"),
       toolbarToggle: document.getElementById("file-preview-toolbar-toggle"),
+      enlarge: document.getElementById("file-preview-enlarge"),
+      collapse: document.getElementById("file-preview-collapse"),
+      close: document.getElementById("file-preview-close"),
       path: document.getElementById("file-preview-path"),
       preview: document.getElementById("file-preview-mode-preview"),
       save: document.getElementById("file-preview-save"),
@@ -1277,6 +1277,9 @@ export class FilePreviewPanel {
       [this.controls.copy, "copy"],
       [this.controls.openDesktop, "external-link"],
       [this.controls.toolbarToggle, "sliders"],
+      [this.controls.enlarge, "maximize"],
+      [this.controls.collapse, "minimize"],
+      [this.controls.close, "x"],
     ]) {
       setButtonIcon(control, icon, { size: 14 });
     }
