@@ -734,17 +734,13 @@
                   Linking never copies files. Pi reads the selected source paths
                   from the matching settings file.
                 </p>
-                <div
-                  class="scope-toggle"
-                  role="group"
-                  aria-label="Installation scope"
-                >
+                <fieldset class="scope-toggle" aria-label="Installation scope">
                   <button class="scope-option active" data-scope="global">
                     Global install</button
                   ><button class="scope-option" data-scope="project">
                     Current project
                   </button>
-                </div>
+                </fieldset>
                 <div class="scope-hint" id="scopeHint">
                   Writes to <code>~/.pi/agent/settings.json</code> for every
                   trusted workspace.
@@ -810,16 +806,16 @@ skills += [
 
     <script>
       const tabs = document.querySelectorAll(".top-tab");
-      tabs.forEach((tab) =>
+      tabs.forEach((tab) => {
         tab.addEventListener("click", () => {
-          tabs.forEach((item) => item.classList.toggle("active", item === tab));
-          document
-            .querySelectorAll(".panel")
-            .forEach((panel) =>
-              panel.classList.toggle("active", panel.id === tab.dataset.tab),
-            );
-        }),
-      );
+          tabs.forEach((item) => {
+            item.classList.toggle("active", item === tab);
+          });
+          document.querySelectorAll(".panel").forEach((panel) => {
+            panel.classList.toggle("active", panel.id === tab.dataset.tab);
+          });
+        });
+      });
 
       const skillChecks = [...document.querySelectorAll(".skill-check")];
       const groupChecks = [...document.querySelectorAll(".group-check")];
@@ -840,32 +836,32 @@ skills += [
         groupChecks[1].indeterminate =
           !groupChecks[1].checked && review.some((item) => item.checked);
       }
-      skillChecks.forEach((item) =>
-        item.addEventListener("change", updateSelection),
-      );
-      groupChecks.forEach((group, index) =>
+      skillChecks.forEach((item) => {
+        item.addEventListener("change", updateSelection);
+      });
+      groupChecks.forEach((group, index) => {
         group.addEventListener("change", () => {
           const targets =
             index === 0
               ? skillChecks.slice(0, 3)
               : skillChecks.filter((item) => item.dataset.parent === "review");
-          targets.forEach((item) => (item.checked = group.checked));
+          targets.forEach((item) => {
+            item.checked = group.checked;
+          });
           updateSelection();
-        }),
-      );
+        });
+      });
 
       let scope = "global";
       const scopeHint = document.getElementById("scopeHint");
       const previewText = document.getElementById("previewText");
       const modalSettings = document.getElementById("modalSettings");
-      document.querySelectorAll(".scope-option").forEach((option) =>
+      document.querySelectorAll(".scope-option").forEach((option) => {
         option.addEventListener("click", () => {
           scope = option.dataset.scope;
-          document
-            .querySelectorAll(".scope-option")
-            .forEach((item) =>
-              item.classList.toggle("active", item === option),
-            );
+          document.querySelectorAll(".scope-option").forEach((item) => {
+            item.classList.toggle("active", item === option);
+          });
           const global = scope === "global";
           const settings = global
             ? "~/.pi/agent/settings.json"
@@ -883,8 +879,8 @@ skills += [
           modalSettings.textContent = settings;
           document.getElementById("modalPaths").textContent =
             `${first}\n${second}`;
-        }),
-      );
+        });
+      });
 
       const modal = document.getElementById("modal");
       document

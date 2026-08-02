@@ -664,6 +664,43 @@ Tauri command handler（`new_session_core`、`switch_session_core`、
   （`src-tauri/src/pi_manager.rs`）；未来任何 Rust→pi 的 HTTP 调用
   都必须以同样方式构建 client。
 
+### UI 现代化：会话聚合 / 当前上下文 / 图标 / 面板
+
+这些是集成 UI 现代化后的稳定生命周期与所有权契约。
+
+- **会话聚合与当前上下文是两套独立数据。** 会话级 IN/OUT/CACHE/cost
+  只能由 `get_session_stats` 聚合（`aggregateSessionStats`）和
+  `headerStatusBar.applyLiveUsage()`（仅同一 active session 的新 live
+  completion）贡献；历史回放（`renderSessionHistory`）只更新
+  current-context `lastUsage`，绝不累加聚合。`ui/header-status-bar.js`
+  拥有聚合行，`lastUsage` 路径拥有当前上下文 pill。
+- **Compact 不变量：确认 ≠ 完成。** 只有 `compaction_end(success:true)`
+  才失效 `lastUsage`、清除 context pill、关闭陈旧 Context Viz；ack 与
+  failure 保留当前上下文。聚合总额不受 Compact 影响。
+- **图标语义不可互换。** 动作控件（`maximize` / `minimize` /
+  `text-collapse` / `refresh-cw`）使用本地单色 SVG（`public/icons.js`，
+  24×24、`currentColor`、round caps）；DOM 构建按钮必须通过
+  `createIcon()` / `setButtonIcon()`，命令模板只能使用受信 registry 定义。
+  File/Git 对象图标使用受控的 vscode-material-icon-theme 词表
+  （`public/file-type-icons.js`，本地受信 fill、不强制 `currentColor`）。
+  Material 资产绝不用作动作控件，动作图标绝不用作对象图标。品牌标志、
+  状态点、session history 的既有内容图形和独立 prototype 属于明确例外，
+  不得为了统一图标而改写。
+- **Header 动作控件固定 32px。** 仅主 `.header` / `.header-right` /
+  `.header-left` 内的 `.icon-btn` 为 32px；Sidebar、File Preview、
+  Terminal、对话框、面板控件保留各自 scoped 尺寸，需单独视觉评审。
+  不全局改写 `.icon-btn`。
+- **refresh 是静态的。** Sidebar refresh 不旋转；pending 状态用
+  `disabled` + `aria-busy` + 状态文案表示。
+- **通用 resizer 边界。** `ui/resizable-panel.js` 只服务 File sidebar
+  和 Super Agent；File Preview 与 Terminal 保留各自的 stateful
+  resize/enlarge 生命周期，不走 `setupResizablePanel()`。resizer 不使用
+  `setPointerCapture` / `releasePointerCapture`；手势结束（pointerup /
+  pointercancel / blur / hidden）统一 teardown 并 persist 一次。
+- **主题切换可降级。** `themes.js::withViewTransition` 在无 View
+  Transition API 或 `prefers-reduced-motion: reduce` 时同步生效；
+  否则把点击原点写入 CSS 自定义属性并走 `startViewTransition`。
+
 ---
 
 ## 横切关注点
