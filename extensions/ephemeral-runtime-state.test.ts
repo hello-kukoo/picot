@@ -161,11 +161,13 @@ describe("EphemeralRuntimeState snapshot", () => {
     state.setContextState({
       model: { id: "m1" },
       thinkingLevel: "high",
+      thinkingLevels: ["off", "high", "xhigh"],
       contextUsage: { used: 10 },
     });
     const snap = state.snapshot();
     expect(snap.model).toEqual({ id: "m1" });
     expect(snap.thinkingLevel).toBe("high");
+    expect(snap.thinkingLevels).toEqual(["off", "high", "xhigh"]);
     expect(snap.contextUsage).toEqual({ used: 10 });
   });
 

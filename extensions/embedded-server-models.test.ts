@@ -7,10 +7,47 @@ import { describe, expect, it } from "vitest";
 import {
   buildModelCatalog,
   getAvailableModelsForRpc,
+  getAvailableThinkingLevelsForModel,
+  getNextThinkingLevel,
   ModelPreferencesStore,
+  normalizeDefaultThinkingLevel,
   persistProviderApiKey,
   sanitizeHealthError,
 } from "./embedded-server.ts";
+
+describe("embedded server thinking levels", () => {
+  it("returns only off for models without reasoning support", () => {
+    expect(getAvailableThinkingLevelsForModel({ reasoning: false })).toEqual(["off"]);
+  });
+
+  it("honors model-specific level mappings, including extended levels", () => {
+    expect(
+      getAvailableThinkingLevelsForModel({
+        reasoning: true,
+        thinkingLevelMap: { minimal: null, xhigh: "xhigh", max: null },
+      }),
+    ).toEqual(["off", "low", "medium", "high", "xhigh"]);
+  });
+
+  it("cycles only through levels supported by the current model", () => {
+    const model = {
+      reasoning: true,
+      thinkingLevelMap: { minimal: null, low: null, medium: "medium", high: null },
+    };
+    expect(getNextThinkingLevel("off", model)).toBe("medium");
+    expect(getNextThinkingLevel("medium", model)).toBe("off");
+  });
+
+  it("does not cycle a model without reasoning support", () => {
+    expect(getNextThinkingLevel("off", { reasoning: false })).toBeNull();
+  });
+
+  it("normalizes the Settings default to the standard supported choices", () => {
+    expect(normalizeDefaultThinkingLevel("high")).toBe("high");
+    expect(normalizeDefaultThinkingLevel("xhigh")).toBe("medium");
+    expect(normalizeDefaultThinkingLevel("unsupported")).toBe("medium");
+  });
+});
 
 describe("embedded server model listing", () => {
   it("uses the cached model registry when session context is unavailable", async () => {

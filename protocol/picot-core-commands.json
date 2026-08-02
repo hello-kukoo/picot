@@ -17,6 +17,8 @@
     "set_model": "allowed",
     "cycle_model": "allowed",
     "cycle_thinking_level": "allowed",
+    "get_available_thinking_levels": "allowed",
+    "set_default_thinking_level": "allowed",
     "set_thinking_level": "allowed",
     "get_session_stats": "allowed",
     "set_session_name": "deniedSessionLifecycle",

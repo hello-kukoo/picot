@@ -40,6 +40,12 @@ import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  type Api,
+  getSupportedThinkingLevels,
+  type Model,
+  type ModelThinkingLevel,
+} from "@earendil-works/pi-ai";
+import {
   createAgentSession,
   type ExtensionAPI,
   type ExtensionCommandContext,
@@ -99,8 +105,11 @@ import {
   buildSkillInventory,
   mutateClaudeSkillRoot,
   mutateSkillEnabled,
+  readSettingsObject,
   type SkillScope,
   type SkillTarget,
+  withSettingsLock,
+  writeSettingsAtomically,
 } from "./skill-inventory.ts";
 import {
   inspectWorkspaceGit,
@@ -1275,6 +1284,51 @@ export class ModelPreferencesStore {
   }
 }
 
+const DEFAULT_THINKING_LEVELS: ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
+const DEFAULT_DEFAULT_THINKING_LEVEL: ModelThinkingLevel = "medium";
+type ThinkingModel = Pick<Model<Api>, "reasoning" | "thinkingLevelMap">;
+
+export function getAvailableThinkingLevelsForModel(
+  model: ThinkingModel | null | undefined,
+): ModelThinkingLevel[] {
+  return model ? getSupportedThinkingLevels(model as Model<Api>) : DEFAULT_THINKING_LEVELS;
+}
+
+export function getNextThinkingLevel(
+  currentLevel: ModelThinkingLevel,
+  model: ThinkingModel | null | undefined,
+): ModelThinkingLevel | null {
+  if (!model?.reasoning) return null;
+  const levels = getAvailableThinkingLevelsForModel(model);
+  const currentIndex = levels.indexOf(currentLevel);
+  return levels[(currentIndex + 1) % levels.length] ?? null;
+}
+
+export function normalizeDefaultThinkingLevel(level: unknown): ModelThinkingLevel {
+  return typeof level === "string" && DEFAULT_THINKING_LEVELS.includes(level as ModelThinkingLevel)
+    ? (level as ModelThinkingLevel)
+    : DEFAULT_DEFAULT_THINKING_LEVEL;
+}
+
+function configuredDefaultThinkingLevel(): ModelThinkingLevel {
+  try {
+    const settings = readSettingsObject(path.join(PI_AGENT_ROOT, "settings.json"));
+    return normalizeDefaultThinkingLevel(settings.defaultThinkingLevel);
+  } catch {
+    return DEFAULT_DEFAULT_THINKING_LEVEL;
+  }
+}
+
+async function saveDefaultThinkingLevel(level: unknown): Promise<ModelThinkingLevel> {
+  const normalized = normalizeDefaultThinkingLevel(level);
+  const settingsPath = path.join(PI_AGENT_ROOT, "settings.json");
+  await withSettingsLock(settingsPath, () => {
+    const current = readSettingsObject(settingsPath);
+    writeSettingsAtomically(settingsPath, { ...current, defaultThinkingLevel: normalized });
+  });
+  return normalized;
+}
+
 export async function getAvailableModelsForRpc(
   ctx: { modelRegistry?: AvailableModelRegistry } | null,
   fallbackRegistry: AvailableModelRegistry | null,
@@ -1812,6 +1866,7 @@ export default function (pi: ExtensionAPI) {
     "auto_retry_end",
     "extension_error",
     "model_select",
+    "thinking_level_select",
   ] as const;
 
   // Cache the process-scoped ModelRegistry the first time we see any ctx.
@@ -1856,6 +1911,7 @@ export default function (pi: ExtensionAPI) {
             ephemeralState.setContextState({
               model: ctx.model,
               thinkingLevel: currentPi()?.getThinkingLevel() ?? undefined,
+              thinkingLevels: getAvailableThinkingLevelsForModel(ctx.model),
               contextUsage: ctx.getContextUsage(),
             });
           }
@@ -2005,6 +2061,7 @@ export default function (pi: ExtensionAPI) {
     const model = ctx.model;
     const api = currentPi();
     const thinkingLevel = api?.getThinkingLevel() ?? "off";
+    const thinkingLevels = getAvailableThinkingLevelsForModel(model);
     const sessionName = api?.getSessionName() ?? "";
     const sessionFile = ctx.sessionManager.getSessionFile();
 
@@ -2016,6 +2073,8 @@ export default function (pi: ExtensionAPI) {
       entries,
       model,
       thinkingLevel,
+      thinkingLevels,
+      defaultThinkingLevel: configuredDefaultThinkingLevel(),
       sessionName,
       sessionFile,
       isStreaming: !ctx.isIdle(),
@@ -2381,6 +2440,8 @@ export default function (pi: ExtensionAPI) {
           const state = {
             model,
             thinkingLevel: api?.getThinkingLevel() ?? "off",
+            thinkingLevels: getAvailableThinkingLevelsForModel(model),
+            defaultThinkingLevel: configuredDefaultThinkingLevel(),
             isStreaming: !ctx.isIdle(),
             sessionFile: ctx.sessionManager.getSessionFile(),
             sessionName: api?.getSessionName() ?? "",
@@ -2617,7 +2678,14 @@ export default function (pi: ExtensionAPI) {
             sendTo(ws, error("set_model", "No API key for this model"));
             break;
           }
-          sendTo(ws, success("set_model", model));
+          sendTo(
+            ws,
+            success("set_model", {
+              ...model,
+              thinkingLevel: a.getThinkingLevel(),
+              thinkingLevels: getAvailableThinkingLevelsForModel(model),
+            }),
+          );
           break;
         }
 
@@ -2647,21 +2715,64 @@ export default function (pi: ExtensionAPI) {
             success("cycle_model", {
               model: nextModel,
               thinkingLevel: a.getThinkingLevel(),
+              thinkingLevels: getAvailableThinkingLevelsForModel(nextModel),
             }),
           );
           break;
         }
 
         // ─── Thinking ───
+        case "set_default_thinking_level": {
+          if (ephemeralState) {
+            sendTo(
+              ws,
+              error("set_default_thinking_level", "Command is not available in temporary chat"),
+            );
+            break;
+          }
+          if (!ctx) {
+            sendTo(ws, error("set_default_thinking_level", "No context available"));
+            break;
+          }
+          try {
+            const level = await saveDefaultThinkingLevel(command.level);
+            sendTo(ws, success("set_default_thinking_level", { level }));
+          } catch (e: unknown) {
+            sendTo(ws, error("set_default_thinking_level", errMessage(e)));
+          }
+          break;
+        }
+
+        case "get_available_thinking_levels": {
+          if (!ctx) {
+            sendTo(ws, error("get_available_thinking_levels", "No context available"));
+            break;
+          }
+          sendTo(
+            ws,
+            success("get_available_thinking_levels", {
+              levels: getAvailableThinkingLevelsForModel(ctx.model),
+            }),
+          );
+          break;
+        }
+
         case "cycle_thinking_level": {
           const a = requireApi("cycle_thinking_level");
           if (!a) break;
-          const levels = ["off", "minimal", "low", "medium", "high"];
-          const current = a.getThinkingLevel();
-          const idx = levels.indexOf(current);
-          const next = levels[(idx + 1) % levels.length];
+          const next = getNextThinkingLevel(a.getThinkingLevel(), ctx?.model);
+          if (!next) {
+            sendTo(ws, success("cycle_thinking_level", null));
+            break;
+          }
           a.setThinkingLevel(next as Parameters<typeof a.setThinkingLevel>[0]);
-          sendTo(ws, success("cycle_thinking_level", { level: next }));
+          sendTo(
+            ws,
+            success("cycle_thinking_level", {
+              level: a.getThinkingLevel(),
+              levels: getAvailableThinkingLevelsForModel(ctx?.model),
+            }),
+          );
           break;
         }
 
@@ -2669,7 +2780,13 @@ export default function (pi: ExtensionAPI) {
           const a = requireApi("set_thinking_level");
           if (!a) break;
           a.setThinkingLevel(command.level as Parameters<typeof a.setThinkingLevel>[0]);
-          sendTo(ws, success("set_thinking_level"));
+          sendTo(
+            ws,
+            success("set_thinking_level", {
+              level: a.getThinkingLevel(),
+              levels: getAvailableThinkingLevelsForModel(ctx?.model),
+            }),
+          );
           break;
         }
 
