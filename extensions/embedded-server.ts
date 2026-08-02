@@ -1836,8 +1836,13 @@ export default function (pi: ExtensionAPI) {
       eventType as Parameters<typeof pi.on>[0],
       async (event: unknown, ctx: ExtensionContext) => {
         rememberCtx(ctx);
-        // pi 的 compaction_end 把 summary 放在 result.summary；统一提升到顶层，
-        // 让前端 handleCompactionEnd 不必区分「手动 compact」与「自动 compaction」两种来源。
+        // Pi nests the completion summary under `result`; lift it to the top
+        // level so clients read one shape. The manual compact RPC below sets
+        // `success`/`error` explicitly; an automatic compaction forwarded from
+        // the coding-agent layer may carry neither. Clients treat a missing
+        // `success`/`error` as success (handleCompactionEnd), so the server
+        // must not synthesize `success` here — doing so would mask a genuine
+        // failure payload that simply omits the field.
         if (eventType === "compaction_end") {
           const e = event as Record<string, unknown> | undefined;
           if (e && e.summary === undefined) {
@@ -2728,13 +2733,15 @@ export default function (pi: ExtensionAPI) {
               onComplete: (result: { summary?: string }) => {
                 broadcast({
                   type: "compaction_end",
+                  success: true,
                   summary: result?.summary,
                 });
               },
               onError: (err: unknown) => {
                 broadcast({
                   type: "compaction_end",
-                  summary: `Error: ${errMessage(err)}`,
+                  success: false,
+                  error: errMessage(err),
                 });
               },
             });
