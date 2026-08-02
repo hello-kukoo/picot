@@ -719,7 +719,7 @@ mod tests {
         let health: serde_json::Value = serde_json::from_str(&health_body)
             .unwrap_or_else(|error| panic!("invalid health JSON {health_body:?}: {error}"));
         assert_eq!(health["protocolVersion"], 2);
-        assert_eq!(health["piVersion"], "0.82.0");
+        assert_eq!(health["piVersion"], "0.83.0");
         let index = client
             .get(format!("{}/app/settings", host.origin()))
             .send()

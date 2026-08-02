@@ -1310,6 +1310,93 @@ export function normalizeDefaultThinkingLevel(level: unknown): ModelThinkingLeve
     : DEFAULT_DEFAULT_THINKING_LEVEL;
 }
 
+/**
+ * Aggregate persisted session usage/cost from assistant messages, nested tool
+ * work, and summary-generation entries into authoritative session totals.
+ * These are the single source of truth for the header aggregate row
+ * (IN/OUT/CACHE/cost). A session with no usage returns `hasAggregate:false`.
+ */
+export function aggregateSessionStats(entries: Iterable<unknown>): {
+  userMessages: number;
+  assistantMessages: number;
+  toolCalls: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+  hasAggregate: boolean;
+} {
+  let userMessages = 0;
+  let assistantMessages = 0;
+  let toolCalls = 0;
+  let input = 0;
+  let output = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
+  let cost = 0;
+  let hasAggregate = false;
+
+  function addUsage(rawUsage: unknown) {
+    const u = rawUsage as
+      | (Record<string, unknown> & { cost?: { total?: unknown } })
+      | null
+      | undefined;
+    if (!u) return;
+    const inT = Number(u.input || 0);
+    const outT = Number(u.output || 0);
+    const cr = Number(u.cacheRead || 0);
+    const cw = Number(u.cacheWrite || 0);
+    const ct = Number(u.cost?.total || 0);
+    if (inT || outT || cr || cw || ct) hasAggregate = true;
+    input += Number.isFinite(inT) ? inT : 0;
+    output += Number.isFinite(outT) ? outT : 0;
+    cacheRead += Number.isFinite(cr) ? cr : 0;
+    cacheWrite += Number.isFinite(cw) ? cw : 0;
+    cost += Number.isFinite(ct) ? ct : 0;
+  }
+
+  for (const raw of entries) {
+    const e = raw as {
+      type?: string;
+      usage?: unknown;
+      message?: {
+        role?: string;
+        usage?: Record<string, unknown> & { cost?: { total?: unknown } };
+      };
+    };
+    if (e?.type === "message") {
+      const msg = e.message;
+      if (!msg) continue;
+      if (msg.role === "user") {
+        userMessages++;
+      } else if (msg.role === "assistant") {
+        assistantMessages++;
+        addUsage(msg.usage);
+      } else if (msg.role === "toolResult") {
+        toolCalls++;
+        // Tool results can contain nested LLM work with its own usage.
+        addUsage(msg.usage);
+      }
+      continue;
+    }
+    // Compaction and branch-summary entries persist the LLM usage that
+    // generated their summaries directly on the session entry.
+    if (e?.type === "compaction" || e?.type === "branch_summary") addUsage(e.usage);
+  }
+  return {
+    userMessages,
+    assistantMessages,
+    toolCalls,
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    cost,
+    hasAggregate,
+  };
+}
+
 function configuredDefaultThinkingLevel(): ModelThinkingLevel {
   try {
     const settings = readSettingsObject(path.join(PI_AGENT_ROOT, "settings.json"));
@@ -2796,27 +2883,26 @@ export default function (pi: ExtensionAPI) {
             sendTo(ws, error("get_session_stats", "No context available"));
             break;
           }
-          const usage = ctx.getContextUsage();
           const entries = ctx.sessionManager.getEntries();
-          let userMessages = 0,
-            assistantMessages = 0,
-            toolCalls = 0;
-          for (const e of entries) {
-            if (e.type === "message") {
-              if (e.message?.role === "user") userMessages++;
-              else if (e.message?.role === "assistant") assistantMessages++;
-              else if (e.message?.role === "toolResult") toolCalls++;
-            }
-          }
+          const stats = aggregateSessionStats(entries);
           sendTo(
             ws,
             success("get_session_stats", {
               sessionFile: ctx.sessionManager.getSessionFile(),
-              userMessages,
-              assistantMessages,
-              toolCalls,
+              userMessages: stats.userMessages,
+              assistantMessages: stats.assistantMessages,
+              toolCalls: stats.toolCalls,
               totalMessages: entries.length,
-              tokens: usage ? { input: usage.tokens, total: usage.tokens } : null,
+              tokens: stats.hasAggregate
+                ? {
+                    input: stats.input,
+                    output: stats.output,
+                    cacheRead: stats.cacheRead,
+                    cacheWrite: stats.cacheWrite,
+                    total: stats.input + stats.output + stats.cacheRead + stats.cacheWrite,
+                  }
+                : null,
+              cost: { total: stats.cost },
             }),
           );
           break;
