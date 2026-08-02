@@ -1,5 +1,5 @@
 {
-  "version": "0.82.0",
+  "version": "0.83.0",
   "commands": [
     "get_state",
     "get_commands",
@@ -20,7 +20,7 @@
     "steeringMode",
     "thinkingLevel"
   ],
-  "commandSources": ["extension", "prompt", "skill"],
+  "commandSources": ["extension", "skill"],
   "eventTypes": ["extension_ui_request"],
   "promptAcceptance": true
 }
