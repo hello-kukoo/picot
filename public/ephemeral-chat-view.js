@@ -14,7 +14,6 @@ import { ToolCardRenderer } from "./ui/tool-card.js";
 // Monotonic counter guarantees unique mention-popup ids across ephemeral views.
 let ephemeralPopupSeq = 0;
 
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"];
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 function appendIcon(doc, button, paths, { fill = "none", strokeWidth = "2" } = {}) {
@@ -298,12 +297,14 @@ export class EphemeralChatView {
       this._renderComposerState({
         model: this.runtime.model,
         thinkingLevel: this.runtime.thinkingLevel,
+        thinkingLevels: this.runtime.thinkingLevels,
         isStreaming: this.runtime.isStreaming,
       });
     });
     this._renderComposerState({
       model: this.runtime.model,
       thinkingLevel: this.runtime.thinkingLevel,
+      thinkingLevels: this.runtime.thinkingLevels,
       isStreaming: this.runtime.isStreaming,
     });
   }
@@ -556,7 +557,7 @@ export class EphemeralChatView {
           : "";
         option.append(name, context);
         option.addEventListener("click", () => {
-          this.runtime.setModel(model.provider, id);
+          void this.runtime.setModel(model.provider, id).catch(() => {});
           this._closeModelMenu();
         });
         itemsContainer.appendChild(option);
@@ -576,12 +577,13 @@ export class EphemeralChatView {
     requestAnimationFrame(() => search.focus());
   }
 
-  _cycleThinkingLevel() {
+  async _cycleThinkingLevel() {
     if (this._interactionLocked) return;
-    const current = this.runtime.thinkingLevel || "off";
-    const index = THINKING_LEVELS.indexOf(current);
-    const next = THINKING_LEVELS[(index + 1) % THINKING_LEVELS.length];
-    this.runtime.setThinkingLevel(next);
+    try {
+      await this.runtime.cycleThinkingLevel();
+    } catch {
+      // The runtime reports command failures through its normal failure event.
+    }
   }
 
   _renderComposerState(state) {
@@ -593,6 +595,7 @@ export class EphemeralChatView {
     this._modelBtn.setAttribute("aria-label", t("input.switchModel"));
 
     const thinkingLevel = state?.thinkingLevel || "off";
+    const thinkingLevels = Array.isArray(state?.thinkingLevels) ? state.thinkingLevels : ["off"];
     this._thinkingBtn.textContent = t("settings.thinkingCompact", { level: thinkingLevel });
     this._thinkingBtn.title = t("settings.thinkingTitle");
     this._thinkingBtn.setAttribute(
@@ -600,6 +603,7 @@ export class EphemeralChatView {
       t("settings.thinkingAriaLabel", { level: thinkingLevel }),
     );
     this._thinkingBtn.classList.toggle("off", thinkingLevel === "off");
+    this._thinkingBtn.dataset.availableLevels = thinkingLevels.join(",");
 
     const sendLabel = state?.isStreaming ? t("ephemeral.abort") : t("ephemeral.send");
     this._sendBtn.title = sendLabel;

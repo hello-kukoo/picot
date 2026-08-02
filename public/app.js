@@ -3141,17 +3141,13 @@ function updateThinkingBtn() {
     t("settings.thinkingAriaLabel", { level: currentThinkingLevel || t("settings.off") }),
   );
   thinkingBtn.classList.toggle("off", currentThinkingLevel === "off");
-  renderThinkingEffort(currentThinkingLevel || "off", {
-    thinkingSteps: thinkingEffortSteps,
-    thinkingMarker: thinkingEffortMarker,
-    thinkingName: thinkingEffortName,
-  });
 }
 let currentModelId = "";
 let availableModels = [];
 let hasLoadedAvailableModels = false;
 let didAutoOpenEmptyModelsDropdown = false;
 let currentThinkingLevel = "off";
+let currentDefaultThinkingLevel = "medium";
 
 function currentOnboardingState() {
   return getOnboardingState({
@@ -3243,9 +3239,14 @@ async function fetchModelInfo() {
         }
       }
     }
-    if (stateData.success && stateData.data?.thinkingLevel) {
-      currentThinkingLevel = stateData.data.thinkingLevel;
-      updateThinkingBtn();
+    if (stateData.success && stateData.data) {
+      if (stateData.data.thinkingLevel) {
+        currentThinkingLevel = stateData.data.thinkingLevel;
+        updateThinkingBtn();
+      }
+      if (stateData.data.defaultThinkingLevel) {
+        currentDefaultThinkingLevel = stateData.data.defaultThinkingLevel;
+      }
     }
   } catch (_e) {
     // ignore
@@ -3379,7 +3380,11 @@ function openModelDropdown() {
           refreshModelInfo: fetchModelInfo,
           applySelectedModel: (selectedModel) => {
             currentModelId = selectedModel.id;
+            if (selectedModel.thinkingLevel) {
+              currentThinkingLevel = selectedModel.thinkingLevel;
+            }
             saveCurrentSessionProfile();
+            updateThinkingBtn();
             updateModelLabel();
             if (selectedModel.contextWindow) {
               contextWindowSize = selectedModel.contextWindow;
@@ -3694,6 +3699,10 @@ async function applySessionUiProfile(sessionFile) {
   if (generation !== uiSessionGeneration) return;
   if (modelResult?.success) {
     currentModelId = profile.modelId;
+    if (modelResult.data?.thinkingLevel) {
+      currentThinkingLevel = modelResult.data.thinkingLevel;
+    }
+    updateThinkingBtn();
     updateModelLabel();
     const contextWindow = model?.contextWindow;
     if (contextWindow) {
@@ -3709,7 +3718,7 @@ async function applySessionUiProfile(sessionFile) {
     );
     if (generation !== uiSessionGeneration) return;
     if (thinkingResult?.success) {
-      currentThinkingLevel = profile.thinkingLevel;
+      currentThinkingLevel = thinkingResult.data?.level || profile.thinkingLevel;
       updateThinkingBtn();
     }
   }
@@ -4401,6 +4410,14 @@ function handleMirrorSync(data) {
   if (data.thinkingLevel) {
     currentThinkingLevel = data.thinkingLevel;
     updateThinkingBtn();
+  }
+  if (data.defaultThinkingLevel) {
+    currentDefaultThinkingLevel = data.defaultThinkingLevel;
+    renderThinkingEffort(currentDefaultThinkingLevel, {
+      thinkingSteps: thinkingEffortSteps,
+      thinkingMarker: thinkingEffortMarker,
+      thinkingName: thinkingEffortName,
+    });
   }
   void applySessionUiProfile(data.sessionFile || null);
 
@@ -5662,7 +5679,13 @@ async function openSettings(tabKey = "general", options = {}) {
       toggleAutoCompact.className = `settings-toggle${s.autoCompactionEnabled ? " on" : ""}`;
       // Thinking level
       currentThinkingLevel = s.thinkingLevel || "off";
+      currentDefaultThinkingLevel = s.defaultThinkingLevel || "medium";
       updateThinkingBtn();
+      renderThinkingEffort(currentDefaultThinkingLevel, {
+        thinkingSteps: thinkingEffortSteps,
+        thinkingMarker: thinkingEffortMarker,
+        thinkingName: thinkingEffortName,
+      });
       // Session name
       inputSessionName.value = s.sessionName || "";
     }
@@ -5735,9 +5758,9 @@ setupSettingsToggles({
   toggleAuth,
   toggleSuperAgent,
   rpcCommand,
-  getCurrentThinkingLevel: () => currentThinkingLevel,
-  setCurrentThinkingLevel: (level) => {
-    currentThinkingLevel = level;
+  getDefaultThinkingLevel: () => currentDefaultThinkingLevel,
+  setDefaultThinkingLevel: (level) => {
+    currentDefaultThinkingLevel = level;
   },
   updateThinkingBtn,
   onSuperAgentEnabledChanged: handleSuperAgentEnabledChanged,

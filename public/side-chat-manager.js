@@ -312,9 +312,9 @@ export class SideChatManager {
     if (startupProfile?.provider && startupProfile?.modelId) {
       const applyOnce = () => {
         runtime.removeEventListener("renderstate", applyOnce);
-        runtime.setModel(startupProfile.provider, startupProfile.modelId);
+        void runtime.setModel(startupProfile.provider, startupProfile.modelId).catch(() => {});
         if (startupProfile.thinkingLevel && startupProfile.thinkingLevel !== "off") {
-          runtime.setThinkingLevel(startupProfile.thinkingLevel);
+          void runtime.setThinkingLevel(startupProfile.thinkingLevel).catch(() => {});
         }
       };
       runtime.addEventListener("renderstate", applyOnce);

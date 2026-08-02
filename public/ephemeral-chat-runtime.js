@@ -74,6 +74,7 @@ export class EphemeralChatRuntime extends EventTarget {
     this.tools = new Map();
     this.model = null;
     this.thinkingLevel = "off";
+    this.thinkingLevels = ["off", "minimal", "low", "medium", "high"];
     this.isStreaming = false;
     this.contextUsage = null;
     this.error = null;
@@ -94,10 +95,13 @@ export class EphemeralChatRuntime extends EventTarget {
     return this._send({ type: "abort" });
   }
 
-  setModel(provider, modelId) {
-    this.model = { provider, id: modelId };
+  async setModel(provider, modelId) {
+    const data = await this._request({ type: "set_model", provider, modelId });
+    this.model = data?.model || { provider, id: modelId };
+    if (data?.thinkingLevel) this.thinkingLevel = data.thinkingLevel;
+    if (Array.isArray(data?.thinkingLevels)) this.thinkingLevels = data.thinkingLevels;
     this._emitRender();
-    return this._send({ type: "set_model", provider, modelId });
+    return data;
   }
 
   async getAvailableModels() {
@@ -105,10 +109,25 @@ export class EphemeralChatRuntime extends EventTarget {
     return Array.isArray(response?.models) ? response.models : [];
   }
 
-  setThinkingLevel(level) {
-    this.thinkingLevel = level;
+  async getAvailableThinkingLevels() {
+    const response = await this._request({ type: "get_available_thinking_levels" });
+    return Array.isArray(response?.levels) ? response.levels : ["off"];
+  }
+
+  async setThinkingLevel(level) {
+    const data = await this._request({ type: "set_thinking_level", level });
+    this.thinkingLevel = data?.level || level;
+    if (Array.isArray(data?.levels)) this.thinkingLevels = data.levels;
     this._emitRender();
-    return this._send({ type: "set_thinking_level", level });
+    return data;
+  }
+
+  async cycleThinkingLevel() {
+    const data = await this._request({ type: "cycle_thinking_level" });
+    if (data?.level) this.thinkingLevel = data.level;
+    if (Array.isArray(data?.levels)) this.thinkingLevels = data.levels;
+    this._emitRender();
+    return data;
   }
 
   respondToExtensionUi(id, response) {
@@ -170,6 +189,9 @@ export class EphemeralChatRuntime extends EventTarget {
     this.tools = new Map((snapshot.tools || []).map((tool) => [tool.toolCallId, { ...tool }]));
     this.model = snapshot.model ?? null;
     this.thinkingLevel = snapshot.thinkingLevel ?? "off";
+    this.thinkingLevels = Array.isArray(snapshot.thinkingLevels)
+      ? snapshot.thinkingLevels
+      : ["off"];
     this.isStreaming = Boolean(snapshot.isStreaming);
     this.contextUsage = snapshot.contextUsage ?? null;
     this.error = snapshot.error ?? null;
@@ -339,6 +361,9 @@ export class EphemeralChatRuntime extends EventTarget {
       }
       case "message_end": {
         const message = event.message;
+        const usage = message?.usage;
+        const costTotal = Number(usage?.cost?.total || 0);
+        const tokens = Number(usage?.input || 0) + Number(usage?.output || 0);
         if (message?.role === "assistant") {
           this.messages.push(clone(message));
           this.assistantDraft = null;
@@ -346,13 +371,8 @@ export class EphemeralChatRuntime extends EventTarget {
             this.error = message.errorMessage || GENERIC_FAILURE;
             this._emit("failure", { error: this.error });
           }
-          const usage = message.usage;
-          if (usage) {
-            const costTotal = Number(usage.cost?.total || 0);
-            if (Number.isFinite(costTotal)) this.cost += costTotal;
-            const tokens = Number(usage.input || 0) + Number(usage.output || 0);
-            if (Number.isFinite(tokens)) this.totalTokens += tokens;
-          }
+          if (Number.isFinite(costTotal)) this.cost += costTotal;
+          if (Number.isFinite(tokens)) this.totalTokens += tokens;
         }
         break;
       }
@@ -385,9 +405,14 @@ export class EphemeralChatRuntime extends EventTarget {
         }
         break;
       }
-      case "model_select":
+      case "model_select": {
         this.model = clone(event.model);
         break;
+      }
+      case "thinking_level_select": {
+        this.thinkingLevel = event.level || "off";
+        break;
+      }
       case "agent_start":
         this.isStreaming = true;
         break;
@@ -416,6 +441,7 @@ export class EphemeralChatRuntime extends EventTarget {
       tools: Array.from(this.tools.values()).map((t) => ({ ...t })),
       model: clone(this.model),
       thinkingLevel: this.thinkingLevel,
+      thinkingLevels: clone(this.thinkingLevels),
       isStreaming: this.isStreaming,
       contextUsage: clone(this.contextUsage),
       error: this.error,

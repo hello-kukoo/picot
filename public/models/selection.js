@@ -30,6 +30,13 @@ export async function selectModel({ model, rpcCommand, refreshModelInfo, applySe
     return { success: false, error: result?.error || "Model switch failed" };
   }
 
-  applySelectedModel(model);
+  const selectedModel = result.data?.model || model;
+  applySelectedModel({
+    ...selectedModel,
+    ...(result.data?.thinkingLevel ? { thinkingLevel: result.data.thinkingLevel } : {}),
+    ...(Array.isArray(result.data?.thinkingLevels)
+      ? { thinkingLevels: result.data.thinkingLevels }
+      : {}),
+  });
   return result;
 }

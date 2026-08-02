@@ -83,6 +83,46 @@ describe("EphemeralChatRuntime outbound commands", () => {
     expect(transport.sent[3].payload).toMatchObject({ id: "ui-1", value: "yes" });
   });
 
+  it("uses the runtime's available thinking levels and effective cycle result", async () => {
+    const { runtime, transport } = makeRuntime();
+    const levelsPromise = runtime.getAvailableThinkingLevels();
+    runtime.applySequencedEvent({
+      instanceId: "inst-1",
+      generation: 3,
+      payload: {
+        type: "response",
+        id: "ep-1",
+        command: "get_available_thinking_levels",
+        success: true,
+        data: { levels: ["off", "high", "xhigh"] },
+      },
+    });
+    await expect(levelsPromise).resolves.toEqual(["off", "high", "xhigh"]);
+
+    const cyclePromise = runtime.cycleThinkingLevel();
+    runtime.applySequencedEvent({
+      instanceId: "inst-1",
+      generation: 3,
+      payload: {
+        type: "response",
+        id: "ep-2",
+        command: "cycle_thinking_level",
+        success: true,
+        data: { level: "high", levels: ["off", "high", "xhigh"] },
+      },
+    });
+    await expect(cyclePromise).resolves.toEqual({
+      level: "high",
+      levels: ["off", "high", "xhigh"],
+    });
+    expect(runtime.thinkingLevel).toBe("high");
+    expect(runtime.thinkingLevels).toEqual(["off", "high", "xhigh"]);
+    expect(transport.sent.map((entry) => entry.payload.type)).toEqual([
+      "get_available_thinking_levels",
+      "cycle_thinking_level",
+    ]);
+  });
+
   it("returns the ephemeral runtime's available models from its correlated response", async () => {
     const { runtime } = makeRuntime();
     const modelsPromise = runtime.getAvailableModels();

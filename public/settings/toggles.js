@@ -51,9 +51,8 @@ export function setupSettingsToggles({
   toggleAuth,
   toggleSuperAgent,
   rpcCommand,
-  getCurrentThinkingLevel,
-  setCurrentThinkingLevel,
-  updateThinkingBtn,
+  getDefaultThinkingLevel,
+  setDefaultThinkingLevel,
   onSuperAgentEnabledChanged,
 }) {
   toggleAutoCompact?.addEventListener("click", async () => {
@@ -62,19 +61,24 @@ export function setupSettingsToggles({
     await rpcCommand({ type: "set_auto_compaction", enabled: !isOn });
   });
 
-  // Click a dot to set the reasoning depth directly.
+  // Click a dot to set the default reasoning depth for future sessions.
   thinkingSteps?.addEventListener("click", async (event) => {
     const step = event.target.closest(".thinking-effort-dot");
     if (!step) return;
     const level = step.dataset.level || "off";
     // Optimistically move the marker for snappy feedback.
     renderThinkingEffort(level, { thinkingSteps, thinkingMarker, thinkingName });
-    const data = await rpcCommand({ type: "set_thinking_level", level });
+    const data = await rpcCommand({ type: "set_default_thinking_level", level });
     if (data?.success) {
-      setCurrentThinkingLevel(level);
-      updateThinkingBtn();
+      const effectiveLevel = data.data?.level || level;
+      setDefaultThinkingLevel?.(effectiveLevel);
+      renderThinkingEffort(effectiveLevel, {
+        thinkingSteps,
+        thinkingMarker,
+        thinkingName,
+      });
     } else {
-      renderThinkingEffort(getCurrentThinkingLevel?.() || "off", {
+      renderThinkingEffort(getDefaultThinkingLevel?.() || "medium", {
         thinkingSteps,
         thinkingMarker,
         thinkingName,
@@ -106,6 +110,6 @@ export function setupSettingsToggles({
   });
 
   return {
-    getCurrentThinkingLevel,
+    getDefaultThinkingLevel,
   };
 }
