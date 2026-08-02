@@ -277,6 +277,25 @@ The one-shot Pi commit-message runner receives a host-created private request fi
   中的 `enableSkillCommands` 提升到顶层、`customDirectories` 转为 `skills`
   数组，避免覆盖丢失 `enableSkillCommands`。
 
+#### Side Chat 单实例边界
+
+每个 native window owner 最多新增一个 Side Chat。前端 `SideChatManager` 的
+header 入口在没有运行时才创建；已有运行时只执行打开/恢复，不创建第二个。
+Rust `EphemeralRegistry` 同样以 owner 为边界拒绝第二个 `SideChat` reservation，
+因此 UI 隐藏或绕过不能突破资源配额。旧版本已存在的多个运行时不被强制终止，
+但在它们自然关闭前不会再创建新的 Side Chat。
+
+#### Session UI 状态边界
+
+主聊天的未发送草稿按完整 session file path 隔离，仅保存在当前 WebView 的内存中，
+不进入 Pi JSONL、cookie、localStorage 或 sessionStorage；同一页面内切换 session 可
+恢复，刷新、跨端口导航、关闭窗口或重启都会丢弃。模型 provider/modelId 与 thinking
+level 是 Picot 的 display profile，不改变 Pi 的全局 defaults；由 native host 以版本化
+文件持久化。前端只能通过 broker control 请求当前路由的 profile，host 从 verified
+owner 的当前 workspace port 与 broker session route 派生实际 session path，并拒绝
+remote、错误 owner、过期 route 和浏览器提交的任意路径。authoritative mirror_sync
+到达后恢复 profile；新建且尚未有 session file 的任务继续使用 Pi 当前默认值。
+
 #### 三页签 Skills 资源边界
 
 Settings → Skills 固定为 **Discovered / Install / Packages**。每个页签拥有
@@ -808,9 +827,15 @@ design spec 要列出可见/省略字段、图标、分隔线和截断，测试�
    [`docs/superpowers/specs/2026-07-15-quick-and-side-chat-design.md`](docs/superpowers/specs/2026-07-15-quick-and-side-chat-design.md)。
 4. `file-preview-renderers.js` 按 `file-language.js` 的分类分派：
    Markdown 经 allowlist sanitizer 后预览，普通文本用 CodeMirror，
-   图片走 `<img>`，PDF 用 PDF.js canvas renderer。CodeMirror / PDF.js
-   是 `scripts/build-frontend.js` 打出的同源 vendor bundle；源代码在
-   Vitest 中仍直接解析 npm 包。
+   图片走 `<img>`，PDF 用 PDF.js canvas renderer。可编辑 Markdown / 文本首次
+   打开时显示 editor toolbar；Wrap 偏好首次默认为开启，但显式保存的用户选择优先。
+   toolbar 下方只显示当前文件相对 canonical workspace root 的路径，无法证明
+   containment 时不伪造相对路径。CodeMirror / PDF.js 是
+   `scripts/build-frontend.js` 打出的同源 vendor bundle；源代码在 Vitest 中仍直接解析 npm 包。
+5. Git Diff 是内存 tab，不进入 `FileTabState`。关闭 Wrap 时保留独立双栏和横向
+   阅读；开启 Wrap 时 renderer 改为单一纵向 scroller 中的 logical two-column grid row，
+   每个 original/current cell 同属一个 grid track，因此长行换行、单侧变更和 blank cell
+   始终严格等高、垂直对齐。
 
 **文件 API 安全边界：** 浏览器传来的绝对路径一律是不可信输入。
 `file-routes.ts` 先将路径 realpath 后限制在活跃 workspace，再仅以
@@ -854,6 +879,16 @@ segment 比较，并拒绝跨 drive 的路径。
 
 完整交互、状态模型和端点契约见
 [`docs/superpowers/specs/2026-07-12-file-preview-editor-design.md`](docs/superpowers/specs/2026-07-12-file-preview-editor-design.md)。
+
+### Context Compact 生命周期
+
+手动 Compact 的 RPC acknowledgement 只表示 embedded server 已把请求交给 Pi，绝不表示
+压缩已完成。WebView 的主工具条、Context popover 和命令菜单共享同一前端状态机：请求已
+发送或 Pi 广播 `compaction_start` 后均保持 busy，直到 `compaction_end`。server 对完成事件
+明确广播 `success: true`；错误使用 `success: false` 与 `error`，不得把错误文本放进成功
+summary。只有成功完成才会使当前 session 的 `lastUsage` 失效、清空 context pill 与关闭旧
+popover；下一次显示必须来自 Pi 后续返回的真实 usage。失败保留原 usage，恢复入口以便重试。
+主工具条 Compact 仍只在 `(input + cacheRead) / contextWindow >= 80%` 时出现。
 
 ### 国际化 (i18n)
 
@@ -1009,7 +1044,7 @@ Quick Chat 与 Side Chat 是隔离的、**不持久化**的临时 Pi 会话进�
 
 入口控件在 capability 到达前必须隐藏：Quick Chat 位于侧栏搜索框后的固定工具栏；Side Chat 位于工作区头部。只有认证后的原生窗口显示它们，LAN/移动客户端始终隐藏。
 
-- **Side Chat**：复用所属窗口的工作区 cwd，`pi --mode rpc --no-session`，**保留工具**，上限 5 个/窗口，投影进文件预览面板的 tab 条。
+- **Side Chat**：复用所属窗口的工作区 cwd，`pi --mode rpc --no-session`，**保留工具**，每个窗口最多新增 1 个；旧版本遗留的多个实例仍可 rebind/关闭，运行时投影进文件预览面板的 tab 条。
 - **Quick Chat**：用 Picot 安全创建的临时目录，`pi --mode rpc --no-session --no-tools`，**禁用工具**，上限 1 个/窗口，渲染为非模态浮动对话框。
 
 ### 安全与能力边界（Rust 宿主拥有）
@@ -1037,9 +1072,9 @@ Quick Chat 与 Side Chat 是隔离的、**不持久化**的临时 Pi 会话进�
 ### 前端模块
 
 - `ephemeral-chat-view.js`：元素级隔离的聊天视图，复用 `MessageRenderer`/`ToolCardRenderer`/`DialogHandler`/voice（均有幂等 `destroy()`）；Side Chat `toolsEnabled=true`、Quick Chat `false`；composer 复用主聊天的 `composer-card`、模型下拉、thinking 和图标控件样式，并通过 owner-scoped runtime 获取模型；extension UI 请求经 scoped `DialogHandler` → `runtime.respondToExtensionUi`。
-- `side-chat-manager.js`：Side Chat 集合 + 5 配额 + Unicode-grapheme 安全标题（40 簇）+ transient tab 投影 + 创建/关闭 + 工作区转换 settle + rebind。
+- `side-chat-manager.js`：Side Chat 集合 + 单新增配额 + Unicode-grapheme 安全标题（40 簇）+ transient tab 投影 + 打开/创建/关闭 + 工作区转换 settle + rebind。
 - `quick-chat-dialog.js`：单 Quick Chat 非模态对话框 + 最小化芯片 + 标题拖拽（pointer 捕获 + blur/cancel 清理）+ New Chat 事务替换 + 几何仅内存；标题栏操作为本地化的图标按钮。
-- `file-preview-panel.js`：discriminated `activeContent={kind:"file"|"transient",id}` + transient tab 投影 API（register/update/activate/requestClose/unregister）+ close-risk 参与者 API + tab-bar 动作适配器（“New Side Chat”图标按钮）。`FileTabState` 仍是文件唯一持久化源；transient 仅内存。两类 tab 的协调不变量：file→transient 切换时停用 file renderer 后必须清空 content 容器 DOM（text/markdown renderer 的 `destroy()` 不移除自身挂载节点，`overflow:hidden` 内容区会令残留的 `height:100%` 节点遮挡 transient 视图）；关最后 file tab 时若仍有 transient tab 则切过去而非收起面板（仅在 file 与 transient tab 均为空时才收起，与 `unregisterTransientTab` 的双判空对称）；foreground 切工作区时 `setWorkspaceRoot` 只在恢复的 active tab 内容加载成功后才撑开面板（过渡窗口的 `403 outsideWorkspace` 不撑开，避免「撑开→加载失败→关闭」抖动）。
+- `file-preview-panel.js`：discriminated `activeContent={kind:"file"|"transient",id}` + transient tab 投影 API（register/update/activate/requestClose/unregister）+ close-risk 参与者 API；Side Chat 通过工作区 header 打开/创建，不注册 File Preview tab-bar 新增动作。`FileTabState` 仍是文件唯一持久化源；transient 仅内存。两类 tab 的协调不变量：file→transient 切换时停用 file renderer 后必须清空 content 容器 DOM（text/markdown renderer 的 `destroy()` 不移除自身挂载节点，`overflow:hidden` 内容区会令残留的 `height:100%` 节点遮挡 transient 视图）；关最后 file tab 时若仍有 transient tab 则切过去而非收起面板（仅在 file 与 transient tab 均为空时才收起，与 `unregisterTransientTab` 的双判空对称）；foreground 切工作区时 `setWorkspaceRoot` 只在恢复的 active tab 内容加载成功后才撑开面板（过渡窗口的 `403 outsideWorkspace` 不撑开，避免「撑开→加载失败→关闭」抖动）。
 - `window-close-coordinator.js`：唯一窗口关闭决策流——冻结交互→收集 versioned risk（脏文件 + 非空/流式 ephemeral）→单摘要对话框→settle 文件→generation-checked ephemeral cleanup→approve；cancel/失败解锁，重复请求合并；owns 唯一 `beforeunload` 脏文件守卫。
 
 ### 工作区转换与原生关闭
