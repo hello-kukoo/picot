@@ -117,7 +117,12 @@
     "thinking": "Thinking",
     "copy": "Copy",
     "copied": "Copied!",
-    "scrollToBottom": "Scroll to latest message"
+    "scrollToBottom": "Scroll to latest message",
+    "processDetails": "Process details",
+    "processStep": "{count} step",
+    "processSteps": "{count} steps",
+    "processToolCall": "{count} tool call",
+    "processToolCalls": "{count} tool calls"
   },
   "tools": {
     "copyOutput": "Copy output",

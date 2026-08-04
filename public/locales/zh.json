@@ -117,7 +117,12 @@
     "thinking": "思考中",
     "copy": "复制",
     "copied": "已复制！",
-    "scrollToBottom": "滚动到最新消息"
+    "scrollToBottom": "滚动到最新消息",
+    "processDetails": "过程详情",
+    "processStep": "{count} 步",
+    "processSteps": "{count} 步",
+    "processToolCall": "{count} 次工具调用",
+    "processToolCalls": "{count} 次工具调用"
   },
   "tools": {
     "copyOutput": "复制输出",

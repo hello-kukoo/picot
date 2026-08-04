@@ -105,6 +105,7 @@ import { setupAtFileMention } from "./ui/at-file-mention.js";
 import { DialogHandler } from "./ui/dialogs.js";
 import { setupMessagesInsets } from "./ui/layout-insets.js";
 import { MessageRenderer } from "./ui/message-renderer.js";
+import { createProcessDetailsGroup, summarizeProcessGroup } from "./ui/process-group.js";
 import { setupResizablePanel } from "./ui/resizable-panel.js";
 import {
   isRpivTodoCommandNotify,
@@ -2526,6 +2527,64 @@ function handleAgentSettled() {
   showTypingIndicator(false);
   const live = getCurrentLiveSessionFile();
   if (live) sidebar.setStreaming(live, false);
+  // Fold the just-finished turn's thinking + tool noise into a collapsed
+  // "Process details" row so chat history stays scannable. Live turn stays
+  // expanded while streaming; collapse is purely post-hoc.
+  collapseCompletedTurn();
+}
+
+/**
+ * Walk the just-finished turn's children in the messages container (everything
+ * after the last .user message) and pack any thinking blocks and tool cards
+ * into a collapsed process-details group. Matches upstream's
+ * `collapseCompletedTurn` in public/native/app.js: the user prompt and the
+ * final assistant answer stay visible, everything else gets folded away.
+ */
+function collapseCompletedTurn() {
+  const children = Array.from(messagesElement.children);
+  let lastUserIdx = -1;
+  for (let i = children.length - 1; i >= 0; i--) {
+    if (children[i].classList.contains("user")) {
+      lastUserIdx = i;
+      break;
+    }
+  }
+  const afterUser = children.slice(lastUserIdx + 1);
+  if (afterUser.length === 0) return;
+
+  const group = createProcessDetailsGroup();
+  let stepCount = 0;
+  let toolCallCount = 0;
+  let inserted = false;
+  const insertGroupBefore = (el) => {
+    if (inserted) return;
+    el.before(group.wrapper);
+    inserted = true;
+  };
+
+  for (const el of afterUser) {
+    if (el.classList.contains("tool-card")) {
+      insertGroupBefore(el);
+      group.body.appendChild(el);
+      stepCount += 1;
+      toolCallCount += 1;
+      continue;
+    }
+    if (el.classList.contains("assistant")) {
+      const thinkingEl = el.querySelector(".thinking-block");
+      if (!thinkingEl) continue;
+      insertGroupBefore(el);
+      thinkingEl.remove();
+      group.body.appendChild(thinkingEl);
+      stepCount += 1;
+      const contentEl = el.querySelector(".message-content");
+      const hasRemainingContent = Boolean(contentEl?.textContent.trim());
+      if (!hasRemainingContent) el.remove();
+    }
+  }
+
+  if (group.body.children.length === 0) return; // nothing to fold away; wrapper was never inserted
+  group.setLabel(summarizeProcessGroup(stepCount, toolCallCount));
 }
 
 function handleAgentStart(event = null) {
