@@ -106,7 +106,11 @@ import { DialogHandler } from "./ui/dialogs.js";
 import { setupMessagesInsets } from "./ui/layout-insets.js";
 import { MessageRenderer } from "./ui/message-renderer.js";
 import { setupResizablePanel } from "./ui/resizable-panel.js";
-import { isRpivTodoWidgetRequest, RpivTodoMirrorPanel } from "./ui/rpiv-todo-mirror.js";
+import {
+  isRpivTodoCommandNotify,
+  isRpivTodoWidgetRequest,
+  RpivTodoMirrorPanel,
+} from "./ui/rpiv-todo-mirror.js";
 import { setupSkillSlashCommand } from "./ui/skill-slash-command.js";
 import { ToolCardRenderer } from "./ui/tool-card.js";
 import { WindowCloseCoordinator } from "./window-close-coordinator.js";
@@ -2805,6 +2809,14 @@ function handleExtensionUIRequest(event) {
       dialogHandler.showEditor(event);
       break;
     case "notify":
+      // rpiv-todo's /todos command emits a centered notify transcript
+      // listing each status section. The floating panel already mirrors the
+      // same state natively, so expand it instead of rendering a duplicate
+      // toast — both would otherwise flash the same content for 5 seconds.
+      if (isRpivTodoCommandNotify(event.message)) {
+        todoMirrorPanel.expand();
+        break;
+      }
       dialogHandler.showNotification(event);
       break;
     // `setStatus` and `setWidget` are informational labels/widgets the
