@@ -25,25 +25,51 @@
   },
   "git": {
     "currentBranch": "現在のGitブランチ",
-    "branchName": "ブランチ：{name}"
+    "branchName": "ブランチ：{name}",
+    "aiCommitMessage": "AIコミットメッセージを生成",
+    "aiFailed": "AIコミットメッセージの生成に失敗しました。手動でコミットメッセージを書くこともできます。",
+    "cancel": "キャンセル",
+    "changes": "変更",
+    "commit": "コミット",
+    "commitInProgress": "コミット中...",
+    "commitMessageLabel": "コミットメッセージ",
+    "committing": "コミット中...",
+    "comparison": {
+      "changes": "変更",
+      "staged": "ステージ済み",
+      "untracked": "未追跡"
+    },
+    "confirmationRequired": "このファイルにはステージ済みと未ステージの変更があります。ファイル全体をコミットしますか？",
+    "conflicted": "競合",
+    "diffEmpty": "表示できる変更はありません",
+    "diffModified": "変更後",
+    "diffOriginal": "元のバージョン",
+    "discard": "変更を破棄",
+    "discardConfirm": "{count} 個のファイルの変更を破棄しますか？この操作は元に戻せません。",
+    "discardWarning": "この操作は元に戻せません",
+    "files": "ファイル",
+    "hookChangedTree": "pre-commitフックがコミット内容を変更しました。コミットは作成されましたが、ステージされたスナップショットと異なる可能性があります。",
+    "noStatus": "Gitステータスが読み込まれていません",
+    "noUpstream": "上流ブランチが設定されていません",
+    "outcomeUnknown": "コミット結果を判定できませんでした。再試行する前にリポジトリの状態を確認してください。",
+    "panel": "Git",
+    "refresh": "Gitステータスを更新",
+    "stage": "ステージ",
+    "staged": "ステージ済み",
+    "stats": "+{additions} −{deletions} · ステージ済み {staged} · 変更 {changes} · 未追跡 {untracked}",
+    "summary": "{branch} · {upstream} · ↑{ahead} ↓{behind}",
+    "truncated": "他に {count} 件の変更が表示されていません",
+    "unstage": "ステージ解除",
+    "untracked": "未追跡",
+    "writeUnavailable": "Git書き込み権限がありません"
   },
   "usage": {
     "contextTokens": "コンテキスト：{used}k / {limit}k トークン",
     "sessionCostTitle": "セッションコスト",
     "contextTitle": "コンテキスト使用量",
-    "costSub": "{amount}（サブスク）"
-  },
-  "sessionInfo": {
-    "title": "セッション情報",
-    "heading": "セッション情報",
-    "file": "ファイル",
-    "id": "ID",
-    "inMemory": "メモリ内（未保存）",
-    "unavailable": "利用できません",
-    "copyFile": "ファイルパスをコピー",
-    "copyId": "セッション ID をコピー",
-    "copied": "コピーしました",
-    "copyFailed": "コピーに失敗しました"
+    "costSub": "{amount}（サブスク）",
+    "sessionUsageTitle": "セッショントークン（入力 / 出力 / キャッシュ）",
+    "summary": "入力 {in} · 出力 {out} · キャッシュ {cache}"
   },
   "context": {
     "cached": "キャッシュ済み",
@@ -95,7 +121,8 @@
     "processStep": "{count} ステップ",
     "processSteps": "{count} ステップ",
     "processToolCall": "{count} ツール呼び出し",
-    "processToolCalls": "{count} ツール呼び出し"
+    "processToolCalls": "{count} ツール呼び出し",
+    "scrollToBottom": "最新のメッセージまでスクロール"
   },
   "tools": {
     "copyOutput": "出力をコピー",
@@ -123,7 +150,6 @@
       "enableLineWrap": "折り返しを有効にする",
       "edit": "編集",
       "preview": "プレビュー",
-      "diff": "差分",
       "find": "検索",
       "goToLine": "行に移動",
       "goToLinePrompt": "行番号",
@@ -159,7 +185,8 @@
         "installWindows": "py -3 -m pip install \"markitdown[docx,pptx,xlsx,xls,outlook]\"",
         "remoteImageHidden": "リモート画像は非表示です"
       },
-      "conflictMessage": "{name}がディスク上で変更されました。再読み込みしますか、それともディスクバージョンを上書きしますか？"
+      "conflictMessage": "{name}がディスク上で変更されました。再読み込みしますか、それともディスクバージョンを上書きしますか？",
+      "tabpanelLabel": "ファイルプレビュー"
     },
     "unsaved": {
       "title": "未保存の変更",
@@ -296,7 +323,9 @@
     "abortedByUser": "ユーザーによって中止されました",
     "invalidJson": "無効なJSON：{detail}",
     "modelsMustBeObject": "models.jsonはJSONオブジェクトである必要があります。",
-    "providersMustBeObject": "'providers'はオブジェクトである必要があります。"
+    "providersMustBeObject": "'providers'はオブジェクトである必要があります。",
+    "compactionFailed": "コンテキスト圧縮に失敗しました。",
+    "compactionFailedDetail": "コンテキスト圧縮に失敗しました：{error}"
   },
   "onboarding": {
     "openProject": "チャットを始めるためにプロジェクトを開いてください。",
@@ -352,9 +381,6 @@
     "untitled": "無題",
     "emptySession": "空のセッション",
     "rename": "名前を変更",
-    "generateTitle": "タイトルを生成",
-    "generatingTitle": "生成中…",
-    "generateTitleError": "タイトルを生成できませんでした。もう一度お試しください。",
     "renameSessionAriaLabel": "セッション名を変更",
     "renameInputPlaceholder": "セッション名",
     "renameErrorInvalid": "空でないセッション名を入力してください。",
@@ -474,10 +500,6 @@
     "thinkingEffort": "思考の深さ",
     "reasoningDepth": "推論の深さ",
     "showThinking": "思考を表示",
-    "taskNotifications": "タスク完了通知",
-    "taskNotificationsDescription": "タスクの完了時にOS通知を表示します。",
-    "taskCompleteTitle": "タスクが完了しました",
-    "taskCompleteMessage": "タスクが完了しました。",
     "piVersion": "Piバージョン",
     "picotVersion": "Picotバージョン",
     "checkForUpdates": "アップデートを確認",
@@ -497,15 +519,6 @@
     "thinkingLevel": "思考：{level}",
     "thinkingCompact": "思考 {level}",
     "off": "オフ",
-    "thinkingFaster": "速め",
-    "thinkingSmarter": "賢め",
-    "thinkingLevels": {
-      "off": "オフ",
-      "minimal": "最小",
-      "low": "低",
-      "medium": "中",
-      "high": "高"
-    },
     "thinkingTitle": "思考の深さは推論の深度を制御します。クリックで切り替え。",
     "thinkingAriaLabel": "思考の深さ：{level}。クリックして推論の深度を切り替え。",
     "agentConfiguration": "エージェント設定",
@@ -582,7 +595,57 @@
       "saveFailed": "スキル設定の保存に失敗しました。",
       "rescanFailed": "スキルの再スキャンに失敗しました。",
       "ambiguousRuleTarget": "このターゲットは複数のルートにマップされます。settings.jsonを手動で編集して変更してください。",
-      "scopeSummary": "{total}個のスキル · {groups}個のグループ"
+      "scopeSummary": "{total}個のスキル · {groups}個のグループ",
+      "addRoot": "Piで有効にする",
+      "addRootCancel": "キャンセル",
+      "addRootConfirm": "有効にする",
+      "addRootConfirmation": "このClaudeスキルディレクトリをPiで有効にしますか？表示される設定エントリは、新しいセッションまたはPiの再起動後に適用されます。",
+      "addRootFailed": "スキルルートの有効化に失敗しました。",
+      "discovered": "検出済み",
+      "install": "インストール",
+      "packages": "パッケージ",
+      "rootAddedRestartRequired": "有効にしました。変更を反映するには新しいセッションを開始するかPiを再起動してください。",
+      "sectionsAriaLabel": "スキルセクション"
+    },
+    "installSkills": {
+      "cancel": "キャンセル",
+      "chooseFolder": "フォルダを選択",
+      "complete": "{added} 件をインストールしました；{skipped} 件は設定済みです。",
+      "confirm": "選択したスキルをインストール",
+      "confirmation": "{count} 個の選択したスキルを {scope} にインストールしますか？",
+      "confirmationHeading": "スキルインストールの確認",
+      "description": "ローカルフォルダからスキルをリンクします。ファイルはコピーも変更もされません。",
+      "global": "グローバル",
+      "group": "グループ",
+      "installFailed": "選択したスキルのインストールに失敗しました。",
+      "installing": "インストール中...",
+      "project": "現在のプロジェクト",
+      "projectUntrusted": "このプロジェクトは信頼されていません。現在のプロジェクトへのインストールは利用できません。",
+      "restartRequired": "保存しました。変更を反映するには新しいセッションを開始するかPiを再起動してください。",
+      "review": "インストールを確認",
+      "scanFailed": "選択したフォルダのスキャンに失敗しました。",
+      "scanning": "スキルをスキャン中...",
+      "skill": "スキル",
+      "title": "スキルをインストール"
+    },
+    "packageSkills": {
+      "bundledCandidates": "バンドル候補",
+      "candidateCount": "{count} 件の候補",
+      "canonicalPath": "正規パス",
+      "description": "設定済みのPiパッケージに含まれるスキル候補です。これらは読み取り専用の候補であり、実際の有効/無効状態はPiによって計算され、ここには表示されません。",
+      "empty": "このスコープには設定済みのパッケージがありません。",
+      "enableAll": "すべて有効にする",
+      "global": "グローバル",
+      "loadFailed": "パッケージスキルの読み込みに失敗しました。",
+      "loading": "パッケージスキルを読み込み中...",
+      "notInstalled": "未インストール",
+      "package": "パッケージ",
+      "project": "現在のプロジェクト",
+      "projectUntrusted": "このプロジェクトは信頼されていません。プロジェクトのパッケージパスは表示されません。",
+      "refresh": "更新",
+      "retry": "再試行",
+      "scopeSummary": "{count} パッケージ",
+      "title": "パッケージスキル"
     }
   },
   "lanQr": {
@@ -661,7 +724,8 @@
     "model": "モデル",
     "compact": "コンパクト",
     "compactTitle": "コンテキストが80%を超えています — トークンを節約するためコンパクトにしてください",
-    "qrUnavailable": "QRコードが利用できません"
+    "qrUnavailable": "QRコードが利用できません",
+    "toggleContextControls": "コンテキストコントロールを切り替え"
   },
   "browse": {
     "openExternalPrompt": "このリンクを新しいタブで開きますか："
@@ -675,7 +739,6 @@
     "startingQuickChat": "クイックチャットを開始中…",
     "tokens": "トークン",
     "sideChat": "サイドチャット",
-    "sideChatLimit": "サイドチャットの上限に達しました",
     "quickChat": "クイックチャット",
     "minimize": "最小化",
     "close": "閉じる",
@@ -700,172 +763,31 @@
     "showMore": "もっと表示"
   },
   "migrated": {
-    "bootstrap": {
-      "text": {
-        "picotStartup": "Picot Startup",
-        "pi": "pi"
-      }
-    },
     "index": {
-      "alt": {
-        "picotLogo": "Picotロゴ"
-      },
       "title": {
-        "newSession": "新しいセッション",
-        "settings": "設定",
-        "downloadAndInstallUpdate": "アップデートをダウンロードしてインストール",
-        "workspacePath": "ワークスペースパス",
-        "gitBranch": "Gitブランチ",
-        "chooseApp": "アプリを選択",
-        "files": "ファイル",
-        "close": "閉じる",
-        "minimal": "最小",
-        "low": "低",
-        "medium": "中",
-        "high": "高"
+        "close": "閉じる"
       },
       "ariaLabel": {
-        "toggleFileBrowser": "ファイルブラウザを切り替え",
-        "keyboardShortcuts": "キーボードショートカット",
-        "conversationNavigator": "会話ナビゲーター",
-        "openCommands": "コマンドを開く",
-        "thinkingEffortOffClickToCycleReasoning": "思考の深さ：オフ。クリックして推論の深度を切り替え。",
-        "receiveBetaUpdates": "ベータアップデートを受け取る",
         "searchTasks": "タスクを検索",
         "searchResults": "検索結果"
       },
       "placeholder": {
-        "typeAMessageOrUseToCall": "メッセージ… / でコマンド、@ でファイルを入力",
-        "providers": "{ \"providers\": { ... } }",
         "searchTasksAndMessages": "タスクとメッセージを検索…"
-      },
-      "text": {
-        "update": "更新",
-        "new": "新規 ↓",
-        "thinkOff": "思考オフ",
-        "extensions": "拡張機能",
-        "skills": "スキル",
-        "faster": "速め",
-        "smarter": "賢め",
-        "betaUpdates": "ベータアップデート",
-        "receivePrereleasePicotBuilds": "プレリリース版Picotビルドを受け取る",
-        "piAgentAuthJson": "~/.pi/agent/auth.json",
-        "save": "保存",
-        "piAgentModelsJson": "~/.pi/agent/models.json",
-        "cancel": "キャンセル",
-        "openLink": "リンクを開く"
-      }
-    },
-    "app": {
-      "textcontent": {
-        "retrying": "再試行中…"
-      }
-    },
-    "components": {
-      "chatSettingsPanel": {
-        "textcontent": {
-          "checkingTelegram": "Telegramを確認中…"
-        },
-        "placeholder": {
-          "pasteANewTokenToReconnect": "再接続するには新しいトークンを貼り付けてください"
-        }
       }
     },
     "native": {
-      "app": {
-        "textcontent": {
-          "openSettings": "設定を開く",
-          "noModelsMatchYourSearch": "検索に一致するモデルがありません。"
-        }
-      },
-      "composer": {
-        "composerSlashMenu": {
-          "textcontent": {
-            "noMatchingSkills": "一致するスキルがありません"
-          },
-          "ariaLabel": {
-            "skillSlashCommands": "スキルスラッシュコマンド"
-          }
-        }
-      },
-      "extensions": {
-        "inlineExtensionPrompt": {
-          "placeholder": {
-            "typeACustomAnswer": "カスタム回答を入力"
-          },
-          "textcontent": {
-            "noPreview": "プレビューなし"
-          },
-          "ariaLabel": {
-            "extensionQuestion": "拡張機能の質問"
-          }
-        }
-      },
       "features": {
         "rpivTodoMirror": {
           "textcontent": {
             "todos": "タスク"
           }
         }
-      },
-      "notifications": {
-        "notificationCenter": {
-          "ariaLabel": {
-            "dismissNotification": "通知を閉じる"
-          }
-        }
-      },
-      "session": {
-        "sessionSearchDialog": {
-          "textcontent": {
-            "searchingMessages": "メッセージを検索中..."
-          }
-        },
-        "sessionSidebar": {
-          "textcontent": {
-            "showMore": "もっと表示"
-          }
-        }
-      },
-      "settings": {
-        "settingsConfig": {
-          "textcontent": {
-            "loading": "読み込み中…"
-          }
-        }
-      }
-    },
-    "sidebar": {
-      "buildSessionItem": {
-        "textcontent": {
-          "tmux": "tmux"
-        }
-      },
-      "index": {
-        "textcontent": {
-          "pinned": "ピン留め"
-        }
-      }
-    },
-    "terminalPanel": {
-      "ariaLabel": {
-        "closeTerminalTab": "ターミナルタブを閉じる"
       }
     },
     "ui": {
       "imageLightbox": {
         "ariaLabel": {
           "imagePreview": "画像プレビュー"
-        }
-      },
-      "messageRenderer": {
-        "title": {
-          "forkSessionFromHere": "ここからセッションをフォーク"
-        }
-      },
-      "resizablePanel": {
-        "title": {
-          "resizePanel": "パネルのサイズを変更"
         }
       }
     }

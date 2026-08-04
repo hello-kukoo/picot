@@ -68,8 +68,7 @@ describe("buildCostDashboardPayload infobar aggregation", () => {
         granularity: "day",
         scope: "all",
         range: "30d",
-        models: new Set(),
-      } as any,
+      },
       new Date("2026-06-06T18:00:00.000Z"),
     );
 

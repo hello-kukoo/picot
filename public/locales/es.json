@@ -25,25 +25,51 @@
   },
   "git": {
     "currentBranch": "Rama git actual",
-    "branchName": "Rama: {name}"
+    "branchName": "Rama: {name}",
+    "aiCommitMessage": "Generar mensaje de commit con IA",
+    "aiFailed": "Falló la generación del mensaje de commit con IA. Aún puedes escribir un mensaje de commit manualmente.",
+    "cancel": "Cancelar",
+    "changes": "Cambios",
+    "commit": "Commit",
+    "commitInProgress": "Commit en curso...",
+    "commitMessageLabel": "Mensaje de commit",
+    "committing": "Confirmando...",
+    "comparison": {
+      "changes": "Cambios",
+      "staged": "Preparados",
+      "untracked": "Sin seguimiento"
+    },
+    "confirmationRequired": "Este archivo tiene cambios preparados y sin preparar. ¿Confirmas el commit del archivo completo?",
+    "conflicted": "En conflicto",
+    "diffEmpty": "No hay cambios que mostrar",
+    "diffModified": "Modificado",
+    "diffOriginal": "Original",
+    "discard": "Descartar cambios",
+    "discardConfirm": "¿Descartar los cambios de {count} archivo(s)? Esta acción no se puede deshacer.",
+    "discardWarning": "Esta acción no se puede deshacer",
+    "files": "Archivos",
+    "hookChangedTree": "Un hook de pre-commit modificó el contenido confirmado; el commit se creó pero puede diferir de la instantánea preparada.",
+    "noStatus": "No se cargó el estado de Git",
+    "noUpstream": "No hay upstream configurado",
+    "outcomeUnknown": "No se pudo determinar el resultado del commit. Verifica el estado del repositorio antes de reintentar.",
+    "panel": "Git",
+    "refresh": "Actualizar estado de Git",
+    "stage": "Preparar",
+    "staged": "Preparados",
+    "stats": "+{additions} −{deletions} · Preparados {staged} · Cambios {changes} · Sin seguimiento {untracked}",
+    "summary": "{branch} · {upstream} · ↑{ahead} ↓{behind}",
+    "truncated": "{count} cambios más no mostrados",
+    "unstage": "Quitar de preparados",
+    "untracked": "Sin seguimiento",
+    "writeUnavailable": "Autorización de escritura de Git no disponible"
   },
   "usage": {
     "contextTokens": "Contexto: {used}k / {limit}k tokens",
     "sessionCostTitle": "Costo de sesión",
     "contextTitle": "Uso del contexto",
-    "costSub": "{amount} (suscripción)"
-  },
-  "sessionInfo": {
-    "title": "Información de la sesión",
-    "heading": "Información de la sesión",
-    "file": "Archivo",
-    "id": "ID",
-    "inMemory": "En memoria (aún no guardada)",
-    "unavailable": "No disponible",
-    "copyFile": "Copiar ruta del archivo",
-    "copyId": "Copiar ID de sesión",
-    "copied": "Copiado",
-    "copyFailed": "Error al copiar"
+    "costSub": "{amount} (suscripción)",
+    "sessionUsageTitle": "Tokens de sesión (entrada / salida / caché)",
+    "summary": "Entrada {in} · Salida {out} · Caché {cache}"
   },
   "context": {
     "cached": "En caché",
@@ -95,7 +121,8 @@
     "processStep": "{count} paso",
     "processSteps": "{count} pasos",
     "processToolCall": "{count} llamada a herramienta",
-    "processToolCalls": "{count} llamadas a herramientas"
+    "processToolCalls": "{count} llamadas a herramientas",
+    "scrollToBottom": "Desplazarse al último mensaje"
   },
   "tools": {
     "copyOutput": "Copiar salida",
@@ -123,7 +150,6 @@
       "enableLineWrap": "Habilitar ajuste de línea",
       "edit": "Editar",
       "preview": "Vista previa",
-      "diff": "Diff",
       "find": "Buscar",
       "goToLine": "Ir a línea",
       "goToLinePrompt": "Número de línea",
@@ -159,7 +185,8 @@
         "installWindows": "py -3 -m pip install \"markitdown[docx,pptx,xlsx,xls,outlook]\"",
         "remoteImageHidden": "Imagen remota oculta"
       },
-      "conflictMessage": "{name} fue modificado en disco. ¿Recargar o sobreescribir la versión del disco?"
+      "conflictMessage": "{name} fue modificado en disco. ¿Recargar o sobreescribir la versión del disco?",
+      "tabpanelLabel": "Vista previa del archivo"
     },
     "unsaved": {
       "title": "Cambios sin guardar",
@@ -296,7 +323,9 @@
     "abortedByUser": "Cancelado por el usuario",
     "invalidJson": "JSON inválido: {detail}",
     "modelsMustBeObject": "models.json debe ser un objeto JSON.",
-    "providersMustBeObject": "'providers' debe ser un objeto."
+    "providersMustBeObject": "'providers' debe ser un objeto.",
+    "compactionFailed": "La compactación del contexto falló.",
+    "compactionFailedDetail": "La compactación del contexto falló: {error}"
   },
   "onboarding": {
     "openProject": "Abre un proyecto para comenzar a chatear.",
@@ -352,9 +381,6 @@
     "untitled": "Sin título",
     "emptySession": "Sesión vacía",
     "rename": "Renombrar",
-    "generateTitle": "Generar título",
-    "generatingTitle": "Generando…",
-    "generateTitleError": "No se pudo generar el título. Inténtalo de nuevo.",
     "renameSessionAriaLabel": "Renombrar sesión",
     "renameInputPlaceholder": "Nombre de sesión",
     "renameErrorInvalid": "Introduce un nombre de sesión no vacío.",
@@ -474,10 +500,6 @@
     "thinkingEffort": "Esfuerzo de razonamiento",
     "reasoningDepth": "Profundidad de razonamiento",
     "showThinking": "Mostrar razonamiento",
-    "taskNotifications": "Notificaciones de tareas completadas",
-    "taskNotificationsDescription": "Muestra una notificación del sistema operativo cuando finaliza una tarea.",
-    "taskCompleteTitle": "Tarea completada",
-    "taskCompleteMessage": "Tu tarea ha finalizado.",
     "piVersion": "Versión de Pi",
     "picotVersion": "Versión de Picot",
     "checkForUpdates": "Buscar actualizaciones",
@@ -497,15 +519,6 @@
     "thinkingLevel": "Razonamiento: {level}",
     "thinkingCompact": "Razonar {level}",
     "off": "apagado",
-    "thinkingFaster": "Más rápido",
-    "thinkingSmarter": "Más inteligente",
-    "thinkingLevels": {
-      "off": "apagado",
-      "minimal": "mínimo",
-      "low": "bajo",
-      "medium": "medio",
-      "high": "alto"
-    },
     "thinkingTitle": "El esfuerzo de razonamiento controla la profundidad de razonamiento. Haz clic para cambiar.",
     "thinkingAriaLabel": "Esfuerzo de razonamiento: {level}. Haz clic para cambiar la profundidad de razonamiento.",
     "agentConfiguration": "Configuración del agente",
@@ -582,7 +595,57 @@
       "saveFailed": "Error al guardar la configuración de habilidades.",
       "rescanFailed": "Error al reescanear habilidades.",
       "ambiguousRuleTarget": "Este objetivo corresponde a múltiples raíces; edita settings.json manualmente para cambiarlo.",
-      "scopeSummary": "{total} habilidades · {groups} grupos"
+      "scopeSummary": "{total} habilidades · {groups} grupos",
+      "addRoot": "Habilitar en Pi",
+      "addRootCancel": "Cancelar",
+      "addRootConfirm": "Habilitar",
+      "addRootConfirmation": "¿Habilitar este directorio de habilidades de Claude en Pi? La entrada de configuración mostrada se aplica después de una nueva sesión o reinicio de Pi.",
+      "addRootFailed": "No se pudo habilitar esta raíz de habilidades.",
+      "discovered": "Descubiertas",
+      "install": "Instalar",
+      "packages": "Paquetes",
+      "rootAddedRestartRequired": "Habilitado. Inicia una nueva sesión o reinicia Pi para que el cambio surta efecto.",
+      "sectionsAriaLabel": "Secciones de habilidades"
+    },
+    "installSkills": {
+      "cancel": "Cancelar",
+      "chooseFolder": "Elegir carpeta",
+      "complete": "Se instalaron {added} entradas; {skipped} ya configuradas.",
+      "confirm": "Instalar habilidades seleccionadas",
+      "confirmation": "¿Instalar {count} habilidades seleccionadas en {scope}?",
+      "confirmationHeading": "Confirmar instalación de habilidades",
+      "description": "Enlaza habilidades desde una carpeta local. No se copian ni modifican archivos.",
+      "global": "Global",
+      "group": "Grupo",
+      "installFailed": "No se pudieron instalar las habilidades seleccionadas.",
+      "installing": "Instalando...",
+      "project": "Proyecto actual",
+      "projectUntrusted": "Este proyecto no es de confianza. No se puede instalar en el proyecto actual.",
+      "restartRequired": "Guardado. Inicia una nueva sesión o reinicia Pi para que el cambio surta efecto.",
+      "review": "Revisar instalación",
+      "scanFailed": "No se pudo escanear la carpeta seleccionada.",
+      "scanning": "Escaneando habilidades...",
+      "skill": "Habilidad",
+      "title": "Instalar habilidades"
+    },
+    "packageSkills": {
+      "bundledCandidates": "Candidatos incluidos",
+      "candidateCount": "{count} candidatos",
+      "canonicalPath": "Ruta canónica",
+      "description": "Candidatos de habilidades incluidos de los paquetes de Pi configurados. Son candidatos de solo lectura; el estado efectivo de activación/desactivación lo calcula Pi y no se muestra aquí.",
+      "empty": "No hay paquetes configurados en este ámbito.",
+      "enableAll": "Habilitar todo",
+      "global": "Global",
+      "loadFailed": "No se pudieron cargar las habilidades de los paquetes.",
+      "loading": "Cargando habilidades de paquetes...",
+      "notInstalled": "No instalado",
+      "package": "Paquete",
+      "project": "Proyecto actual",
+      "projectUntrusted": "Este proyecto no es de confianza. No se muestran las rutas de paquetes del proyecto.",
+      "refresh": "Actualizar",
+      "retry": "Reintentar",
+      "scopeSummary": "{count} paquetes",
+      "title": "Habilidades de paquetes"
     }
   },
   "lanQr": {
@@ -661,7 +724,8 @@
     "model": "modelo",
     "compact": "Compactar",
     "compactTitle": "El contexto supera el 80% — compacta para ahorrar tokens",
-    "qrUnavailable": "Código QR no disponible"
+    "qrUnavailable": "Código QR no disponible",
+    "toggleContextControls": "Alternar controles de contexto"
   },
   "browse": {
     "openExternalPrompt": "Abrir este enlace en una nueva pestaña:"
@@ -675,7 +739,6 @@
     "startingQuickChat": "Iniciando chat rápido…",
     "tokens": "tokens",
     "sideChat": "Chat lateral",
-    "sideChatLimit": "Límite de chat lateral alcanzado",
     "quickChat": "Chat rápido",
     "minimize": "Minimizar",
     "close": "Cerrar",
@@ -700,172 +763,31 @@
     "showMore": "Mostrar más"
   },
   "migrated": {
-    "bootstrap": {
-      "text": {
-        "picotStartup": "Picot Startup",
-        "pi": "pi"
-      }
-    },
     "index": {
-      "alt": {
-        "picotLogo": "Logotipo de Picot"
-      },
       "title": {
-        "newSession": "Nueva sesión",
-        "settings": "Ajustes",
-        "downloadAndInstallUpdate": "Descargar e instalar actualización",
-        "workspacePath": "Ruta del espacio de trabajo",
-        "gitBranch": "Rama de Git",
-        "chooseApp": "Elegir app",
-        "files": "Archivos",
-        "close": "Cerrar",
-        "minimal": "mínimo",
-        "low": "bajo",
-        "medium": "medio",
-        "high": "alto"
+        "close": "Cerrar"
       },
       "ariaLabel": {
-        "toggleFileBrowser": "Alternar explorador de archivos",
-        "keyboardShortcuts": "Atajos de teclado",
-        "conversationNavigator": "Navegador de conversación",
-        "openCommands": "Abrir comandos",
-        "thinkingEffortOffClickToCycleReasoning": "Esfuerzo de razonamiento: apagado. Haz clic para cambiar la profundidad de razonamiento.",
-        "receiveBetaUpdates": "Recibir actualizaciones beta",
         "searchTasks": "Buscar tareas",
         "searchResults": "Resultados de búsqueda"
       },
       "placeholder": {
-        "typeAMessageOrUseToCall": "Mensaje… Escribe / para comandos, @ para archivos",
-        "providers": "{ \"providers\": { ... } }",
         "searchTasksAndMessages": "Buscar tareas y mensajes…"
-      },
-      "text": {
-        "update": "Actualizar",
-        "new": "Nuevo ↓",
-        "thinkOff": "Razonamiento apagado",
-        "extensions": "Extensiones",
-        "skills": "Habilidades",
-        "faster": "Más rápido",
-        "smarter": "Más inteligente",
-        "betaUpdates": "Actualizaciones beta",
-        "receivePrereleasePicotBuilds": "Recibir versiones preliminares de Picot",
-        "piAgentAuthJson": "~/.pi/agent/auth.json",
-        "save": "Guardar",
-        "piAgentModelsJson": "~/.pi/agent/models.json",
-        "cancel": "Cancelar",
-        "openLink": "Abrir enlace"
-      }
-    },
-    "app": {
-      "textcontent": {
-        "retrying": "Reintentando…"
-      }
-    },
-    "components": {
-      "chatSettingsPanel": {
-        "textcontent": {
-          "checkingTelegram": "Comprobando Telegram…"
-        },
-        "placeholder": {
-          "pasteANewTokenToReconnect": "Pega un nuevo token para reconectar"
-        }
       }
     },
     "native": {
-      "app": {
-        "textcontent": {
-          "openSettings": "Abrir ajustes",
-          "noModelsMatchYourSearch": "Ningún modelo coincide con tu búsqueda."
-        }
-      },
-      "composer": {
-        "composerSlashMenu": {
-          "textcontent": {
-            "noMatchingSkills": "No hay habilidades coincidentes"
-          },
-          "ariaLabel": {
-            "skillSlashCommands": "Comandos slash de habilidades"
-          }
-        }
-      },
-      "extensions": {
-        "inlineExtensionPrompt": {
-          "placeholder": {
-            "typeACustomAnswer": "Escribe una respuesta personalizada"
-          },
-          "textcontent": {
-            "noPreview": "Sin vista previa"
-          },
-          "ariaLabel": {
-            "extensionQuestion": "Pregunta de extensión"
-          }
-        }
-      },
       "features": {
         "rpivTodoMirror": {
           "textcontent": {
             "todos": "Tareas"
           }
         }
-      },
-      "notifications": {
-        "notificationCenter": {
-          "ariaLabel": {
-            "dismissNotification": "Descartar notificación"
-          }
-        }
-      },
-      "session": {
-        "sessionSearchDialog": {
-          "textcontent": {
-            "searchingMessages": "Buscando mensajes..."
-          }
-        },
-        "sessionSidebar": {
-          "textcontent": {
-            "showMore": "Mostrar más"
-          }
-        }
-      },
-      "settings": {
-        "settingsConfig": {
-          "textcontent": {
-            "loading": "Cargando…"
-          }
-        }
-      }
-    },
-    "sidebar": {
-      "buildSessionItem": {
-        "textcontent": {
-          "tmux": "tmux"
-        }
-      },
-      "index": {
-        "textcontent": {
-          "pinned": "Fijado"
-        }
-      }
-    },
-    "terminalPanel": {
-      "ariaLabel": {
-        "closeTerminalTab": "Cerrar pestaña de terminal"
       }
     },
     "ui": {
       "imageLightbox": {
         "ariaLabel": {
           "imagePreview": "Vista previa de imagen"
-        }
-      },
-      "messageRenderer": {
-        "title": {
-          "forkSessionFromHere": "Bifurcar sesión desde aquí"
-        }
-      },
-      "resizablePanel": {
-        "title": {
-          "resizePanel": "Redimensionar panel"
         }
       }
     }

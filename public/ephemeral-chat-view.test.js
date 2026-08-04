@@ -198,13 +198,12 @@ describe("EphemeralChatView", () => {
     expect(composer.querySelector('[data-role="ephemeral-thinking"]')).not.toBeNull();
     expect(composer.querySelector('[data-role="ephemeral-send"] svg')).not.toBeNull();
     const sendIcon = composer.querySelector('[data-role="ephemeral-send"] svg');
-    const line = sendIcon.querySelector("line");
-    expect(line).not.toBeNull();
-    expect(line.getAttribute("x1")).toBe("12");
-    expect(line.getAttribute("y1")).toBe("19");
-    expect(line.getAttribute("x2")).toBe("12");
-    expect(line.getAttribute("y2")).toBe("5");
-    expect(sendIcon.querySelector("polyline").getAttribute("points")).toBe("5 12 12 5 19 12");
+    // The send button shows the "arrow-up" icon when not streaming. The icon's
+    // exact SVG shape is owned by public/icons.js; assert on the path data so
+    // this test does not break every time the icon definition is refactored.
+    const arrowPath = sendIcon.querySelector("path");
+    expect(arrowPath).not.toBeNull();
+    expect(arrowPath.getAttribute("d")).toBe("M12 19V5M5 12l7-7 7 7");
     expect(composer.querySelector('[data-role="ephemeral-send"]').textContent.trim()).toBe("");
     expect(composer.textContent).toContain("claude-3");
     expect(composer.textContent).toContain("Think high");
