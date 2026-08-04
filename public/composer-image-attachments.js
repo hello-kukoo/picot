@@ -10,7 +10,6 @@ import { createIcon } from "./icons.js";
  * share the exact same attachment behavior without duplicating DOM wiring.
  *
  * opts:
- *   doc              Document instance
  *   composerCard     the composer-card element (drag & drop target)
  *   textarea         the input/textarea (paste target + focus return)
  *   attachBtn        button element that opens the picker
@@ -26,7 +25,6 @@ import { createIcon } from "./icons.js";
  */
 export function setupComposerImageAttachments(opts) {
   const {
-    doc,
     composerCard,
     textarea,
     attachBtn,
@@ -129,16 +127,16 @@ export function setupComposerImageAttachments(opts) {
     }
     imagePreviews.classList.remove("hidden");
     pendingImages.forEach((img, i) => {
-      const preview = doc.createElement("div");
+      const preview = document.createElement("div");
       preview.className = "image-preview";
-      const image = doc.createElement("img");
+      const image = document.createElement("img");
       image.src = `data:${img.mimeType};base64,${img.data}`;
       image.alt = "";
-      const removeButton = doc.createElement("button");
+      const removeButton = document.createElement("button");
       removeButton.type = "button";
       removeButton.className = "image-preview-remove";
       removeButton.dataset.index = String(i);
-      const removeIcon = createIcon("x", { size: 14, document: doc });
+      const removeIcon = createIcon("x", { size: 14 });
       if (removeIcon) removeButton.appendChild(removeIcon);
       removeButton.addEventListener("click", () => {
         pendingImages.splice(i, 1);
