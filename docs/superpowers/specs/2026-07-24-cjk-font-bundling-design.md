@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. The upstream release pin, source SHA-256, and subset size cap are
+Proposed. The upstream release pin, source SHA-256, and WOFF2 size cap are
 locked concretely in `scripts/cjk-font-version.json` via the implementation
 plan (verified against the live `lxgw/LxgwWenKai-Lite` release); they are
 re-verified and re-filled only when the pinned version changes, mirroring the
@@ -11,13 +11,13 @@ wiring, and CSS integration.
 
 ## Goal
 
-Bundle a GB2312 subset of **LXGW WenKai Lite** (Simplified Chinese, SIL OFL
-1.1) as a same-origin WOFF2 web font, and apply it as the CJK fallback on
-Picot's **content surfaces** — the main-chat prose (both assistant
-replies and user messages) and file-preview Markdown prose. Latin text and
-all app chrome continue to use the
-existing system font stack. The bundled font is the single source of truth for
-CJK rendering on those surfaces; a user-installed font is never required.
+Bundle the full **LXGW WenKai Lite** (Simplified Chinese, SIL OFL 1.1) as a
+same-origin WOFF2 web font, and apply it as the CJK fallback on Picot's
+**content surfaces** — the main-chat prose (both assistant replies and user
+messages) and file-preview Markdown prose. Latin text and all app chrome
+continue to use the existing system font stack. The bundled font is the single
+source of truth for CJK rendering on those surfaces; a user-installed font is
+never required.
 
 This reuses the proven terminal-font asset pipeline
 (`scripts/fetch-terminal-font.js` + `scripts/terminal-font-version.json`,
@@ -27,14 +27,13 @@ documented in `docs/terminal-font-bundling.md`) as its template.
 
 These are the outcomes of the design discussion and are not re-litigated here:
 
-1. **Use the Lite variant, not the full version.** The author publishes
+1. **Use the Lite variant.** The author publishes
    [LXGW WenKai Lite](https://github.com/lxgw/LxgwWenKai-Lite) specifically so
-   developers can embed the font in software. The full version carries the
-   entire CJK base plane + Extension A + Hangul and is far larger than needed.
-2. **Subset to GB2312 + CJK punctuation, exclude ASCII.** GB2312 (6,763
-   ideographs) covers Simplified-Chinese daily use. ASCII is dropped so Latin
-   is always served by the system font; this both shrinks the asset and makes
-   the "Latin = system" intent structural rather than incidental.
+   developers can embed the font in software.
+2. **Convert the full TTF to WOFF2, no subsetting.** The Lite variant is
+   already trimmed relative to the main LXGW WenKai project; distribute its
+   full Regular as WOFF2. ASCII is still excluded at render time via
+   `unicode-range`.
 3. **WOFF2 format**, consistent with the terminal font (not WOFF).
 4. **Ship Regular weight only for v1.** Markdown `<strong>` uses the browser's
    faux-bold. Real Medium/Bold is deferred.
@@ -66,8 +65,6 @@ These are the outcomes of the design discussion and are not re-litigated here:
 - A CJK face inside code blocks or the CodeMirror editor (Phase 2 candidate:
   LXGW WenKai Mono Lite).
 - A real Bold/Medium weight (Phase 2 candidate).
-- Coverage of Traditional Chinese or rare Hanzi beyond GB2312 (these fall back
-  to the system CJK face).
 - A user-selectable font preference.
 - Any change to the terminal-font pipeline, PTY profiles, or persisted
   terminal metadata.
@@ -76,12 +73,11 @@ These are the outcomes of the design discussion and are not re-litigated here:
 
 LXGW WenKai is licensed under SIL Open Font License 1.1 (derived from
 Fontworks' Klee One). OFL 1.1 permits embedding and bundling in software and
-explicitly permits subsetting and format conversion (to WOFF/WOFF2) for
-web-font use, provided the font is not offered as an installable desktop font
-and the `OFL.txt` is redistributed. Picot's bundle model (WOFF2 inside the
-`.app`, not exposed as an installable font, LICENSE shipped alongside)
-satisfies these terms. The bundled license file is mandatory in the generated
-output.
+explicitly permits format conversion (to WOFF/WOFF2) for web-font use, provided
+the font is not offered as an installable desktop font and the `OFL.txt` is
+redistributed. Picot's bundle model (WOFF2 inside the `.app`, not exposed as
+an installable font, LICENSE shipped alongside) satisfies these terms. The
+bundled license file is mandatory in the generated output.
 
 ## Asset contract
 
@@ -90,33 +86,28 @@ output.
   (≈13.9 MB). The Mono sibling (`LXGWWenKaiMonoLite-Regular.ttf`) exists but is
   out of scope for v1.
 - **Pin file:** `scripts/cjk-font-version.json` records `version`, the source
-  archive/TTF URL, the source TTF filename, the source **SHA-256**, the subset
-  unicode-set name, and the generated WOFF2 output filename. It mirrors the
-  terminal-font lock's pinning discipline (version + SHA-256 + `outputFiles`
-  + `_comment`) with CJK-specific fields (`sourceUrl`, `licenseUrl`,
-  `subsetSet`, `approxBytes`, `sizeCapBytes`); it is not a field-for-field copy
-  of `scripts/terminal-font-version.json`.
-- **Subset target:** GB2312 ideograph set (6,763 Hanzi) ∪ CJK Symbols and
-  Punctuation (`U+3000`–`U+303F`) ∪ Halfwidth and Fullwidth Forms
-  (`U+FF00`–`U+FFEF`). ASCII (`U+0020`–`U+007E`) is excluded.
-- **Distributed files:** exactly one WOFF2 (for example
-  `LXGWWenKaiLite-Regular.gb2312.woff2`) and the upstream `OFL.txt`. No TTF is
-  shipped.
+  archive/TTF URL, the source TTF filename, the source **SHA-256**, and the
+  generated WOFF2 output filename. It mirrors the terminal-font lock's pinning
+  discipline (version + SHA-256 + `outputFiles` + `_comment`) with CJK-specific
+  fields (`sourceUrl`, `licenseUrl`, `approxBytes`, `sizeCapBytes`); it is not a
+  field-for-field copy of `scripts/terminal-font-version.json`.
+- **Distributed files:** exactly one WOFF2 (`LXGWWenKaiLite-Regular.woff2`)
+  and the upstream `OFL.txt`. No TTF is shipped.
 - **Output directory:** `public/fonts/cjk/`. Gitignored (same model as
   `public/fonts/terminal/`); recreated by the fetch script.
 - **Source cache:** `.cache/cjk-fonts/`, holding the downloaded source TTF
   between runs. Also gitignored (same model as `.cache/terminal-fonts/`); if
   it is omitted, a ≈13.9 MB source TTF is one `git add -A` away from the
   repository.
-- **Integrity:** the downloaded source is SHA-256 verified before subsetting.
+- **Integrity:** the downloaded source is SHA-256 verified before conversion.
   A mismatch removes the cached source and fails the build.
-- **Expected size:** on the order of 1–3 MB WOFF2 after subset. The lock file
-  records `approxBytes` (the observed size, reference only) and `sizeCapBytes`
-  (a sane upper bound). The fetch CLI itself asserts the generated WOFF2 is
-  materially smaller than the source TTF, at or under `sizeCapBytes`, and
-  above a hardcoded `MIN_WOFF2_BYTES` floor (100,000) that catches a silently
-  empty subset; none of this is asserted by the unit suite, which is
-  network-free.
+- **Expected size:** on the order of 5 MB WOFF2 for the full Lite Regular. The
+  lock file records `approxBytes` (the observed size, reference only) and
+  `sizeCapBytes` (a sane upper bound). The fetch CLI itself asserts the
+  generated WOFF2 is materially smaller than the source TTF, at or under
+  `sizeCapBytes`, and above a hardcoded `MIN_WOFF2_BYTES` floor (100,000) that
+  catches a silently empty conversion; none of this is asserted by the unit
+  suite, which is network-free.
 
 ## Fetch pipeline (new module)
 
@@ -129,19 +120,13 @@ A new `scripts/fetch-cjk-font.js` mirrors `scripts/fetch-terminal-font.js`:
 3. Download the pinned source into `.cache/cjk-fonts/`; if a cached file's
    SHA-256 does not match the pin, delete it and re-download.
 4. Verify SHA-256; on mismatch remove the cached source and fail.
-5. Subset + convert the source TTF to WOFF2 for the declared unicode set.
-   - **Recommended tool:** `subset-font` (pure JavaScript, Bun-compatible),
-     added as a pinned devDependency. It performs subset and WOFF2 conversion in
-     one step and keeps the build Bun/Node-only.
-   - **Documented alternative for local experiments:** `pyftsubset` (Python
-     `fonttools`). Not used by the build, because the project is Bun-only.
-   - Before publishing the output, assert its byte size is materially smaller
-     than the source TTF, at or under `sizeCapBytes`, and above an absolute
-     floor (`MIN_WOFF2_BYTES`, 100,000 — a GB2312 subset is orders of
-     magnitude larger, so this catches a silently empty subset); remove
-     generated output and fail with the actual source/output/cap/floor sizes
-     on violation.
-6. Replace `public/fonts/cjk/`, write only the validated WOFF2 + `OFL.txt`, and
+5. Convert the full source TTF to WOFF2 using `ttf2woff2`. The full Lite
+   font is distributed.
+6. Before publishing the output, assert its byte size is materially smaller
+   than the source TTF, at or under `sizeCapBytes`, and above an absolute
+   floor (`MIN_WOFF2_BYTES`, 100,000); remove generated output and fail with
+   the actual source/output/cap/floor sizes on violation.
+7. Replace `public/fonts/cjk/`, write only the validated WOFF2 + `OFL.txt`, and
    write the `.version` marker.
 
 ### Build wiring
@@ -176,7 +161,7 @@ existing terminal `@font-face` blocks:
 ```css
 @font-face {
   font-family: "Picot CJK";
-  src: url("./fonts/cjk/LXGWWenKaiLite-Regular.gb2312.woff2") format("woff2");
+  src: url("./fonts/cjk/LXGWWenKaiLite-Regular.woff2") format("woff2");
   unicode-range: U+3000-303F, U+4E00-9FFF, U+FF00-FFEF;
   font-style: normal;
   font-weight: 400;
@@ -227,8 +212,8 @@ Notes:
 
 ## Known limitations and trade-offs
 
-- Hanzi outside GB2312 (Traditional, rare Extension-A) fall back to the system
-  CJK face. Acceptable for v1; revisit if gaps are felt.
+- The full Lite font is distributed. Rare Traditional characters still fall
+  back to the system CJK face if they are outside the Lite glyph set.
 - Markdown bold (`<strong>`, `font-weight: 700`) renders as browser faux-bold
   against the single Regular weight. Faux-bold on kai strokes can look slightly
   muddy at large sizes; a real Medium/Bold weight is Phase 2.
@@ -241,17 +226,14 @@ Notes:
 New files:
 
 - `scripts/cjk-font-version.json` — asset pin.
-- `scripts/cjk-subset.js` — pure, I/O-free GB2312 subset collector (exports
-  `collectGb2312SubsetChars`); split out so the unit suite can exercise it
-  without triggering the CLI's network `main()`.
-- `scripts/fetch-cjk-font.js` — fetch/verify/subset/convert/install.
+- `scripts/fetch-cjk-font.js` — fetch/verify/convert/install.
 - `scripts/fetch-cjk-font.test.js` — unit tests mirroring
   `scripts/fetch-terminal-font.test.js`.
 
 Changed files:
 
-- `package.json` — `fetch:cjk-font` script; `subset-font` devDependency; add
-  `fetch:cjk-font` to `dev` and `prebuild`.
+- `package.json` — `fetch:cjk-font` script; add `fetch:cjk-font` to `dev`
+  and `prebuild`.
 - `src-tauri/tauri.conf.json` — add `fetch:cjk-font` to `beforeDevCommand`
   and `beforeBuildCommand`.
 - `scripts/build.sh` — mirror the fetch chain where applicable.
@@ -265,22 +247,17 @@ Changed files:
 ### Fetch-script unit tests
 
 The unit suite is network-free; it validates only what it can without
-downloading or subsetting:
+downloading or converting:
 
 1. `scripts/cjk-font-version.json` pins the expected version, source file,
-   source/license URLs, 64-hex SHA-256, `subsetSet: "gb2312"`, the single
-   WOFF2 output filename, and both the `approxBytes` reference and the
-   `sizeCapBytes` upper bound.
-2. `collectGb2312SubsetChars()` returns exactly 6,763 Hanzi — all inside the
-   CJK punctuation / Unified Ideographs / Fullwidth ranges — and includes
-   representative characters (`一`, `。`).
-3. `scripts/fetch-cjk-font.js` wires `subset-font` (with `targetFormat:
-   "woff2"`), SHA-256 verification, and the Open Font License check.
+   source/license URLs, 64-hex SHA-256, the single WOFF2 output filename, and
+   both the `approxBytes` reference and the `sizeCapBytes` upper bound.
+2. `scripts/fetch-cjk-font.js` wires `ttf2woff2`, SHA-256 verification, and the
+   Open Font License check.
 
-The behaviors that need the network and the real subsetting — skip-when-
-up-to-date, SHA-256 mismatch removal, the exact output file set, no TTF
-shipped, and the subset byte size — are asserted by the fetch CLI under Build
-/ CI, not by the unit suite.
+The behaviors that need the network — skip-when-up-to-date, SHA-256 mismatch
+removal, the exact output file set, no TTF shipped, and the WOFF2 byte size
+— are asserted by the fetch CLI under Build / CI, not by the unit suite.
 
 ### Build / CI
 
@@ -301,14 +278,14 @@ shipped, and the subset byte size — are asserted by the fetch CLI under Build
 - An English-only reply does **not** request the CJK WOFF2 in DevTools Network.
 - Previewing a `.md` with Chinese: prose renders in wenkai; code blocks are
   unchanged.
-- A Hanzi outside GB2312 (for example a rare character) falls back to the
-  system CJK face without tofu on both macOS and Windows.
+- A Hanzi outside the Lite glyph set falls back to the system CJK face without
+  tofu on both macOS and Windows.
 
 ## Acceptance criteria
 
 1. A clean `bun run fetch:cjk-font` installs exactly one WOFF2 and `OFL.txt`
    under `public/fonts/cjk/`, SHA-verified and version-marked.
-2. The shipped WOFF2 is a GB2312 + CJK-punctuation subset; no full TTF is
+2. The shipped WOFF2 contains the full Lite Regular glyph set; no full TTF is
    distributed.
 3. Assistant response prose, the user message bubble, and Markdown preview
    prose render CJK in wenkai and Latin in the system font.
@@ -328,7 +305,4 @@ shipped, and the subset byte size — are asserted by the fetch CLI under Build
   the browser's UA-default monospace rather than the bundled `Picot Mono Nerd`.
 - **Phase 2 — real weight:** ship Medium for `<strong>` instead of faux-bold.
 - **Phase 2 — broader coverage:** move to a GB 18030 / Traditional-capable
-  source if GB2312 gaps are felt.
-- **Implementation-time confirmation:** pin the exact `subset-font` version and
-  confirm its option API (unicode input shape, output format string) against
-  that version before writing the subset step.
+  source if coverage gaps are felt.

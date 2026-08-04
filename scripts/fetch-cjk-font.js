@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 // ABOUTME: Downloads and verifies the locked LXGW WenKai Lite release.
-// ABOUTME: Subsets it to GB2312 + CJK punctuation and installs the WOFF2 into public/fonts.
+// ABOUTME: Converts the full TTF to WOFF2 and installs it into public/fonts.
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const https = require("node:https");
 const path = require("node:path");
-const { collectGb2312SubsetChars } = require("./cjk-subset.js");
 
 const ROOT = path.resolve(__dirname, "..");
 const LOCK_FILE = path.join(__dirname, "cjk-font-version.json");
@@ -50,9 +49,6 @@ function loadLock() {
   if (!/^[a-f0-9]{64}$/i.test(lock.sha256 || "")) {
     fail(`missing sha256 pin in ${LOCK_FILE}`);
   }
-  if (lock.subsetSet !== "gb2312") {
-    fail(`unsupported subsetSet in ${LOCK_FILE} (only "gb2312" is supported)`);
-  }
   if (!Number.isFinite(lock.approxBytes) || lock.approxBytes <= 0) {
     fail(`invalid approxBytes in ${LOCK_FILE}`);
   }
@@ -65,7 +61,7 @@ function loadLock() {
   if (
     !Array.isArray(lock.outputFiles) ||
     lock.outputFiles.length !== 1 ||
-    lock.outputFiles[0] !== "LXGWWenKaiLite-Regular.gb2312.woff2"
+    lock.outputFiles[0] !== "LXGWWenKaiLite-Regular.woff2"
   ) {
     fail(`invalid outputFiles in ${LOCK_FILE}`);
   }
@@ -126,13 +122,10 @@ function replaceDirectory(directory) {
   fs.mkdirSync(directory, { recursive: true });
 }
 
-async function subsetToWoff2(sourcePath, destinationPath) {
-  const { default: subsetFont } = await import("subset-font");
-  const ttf = fs.readFileSync(sourcePath);
-  const subsetBuffer = await subsetFont(ttf, collectGb2312SubsetChars(), {
-    targetFormat: "woff2",
-  });
-  fs.writeFileSync(destinationPath, subsetBuffer);
+async function convertToWoff2(sourcePath, destinationPath) {
+  const { default: convert } = await import("ttf2woff2");
+  const converted = convert(fs.readFileSync(sourcePath));
+  fs.writeFileSync(destinationPath, converted);
 }
 
 async function main() {
@@ -181,7 +174,7 @@ async function main() {
 
   replaceDirectory(OUT_DIR);
   const outputPath = path.join(OUT_DIR, lock.outputFiles[0]);
-  await subsetToWoff2(ttfPath, outputPath);
+  await convertToWoff2(ttfPath, outputPath);
   const sourceBytes = fs.statSync(ttfPath).size;
   const outputBytes = fs.statSync(outputPath).size;
   if (
@@ -201,7 +194,7 @@ async function main() {
   fs.copyFileSync(licensePath, path.join(OUT_DIR, LICENSE_FILE));
   fs.writeFileSync(VERSION_MARKER, `${lock.version}\n`, "utf8");
 
-  info(`installed LXGW WenKai Lite v${lock.version} (gb2312 subset) -> ${OUT_DIR}`);
+  info(`installed LXGW WenKai Lite v${lock.version} -> ${OUT_DIR}`);
 }
 
 main().catch((error) => fail(error.stack || error.message || String(error)));

@@ -1,7 +1,7 @@
 {
-  "version": "3.4.0",
+  "version": "3.5.0",
   "archiveName": "FiraCode.zip",
-  "sha256": "7cc4ffd8f7a1fc914cdab7b149808298165ff7a7f40e40d82dea9ebe41e8ca0b",
+  "sha256": "8ad2834d8ea1945d8ab042538e608f6370573a29913aa94b5e6bbc92ffacbab5",
   "fontFiles": ["FiraCodeNerdFontMono-Regular.ttf", "FiraCodeNerdFontMono-Bold.ttf"],
   "outputFiles": ["FiraCodeNerdFontMono-Regular.woff2", "FiraCodeNerdFontMono-Bold.woff2"],
   "_comment": "Pinned Nerd Fonts release for the bundled terminal font. To update, change version and sha256 from the official release checksum, then run bun run fetch:terminal-font."

@@ -1,10 +1,7 @@
-// ABOUTME: Verifies the CJK font lockfile, GB2312 subset coverage, and fetch CLI.
+// ABOUTME: Verifies the CJK font lockfile and fetch CLI.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
-// Default-import the CJS module (its `module.exports` is the default) so the
-// test does not rely on Vitest synthesizing named exports from CommonJS.
-import cjkSubset from "./cjk-subset.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
@@ -15,45 +12,20 @@ describe("CJK font distribution", () => {
 
     expect(lock.version).toMatch(/^\d+\.\d+(\.\d+)?$/);
     expect(lock.sourceFile).toBe("LXGWWenKaiLite-Regular.ttf");
-    expect(lock.subsetSet).toBe("gb2312");
     expect(lock.sha256).toMatch(/^[a-f0-9]{64}$/i);
     expect(lock.sourceUrl).toMatch(/^https:\/\//);
     expect(lock.licenseUrl).toMatch(/^https:\/\//);
-    expect(lock.outputFiles).toEqual(["LXGWWenKaiLite-Regular.gb2312.woff2"]);
+    expect(lock.outputFiles).toEqual(["LXGWWenKaiLite-Regular.woff2"]);
     expect(typeof lock.approxBytes).toBe("number");
     expect(lock.sizeCapBytes).toBeGreaterThan(1_000_000);
     expect(lock.licenseUrl).toContain("/v1.522/");
     expect(lock.licenseSha256).toMatch(/^[a-f0-9]{64}$/);
   });
 
-  test("GB2312 subset covers exactly 6763 Hanzi in the CJK blocks", () => {
-    const chars = cjkSubset.collectGb2312SubsetChars();
-    const hanzi = [...chars].filter((c) => {
-      const cp = c.codePointAt(0);
-      return cp >= 0x4e00 && cp <= 0x9fff;
-    }).length;
-
-    expect(hanzi).toBe(6763);
-    expect(chars).toContain("一");
-    expect(chars).toContain("。");
-    expect(
-      [...chars].every((c) => {
-        const cp = c.codePointAt(0);
-        return (
-          (cp >= 0x3000 && cp <= 0x303f) ||
-          (cp >= 0x4e00 && cp <= 0x9fff) ||
-          (cp >= 0xff00 && cp <= 0xffef)
-        );
-      }),
-    ).toBe(true);
-  });
-
-  test("fetch CLI subsets the verified TTF to WOFF2 via subset-font", () => {
+  test("fetch CLI converts the verified TTF to WOFF2 via ttf2woff2", () => {
     const src = read("scripts/fetch-cjk-font.js");
 
-    expect(src).toContain("./cjk-subset.js");
-    expect(src).toContain("subset-font");
-    expect(src).toContain("targetFormat");
+    expect(src).toContain("ttf2woff2");
     expect(src).toContain("woff2");
     expect(src).toContain("sha256");
     expect(src).toContain("approxBytes");
@@ -80,7 +52,7 @@ describe("CJK font distribution", () => {
 
     // @font-face declaration
     expect(flat).toContain('"Picot CJK"');
-    expect(flat).toContain("LXGWWenKaiLite-Regular.gb2312.woff2");
+    expect(flat).toContain("LXGWWenKaiLite-Regular.woff2");
     expect(flat).toContain("U+3000-303F, U+4E00-9FFF, U+FF00-FFEF");
 
     // selectors scoped to content surfaces

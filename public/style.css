@@ -23,7 +23,7 @@
 
 @font-face {
   font-family: "Picot CJK";
-  src: url("./fonts/cjk/LXGWWenKaiLite-Regular.gb2312.woff2") format("woff2");
+  src: url("./fonts/cjk/LXGWWenKaiLite-Regular.woff2") format("woff2");
   unicode-range: U+3000-303F, U+4E00-9FFF, U+FF00-FFEF;
   font-style: normal;
   font-weight: 400;
