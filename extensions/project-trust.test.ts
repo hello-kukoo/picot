@@ -29,8 +29,14 @@ describe("Picot project trust bridge", () => {
     await expect(setup(choice)()).resolves.toEqual(expected);
   });
 
-  it("defaults to untrusted when UI is unavailable or cancelled", async () => {
+  it("returns undecided when no UI is available so saved trust is honored", async () => {
+    // Without a UI, defer to pi's saved trust.json / defaultProjectTrust
+    // instead of returning a hard "no" that would override an already-trusted
+    // project (e.g. one trusted in the web UI but not in the rpc session).
+    await expect(setup("Trust once", false)()).resolves.toEqual({ trusted: "undecided" });
+  });
+
+  it("returns no when the user explicitly cancels the prompt", async () => {
     await expect(setup(undefined)()).resolves.toEqual({ trusted: "no" });
-    await expect(setup("Trust once", false)()).resolves.toEqual({ trusted: "no" });
   });
 });

@@ -779,6 +779,16 @@
       },
       "placeholder": {
         "searchTasksAndMessages": "搜索会话与消息…"
+      },
+      "title": {
+        "close": "关闭"
+      }
+    },
+    "ui": {
+      "imageLightbox": {
+        "ariaLabel": {
+          "imagePreview": "图片预览"
+        }
       }
     }
   }

@@ -8,6 +8,7 @@
 import { createCompactCoordinator } from "./compact-coordinator.js";
 import { repaintContextViz, setupContextViz } from "./ui/context-viz.js";
 import { createHeaderStatusBar } from "./ui/header-status-bar.js";
+import { initImageLightbox } from "./ui/image-lightbox.js";
 import "./cost/dashboard.js";
 import { StateManager } from "./app/state.js";
 import { initTransport } from "./app/transport.js";
@@ -538,6 +539,7 @@ const state = new StateManager();
 const messagesElement = document.getElementById("messages");
 const messageRenderer = new MessageRenderer(messagesElement);
 const toolCardRenderer = new ToolCardRenderer(messagesElement);
+initImageLightbox(messagesElement);
 const dialogHandler = new DialogHandler({
   container: document.getElementById("dialog-container"),
   notificationContainer: document.getElementById("messages"),

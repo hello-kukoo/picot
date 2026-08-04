@@ -779,6 +779,16 @@
       },
       "placeholder": {
         "searchTasksAndMessages": "Search tasks and messages…"
+      },
+      "title": {
+        "close": "Close"
+      }
+    },
+    "ui": {
+      "imageLightbox": {
+        "ariaLabel": {
+          "imagePreview": "Image preview"
+        }
       }
     }
   }
