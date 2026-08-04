@@ -169,7 +169,7 @@ export class MessageRenderer {
     return div;
   }
 
-  renderAssistantMessage(message, isStreaming = false, isHistory = false) {
+  renderAssistantMessage(message, isStreaming = false, isHistory = false, targetContainer = null) {
     // Remove welcome message if present
     const welcome = this.container.querySelector(".welcome");
     if (welcome) welcome.remove();
@@ -225,7 +225,12 @@ export class MessageRenderer {
     this._setupThinkingToggles(div);
     this._setupCodeCopyButtons(div);
     if (!isStreaming) this._setupCopyBtn(div);
-    this.container.appendChild(div);
+    // History turns fold process content (thinking + tool calls) into a
+    // collapsible "Process details" group; callers pass that group's body as
+    // targetContainer so intermediate steps land inside it instead of the
+    // main messages flow.
+    const host = targetContainer ?? this.container;
+    host.appendChild(div);
     if (!isHistory) this.scrollToBottom();
 
     return div;

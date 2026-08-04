@@ -4742,6 +4742,52 @@ function updateMirrorInputState() {
 // Session history rendering
 // ═══════════════════════════════════════
 
+/** True when an assistant message has at least one text block worth showing. */
+function assistantHasText(content) {
+  if (typeof content === "string") return content.trim().length > 0;
+  if (!Array.isArray(content)) return false;
+  return content.some((b) => b?.type === "text" && String(b.text ?? "").trim().length > 0);
+}
+
+/**
+ * Split the final assistant message of a turn into the steps that should be
+ * folded away (everything up to and including the last non-text block —
+ * thinking/tool-calls) and the final answer (trailing text blocks). Mirrors
+ * upstream's splitFinalAssistantBlocks in public/native/app.js.
+ */
+function splitFinalAssistantBlocks(content) {
+  if (!Array.isArray(content)) return { processBlocks: [], answerBlocks: [] };
+  let lastNonTextIdx = -1;
+  for (let i = 0; i < content.length; i++) {
+    if (content[i]?.type !== "text") lastNonTextIdx = i;
+  }
+  return {
+    processBlocks: content.slice(0, lastNonTextIdx + 1),
+    answerBlocks: content.slice(lastNonTextIdx + 1),
+  };
+}
+
+/**
+ * Render an assistant message's tool-call blocks as history cards. With a
+ * targetContainer they land inside the turn's "Process details" group body
+ * instead of the main messages flow. Returns the number of cards created.
+ */
+function renderHistoryToolCallBlocks(blocks, toolResults, targetContainer) {
+  let count = 0;
+  for (const block of blocks) {
+    if (block?.type !== "toolCall") continue;
+    count += 1;
+    const card = toolCardRenderer.createHistoryCard(
+      { toolCallId: block.id, toolName: block.name, args: block.arguments ?? {} },
+      targetContainer,
+    );
+    const result = toolResults.get(block.id);
+    if (result) toolCardRenderer.addHistoryResult(block.id, result, result.isError);
+    void card;
+  }
+  return count;
+}
+
 function renderSessionHistory(entries, { searchQuery = "" } = {}) {
   console.log(`[History] Rendering ${entries.length} entries`);
   let userCount = 0,
@@ -4749,95 +4795,144 @@ function renderSessionHistory(entries, { searchQuery = "" } = {}) {
     toolCardCount = 0,
     toolResultCount = 0;
 
+  // Flatten entries to bare messages; pre-index tool results by toolCallId so
+  // tool cards can attach their result during rendering regardless of order.
+  const messages = [];
+  const toolResults = new Map();
   for (const entry of entries) {
-    if (entry.type !== "message") continue;
-
+    if (entry?.type !== "message") continue;
     const msg = entry.message;
     if (!msg) continue;
+    messages.push(msg);
+    if (msg.role === "toolResult") toolResults.set(msg.toolCallId, msg);
+  }
 
-    if (msg.role === "user") {
-      const content =
-        typeof msg.content === "string"
-          ? msg.content
-          : (msg.content || [])
-              .filter((b) => b.type === "text")
-              .map((b) => b.text)
-              .join("\n");
-      // Extract images from content blocks
-      const images = Array.isArray(msg.content)
+  // Split into turns anchored at each user message so each turn's
+  // thinking/tool-call noise can be folded into one collapsed group, leaving
+  // only the user prompt and the final answer visible (mirrors pi-web).
+  const turns = [];
+  let turnStart = 0;
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].role === "user" && i !== turnStart) {
+      turns.push([turnStart, i]);
+      turnStart = i;
+    }
+  }
+  turns.push([turnStart, messages.length]);
+
+  const renderUserFromMsg = (msg) => {
+    const content =
+      typeof msg.content === "string"
         ? msg.content
-            .filter((b) => b.type === "image")
-            .map((b) => ({
-              data: b.source?.data || b.data || "",
-              mimeType: b.source?.media_type || b.media_type || "image/png",
-            }))
-        : [];
-      if (content || images.length > 0) {
-        userCount++;
-        renderNavigableUserMessage({
-          content: content || "",
-          images: images.length > 0 ? images : undefined,
-          isHistory: true,
-        });
-      }
-    } else if (msg.role === "assistant") {
-      const textBlocks = (msg.content || []).filter((b) => b.type === "text");
-      const thinkingBlocks = (msg.content || []).filter((b) => b.type === "thinking");
-      const toolCalls = (msg.content || []).filter((b) => b.type === "toolCall");
+        : (msg.content || [])
+            .filter((b) => b.type === "text")
+            .map((b) => b.text)
+            .join("\n");
+    const images = Array.isArray(msg.content)
+      ? msg.content
+          .filter((b) => b.type === "image")
+          .map((b) => ({
+            data: b.source?.data || b.data || "",
+            mimeType: b.source?.media_type || b.media_type || "image/png",
+          }))
+      : [];
+    if (content || images.length > 0) {
+      userCount++;
+      renderNavigableUserMessage({
+        content: content || "",
+        images: images.length > 0 ? images : undefined,
+        isHistory: true,
+      });
+    }
+  };
 
-      // Build content blocks for rendering
-      const contentBlocks = [];
-      for (const block of msg.content || []) {
-        if (block.type === "text" || block.type === "thinking") {
-          contentBlocks.push(block);
+  for (const [start, end] of turns) {
+    const anchor = messages[start];
+    let bodyStart = start;
+    if (anchor?.role === "user") {
+      renderUserFromMsg(anchor);
+      bodyStart = start + 1;
+    }
+
+    // The last assistant message that still has visible text is the final
+    // answer; everything before it in this turn is process noise.
+    let finalAssistantIdx = -1;
+    for (let i = end - 1; i >= bodyStart; i--) {
+      if (messages[i].role === "assistant" && assistantHasText(messages[i].content)) {
+        finalAssistantIdx = i;
+        break;
+      }
+    }
+
+    let group = null;
+    let stepCount = 0;
+    let toolCallCount = 0;
+    const ensureGroup = () => {
+      if (!group) {
+        group = createProcessDetailsGroup();
+        // Insert immediately so later appends (the final answer, or the next
+        // turn's user message) land after it in DOM order.
+        messagesElement.appendChild(group.wrapper);
+      }
+      return group;
+    };
+
+    for (let i = bodyStart; i < end; i++) {
+      const msg = messages[i];
+      if (msg?.role !== "assistant") continue;
+
+      if (i === finalAssistantIdx) {
+        const { processBlocks, answerBlocks } = splitFinalAssistantBlocks(msg.content);
+        if (processBlocks.some((b) => b.type === "text" || b.type === "thinking")) {
+          const el = messageRenderer.renderAssistantMessage(
+            { content: processBlocks, usage: msg.usage },
+            false,
+            true,
+            ensureGroup().body,
+          );
+          if (el) stepCount += 1;
         }
-      }
-
-      const text = textBlocks.map((b) => b.text).join("\n");
-
-      if (text || thinkingBlocks.length > 0) {
-        assistantCount++;
-        messageRenderer.renderAssistantMessage(
-          {
-            content: contentBlocks.length > 0 ? contentBlocks : text,
-            usage: msg.usage,
-          },
-          false,
-          true,
-        );
-
-        // History rendering updates current context only. Session aggregate
-        // totals come from get_session_stats, never from replay.
+        if (processBlocks.some((b) => b.type === "toolCall")) {
+          toolCallCount += renderHistoryToolCallBlocks(
+            processBlocks,
+            toolResults,
+            ensureGroup().body,
+          );
+        }
+        if (answerBlocks.length > 0) {
+          messageRenderer.renderAssistantMessage(
+            { content: answerBlocks, usage: msg.usage },
+            false,
+            true,
+          );
+          assistantCount++;
+        }
         if (msg.usage?.input) {
           lastInputTokens = msg.usage.input + (msg.usage.cacheRead || 0);
           lastUsage = msg.usage;
         }
-      }
-
-      // Show tool calls as compact history cards
-      for (const tc of toolCalls) {
-        toolCardCount++;
-        const card = toolCardRenderer.createHistoryCard({
-          toolCallId: tc.id,
-          toolName: tc.name,
-          args: tc.arguments || {},
-        });
-        console.log(
-          `[History] Tool card created: ${tc.name}`,
-          card?.offsetHeight,
-          card?.innerHTML?.substring(0, 100),
+      } else {
+        const el = messageRenderer.renderAssistantMessage(msg, false, true, ensureGroup().body);
+        if (el) stepCount += 1;
+        toolCallCount += renderHistoryToolCallBlocks(
+          msg.content ?? [],
+          toolResults,
+          group?.body ?? ensureGroup().body,
         );
       }
-    } else if (msg.role === "toolResult") {
-      toolResultCount++;
-      toolCardRenderer.addHistoryResult(
-        msg.toolCallId,
-        { content: msg.content || [] },
-        msg.isError,
-      );
+    }
+
+    if (group) {
+      if (group.body.children.length > 0) {
+        group.setLabel(summarizeProcessGroup(stepCount, toolCallCount));
+      } else {
+        group.wrapper.remove();
+      }
     }
   }
 
+  toolCardCount = toolCardRenderer.toolCards.size;
+  toolResultCount = toolResults.size;
   console.log(
     `[History] Done: ${userCount} users, ${assistantCount} assistants, ${toolCardCount} tools, ${toolResultCount} results`,
   );

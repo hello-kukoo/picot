@@ -238,7 +238,7 @@ export class ToolCardRenderer {
   /**
    * Create a pre-collapsed card for session history using DOM methods (no innerHTML)
    */
-  createHistoryCard(toolExecution) {
+  createHistoryCard(toolExecution, targetContainer = null) {
     const { toolCallId, toolName, args } = toolExecution;
 
     const card = document.createElement("div");
@@ -317,7 +317,10 @@ export class ToolCardRenderer {
 
     card.appendChild(body);
 
-    this.container.appendChild(card);
+    // History turns fold tool cards into the "Process details" group; callers
+    // pass the group body as targetContainer so the card lands inside it.
+    const host = targetContainer ?? this.container;
+    host.appendChild(card);
     this.toolCards.set(toolCallId, card);
 
     return card;
