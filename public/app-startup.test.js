@@ -121,6 +121,30 @@ test("switches the open file sidebar between Files and Git tabs", async () => {
   expect(gitPanel.classList.contains("hidden")).toBe(true);
 });
 
+test("opens the file sidebar and switches tabs from header indicator pills", async () => {
+  await import("./app.js?indicator-sidebar-tabs");
+
+  const fileSidebar = document.getElementById("file-sidebar");
+  const filesTab = document.getElementById("file-sidebar-files-tab");
+  const gitTab = document.getElementById("file-sidebar-git-tab");
+  const workspaceIndicator = document.getElementById("workspace-indicator");
+  const gitIndicator = document.getElementById("git-branch-indicator");
+
+  // Start from a known collapsed state so the pills must expand it.
+  fileSidebar.classList.add("collapsed");
+
+  workspaceIndicator.click();
+  expect(fileSidebar.classList.contains("collapsed")).toBe(false);
+  expect(filesTab.classList.contains("active")).toBe(true);
+  expect(gitTab.classList.contains("active")).toBe(false);
+
+  fileSidebar.classList.add("collapsed");
+  gitIndicator.click();
+  expect(fileSidebar.classList.contains("collapsed")).toBe(false);
+  expect(filesTab.classList.contains("active")).toBe(false);
+  expect(gitTab.classList.contains("active")).toBe(true);
+});
+
 test("retries Git status when workspace generation arrives after opening Git", async () => {
   await import("./app.js?git-status-after-bootstrap");
   const socket = FakeWebSocket.instances.at(-1);

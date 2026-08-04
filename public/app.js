@@ -1593,6 +1593,25 @@ function setFileSidebarTab(tab) {
   }
 }
 
+/**
+ * Expand the file sidebar and switch to the requested tab. Used by the
+ * workspace-path and git-branch header pills so clicking them directly opens
+ * the matching panel.
+ */
+function openFileSidebarTab(tab) {
+  const wasCollapsed = fileSidebar.classList.contains("collapsed");
+  fileSidebar.classList.remove("collapsed");
+  fileSidebarToggle.setAttribute("aria-pressed", "true");
+  localStorage.setItem("pi-studio-file-sidebar", "open");
+  setFileSidebarTab(tab);
+  if (tab === "files" && wasCollapsed) {
+    refreshFileBrowserForWorkspace(getCurrentWorkspacePath(), { force: true });
+  }
+}
+
+workspaceIndicatorEl.addEventListener("click", () => openFileSidebarTab("files"));
+gitBranchEl.addEventListener("click", () => openFileSidebarTab("git"));
+
 fileSidebarFilesTab.addEventListener("click", () => setFileSidebarTab("files"));
 fileSidebarGitTab.addEventListener("click", () => setFileSidebarTab("git"));
 

@@ -1549,6 +1549,7 @@ body {
   max-width: 360px;
   overflow: hidden;
   text-overflow: ellipsis;
+  cursor: pointer;
   color: var(--header-pill-text, var(--text-dim));
 }
 
