@@ -106,6 +106,7 @@ import { DialogHandler } from "./ui/dialogs.js";
 import { setupMessagesInsets } from "./ui/layout-insets.js";
 import { MessageRenderer } from "./ui/message-renderer.js";
 import { setupResizablePanel } from "./ui/resizable-panel.js";
+import { isRpivTodoWidgetRequest, RpivTodoMirrorPanel } from "./ui/rpiv-todo-mirror.js";
 import { setupSkillSlashCommand } from "./ui/skill-slash-command.js";
 import { ToolCardRenderer } from "./ui/tool-card.js";
 import { WindowCloseCoordinator } from "./window-close-coordinator.js";
@@ -831,6 +832,11 @@ setupMessagesInsets({
   header: headerEl,
   inputArea: inputAreaEl,
 });
+
+// Mirror the rpiv-todo extension's `todo` tool reducer onto a native panel
+// above the composer. The panel is empty (and display:none) when no todo
+// snapshot has been seen.
+const todoMirrorPanel = new RpivTodoMirrorPanel({ container: inputAreaEl });
 
 // State tracking
 let currentStreamingElement = null;
@@ -2777,6 +2783,11 @@ function handleToolExecutionEnd(event) {
   });
 
   toolCardRenderer.finalizeToolCard(toolCallId, result, isError);
+  // rpiv-todo emits `todo` tool results whose `details` carry the reducer
+  // snapshot. Mirror the latest snapshot onto the floating panel.
+  if (event.toolName === "todo" && !isError && result?.details) {
+    todoMirrorPanel.applyToolResult(result);
+  }
 }
 
 function handleExtensionUIRequest(event) {
@@ -2799,9 +2810,13 @@ function handleExtensionUIRequest(event) {
     // `setStatus` and `setWidget` are informational labels/widgets the
     // embedded server and pi extensions push (e.g. "Embedded: 127.0.0.1:47821",
     // plannotator progress). They have no browser-side surface, so acknowledge
-    // them silently instead of logging unknown-method warnings.
+    // them silently instead of logging unknown-method warnings. The rpiv-todo
+    // extension is the exception — its `setWidget` with widgetKey="rpiv-todos"
+    // asks the host UI to surface the mirror, so expand it instead.
     case "setStatus":
+      break;
     case "setWidget":
+      if (isRpivTodoWidgetRequest(event)) todoMirrorPanel.expand();
       break;
     default:
       console.warn("[App] Unknown extension UI method:", event.method);
@@ -4274,6 +4289,9 @@ async function switchSession(sessionFile, session = null, project = null) {
   try {
     state.reset();
     clearConversationRenderers();
+    // Drop the previous session's todo snapshot — the next renderSessionHistory
+    // call below will rehydrate from the new session's history if applicable.
+    todoMirrorPanel.clear();
 
     if (sessionFile && session) {
       messageRenderer.renderSystemMessage(t("status.loadingSession"));
@@ -4690,6 +4708,16 @@ function renderSessionHistory(entries, { searchQuery = "" } = {}) {
   if (searchQuery) {
     messageRenderer.highlightSearchQuery(searchQuery);
   }
+
+  // Replay the most recent `todo` tool-result snapshot onto the floating
+  // rpiv-todo panel so the user sees prior state when navigating back.
+  const todoEntries = [];
+  for (const entry of entries) {
+    if (entry?.type === "message" && entry.message?.role === "toolResult") {
+      todoEntries.push(entry.message);
+    }
+  }
+  todoMirrorPanel.hydrateFromMessages(todoEntries);
 
   updateTokenUsage();
   fetchContextWindow();

@@ -756,5 +756,16 @@
     "back": "Back",
     "newTask": "New Task",
     "showMore": "Show more"
+  },
+  "migrated": {
+    "native": {
+      "features": {
+        "rpivTodoMirror": {
+          "textcontent": {
+            "todos": "Todos"
+          }
+        }
+      }
+    }
   }
 }
