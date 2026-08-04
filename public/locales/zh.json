@@ -766,6 +766,15 @@
           }
         }
       }
+    },
+    "index": {
+      "ariaLabel": {
+        "searchTasks": "搜索会话",
+        "searchResults": "搜索结果"
+      },
+      "placeholder": {
+        "searchTasksAndMessages": "搜索会话与消息…"
+      }
     }
   }
 }

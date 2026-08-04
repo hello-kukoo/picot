@@ -111,6 +111,7 @@ import {
   isRpivTodoWidgetRequest,
   RpivTodoMirrorPanel,
 } from "./ui/rpiv-todo-mirror.js";
+import { setupSessionSearchDialog } from "./ui/session-search-dialog.js";
 import { setupSkillSlashCommand } from "./ui/skill-slash-command.js";
 import { ToolCardRenderer } from "./ui/tool-card.js";
 import { WindowCloseCoordinator } from "./window-close-coordinator.js";
@@ -786,6 +787,10 @@ const sidebarOverlay = document.getElementById("sidebar-overlay");
 const refreshSessionsBtn = document.getElementById("refresh-sessions-btn");
 const sessionSearchInput = document.getElementById("session-search-input");
 const sessionSearchClearBtn = document.getElementById("session-search-clear");
+const sessionSearchOverlay = document.getElementById("session-search-overlay");
+const sessionSearchDialog = document.getElementById("session-search-dialog");
+const sessionSearchDialogInput = document.getElementById("session-search-dialog-input");
+const sessionSearchResults = document.getElementById("session-search-results");
 setButtonIcon(sessionSearchClearBtn, "x", { size: 12 });
 const typingIndicator = document.getElementById("typing-indicator");
 
@@ -3734,6 +3739,56 @@ setupSidebarSearchControl({
   input: sessionSearchInput,
   clearButton: sessionSearchClearBtn,
   onChange: (value) => sidebar.setSearchQuery(value),
+});
+
+// Cmd/Ctrl-K spotlight dialog overlay. Reuses the sidebar search input as
+// the trigger so focus, click, and the global shortcut all open the same
+// dialog. The sidebar in-line filter keeps running in parallel — the dialog
+// only changes the visible affordance.
+function flattenSidebarSessionsToSearchRows() {
+  const currentPath = getCurrentWorkspacePath();
+  const rows = [];
+  for (const project of sidebar?.projects ?? []) {
+    const projectName = project.folderName || project.dirName || "";
+    const projectPath = project.path || project.dirName || "";
+    const isCurrentWorkspace = !!currentPath && projectPath === currentPath;
+    for (const session of project.sessions ?? []) {
+      if (!session?.filePath) continue;
+      rows.push({
+        id: session.filePath,
+        name: session.name || "",
+        firstMessage: session.firstMessage || "",
+        projectName,
+        projectPath,
+        isCurrentWorkspace,
+      });
+    }
+  }
+  return rows;
+}
+
+setupSessionSearchDialog({
+  triggerInput: sessionSearchInput,
+  triggerClear: sessionSearchClearBtn,
+  overlay: sessionSearchOverlay,
+  dialog: sessionSearchDialog,
+  input: sessionSearchDialogInput,
+  list: sessionSearchResults,
+  // v3 has no message-level search RPC; the dialog tolerates `data` being
+  // absent and falls back to title-only matching.
+  data: undefined,
+  getWorkspaceId: () => undefined,
+  getSessions: flattenSidebarSessionsToSearchRows,
+  onSelect: (session) => {
+    if (!session?.id) return;
+    for (const project of sidebar?.projects ?? []) {
+      const target = (project.sessions ?? []).find((item) => item.filePath === session.id);
+      if (target) {
+        switchSession(target.filePath, target, project);
+        return;
+      }
+    }
+  },
 });
 
 /**

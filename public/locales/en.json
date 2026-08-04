@@ -766,6 +766,15 @@
           }
         }
       }
+    },
+    "index": {
+      "ariaLabel": {
+        "searchTasks": "Search tasks",
+        "searchResults": "Search results"
+      },
+      "placeholder": {
+        "searchTasksAndMessages": "Search tasks and messages…"
+      }
     }
   }
 }
