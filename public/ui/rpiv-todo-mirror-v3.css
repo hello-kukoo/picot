@@ -1,0 +1,27 @@
+/* v3-specific overrides for the upstream rpiv-todo-mirror panel.
+   Loaded AFTER rpiv-todo-mirror.css so these rules win in the cascade.
+
+   The upstream panel uses var(--bg-glass) + backdrop-filter: blur(), but
+   v3's --bg-glass is only 3-4% opaque in dark themes (and the blur lands on
+   a solid --bg-solid chat area), so chat text shows through. Force a frosted
+   look that matches the rest of v3's floating panels (image-lightbox,
+   command-palette, terminal-panel). */
+
+.rpiv-todo-panel {
+  background: var(--bg-frosted);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow:
+    0 4px 16px rgba(0, 0, 0, 0.18),
+    var(--shadow-inset);
+}
+
+/* Light themes use a higher-alpha frosted token already; nothing to do. */
+:root[data-theme="clean"] .rpiv-todo-panel,
+:root[data-theme="terracotta"] .rpiv-todo-panel,
+:root[data-theme="sage"] .rpiv-todo-panel {
+  background: var(--bg-frosted);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.08),
+    var(--shadow-inset);
+}

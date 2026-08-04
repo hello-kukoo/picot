@@ -4138,6 +4138,12 @@ async function handleSessionSelectImpl(session, project) {
     projectDir: project?.dirName,
     liveInstances,
   });
+  // Drop the previous session's todo snapshot before any async work. The
+  // history load below is the only path that re-hydrates the panel, and if
+  // it fails or short-circuits (missing dirName/file, fetch error, no
+  // entries) we don't want the prior turn's list still pinned in the
+  // composer. clear() also drops the sticky is-hover-expanded class.
+  todoMirrorPanel.clear();
   // An explicit session selection supersedes any pending deferred switch.
   // Leaving it set would (a) suppress all live rendering for the newly
   // selected session via the `pendingSessionSwitchPath` guard in

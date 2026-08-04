@@ -69,6 +69,11 @@ function cloneTodoState(details) {
 export class RpivTodoMirrorPanel {
   #element;
   #state = EMPTY_STATE;
+  // v3 addition: tracks a pending auto-collapse timer so sticky expand()
+  // calls (e.g. from the /todos command) don't keep the panel pinned
+  // open after the user has moved on. Cleared in clear() and on each
+  // new expand() to avoid stacking timeouts.
+  #expandTimer = null;
 
   constructor({ container }) {
     this.#element = document.createElement("section");
@@ -78,6 +83,10 @@ export class RpivTodoMirrorPanel {
       t("migrated.native.features.rpivTodoMirror.textcontent.todos"),
     );
     container?.insertBefore(this.#element, container.querySelector("form"));
+  }
+
+  get element() {
+    return this.#element;
   }
 
   hydrateFromMessages(messages) {
@@ -96,11 +105,30 @@ export class RpivTodoMirrorPanel {
   }
 
   clear() {
+    if (this.#expandTimer != null) {
+      clearTimeout(this.#expandTimer);
+      this.#expandTimer = null;
+    }
+    // Drop the sticky expand class so a follow-up setState/EMPTY_STATE
+    // path doesn't leave the panel pinned open across a session switch.
+    this.#element.classList.remove("is-hover-expanded");
     this.setState(EMPTY_STATE);
   }
 
   expand() {
     this.#element.classList.add("is-hover-expanded");
+    // v3: upstream leaves the class on indefinitely (the comment in
+    // public/native/app.js says "expand the panel instead of rendering
+    // a duplicate system message"). In practice that means once any
+    // /todos call hits, the panel stays force-expanded until the next
+    // session change — the user has no way to re-collapse it. Auto-clear
+    // the class after a short window so the panel returns to its hover
+    // affordance.
+    if (this.#expandTimer != null) clearTimeout(this.#expandTimer);
+    this.#expandTimer = setTimeout(() => {
+      this.#element.classList.remove("is-hover-expanded");
+      this.#expandTimer = null;
+    }, 3000);
   }
 
   #render() {

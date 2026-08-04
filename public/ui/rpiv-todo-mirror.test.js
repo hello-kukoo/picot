@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setMessages } from "../i18n.js";
 import {
   isRpivTodoCommandNotify,
@@ -100,5 +100,45 @@ describe("rpiv todo mirror", () => {
     expect(element.classList.contains("is-collapsed")).toBe(true);
     expect(element.querySelector(".rpiv-todo-panel__collapseIcon")).toBeNull();
     expect(element.querySelector(".rpiv-todo-panel__list").textContent).toContain("Build panel");
+  });
+
+  it("clear() removes the sticky is-hover-expanded class", () => {
+    document.body.innerHTML = '<div class="input-area"><form></form></div>';
+    const panel = new RpivTodoMirrorPanel({
+      container: document.querySelector(".input-area"),
+    });
+    panel.applyToolResult({
+      details: {
+        tasks: [{ id: 1, subject: "X", status: "pending" }],
+        nextId: 2,
+      },
+    });
+    panel.expand();
+    expect(panel.element.classList.contains("is-hover-expanded")).toBe(true);
+    panel.clear();
+    expect(panel.element.classList.contains("is-hover-expanded")).toBe(false);
+    expect(panel.element.classList.contains("hidden")).toBe(true);
+  });
+
+  it("expand() auto-collapses after a short window", () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = '<div class="input-area"><form></form></div>';
+      const panel = new RpivTodoMirrorPanel({
+        container: document.querySelector(".input-area"),
+      });
+      panel.applyToolResult({
+        details: {
+          tasks: [{ id: 1, subject: "X", status: "pending" }],
+          nextId: 2,
+        },
+      });
+      panel.expand();
+      expect(panel.element.classList.contains("is-hover-expanded")).toBe(true);
+      vi.advanceTimersByTime(3500);
+      expect(panel.element.classList.contains("is-hover-expanded")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
