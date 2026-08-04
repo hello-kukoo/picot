@@ -2663,6 +2663,14 @@ function handleAgentEnd(event = null) {
     unreadCount++;
     document.title = `(${unreadCount}) ● ${originalTitle}`;
   }
+
+  // Fold the just-finished turn's thinking + tool noise into a collapsed
+  // "Process details" row so chat history stays scannable. The live turn
+  // stays expanded while streaming; collapse is purely post-hoc and runs
+  // once the agent settles. agent_end is the normal completion path;
+  // handleAgentSettled covers the reconnect fallback when agent_end is
+  // never re-delivered.
+  collapseCompletedTurn();
 }
 
 let currentStreamingThinking = "";
