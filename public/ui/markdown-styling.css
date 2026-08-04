@@ -1,0 +1,11 @@
+/* Search-in-messages highlight (see highlightSearchQuery() in public/ui/message-renderer.js).
+   Cherry-picked from upstream public/ui/message-renderer.css to fill the gap
+   that v3's style.css has not styled the mark[data-search-highlight="true"]
+   selector — sidebar search matches were rendering as invisible marks. */
+
+mark[data-search-highlight="true"] {
+  border-radius: var(--radius-xs);
+  background: var(--warning);
+  color: var(--bg-solid);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warning) 35%, transparent);
+}
