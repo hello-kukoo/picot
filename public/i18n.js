@@ -10,8 +10,8 @@
 const LANGUAGE_COOKIE = "picot-language";
 const LANGUAGE_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365 * 10; // 10 years
 
-const SUPPORTED_PREFERENCES = new Set(["system", "en", "zh"]);
-const BCP47_TAG = { en: "en", zh: "zh-CN" };
+const SUPPORTED_PREFERENCES = new Set(["system", "en", "zh", "ja", "es"]);
+const BCP47_TAG = { en: "en", zh: "zh-CN", ja: "ja", es: "es" };
 
 /** English messages — loaded at init, serve as the fallback. */
 let enMessages = {};
@@ -37,6 +37,8 @@ export const LANGUAGES = [
   { value: "system", labelKey: "settings.language.systemDefault" },
   { value: "en", nativeLabel: "English" },
   { value: "zh", nativeLabel: "中文" },
+  { value: "ja", nativeLabel: "日本語" },
+  { value: "es", nativeLabel: "Español" },
 ];
 
 // ── Preference normalization ──────────────────────────────────────────

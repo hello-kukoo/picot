@@ -1,0 +1,873 @@
+{
+  "app": {
+    "welcome": "Bienvenido a Picot",
+    "welcomeHint": "Escribe un mensaje abajo para comenzar a chatear con Pi, o selecciona una sesión en la barra lateral.",
+    "currentWorkspace": "Espacio de trabajo actual:"
+  },
+  "shortcuts": {
+    "focusInput": "Enfocar entrada",
+    "abort": "Cancelar"
+  },
+  "nav": {
+    "chat": "Chat",
+    "toggleSidebar": "Alternar barra lateral",
+    "showMobileQR": "Mostrar código QR móvil",
+    "openWorkspace": "Abrir espacio de trabajo",
+    "openWorkspaceInApp": "Abrir espacio de trabajo en la app",
+    "chooseApp": "Elegir app para abrir el espacio de trabajo",
+    "files": "Archivos",
+    "openWorkspaceInNamedApp": "Abrir {path} en {app}",
+    "openWorkspaceInAppAria": "Abrir espacio de trabajo en {app}",
+    "openInApp": "Abrir en {app}",
+    "sideChat": "Chat lateral",
+    "quickChat": "Chat rápido",
+    "newSideChat": "Nuevo chat lateral"
+  },
+  "git": {
+    "currentBranch": "Rama git actual",
+    "branchName": "Rama: {name}"
+  },
+  "usage": {
+    "contextTokens": "Contexto: {used}k / {limit}k tokens",
+    "sessionCostTitle": "Costo de sesión",
+    "contextTitle": "Uso del contexto",
+    "costSub": "{amount} (suscripción)"
+  },
+  "sessionInfo": {
+    "title": "Información de la sesión",
+    "heading": "Información de la sesión",
+    "file": "Archivo",
+    "id": "ID",
+    "inMemory": "En memoria (aún no guardada)",
+    "unavailable": "No disponible",
+    "copyFile": "Copiar ruta del archivo",
+    "copyId": "Copiar ID de sesión",
+    "copied": "Copiado",
+    "copyFailed": "Error al copiar"
+  },
+  "context": {
+    "cached": "En caché",
+    "input": "Entrada",
+    "available": "Disponible",
+    "used": "{pct}% usado",
+    "tooltip": "{label}: {tokens}"
+  },
+  "models": {
+    "searchPlaceholder": "Buscar modelos…",
+    "emptyTitle": "No hay modelos disponibles",
+    "emptyHelp": "No hay claves API configuradas. Establece una clave en Ajustes → Proveedores.",
+    "openSettings": "Abrir ajustes"
+  },
+  "queue": {
+    "queued": "En cola",
+    "cancelTitle": "Cancelar",
+    "steering": "Dirigir",
+    "followUp": "Seguimiento"
+  },
+  "input": {
+    "typeMessage": "Mensaje… Escribe / para comandos, @ para archivos",
+    "attachImage": "Adjuntar imagen",
+    "commands": "Comandos",
+    "switchModel": "Cambiar modelo",
+    "send": "Enviar mensaje",
+    "abort": "Cancelar (Esc)",
+    "messagePlaceholder": "Mensaje… Escribe / para comandos, @ para archivos",
+    "mirrorReadOnly": "Viendo sesión histórica (solo lectura)",
+    "waitingForSession": "Esperando que la sesión actual termine…",
+    "compact": "Compactar",
+    "compactDesc": "Compactar contexto para ahorrar tokens",
+    "exportHtml": "Exportar HTML",
+    "exportHtmlDesc": "Exportar sesión como archivo HTML",
+    "sessionStats": "Estadísticas de sesión",
+    "sessionStatsDesc": "Mostrar estadísticas de sesión",
+    "expandAllTools": "Expandir todas las herramientas",
+    "expandAllToolsDesc": "Expandir todas las tarjetas de herramientas",
+    "collapseAllTools": "Colapsar todas las herramientas",
+    "collapseAllToolsDesc": "Colapsar todas las tarjetas de herramientas"
+  },
+  "messages": {
+    "attachedImage": "Imagen adjunta",
+    "copyMessage": "Copiar mensaje",
+    "thinking": "Pensando",
+    "copy": "Copiar",
+    "copied": "¡Copiado!",
+    "processDetails": "Detalles del proceso",
+    "processStep": "{count} paso",
+    "processSteps": "{count} pasos",
+    "processToolCall": "{count} llamada a herramienta",
+    "processToolCalls": "{count} llamadas a herramientas"
+  },
+  "tools": {
+    "copyOutput": "Copiar salida",
+    "streaming": "ejecutando",
+    "complete": "completo",
+    "error": "error",
+    "pending": "pendiente"
+  },
+  "files": {
+    "title": "Archivos",
+    "loading": "Cargando…",
+    "empty": "Directorio vacío",
+    "failedLoad": "Error al cargar",
+    "parentDirectory": "Directorio padre",
+    "openInFileManager": "Abrir en el explorador de archivos",
+    "close": "Cerrar explorador de archivos",
+    "preview": {
+      "title": "Vista previa",
+      "enlarge": "Ampliar panel",
+      "collapse": "Colapsar panel",
+      "close": "Cerrar panel",
+      "showControls": "Mostrar controles",
+      "openDesktop": "Abrir en escritorio",
+      "disableLineWrap": "Deshabilitar ajuste de línea",
+      "enableLineWrap": "Habilitar ajuste de línea",
+      "edit": "Editar",
+      "preview": "Vista previa",
+      "diff": "Diff",
+      "find": "Buscar",
+      "goToLine": "Ir a línea",
+      "goToLinePrompt": "Número de línea",
+      "copyContent": "Copiar contenido del archivo",
+      "copyPath": "Copiar ruta del archivo",
+      "save": "Guardar archivo",
+      "autoSaveOn": "Autoguardado activado",
+      "autoSaveOff": "Autoguardado desactivado",
+      "loading": "Cargando…",
+      "saved": "Guardado",
+      "saving": "Guardando…",
+      "conflict": "Archivo modificado externamente",
+      "conflictReload": "Recargar",
+      "conflictOverwrite": "Sobreescribir",
+      "outsideWorkspace": "El archivo está fuera del espacio de trabajo activo",
+      "unsupportedBinary": "Este archivo no se puede previsualizar.",
+      "tooLarge": "Este archivo es demasiado grande para previsualizar.",
+      "pickFile": "Selecciona un archivo del árbol para previsualizarlo.",
+      "copySuccess": "¡Copiado!",
+      "copyFailed": "Error al copiar",
+      "mode": "Modo de vista",
+      "lineWrap": "Ajuste",
+      "autoSave": "Autoguardado",
+      "loadError": "Error al cargar el archivo",
+      "saveError": "Error al guardar el archivo",
+      "readOnly": "Solo lectura",
+      "markitdown": {
+        "pythonMissing": "Instala Python 3.10 o superior para previsualizar este archivo.",
+        "pythonTooOld": "Python {version} es demasiado antiguo. Instala Python 3.10 o superior.",
+        "markitdownMissing": "Instala MarkItDown para previsualizar este archivo.",
+        "markitdownIncompatible": "Actualiza MarkItDown a una versión que soporte conversión por stdin.",
+        "installPosix": "python3 -m pip install 'markitdown[docx,pptx,xlsx,xls,outlook]'",
+        "installWindows": "py -3 -m pip install \"markitdown[docx,pptx,xlsx,xls,outlook]\"",
+        "remoteImageHidden": "Imagen remota oculta"
+      },
+      "conflictMessage": "{name} fue modificado en disco. ¿Recargar o sobreescribir la versión del disco?"
+    },
+    "unsaved": {
+      "title": "Cambios sin guardar",
+      "description": "Este archivo tiene cambios sin guardar. ¿Deseas guardar o descartar los cambios?",
+      "descriptionMultiple": "{count} archivos tienen cambios sin guardar. ¿Guardar o descartar?",
+      "save": "Guardar cambios",
+      "discard": "Descartar",
+      "cancel": "Cancelar"
+    }
+  },
+  "dialogs": {
+    "selectOption": "Selecciona una opción",
+    "confirm": "Confirmar",
+    "input": "Entrada",
+    "editor": "Editor",
+    "cancel": "Cancelar",
+    "no": "No",
+    "yes": "Sí",
+    "submit": "Enviar",
+    "save": "Guardar"
+  },
+  "extensions": {
+    "loadingPackages": "Cargando paquetes...",
+    "failedToLoadPackages": "Error al cargar paquetes",
+    "noPackagesMatch": "Ningún paquete coincide con tus filtros.",
+    "desktopOnly": "Solo escritorio",
+    "searchPackages": "Buscar paquetes...",
+    "all": "Todos",
+    "extensions": "Extensiones",
+    "skills": "Habilidades",
+    "themes": "Temas",
+    "prompts": "Prompts",
+    "installedOnly": "Solo instalados",
+    "mostDownloads": "Más descargados",
+    "nameAZ": "Nombre (A–Z)",
+    "recentlyUpdated": "Actualizados recientemente",
+    "sortPackages": "Ordenar paquetes",
+    "installFailed": "Error al instalar",
+    "uninstallFailed": "Error al desinstalar",
+    "installFailedNote": "Esta extensión requiere npm. Asegúrate de que npm esté instalado y accesible para Picot, luego inténtalo de nuevo.",
+    "uninstallFailedNote": "Picot no pudo eliminar este paquete de extensión. Revisa los detalles del error y vuelve a intentarlo.",
+    "permissionDenied": "Permiso denegado en ~/.pi/agent/npm (verifica propietario/permisos).",
+    "browseCountZero": "0 de {total}",
+    "browseCountRange": "{start}–{end} de {total}",
+    "downloadsPerMonth": "{count}/mes"
+  },
+  "actions": {
+    "retry": "Reintentar",
+    "install": "Instalar",
+    "uninstall": "Desinstalar",
+    "save": "Guardar",
+    "cancel": "Cancelar",
+    "no": "No",
+    "yes": "Sí",
+    "submit": "Enviar",
+    "update": "Actualizar",
+    "setKey": "Establecer clave",
+    "insertExample": "Insertar ejemplo",
+    "remove": "Eliminar",
+    "delete": "Borrar",
+    "openLink": "Abrir enlace"
+  },
+  "status": {
+    "saving": "Guardando...",
+    "saved": "Guardado",
+    "installing": "Instalando...",
+    "uninstalling": "Desinstalando...",
+    "removing": "Eliminando...",
+    "connected": "Conectado",
+    "disconnected": "Desconectado",
+    "connecting": "Conectando...",
+    "working": "Trabajando...",
+    "done": "Listo",
+    "failed": "Fallido",
+    "error": "Error",
+    "connectedLAN": "Conectado • LAN",
+    "connectedTS": "Conectado • TS",
+    "loading": "Cargando...",
+    "unavailableVersion": "No disponible (versión vacía)",
+    "compacting": "Compactando...",
+    "exporting": "Exportando...",
+    "loadingStats": "Cargando estadísticas...",
+    "exported": "Exportado: {path}",
+    "switchingModel": "Cambiando a {model}...",
+    "savingKey": "Guardando clave de {provider}...",
+    "removingKey": "Eliminando clave de {provider}...",
+    "unavailableReason": "No disponible ({reason})",
+    "startingNewSession": "Iniciando nueva sesión…",
+    "loadingSession": "Cargando sesión…",
+    "sessionStatsTitle": "📊 Estadísticas de sesión",
+    "sessionStatsMessages": "Mensajes: {total} ({user} usuario, {assistant} asistente)",
+    "sessionStatsToolCalls": "Llamadas a herramientas: {count}",
+    "sessionStatsContext": "Contexto: ~{tokens}k tokens",
+    "compacted": "✓ Contexto compactado",
+    "compactedWithSummary": "✓ Contexto compactado — {summary}"
+  },
+  "errors": {
+    "newSessionOnlyNative": "La nueva sesión solo está disponible con un host nativo.",
+    "newSessionPathUnavailable": "Error al iniciar nueva sesión: la ruta del espacio de trabajo no está disponible",
+    "newSessionNavUnavailable": "Error al iniciar nueva sesión: la navegación no está disponible",
+    "newSessionFailed": "Error al iniciar nueva sesión",
+    "newChatOnlyNative": "El nuevo chat de proyecto solo está disponible con un host nativo.",
+    "newChatPathUnavailable": "Error al iniciar nuevo chat: la ruta del proyecto no está disponible",
+    "newChatNavUnavailable": "Error al iniciar nuevo chat: la navegación no está disponible",
+    "newChatFailed": "Error al iniciar nuevo chat",
+    "openProjectOnlyNative": "Abrir proyecto solo está disponible con un host nativo.",
+    "openProjectPathUnavailable": "Error al abrir proyecto: la ruta del proyecto no está disponible",
+    "openProjectFailed": "Error al abrir proyecto",
+    "openFolderOnlyNative": "Abrir carpeta solo está disponible con un host nativo.",
+    "openFolderFailed": "Error al abrir carpeta",
+    "attachWorkspaceFailed": "Error al conectar con el espacio de trabajo",
+    "keyCannotBeEmpty": "La clave no puede estar vacía.",
+    "failedToSaveKey": "Error al guardar la clave.",
+    "failedToLoadProviders": "Error al cargar proveedores.",
+    "failedToLoadConfig": "Error al cargar la configuración",
+    "failedToSaveConfig": "Error al guardar la configuración",
+    "failedToLoadModels": "Error al cargar models.json",
+    "failedToSaveModels": "Error al guardar models.json",
+    "unknownError": "error desconocido",
+    "connectionLost": "Se perdió la conexión. Por favor, recarga la página.",
+    "commandUndeliverableNoRoute": "no hay sesión activa para recibirlo",
+    "commandUndeliverableUnreachable": "el proceso de sesión ya no es accesible",
+    "messageNotDelivered": "Mensaje no entregado ({detail}). La sesión puede haber cerrado — inicia un nuevo chat o inténtalo de nuevo.",
+    "extensionError": "Error de extensión: {error}",
+    "failedToSwitchSession": "Error al cambiar de sesión: {error}",
+    "failedToSwitchSessionShort": "Error al cambiar de sesión",
+    "failedToLoadSession": "Error al cargar la sesión: {error}",
+    "failedToAttachImage": "Error al adjuntar imagen: {error}",
+    "failedToOpenInspector": "Error al abrir el inspector: {error}",
+    "modelRequestFailed": "La solicitud al modelo falló",
+    "modelRequestFailedDetail": "[{provider}/{model}] {message}",
+    "newSessionCancelled": "La nueva sesión fue cancelada",
+    "mobileBrokerRequired": "Iniciar un nuevo chat en otro proyecto requiere el broker de escritorio. Vuelve a abrir el código QR móvil.",
+    "abortedByUser": "Cancelado por el usuario",
+    "invalidJson": "JSON inválido: {detail}",
+    "modelsMustBeObject": "models.json debe ser un objeto JSON.",
+    "providersMustBeObject": "'providers' debe ser un objeto."
+  },
+  "onboarding": {
+    "openProject": "Abre un proyecto para comenzar a chatear.",
+    "configureKey": "Configura una clave API o proveedor para comenzar a chatear."
+  },
+  "terminal": {
+    "toggle": "Alternar terminal",
+    "panelLabel": "Terminal",
+    "collapse": "Colapsar terminal",
+    "newTab": "Nueva terminal",
+    "profileDefault": "Predeterminado",
+    "profileGitBash": "Git Bash",
+    "profilePowerShell": "PowerShell",
+    "profileCommandPrompt": "Símbolo del sistema",
+    "closeTab": "Cerrar pestaña",
+    "closeConfirmTitle": "¿Cerrar terminal?",
+    "closeConfirmBody": "Al cerrar se terminará el shell y sus procesos hijo.",
+    "closeSummaryOne": "1 terminal activa",
+    "closeSummaryMany": "{{count}} terminales activas",
+    "incompleteHistory": "No se pudo conservar parte de la salida en segundo plano.",
+    "restartNotice": "Los procesos de terminal anteriores no fueron restaurados.",
+    "gitBashMissing": "No se encontró Git for Windows. Instálalo o elige otro perfil.",
+    "statusCreating": "Iniciando…",
+    "statusExited": "Terminado",
+    "statusFailed": "Error al iniciar",
+    "statusRestarted": "Reiniciado tras relanzar la app",
+    "empty": "No hay terminal abierta",
+    "retry": "Reintentar",
+    "ariaTabList": "Pestañas de terminal",
+    "ariaResizer": "Redimensionador del panel de terminal",
+    "enlarge": "Ampliar panel",
+    "restore": "Restaurar panel"
+  },
+  "sidebar": {
+    "loadingSessions": "Cargando sesiones...",
+    "failedToLoadSessions": "Error al cargar sesiones.",
+    "failedToLoadSessionsRuntime": "Error al cargar sesiones. Es posible que el runtime de Pi no esté disponible.",
+    "search": "Buscar...",
+    "clearSearch": "Limpiar búsqueda",
+    "openFolder": "Abrir carpeta como espacio de trabajo",
+    "openFolderAria": "Abrir carpeta",
+    "refreshSessions": "Actualizar sesiones",
+    "settings": "Ajustes",
+    "updateAvailable": "Actualización disponible",
+    "update": "Actualizar",
+    "recent": "RECIENTE",
+    "pinned": "FIJADO",
+    "projects": "PROYECTOS",
+    "archived": "Archivado",
+    "unavailable": "No disponible",
+    "showMore": "Mostrar más",
+    "showLess": "Mostrar menos",
+    "untitled": "Sin título",
+    "emptySession": "Sesión vacía",
+    "rename": "Renombrar",
+    "generateTitle": "Generar título",
+    "generatingTitle": "Generando…",
+    "generateTitleError": "No se pudo generar el título. Inténtalo de nuevo.",
+    "renameSessionAriaLabel": "Renombrar sesión",
+    "renameInputPlaceholder": "Nombre de sesión",
+    "renameErrorInvalid": "Introduce un nombre de sesión no vacío.",
+    "renameErrorNotFound": "Esta sesión ya no está disponible.",
+    "renameErrorTooLarge": "La solicitud de renombrado es demasiado grande.",
+    "renameErrorServer": "No se pudo renombrar la sesión. Inténtalo de nuevo.",
+    "renameRetry": "Reintentar",
+    "archive": "Archivar",
+    "unarchive": "Desarchivar",
+    "archiveSession": "Archivar sesión",
+    "unarchiveSession": "Desarchivar sesión",
+    "pinSession": "Fijar sesión",
+    "unpinSession": "Desfijar sesión",
+    "newChat": "Nuevo chat en {path}",
+    "deleteAllArchived": "Eliminar todas las sesiones archivadas",
+    "deleteArchivedConfirmOne": "¿Eliminar permanentemente {count} sesión archivada? Esta acción no se puede deshacer.",
+    "deleteArchivedConfirmMany": "¿Eliminar permanentemente {count} sesiones archivadas? Esta acción no se puede deshacer.",
+    "openProject": "Abrir proyecto",
+    "justNow": "Ahora mismo",
+    "minutesAgo": "Hace {minutes}m",
+    "hoursAgo": "Hace {hours}h",
+    "yesterday": "Ayer",
+    "startingSession": "Iniciando sesión…",
+    "retry": "Reintentar",
+    "messageMatches": "Mensajes coincidentes",
+    "matchCount": "{count} coincidencias",
+    "deleteArchivedAriaLabel": "Eliminar sesiones archivadas",
+    "pinWorkspace": "Fijar espacio de trabajo",
+    "unpinWorkspace": "Desfijar espacio de trabajo",
+    "archiveWorkspaceSessions": "Archivar sesiones",
+    "openInFinder": "Abrir en Finder",
+    "workspaceActions": "Acciones del espacio de trabajo",
+    "sessionCountTotal": "{count} sesiones",
+    "repository": "Repositorio",
+    "kind": "Tipo",
+    "branch": "Rama",
+    "worktree": "Árbol de trabajo",
+    "detachedAt": "Desconectado en {sha}",
+    "workspaceMetadataError": "Metadatos de Git no disponibles",
+    "quickInfo": {
+      "cardLabel": "Detalles del espacio de trabajo para {folder}",
+      "totalSessions": "Total de sesiones",
+      "threads": "{count} hilos",
+      "path": "Ruta",
+      "loadingGit": "Cargando metadatos de Git…",
+      "repository": "Repositorio",
+      "type": "Tipo",
+      "worktree": "Árbol de trabajo",
+      "branch": "Rama",
+      "detachedAt": "Desconectado en {sha}",
+      "pinCapacityError": "Demasiados elementos fijados"
+    },
+    "brand": "Espacio de trabajo Picot",
+    "deleteSession": "Eliminar",
+    "deleteSessionRunning": "No se puede eliminar una sesión en ejecución",
+    "archiveDisabledActive": "No se puede archivar la sesión activa",
+    "archiveDisabledStreaming": "No se puede archivar una sesión en streaming",
+    "archiveDisabledRunning": "No se puede archivar una sesión en ejecución"
+  },
+  "updater": {
+    "update": "Actualizar",
+    "openInSettings": "Abrir actualizaciones en ajustes",
+    "unknown": "desconocido",
+    "checking": "Comprobando...",
+    "checkingForUpdates": "Comprobando actualizaciones...",
+    "checkNow": "Comprobar ahora",
+    "downloadInstall": "Descargar e instalar",
+    "downloading": "Descargando...",
+    "downloadingPct": "Descargando {pct}%",
+    "downloadingMB": "Descargando {mb} MB...",
+    "installing": "Instalando...",
+    "retry": "Reintentar",
+    "updating": "Actualizando...",
+    "updateInProgress": "Actualización en curso",
+    "updateAvailableVersion": "Actualización disponible: {version}",
+    "lastCheckFailed": "La última comprobación de actualización falló. Abre los ajustes para reintentar.",
+    "latestVersion": "Tienes la última versión.",
+    "latestStable": "Tienes la última versión estable.",
+    "updateInstalled": "Actualización instalada. Reiniciando...",
+    "pleaseRestart": "Por favor, reinicia Picot para completar la actualización.",
+    "updateFailed": "Error al actualizar: {message}",
+    "devBuild": "Versión de desarrollo — las actualizaciones solo se comprueban en versiones empaquetadas.",
+    "prereleaseBuild": "Versión preliminar ({version}) — las actualizaciones automáticas están deshabilitadas para esta versión.",
+    "autoUpdatesDesktopOnly": "Las actualizaciones automáticas solo están disponibles en la app de escritorio.",
+    "noManifest": "Aún no se ha publicado un manifiesto de actualización. Es posible que la última versión de GitHub no incluya `latest.json`, o no tenga una entrada para esta plataforma. Consulta docs/AUTO_UPDATER.md.",
+    "pubkeyError": "Falta la clave pública del actualizador o la firma del paquete es inválida. Consulta docs/AUTO_UPDATER.md.",
+    "unknownError": "Error desconocido del actualizador",
+    "versionLabel": "Picot {version}",
+    "versionLabelFrom": "Picot {version} (desde {current})"
+  },
+  "voice": {
+    "voiceInput": "Entrada de voz",
+    "stopRecording": "Detener grabación"
+  },
+  "bootstrap": {
+    "title": "Picot no pudo iniciarse",
+    "descriptionPre": "El",
+    "descriptionPost": "runtime integrado que se incluye con Picot falló al iniciarse.",
+    "help": "Esto generalmente significa que la instalación está incompleta o dañada. Reinstalar Picot normalmente lo soluciona. Haz clic en Reintentar inicio después de reinstalar o reiniciar.",
+    "retry": "Reintentar inicio",
+    "tauriUnavailable": "El runtime de Tauri no está disponible en esta ventana.",
+    "starting": "Iniciando runtime de Pi...",
+    "startupFailed": "Error al iniciar"
+  },
+  "settings": {
+    "title": "Ajustes",
+    "general": "General",
+    "extensions": "Extensiones",
+    "usage": "Uso",
+    "configuration": "Proveedores",
+    "agentInbox": "Bandeja del agente",
+    "backToChat": "Volver al chat",
+    "appearance": "Apariencia",
+    "agent": "Agente",
+    "updates": "Actualizaciones",
+    "autoCompaction": "Compactación automática",
+    "thinkingEffort": "Esfuerzo de razonamiento",
+    "reasoningDepth": "Profundidad de razonamiento",
+    "showThinking": "Mostrar razonamiento",
+    "taskNotifications": "Notificaciones de tareas completadas",
+    "taskNotificationsDescription": "Muestra una notificación del sistema operativo cuando finaliza una tarea.",
+    "taskCompleteTitle": "Tarea completada",
+    "taskCompleteMessage": "Tu tarea ha finalizado.",
+    "piVersion": "Versión de Pi",
+    "picotVersion": "Versión de Picot",
+    "checkForUpdates": "Buscar actualizaciones",
+    "status": "Estado",
+    "updateAvailable": "Actualización disponible",
+    "downloadInstall": "Descargar e instalar",
+    "authentication": "Proveedores",
+    "protection": "Protección",
+    "requireLogin": "Requerir inicio de sesión",
+    "agentConfigFile": "Archivo de configuración del agente",
+    "providersFile": "Archivo de proveedores",
+    "llmProviders": "Proveedores LLM",
+    "browseCommunityPackages": "Explorar paquetes de la comunidad",
+    "browseHelp": "Descubre extensiones, habilidades, temas y prompts del ecosistema Pi. Instala con un clic.",
+    "costDashboard": "Panel de costos",
+    "loadingProviders": "Cargando proveedores…",
+    "thinkingLevel": "Razonamiento: {level}",
+    "thinkingCompact": "Razonar {level}",
+    "off": "apagado",
+    "thinkingFaster": "Más rápido",
+    "thinkingSmarter": "Más inteligente",
+    "thinkingLevels": {
+      "off": "apagado",
+      "minimal": "mínimo",
+      "low": "bajo",
+      "medium": "medio",
+      "high": "alto"
+    },
+    "thinkingTitle": "El esfuerzo de razonamiento controla la profundidad de razonamiento. Haz clic para cambiar.",
+    "thinkingAriaLabel": "Esfuerzo de razonamiento: {level}. Haz clic para cambiar la profundidad de razonamiento.",
+    "agentConfiguration": "Configuración del agente",
+    "thinkingCycleTitle": "Haz clic para cambiar: apagado, mínimo, bajo, medio, alto",
+    "openSettings": "Abrir ajustes",
+    "language": {
+      "title": "Idioma",
+      "description": "Elige el idioma de la interfaz. El idioma del sistema sigue el de tu sistema operativo.",
+      "systemDefault": "Idioma del sistema"
+    },
+    "auth": {
+      "helpPre": "Las claves se almacenan localmente en",
+      "helpPost": "(chmod 600). Los lanzamientos desde GUI también importan variables de proveedor de tu shell de inicio de sesión.",
+      "notConfigured": "No configurado",
+      "configuredAuthJson": "Configurado (auth.json)",
+      "runtimeOverride": "Reemplazo en runtime",
+      "customProvider": "Proveedor personalizado",
+      "configured": "Configurado"
+    },
+    "models": {
+      "helpPre": "Edita",
+      "helpPost1": "para añadir proveedores personalizados (Ollama, vLLM, LM Studio, proxies compatibles con OpenAI, anulaciones de enrutamiento de OpenRouter, etc). Consulta la",
+      "docsLink": "documentación de models.json",
+      "helpPost2": "para el esquema completo. Los cambios se aplican inmediatamente — no se requiere reinicio.",
+      "replaceConfirm": "¿Reemplazar el contenido actual con el ejemplo de Ollama?",
+      "docsOpenFailed": "No se pudo abrir el enlace de documentación"
+    },
+    "apiKeys": {
+      "noProviders": "No hay proveedores conocidos.",
+      "summary": "{enabled} habilitados · {healthy} saludables · {issues} problemas",
+      "loadFailed": "Error al cargar proveedores.",
+      "toggleModels": "Alternar modelos de {provider}",
+      "model": "Modelo",
+      "selectAll": "Seleccionar todos los modelos de {provider}",
+      "deselectAll": "Deseleccionar todos los modelos de {provider}",
+      "enableModel": "Habilitar {model}",
+      "noKeyAvailable": "No hay clave disponible",
+      "healthUnknown": "Estado desconocido",
+      "healthy": "Saludable",
+      "healthyLatency": "Saludable ({latency}ms)",
+      "failed": "Fallido",
+      "failedWithMessage": "Fallido: {message}",
+      "checkingHealth": "Comprobando estado",
+      "checkingHealthEllipsis": "Comprobando estado...",
+      "healthCheckFailed": "Error al comprobar el estado",
+      "checkHealth": "Comprobar estado",
+      "editorTitle": "Clave API de {provider}",
+      "pastePlaceholder": "Pega la clave API…",
+      "keyCannotBeEmpty": "La clave no puede estar vacía.",
+      "saveFailed": "Error al guardar la clave.",
+      "removeConfirm": "¿Eliminar la clave API almacenada para {provider}?",
+      "fromEnvironment": "Desde el entorno ({label})",
+      "fromEnvironmentFallback": "Desde el entorno (variable de entorno)"
+    },
+    "skills": {
+      "title": "Habilidades",
+      "description": "Gestiona las habilidades descubiertas. Los cambios se aplican después de una nueva sesión o reinicio de Pi.",
+      "rescan": "Reescanear",
+      "global": "Global",
+      "project": "Proyecto actual",
+      "loading": "Cargando habilidades…",
+      "empty": "No hay habilidades en este ámbito.",
+      "projectUntrusted": "Las habilidades de proyecto están deshabilitadas hasta que se confíe en este proyecto.",
+      "allEnabled": "Todas habilitadas",
+      "allDisabled": "Todas deshabilitadas",
+      "enabledCount": "{enabled}/{total} habilitadas",
+      "source": "Fuente",
+      "enableGroup": "Alternar grupo completo",
+      "enableSkill": "Alternar habilidad",
+      "shadowedBy": "Ocultado por {name}",
+      "customRules": "Reglas de inclusión/filtrado personalizadas (solo lectura — edita settings.json manualmente)",
+      "savedRestartRequired": "Guardado. Inicia una nueva sesión o reinicia Pi para que el cambio surta efecto.",
+      "loadFailed": "Error al cargar habilidades.",
+      "saveFailed": "Error al guardar la configuración de habilidades.",
+      "rescanFailed": "Error al reescanear habilidades.",
+      "ambiguousRuleTarget": "Este objetivo corresponde a múltiples raíces; edita settings.json manualmente para cambiarlo.",
+      "scopeSummary": "{total} habilidades · {groups} grupos"
+    }
+  },
+  "lanQr": {
+    "modalAriaLabel": "Código QR móvil",
+    "title": "Abrir en móvil",
+    "closeAriaLabel": "Cerrar",
+    "generating": "Generando código QR…",
+    "qrAlt": "Código QR para acceso móvil",
+    "hint": "Escanea con tu teléfono para abrir Picot en la misma red",
+    "openLink": "Abrir enlace"
+  },
+  "cost": {
+    "documentTitle": "Picot - Uso",
+    "quickRange": "Rango rápido",
+    "noData": "Sin datos",
+    "noDataInSelectedRange": "No hay datos en el rango seleccionado.",
+    "overview": "Resumen",
+    "models": "Modelos",
+    "toolCost": "Costo de herramientas",
+    "projects": "Proyectos",
+    "sessions": "Sesiones",
+    "recentSessionsInRange": "Sesiones recientes en el rango",
+    "stats": {
+      "totalCost": "Costo total",
+      "sessions": "Sesiones",
+      "totalTokens": "Total de tokens",
+      "activeDays": "Días activos",
+      "currentStreak": "Racha actual",
+      "longestStreak": "Racha más larga",
+      "input": "Entrada",
+      "output": "Salida",
+      "cacheRead": "Lectura de caché",
+      "cacheWrite": "Escritura de caché",
+      "toolCalls": "Llamadas a herramientas",
+      "messages": "Mensajes"
+    },
+    "table": {
+      "session": "Sesión",
+      "model": "Modelo",
+      "tokens": "Tokens",
+      "tools": "Herramientas",
+      "cost": "Costo",
+      "date": "Fecha"
+    },
+    "modelTokens": "{input} entrada · {output} salida",
+    "projectSessions": "{count} sesiones",
+    "toolSessions": "{count} sesiones",
+    "trackedTools": "{count} rastreadas",
+    "noToolUsage": "No hay uso de herramientas en el rango seleccionado.",
+    "noRecentSessions": "No hay sesiones recientes en el rango seleccionado.",
+    "overviewNote": "Has usado aproximadamente {ratio}x más tokens que Guerra y Paz.",
+    "activityCellTitle": "{date} · {tokens} tokens",
+    "chartTooltipTokens": "{label}: {tokens} tokens",
+    "chartTooltipCost": "{label}: {cost}",
+    "chartUnavailable": "El gráfico no está disponible en este entorno.",
+    "unknown": "desconocido",
+    "notAvailable": "N/D",
+    "untitled": "Sin título",
+    "daysShort": "{count}d",
+    "range": {
+      "7d": "7d",
+      "30d": "30d",
+      "90d": "90d"
+    },
+    "activity": {
+      "monday": "Lun",
+      "wednesday": "Mié",
+      "friday": "Vie",
+      "less": "Menos",
+      "more": "Más"
+    }
+  },
+  "misc": {
+    "new": "Nuevo",
+    "contextWindow": "Ventana de contexto",
+    "model": "modelo",
+    "compact": "Compactar",
+    "compactTitle": "El contexto supera el 80% — compacta para ahorrar tokens",
+    "qrUnavailable": "Código QR no disponible"
+  },
+  "browse": {
+    "openExternalPrompt": "Abrir este enlace en una nueva pestaña:"
+  },
+  "ephemeral": {
+    "placeholder": "Pregunta lo que quieras…",
+    "send": "Enviar",
+    "abort": "Cancelar",
+    "newChat": "Nuevo chat",
+    "startingSideChat": "Iniciando chat lateral…",
+    "startingQuickChat": "Iniciando chat rápido…",
+    "tokens": "tokens",
+    "sideChat": "Chat lateral",
+    "sideChatLimit": "Límite de chat lateral alcanzado",
+    "quickChat": "Chat rápido",
+    "minimize": "Minimizar",
+    "close": "Cerrar",
+    "confirmDiscard": "Este chat temporal no se guardará. ¿Descartar?",
+    "confirmCloseSummary": "¿Cerrar y descartar archivos sin guardar y chats temporales?",
+    "generating": "Generando",
+    "unread": "No leído",
+    "resize": "Redimensionar chat rápido",
+    "statusReady": "Listo",
+    "statusStreaming": "Generando",
+    "statusError": "Error",
+    "statusDisconnected": "Desconectado"
+  },
+  "fileMention": {
+    "listLabel": "Archivos"
+  },
+  "workspace": {
+    "focus": "Entrar en modo de enfoque",
+    "focusTitle": "Espacio de trabajo",
+    "back": "Atrás",
+    "newTask": "Nueva tarea",
+    "showMore": "Mostrar más"
+  },
+  "migrated": {
+    "bootstrap": {
+      "text": {
+        "picotStartup": "Picot Startup",
+        "pi": "pi"
+      }
+    },
+    "index": {
+      "alt": {
+        "picotLogo": "Logotipo de Picot"
+      },
+      "title": {
+        "newSession": "Nueva sesión",
+        "settings": "Ajustes",
+        "downloadAndInstallUpdate": "Descargar e instalar actualización",
+        "workspacePath": "Ruta del espacio de trabajo",
+        "gitBranch": "Rama de Git",
+        "chooseApp": "Elegir app",
+        "files": "Archivos",
+        "close": "Cerrar",
+        "minimal": "mínimo",
+        "low": "bajo",
+        "medium": "medio",
+        "high": "alto"
+      },
+      "ariaLabel": {
+        "toggleFileBrowser": "Alternar explorador de archivos",
+        "keyboardShortcuts": "Atajos de teclado",
+        "conversationNavigator": "Navegador de conversación",
+        "openCommands": "Abrir comandos",
+        "thinkingEffortOffClickToCycleReasoning": "Esfuerzo de razonamiento: apagado. Haz clic para cambiar la profundidad de razonamiento.",
+        "receiveBetaUpdates": "Recibir actualizaciones beta",
+        "searchTasks": "Buscar tareas",
+        "searchResults": "Resultados de búsqueda"
+      },
+      "placeholder": {
+        "typeAMessageOrUseToCall": "Mensaje… Escribe / para comandos, @ para archivos",
+        "providers": "{ \"providers\": { ... } }",
+        "searchTasksAndMessages": "Buscar tareas y mensajes…"
+      },
+      "text": {
+        "update": "Actualizar",
+        "new": "Nuevo ↓",
+        "thinkOff": "Razonamiento apagado",
+        "extensions": "Extensiones",
+        "skills": "Habilidades",
+        "faster": "Más rápido",
+        "smarter": "Más inteligente",
+        "betaUpdates": "Actualizaciones beta",
+        "receivePrereleasePicotBuilds": "Recibir versiones preliminares de Picot",
+        "piAgentAuthJson": "~/.pi/agent/auth.json",
+        "save": "Guardar",
+        "piAgentModelsJson": "~/.pi/agent/models.json",
+        "cancel": "Cancelar",
+        "openLink": "Abrir enlace"
+      }
+    },
+    "app": {
+      "textcontent": {
+        "retrying": "Reintentando…"
+      }
+    },
+    "components": {
+      "chatSettingsPanel": {
+        "textcontent": {
+          "checkingTelegram": "Comprobando Telegram…"
+        },
+        "placeholder": {
+          "pasteANewTokenToReconnect": "Pega un nuevo token para reconectar"
+        }
+      }
+    },
+    "native": {
+      "app": {
+        "textcontent": {
+          "openSettings": "Abrir ajustes",
+          "noModelsMatchYourSearch": "Ningún modelo coincide con tu búsqueda."
+        }
+      },
+      "composer": {
+        "composerSlashMenu": {
+          "textcontent": {
+            "noMatchingSkills": "No hay habilidades coincidentes"
+          },
+          "ariaLabel": {
+            "skillSlashCommands": "Comandos slash de habilidades"
+          }
+        }
+      },
+      "extensions": {
+        "inlineExtensionPrompt": {
+          "placeholder": {
+            "typeACustomAnswer": "Escribe una respuesta personalizada"
+          },
+          "textcontent": {
+            "noPreview": "Sin vista previa"
+          },
+          "ariaLabel": {
+            "extensionQuestion": "Pregunta de extensión"
+          }
+        }
+      },
+      "features": {
+        "rpivTodoMirror": {
+          "textcontent": {
+            "todos": "Tareas"
+          }
+        }
+      },
+      "notifications": {
+        "notificationCenter": {
+          "ariaLabel": {
+            "dismissNotification": "Descartar notificación"
+          }
+        }
+      },
+      "session": {
+        "sessionSearchDialog": {
+          "textcontent": {
+            "searchingMessages": "Buscando mensajes..."
+          }
+        },
+        "sessionSidebar": {
+          "textcontent": {
+            "showMore": "Mostrar más"
+          }
+        }
+      },
+      "settings": {
+        "settingsConfig": {
+          "textcontent": {
+            "loading": "Cargando…"
+          }
+        }
+      }
+    },
+    "sidebar": {
+      "buildSessionItem": {
+        "textcontent": {
+          "tmux": "tmux"
+        }
+      },
+      "index": {
+        "textcontent": {
+          "pinned": "Fijado"
+        }
+      }
+    },
+    "terminalPanel": {
+      "ariaLabel": {
+        "closeTerminalTab": "Cerrar pestaña de terminal"
+      }
+    },
+    "ui": {
+      "imageLightbox": {
+        "ariaLabel": {
+          "imagePreview": "Vista previa de imagen"
+        }
+      },
+      "messageRenderer": {
+        "title": {
+          "forkSessionFromHere": "Bifurcar sesión desde aquí"
+        }
+      },
+      "resizablePanel": {
+        "title": {
+          "resizePanel": "Redimensionar panel"
+        }
+      }
+    }
+  }
+}

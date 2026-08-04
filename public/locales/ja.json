@@ -1,0 +1,873 @@
+{
+  "app": {
+    "welcome": "Picotへようこそ",
+    "welcomeHint": "下にメッセージを入力してPiとチャットを始めるか、サイドバーからセッションを選択してください。",
+    "currentWorkspace": "現在のワークスペース："
+  },
+  "shortcuts": {
+    "focusInput": "入力欄にフォーカス",
+    "abort": "中止"
+  },
+  "nav": {
+    "chat": "チャット",
+    "toggleSidebar": "サイドバーを切り替え",
+    "showMobileQR": "モバイルQRコードを表示",
+    "openWorkspace": "ワークスペースを開く",
+    "openWorkspaceInApp": "アプリでワークスペースを開く",
+    "chooseApp": "ワークスペースを開くアプリを選択",
+    "files": "ファイル",
+    "openWorkspaceInNamedApp": "{app}で{path}を開く",
+    "openWorkspaceInAppAria": "{app}でワークスペースを開く",
+    "openInApp": "{app}で開く",
+    "sideChat": "サイドチャット",
+    "quickChat": "クイックチャット",
+    "newSideChat": "新しいサイドチャット"
+  },
+  "git": {
+    "currentBranch": "現在のGitブランチ",
+    "branchName": "ブランチ：{name}"
+  },
+  "usage": {
+    "contextTokens": "コンテキスト：{used}k / {limit}k トークン",
+    "sessionCostTitle": "セッションコスト",
+    "contextTitle": "コンテキスト使用量",
+    "costSub": "{amount}（サブスク）"
+  },
+  "sessionInfo": {
+    "title": "セッション情報",
+    "heading": "セッション情報",
+    "file": "ファイル",
+    "id": "ID",
+    "inMemory": "メモリ内（未保存）",
+    "unavailable": "利用できません",
+    "copyFile": "ファイルパスをコピー",
+    "copyId": "セッション ID をコピー",
+    "copied": "コピーしました",
+    "copyFailed": "コピーに失敗しました"
+  },
+  "context": {
+    "cached": "キャッシュ済み",
+    "input": "入力",
+    "available": "利用可能",
+    "used": "{pct}% 使用中",
+    "tooltip": "{label}：{tokens}"
+  },
+  "models": {
+    "searchPlaceholder": "モデルを検索…",
+    "emptyTitle": "利用可能なモデルがありません",
+    "emptyHelp": "APIキーが設定されていません。設定 → プロバイダーでキーを設定してください。",
+    "openSettings": "設定を開く"
+  },
+  "queue": {
+    "queued": "キュー中",
+    "cancelTitle": "キャンセル",
+    "steering": "誘導",
+    "followUp": "フォローアップ"
+  },
+  "input": {
+    "typeMessage": "メッセージ… / でコマンド、@ でファイルを入力",
+    "attachImage": "画像を添付",
+    "commands": "コマンド",
+    "switchModel": "モデルを切り替え",
+    "send": "メッセージを送信",
+    "abort": "中止 (Esc)",
+    "messagePlaceholder": "メッセージ… / でコマンド、@ でファイルを入力",
+    "mirrorReadOnly": "履歴セッションを表示中（読み取り専用）",
+    "waitingForSession": "現在のセッションが終了するのを待っています…",
+    "compact": "コンパクト",
+    "compactDesc": "トークンを節約するためコンテキストをコンパクトにする",
+    "exportHtml": "HTMLとしてエクスポート",
+    "exportHtmlDesc": "セッションをHTMLファイルとしてエクスポート",
+    "sessionStats": "セッション統計",
+    "sessionStatsDesc": "セッション統計を表示",
+    "expandAllTools": "すべてのツールを展開",
+    "expandAllToolsDesc": "すべてのツールカードを展開する",
+    "collapseAllTools": "すべてのツールを折りたたむ",
+    "collapseAllToolsDesc": "すべてのツールカードを折りたたむ"
+  },
+  "messages": {
+    "attachedImage": "添付画像",
+    "copyMessage": "メッセージをコピー",
+    "thinking": "考え中",
+    "copy": "コピー",
+    "copied": "コピーしました！",
+    "processDetails": "プロセス詳細",
+    "processStep": "{count} ステップ",
+    "processSteps": "{count} ステップ",
+    "processToolCall": "{count} ツール呼び出し",
+    "processToolCalls": "{count} ツール呼び出し"
+  },
+  "tools": {
+    "copyOutput": "出力をコピー",
+    "streaming": "実行中",
+    "complete": "完了",
+    "error": "エラー",
+    "pending": "保留中"
+  },
+  "files": {
+    "title": "ファイル",
+    "loading": "読み込み中…",
+    "empty": "空のディレクトリ",
+    "failedLoad": "読み込み失敗",
+    "parentDirectory": "親ディレクトリ",
+    "openInFileManager": "ファイルマネージャーで開く",
+    "close": "ファイルブラウザを閉じる",
+    "preview": {
+      "title": "プレビュー",
+      "enlarge": "パネルを拡大",
+      "collapse": "パネルを折りたたむ",
+      "close": "パネルを閉じる",
+      "showControls": "コントロールを表示",
+      "openDesktop": "デスクトップで開く",
+      "disableLineWrap": "折り返しを無効にする",
+      "enableLineWrap": "折り返しを有効にする",
+      "edit": "編集",
+      "preview": "プレビュー",
+      "diff": "差分",
+      "find": "検索",
+      "goToLine": "行に移動",
+      "goToLinePrompt": "行番号",
+      "copyContent": "ファイル内容をコピー",
+      "copyPath": "ファイルパスをコピー",
+      "save": "ファイルを保存",
+      "autoSaveOn": "自動保存オン",
+      "autoSaveOff": "自動保存オフ",
+      "loading": "読み込み中…",
+      "saved": "保存済み",
+      "saving": "保存中…",
+      "conflict": "ファイルが外部で変更されました",
+      "conflictReload": "再読み込み",
+      "conflictOverwrite": "上書き",
+      "outsideWorkspace": "ファイルはアクティブなワークスペースの外にあります",
+      "unsupportedBinary": "このファイルはプレビューできません。",
+      "tooLarge": "このファイルは大きすぎてプレビューできません。",
+      "pickFile": "プレビューするファイルをツリーから選択してください。",
+      "copySuccess": "コピーしました！",
+      "copyFailed": "コピー失敗",
+      "mode": "表示モード",
+      "lineWrap": "折り返し",
+      "autoSave": "自動保存",
+      "loadError": "ファイルの読み込みに失敗しました",
+      "saveError": "ファイルの保存に失敗しました",
+      "readOnly": "読み取り専用",
+      "markitdown": {
+        "pythonMissing": "このファイルをプレビューするにはPython 3.10以降をインストールしてください。",
+        "pythonTooOld": "Python {version}は古すぎます。Python 3.10以降をインストールしてください。",
+        "markitdownMissing": "このファイルをプレビューするにはMarkItDownをインストールしてください。",
+        "markitdownIncompatible": "標準入力変換をサポートするバージョンにMarkItDownを更新してください。",
+        "installPosix": "python3 -m pip install 'markitdown[docx,pptx,xlsx,xls,outlook]'",
+        "installWindows": "py -3 -m pip install \"markitdown[docx,pptx,xlsx,xls,outlook]\"",
+        "remoteImageHidden": "リモート画像は非表示です"
+      },
+      "conflictMessage": "{name}がディスク上で変更されました。再読み込みしますか、それともディスクバージョンを上書きしますか？"
+    },
+    "unsaved": {
+      "title": "未保存の変更",
+      "description": "このファイルには未保存の変更があります。保存しますか、それとも破棄しますか？",
+      "descriptionMultiple": "{count}個のファイルに未保存の変更があります。保存しますか、それとも破棄しますか？",
+      "save": "変更を保存",
+      "discard": "破棄",
+      "cancel": "キャンセル"
+    }
+  },
+  "dialogs": {
+    "selectOption": "オプションを選択",
+    "confirm": "確認",
+    "input": "入力",
+    "editor": "エディター",
+    "cancel": "キャンセル",
+    "no": "いいえ",
+    "yes": "はい",
+    "submit": "送信",
+    "save": "保存"
+  },
+  "extensions": {
+    "loadingPackages": "パッケージを読み込み中...",
+    "failedToLoadPackages": "パッケージの読み込みに失敗しました",
+    "noPackagesMatch": "フィルターに一致するパッケージがありません。",
+    "desktopOnly": "デスクトップのみ",
+    "searchPackages": "パッケージを検索...",
+    "all": "すべて",
+    "extensions": "拡張機能",
+    "skills": "スキル",
+    "themes": "テーマ",
+    "prompts": "プロンプト",
+    "installedOnly": "インストール済みのみ",
+    "mostDownloads": "ダウンロード数順",
+    "nameAZ": "名前 (A–Z)",
+    "recentlyUpdated": "最近更新",
+    "sortPackages": "パッケージを並べ替え",
+    "installFailed": "インストール失敗",
+    "uninstallFailed": "アンインストール失敗",
+    "installFailedNote": "この拡張機能はnpmが必要です。npmがインストールされPicotからアクセス可能であることを確認してから再試行してください。",
+    "uninstallFailedNote": "Picotがこの拡張機能パッケージを削除できませんでした。エラーの詳細を確認してから再試行してください。",
+    "permissionDenied": "~/.pi/agent/npmの権限が拒否されました（所有者/権限を確認してください）。",
+    "browseCountZero": "0 / 全{total}件",
+    "browseCountRange": "{start}–{end} / 全{total}件",
+    "downloadsPerMonth": "{count}/月"
+  },
+  "actions": {
+    "retry": "再試行",
+    "install": "インストール",
+    "uninstall": "アンインストール",
+    "save": "保存",
+    "cancel": "キャンセル",
+    "no": "いいえ",
+    "yes": "はい",
+    "submit": "送信",
+    "update": "更新",
+    "setKey": "キーを設定",
+    "insertExample": "例を挿入",
+    "remove": "削除",
+    "delete": "削除",
+    "openLink": "リンクを開く"
+  },
+  "status": {
+    "saving": "保存中...",
+    "saved": "保存済み",
+    "installing": "インストール中...",
+    "uninstalling": "アンインストール中...",
+    "removing": "削除中...",
+    "connected": "接続済み",
+    "disconnected": "切断済み",
+    "connecting": "接続中...",
+    "working": "処理中...",
+    "done": "完了",
+    "failed": "失敗",
+    "error": "エラー",
+    "connectedLAN": "接続済み • LAN",
+    "connectedTS": "接続済み • TS",
+    "loading": "読み込み中...",
+    "unavailableVersion": "利用不可（バージョンが空）",
+    "compacting": "コンパクト中...",
+    "exporting": "エクスポート中...",
+    "loadingStats": "統計を読み込み中...",
+    "exported": "エクスポート済み：{path}",
+    "switchingModel": "{model}に切り替え中...",
+    "savingKey": "{provider}キーを保存中...",
+    "removingKey": "{provider}キーを削除中...",
+    "unavailableReason": "利用不可（{reason}）",
+    "startingNewSession": "新しいセッションを開始中…",
+    "loadingSession": "セッションを読み込み中…",
+    "sessionStatsTitle": "📊 セッション統計",
+    "sessionStatsMessages": "メッセージ：{total}件（ユーザー {user}、アシスタント {assistant}）",
+    "sessionStatsToolCalls": "ツール呼び出し：{count}回",
+    "sessionStatsContext": "コンテキスト：約{tokens}kトークン",
+    "compacted": "✓ コンテキストをコンパクトにしました",
+    "compactedWithSummary": "✓ コンテキストをコンパクトにしました — {summary}"
+  },
+  "errors": {
+    "newSessionOnlyNative": "新しいセッションはネイティブホストでのみサポートされています。",
+    "newSessionPathUnavailable": "新しいセッションの開始に失敗しました：現在のワークスペースパスが利用できません",
+    "newSessionNavUnavailable": "新しいセッションの開始に失敗しました：ナビゲーションが利用できません",
+    "newSessionFailed": "新しいセッションの開始に失敗しました",
+    "newChatOnlyNative": "プロジェクトの新しいチャットはネイティブホストでのみサポートされています。",
+    "newChatPathUnavailable": "新しいチャットの開始に失敗しました：プロジェクトパスが利用できません",
+    "newChatNavUnavailable": "新しいチャットの開始に失敗しました：ナビゲーションが利用できません",
+    "newChatFailed": "新しいチャットの開始に失敗しました",
+    "openProjectOnlyNative": "プロジェクトを開くにはネイティブホストが必要です。",
+    "openProjectPathUnavailable": "プロジェクトを開くのに失敗しました：プロジェクトパスが利用できません",
+    "openProjectFailed": "プロジェクトを開くのに失敗しました",
+    "openFolderOnlyNative": "フォルダーを開くにはネイティブホストが必要です。",
+    "openFolderFailed": "フォルダーを開くのに失敗しました",
+    "attachWorkspaceFailed": "ワークスペースへの接続に失敗しました",
+    "keyCannotBeEmpty": "キーを空にすることはできません。",
+    "failedToSaveKey": "キーの保存に失敗しました。",
+    "failedToLoadProviders": "プロバイダーの読み込みに失敗しました。",
+    "failedToLoadConfig": "設定の読み込みに失敗しました",
+    "failedToSaveConfig": "設定の保存に失敗しました",
+    "failedToLoadModels": "models.jsonの読み込みに失敗しました",
+    "failedToSaveModels": "models.jsonの保存に失敗しました",
+    "unknownError": "不明なエラー",
+    "connectionLost": "接続が失われました。ページを更新してください。",
+    "commandUndeliverableNoRoute": "受信できるセッションが実行されていません",
+    "commandUndeliverableUnreachable": "セッションプロセスに到達できなくなりました",
+    "messageNotDelivered": "メッセージが届きませんでした（{detail}）。セッションが終了した可能性があります — 新しいチャットを開始するか再試行してください。",
+    "extensionError": "拡張機能エラー：{error}",
+    "failedToSwitchSession": "セッションの切り替えに失敗しました：{error}",
+    "failedToSwitchSessionShort": "セッションの切り替えに失敗しました",
+    "failedToLoadSession": "セッションの読み込みに失敗しました：{error}",
+    "failedToAttachImage": "画像の添付に失敗しました：{error}",
+    "failedToOpenInspector": "インスペクターを開くのに失敗しました：{error}",
+    "modelRequestFailed": "モデルリクエストが失敗しました",
+    "modelRequestFailedDetail": "[{provider}/{model}] {message}",
+    "newSessionCancelled": "新しいセッションがキャンセルされました",
+    "mobileBrokerRequired": "別のプロジェクトで新しいチャットを開始するにはデスクトップブローカーが必要です。モバイルQRコードを再度開いてください。",
+    "abortedByUser": "ユーザーによって中止されました",
+    "invalidJson": "無効なJSON：{detail}",
+    "modelsMustBeObject": "models.jsonはJSONオブジェクトである必要があります。",
+    "providersMustBeObject": "'providers'はオブジェクトである必要があります。"
+  },
+  "onboarding": {
+    "openProject": "チャットを始めるためにプロジェクトを開いてください。",
+    "configureKey": "チャットを始めるためにAPIキーまたはプロバイダーを設定してください。"
+  },
+  "terminal": {
+    "toggle": "ターミナルを切り替え",
+    "panelLabel": "ターミナル",
+    "collapse": "ターミナルを折りたたむ",
+    "newTab": "新しいターミナル",
+    "profileDefault": "デフォルト",
+    "profileGitBash": "Git Bash",
+    "profilePowerShell": "PowerShell",
+    "profileCommandPrompt": "コマンドプロンプト",
+    "closeTab": "タブを閉じる",
+    "closeConfirmTitle": "ターミナルを閉じますか？",
+    "closeConfirmBody": "閉じるとシェルとその子プロセスが終了します。",
+    "closeSummaryOne": "1つの実行中のターミナル",
+    "closeSummaryMany": "{{count}}個の実行中のターミナル",
+    "incompleteHistory": "一部のバックグラウンド出力を保持できませんでした。",
+    "restartNotice": "以前のターミナルプロセスは復元されませんでした。",
+    "gitBashMissing": "Git for Windowsが見つかりませんでした。インストールするか別のプロファイルを選択してください。",
+    "statusCreating": "起動中…",
+    "statusExited": "終了しました",
+    "statusFailed": "起動に失敗しました",
+    "statusRestarted": "アプリ再起動後に再起動しました",
+    "empty": "ターミナルが開いていません",
+    "retry": "再試行",
+    "ariaTabList": "ターミナルタブ",
+    "ariaResizer": "ターミナルパネルリサイザー",
+    "enlarge": "パネルを拡大",
+    "restore": "パネルを復元"
+  },
+  "sidebar": {
+    "loadingSessions": "セッションを読み込み中...",
+    "failedToLoadSessions": "セッションの読み込みに失敗しました。",
+    "failedToLoadSessionsRuntime": "セッションの読み込みに失敗しました。Piランタイムが利用できない可能性があります。",
+    "search": "検索...",
+    "clearSearch": "検索をクリア",
+    "openFolder": "フォルダーをワークスペースとして開く",
+    "openFolderAria": "フォルダーを開く",
+    "refreshSessions": "セッションを更新",
+    "settings": "設定",
+    "updateAvailable": "アップデートが利用可能",
+    "update": "更新",
+    "recent": "最近",
+    "pinned": "ピン留め",
+    "projects": "プロジェクト",
+    "archived": "アーカイブ済み",
+    "unavailable": "利用不可",
+    "showMore": "もっと表示",
+    "showLess": "表示を減らす",
+    "untitled": "無題",
+    "emptySession": "空のセッション",
+    "rename": "名前を変更",
+    "generateTitle": "タイトルを生成",
+    "generatingTitle": "生成中…",
+    "generateTitleError": "タイトルを生成できませんでした。もう一度お試しください。",
+    "renameSessionAriaLabel": "セッション名を変更",
+    "renameInputPlaceholder": "セッション名",
+    "renameErrorInvalid": "空でないセッション名を入力してください。",
+    "renameErrorNotFound": "このセッションは利用できなくなりました。",
+    "renameErrorTooLarge": "名前変更リクエストが大きすぎます。",
+    "renameErrorServer": "セッション名を変更できませんでした。再試行してください。",
+    "renameRetry": "再試行",
+    "archive": "アーカイブ",
+    "unarchive": "アーカイブを解除",
+    "archiveSession": "セッションをアーカイブ",
+    "unarchiveSession": "セッションのアーカイブを解除",
+    "pinSession": "セッションをピン留め",
+    "unpinSession": "セッションのピン留めを解除",
+    "newChat": "{path}で新しいチャット",
+    "deleteAllArchived": "アーカイブ済みセッションをすべて削除",
+    "deleteArchivedConfirmOne": "アーカイブ済みセッション{count}件を完全に削除しますか？この操作は元に戻せません。",
+    "deleteArchivedConfirmMany": "アーカイブ済みセッション{count}件を完全に削除しますか？この操作は元に戻せません。",
+    "openProject": "プロジェクトを開く",
+    "justNow": "たった今",
+    "minutesAgo": "{minutes}分前",
+    "hoursAgo": "{hours}時間前",
+    "yesterday": "昨日",
+    "startingSession": "セッションを開始中…",
+    "retry": "再試行",
+    "messageMatches": "メッセージの一致",
+    "matchCount": "{count}件の一致",
+    "deleteArchivedAriaLabel": "アーカイブ済みセッションを削除",
+    "pinWorkspace": "ワークスペースをピン留め",
+    "unpinWorkspace": "ワークスペースのピン留めを解除",
+    "archiveWorkspaceSessions": "セッションをアーカイブ",
+    "openInFinder": "Finderで開く",
+    "workspaceActions": "ワークスペースの操作",
+    "sessionCountTotal": "{count}件のセッション",
+    "repository": "リポジトリ",
+    "kind": "種類",
+    "branch": "ブランチ",
+    "worktree": "ワークツリー",
+    "detachedAt": "{sha}でデタッチ",
+    "workspaceMetadataError": "Gitメタデータが利用できません",
+    "quickInfo": {
+      "cardLabel": "{folder}のワークスペース詳細",
+      "totalSessions": "セッション合計",
+      "threads": "{count}件のスレッド",
+      "path": "パス",
+      "loadingGit": "Gitメタデータを読み込み中…",
+      "repository": "リポジトリ",
+      "type": "種類",
+      "worktree": "ワークツリー",
+      "branch": "ブランチ",
+      "detachedAt": "{sha}でデタッチ",
+      "pinCapacityError": "ピン留めアイテムが多すぎます"
+    },
+    "brand": "Picotワークスペース",
+    "deleteSession": "削除",
+    "deleteSessionRunning": "実行中のセッションは削除できません",
+    "archiveDisabledActive": "アクティブなセッションはアーカイブできません",
+    "archiveDisabledStreaming": "ストリーミング中のセッションはアーカイブできません",
+    "archiveDisabledRunning": "実行中のセッションはアーカイブできません"
+  },
+  "updater": {
+    "update": "更新",
+    "openInSettings": "設定でアップデートを開く",
+    "unknown": "不明",
+    "checking": "確認中...",
+    "checkingForUpdates": "アップデートを確認中...",
+    "checkNow": "今すぐ確認",
+    "downloadInstall": "ダウンロードしてインストール",
+    "downloading": "ダウンロード中...",
+    "downloadingPct": "{pct}%ダウンロード中",
+    "downloadingMB": "{mb} MBダウンロード中...",
+    "installing": "インストール中...",
+    "retry": "再試行",
+    "updating": "更新中...",
+    "updateInProgress": "更新が進行中です",
+    "updateAvailableVersion": "アップデートが利用可能：{version}",
+    "lastCheckFailed": "最後のアップデート確認に失敗しました。設定で再試行してください。",
+    "latestVersion": "最新バージョンを使用しています。",
+    "latestStable": "最新の安定バージョンを使用しています。",
+    "updateInstalled": "アップデートがインストールされました。再起動中...",
+    "pleaseRestart": "更新を完了するにはPicotを再起動してください。",
+    "updateFailed": "更新に失敗しました：{message}",
+    "devBuild": "開発ビルド — アップデートはパッケージ版リリースでのみ確認されます。",
+    "prereleaseBuild": "プレリリースビルド（{version}）— このビルドでは自動更新が無効です。",
+    "autoUpdatesDesktopOnly": "自動更新はデスクトップアプリのみで利用可能です。",
+    "noManifest": "アップデートマニフェストがまだ公開されていません。最新のGitHubリリースに`latest.json`が含まれていないか、このプラットフォームのエントリがない可能性があります。docs/AUTO_UPDATER.mdを参照してください。",
+    "pubkeyError": "アップデーターの公開鍵が見つからないか、バンドル署名が無効です。docs/AUTO_UPDATER.mdを参照してください。",
+    "unknownError": "不明なアップデーターエラー",
+    "versionLabel": "Picot {version}",
+    "versionLabelFrom": "Picot {version}（{current}から）"
+  },
+  "voice": {
+    "voiceInput": "音声入力",
+    "stopRecording": "録音を停止"
+  },
+  "bootstrap": {
+    "title": "Picotを起動できませんでした",
+    "descriptionPre": "Picotに内蔵された",
+    "descriptionPost": "ランタイムの起動に失敗しました。",
+    "help": "これは通常、インストールが不完全または破損していることを意味します。Picotを再インストールすると通常は解決します。再インストールまたは再起動後に「起動を再試行」をクリックしてください。",
+    "retry": "起動を再試行",
+    "tauriUnavailable": "このウィンドウではTauriランタイムが利用できません。",
+    "starting": "Piランタイムを起動中...",
+    "startupFailed": "起動に失敗しました"
+  },
+  "settings": {
+    "title": "設定",
+    "general": "一般",
+    "extensions": "拡張機能",
+    "usage": "使用量",
+    "configuration": "プロバイダー",
+    "agentInbox": "エージェント受信箱",
+    "backToChat": "チャットに戻る",
+    "appearance": "外観",
+    "agent": "エージェント",
+    "updates": "アップデート",
+    "autoCompaction": "自動コンパクト",
+    "thinkingEffort": "思考の深さ",
+    "reasoningDepth": "推論の深さ",
+    "showThinking": "思考を表示",
+    "taskNotifications": "タスク完了通知",
+    "taskNotificationsDescription": "タスクの完了時にOS通知を表示します。",
+    "taskCompleteTitle": "タスクが完了しました",
+    "taskCompleteMessage": "タスクが完了しました。",
+    "piVersion": "Piバージョン",
+    "picotVersion": "Picotバージョン",
+    "checkForUpdates": "アップデートを確認",
+    "status": "ステータス",
+    "updateAvailable": "アップデートが利用可能",
+    "downloadInstall": "ダウンロードしてインストール",
+    "authentication": "プロバイダー",
+    "protection": "保護",
+    "requireLogin": "ログインを要求",
+    "agentConfigFile": "エージェント設定ファイル",
+    "providersFile": "プロバイダーファイル",
+    "llmProviders": "LLMプロバイダー",
+    "browseCommunityPackages": "コミュニティパッケージを閲覧",
+    "browseHelp": "Piエコシステムの拡張機能、スキル、テーマ、プロンプトを発見してください。ワンクリックでインストール。",
+    "costDashboard": "コストダッシュボード",
+    "loadingProviders": "プロバイダーを読み込み中…",
+    "thinkingLevel": "思考：{level}",
+    "thinkingCompact": "思考 {level}",
+    "off": "オフ",
+    "thinkingFaster": "速め",
+    "thinkingSmarter": "賢め",
+    "thinkingLevels": {
+      "off": "オフ",
+      "minimal": "最小",
+      "low": "低",
+      "medium": "中",
+      "high": "高"
+    },
+    "thinkingTitle": "思考の深さは推論の深度を制御します。クリックで切り替え。",
+    "thinkingAriaLabel": "思考の深さ：{level}。クリックして推論の深度を切り替え。",
+    "agentConfiguration": "エージェント設定",
+    "thinkingCycleTitle": "クリックで切り替え：オフ、最小、低、中、高",
+    "openSettings": "設定を開く",
+    "language": {
+      "title": "言語",
+      "description": "インターフェース言語を選択してください。システムデフォルトはOSに従います。",
+      "systemDefault": "システムデフォルト"
+    },
+    "auth": {
+      "helpPre": "キーはローカルに保存されます",
+      "helpPost": "（chmod 600）。GUIからの起動時はログインシェルのプロバイダー変数もインポートされます。",
+      "notConfigured": "未設定",
+      "configuredAuthJson": "設定済み (auth.json)",
+      "runtimeOverride": "ランタイムオーバーライド",
+      "customProvider": "カスタムプロバイダー",
+      "configured": "設定済み"
+    },
+    "models": {
+      "helpPre": "編集",
+      "helpPost1": "でカスタムプロバイダーを追加できます（Ollama、vLLM、LM Studio、OpenAI互換プロキシ、OpenRouterルーティングオーバーライドなど）。完全なスキーマは",
+      "docsLink": "models.jsonドキュメント",
+      "helpPost2": "を参照してください。変更はすぐに反映されます — 再起動不要。",
+      "replaceConfirm": "現在の内容をOllamaの例で置き換えますか？",
+      "docsOpenFailed": "ドキュメントリンクを開けませんでした"
+    },
+    "apiKeys": {
+      "noProviders": "既知のプロバイダーがありません。",
+      "summary": "{enabled}個有効 · {healthy}個正常 · {issues}個の問題",
+      "loadFailed": "プロバイダーの読み込みに失敗しました。",
+      "toggleModels": "{provider}モデルを切り替え",
+      "model": "モデル",
+      "selectAll": "{provider}のすべてのモデルを選択",
+      "deselectAll": "{provider}のすべてのモデルを選択解除",
+      "enableModel": "{model}を有効にする",
+      "noKeyAvailable": "利用可能なキーがありません",
+      "healthUnknown": "ヘルス不明",
+      "healthy": "正常",
+      "healthyLatency": "正常（{latency}ms）",
+      "failed": "失敗",
+      "failedWithMessage": "失敗：{message}",
+      "checkingHealth": "ヘルスを確認中",
+      "checkingHealthEllipsis": "ヘルスを確認中...",
+      "healthCheckFailed": "ヘルスチェックに失敗しました",
+      "checkHealth": "ヘルスを確認",
+      "editorTitle": "{provider} APIキー",
+      "pastePlaceholder": "APIキーを貼り付け…",
+      "keyCannotBeEmpty": "キーを空にすることはできません。",
+      "saveFailed": "キーの保存に失敗しました。",
+      "removeConfirm": "{provider}の保存済みAPIキーを削除しますか？",
+      "fromEnvironment": "環境変数から（{label}）",
+      "fromEnvironmentFallback": "環境変数から（環境変数）"
+    },
+    "skills": {
+      "title": "スキル",
+      "description": "発見されたスキルを管理します。変更は新しいセッションまたはPiの再起動後に適用されます。",
+      "rescan": "再スキャン",
+      "global": "グローバル",
+      "project": "現在のプロジェクト",
+      "loading": "スキルを読み込み中…",
+      "empty": "このスコープにスキルがありません。",
+      "projectUntrusted": "プロジェクトが信頼されるまでプロジェクトスキルは無効です。",
+      "allEnabled": "すべて有効",
+      "allDisabled": "すべて無効",
+      "enabledCount": "{enabled}/{total}個有効",
+      "source": "ソース",
+      "enableGroup": "グループ全体を切り替え",
+      "enableSkill": "スキルを切り替え",
+      "shadowedBy": "{name}によってシャドウされています",
+      "customRules": "カスタム包含/フィルタールール（読み取り専用 — settings.jsonを手動で編集してください）",
+      "savedRestartRequired": "保存しました。新しいセッションを開始するかPiを再起動してください。",
+      "loadFailed": "スキルの読み込みに失敗しました。",
+      "saveFailed": "スキル設定の保存に失敗しました。",
+      "rescanFailed": "スキルの再スキャンに失敗しました。",
+      "ambiguousRuleTarget": "このターゲットは複数のルートにマップされます。settings.jsonを手動で編集して変更してください。",
+      "scopeSummary": "{total}個のスキル · {groups}個のグループ"
+    }
+  },
+  "lanQr": {
+    "modalAriaLabel": "モバイルQRコード",
+    "title": "モバイルで開く",
+    "closeAriaLabel": "閉じる",
+    "generating": "QRコードを生成中…",
+    "qrAlt": "モバイルアクセス用QRコード",
+    "hint": "スマートフォンでスキャンして同じネットワーク上でPicotを開く",
+    "openLink": "リンクを開く"
+  },
+  "cost": {
+    "documentTitle": "Picot - 使用量",
+    "quickRange": "クイック範囲",
+    "noData": "データなし",
+    "noDataInSelectedRange": "選択した範囲にデータがありません。",
+    "overview": "概要",
+    "models": "モデル",
+    "toolCost": "ツールコスト",
+    "projects": "プロジェクト",
+    "sessions": "セッション",
+    "recentSessionsInRange": "範囲内の最近のセッション",
+    "stats": {
+      "totalCost": "合計コスト",
+      "sessions": "セッション",
+      "totalTokens": "合計トークン",
+      "activeDays": "アクティブ日数",
+      "currentStreak": "現在の連続日数",
+      "longestStreak": "最長連続日数",
+      "input": "入力",
+      "output": "出力",
+      "cacheRead": "キャッシュ読み取り",
+      "cacheWrite": "キャッシュ書き込み",
+      "toolCalls": "ツール呼び出し",
+      "messages": "メッセージ"
+    },
+    "table": {
+      "session": "セッション",
+      "model": "モデル",
+      "tokens": "トークン",
+      "tools": "ツール",
+      "cost": "コスト",
+      "date": "日付"
+    },
+    "modelTokens": "{input}入力 · {output}出力",
+    "projectSessions": "{count}件のセッション",
+    "toolSessions": "{count}件のセッション",
+    "trackedTools": "{count}件追跡中",
+    "noToolUsage": "選択した範囲にツール使用がありません。",
+    "noRecentSessions": "選択した範囲に最近のセッションがありません。",
+    "overviewNote": "戦争と平和の約{ratio}倍のトークンを使用しました。",
+    "activityCellTitle": "{date} · {tokens}トークン",
+    "chartTooltipTokens": "{label}：{tokens}トークン",
+    "chartTooltipCost": "{label}：{cost}",
+    "chartUnavailable": "この環境ではグラフが利用できません。",
+    "unknown": "不明",
+    "notAvailable": "N/A",
+    "untitled": "無題",
+    "daysShort": "{count}日",
+    "range": {
+      "7d": "7日",
+      "30d": "30日",
+      "90d": "90日"
+    },
+    "activity": {
+      "monday": "月",
+      "wednesday": "水",
+      "friday": "金",
+      "less": "少ない",
+      "more": "多い"
+    }
+  },
+  "misc": {
+    "new": "新規",
+    "contextWindow": "コンテキストウィンドウ",
+    "model": "モデル",
+    "compact": "コンパクト",
+    "compactTitle": "コンテキストが80%を超えています — トークンを節約するためコンパクトにしてください",
+    "qrUnavailable": "QRコードが利用できません"
+  },
+  "browse": {
+    "openExternalPrompt": "このリンクを新しいタブで開きますか："
+  },
+  "ephemeral": {
+    "placeholder": "何でも聞いてください…",
+    "send": "送信",
+    "abort": "中止",
+    "newChat": "新しいチャット",
+    "startingSideChat": "サイドチャットを開始中…",
+    "startingQuickChat": "クイックチャットを開始中…",
+    "tokens": "トークン",
+    "sideChat": "サイドチャット",
+    "sideChatLimit": "サイドチャットの上限に達しました",
+    "quickChat": "クイックチャット",
+    "minimize": "最小化",
+    "close": "閉じる",
+    "confirmDiscard": "この一時チャットは保存されません。破棄しますか？",
+    "confirmCloseSummary": "未保存のファイルと一時チャットを閉じて破棄しますか？",
+    "generating": "生成中",
+    "unread": "未読",
+    "resize": "クイックチャットのサイズを変更",
+    "statusReady": "準備完了",
+    "statusStreaming": "生成中",
+    "statusError": "エラー",
+    "statusDisconnected": "切断済み"
+  },
+  "fileMention": {
+    "listLabel": "ファイル"
+  },
+  "workspace": {
+    "focus": "フォーカスモードに入る",
+    "focusTitle": "ワークスペース",
+    "back": "戻る",
+    "newTask": "新しいタスク",
+    "showMore": "もっと表示"
+  },
+  "migrated": {
+    "bootstrap": {
+      "text": {
+        "picotStartup": "Picot Startup",
+        "pi": "pi"
+      }
+    },
+    "index": {
+      "alt": {
+        "picotLogo": "Picotロゴ"
+      },
+      "title": {
+        "newSession": "新しいセッション",
+        "settings": "設定",
+        "downloadAndInstallUpdate": "アップデートをダウンロードしてインストール",
+        "workspacePath": "ワークスペースパス",
+        "gitBranch": "Gitブランチ",
+        "chooseApp": "アプリを選択",
+        "files": "ファイル",
+        "close": "閉じる",
+        "minimal": "最小",
+        "low": "低",
+        "medium": "中",
+        "high": "高"
+      },
+      "ariaLabel": {
+        "toggleFileBrowser": "ファイルブラウザを切り替え",
+        "keyboardShortcuts": "キーボードショートカット",
+        "conversationNavigator": "会話ナビゲーター",
+        "openCommands": "コマンドを開く",
+        "thinkingEffortOffClickToCycleReasoning": "思考の深さ：オフ。クリックして推論の深度を切り替え。",
+        "receiveBetaUpdates": "ベータアップデートを受け取る",
+        "searchTasks": "タスクを検索",
+        "searchResults": "検索結果"
+      },
+      "placeholder": {
+        "typeAMessageOrUseToCall": "メッセージ… / でコマンド、@ でファイルを入力",
+        "providers": "{ \"providers\": { ... } }",
+        "searchTasksAndMessages": "タスクとメッセージを検索…"
+      },
+      "text": {
+        "update": "更新",
+        "new": "新規 ↓",
+        "thinkOff": "思考オフ",
+        "extensions": "拡張機能",
+        "skills": "スキル",
+        "faster": "速め",
+        "smarter": "賢め",
+        "betaUpdates": "ベータアップデート",
+        "receivePrereleasePicotBuilds": "プレリリース版Picotビルドを受け取る",
+        "piAgentAuthJson": "~/.pi/agent/auth.json",
+        "save": "保存",
+        "piAgentModelsJson": "~/.pi/agent/models.json",
+        "cancel": "キャンセル",
+        "openLink": "リンクを開く"
+      }
+    },
+    "app": {
+      "textcontent": {
+        "retrying": "再試行中…"
+      }
+    },
+    "components": {
+      "chatSettingsPanel": {
+        "textcontent": {
+          "checkingTelegram": "Telegramを確認中…"
+        },
+        "placeholder": {
+          "pasteANewTokenToReconnect": "再接続するには新しいトークンを貼り付けてください"
+        }
+      }
+    },
+    "native": {
+      "app": {
+        "textcontent": {
+          "openSettings": "設定を開く",
+          "noModelsMatchYourSearch": "検索に一致するモデルがありません。"
+        }
+      },
+      "composer": {
+        "composerSlashMenu": {
+          "textcontent": {
+            "noMatchingSkills": "一致するスキルがありません"
+          },
+          "ariaLabel": {
+            "skillSlashCommands": "スキルスラッシュコマンド"
+          }
+        }
+      },
+      "extensions": {
+        "inlineExtensionPrompt": {
+          "placeholder": {
+            "typeACustomAnswer": "カスタム回答を入力"
+          },
+          "textcontent": {
+            "noPreview": "プレビューなし"
+          },
+          "ariaLabel": {
+            "extensionQuestion": "拡張機能の質問"
+          }
+        }
+      },
+      "features": {
+        "rpivTodoMirror": {
+          "textcontent": {
+            "todos": "タスク"
+          }
+        }
+      },
+      "notifications": {
+        "notificationCenter": {
+          "ariaLabel": {
+            "dismissNotification": "通知を閉じる"
+          }
+        }
+      },
+      "session": {
+        "sessionSearchDialog": {
+          "textcontent": {
+            "searchingMessages": "メッセージを検索中..."
+          }
+        },
+        "sessionSidebar": {
+          "textcontent": {
+            "showMore": "もっと表示"
+          }
+        }
+      },
+      "settings": {
+        "settingsConfig": {
+          "textcontent": {
+            "loading": "読み込み中…"
+          }
+        }
+      }
+    },
+    "sidebar": {
+      "buildSessionItem": {
+        "textcontent": {
+          "tmux": "tmux"
+        }
+      },
+      "index": {
+        "textcontent": {
+          "pinned": "ピン留め"
+        }
+      }
+    },
+    "terminalPanel": {
+      "ariaLabel": {
+        "closeTerminalTab": "ターミナルタブを閉じる"
+      }
+    },
+    "ui": {
+      "imageLightbox": {
+        "ariaLabel": {
+          "imagePreview": "画像プレビュー"
+        }
+      },
+      "messageRenderer": {
+        "title": {
+          "forkSessionFromHere": "ここからセッションをフォーク"
+        }
+      },
+      "resizablePanel": {
+        "title": {
+          "resizePanel": "パネルのサイズを変更"
+        }
+      }
+    }
+  }
+}

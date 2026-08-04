@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 const publicDir = resolve(import.meta.dirname);
 const en = JSON.parse(readFileSync(resolve(publicDir, "locales/en.json"), "utf-8"));
 const zh = JSON.parse(readFileSync(resolve(publicDir, "locales/zh.json"), "utf-8"));
+const ja = JSON.parse(readFileSync(resolve(publicDir, "locales/ja.json"), "utf-8"));
+const es = JSON.parse(readFileSync(resolve(publicDir, "locales/es.json"), "utf-8"));
 
 // ── Flatten helpers ───────────────────────────────────────────────────
 
@@ -76,6 +78,8 @@ describe("locale key parity", () => {
     };
     checkValues(en);
     checkValues(zh);
+    checkValues(ja);
+    checkValues(es);
   });
 
   it("en and zh have identical {placeholder} sets for every shared key", () => {
