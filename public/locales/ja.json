@@ -791,5 +791,14 @@
         }
       }
     }
+  },
+  "native": {
+    "settings": {
+      "settingsConfig": {
+        "textcontent": {
+          "loading": "読み込み中…"
+        }
+      }
+    }
   }
 }

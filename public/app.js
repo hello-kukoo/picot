@@ -47,7 +47,7 @@ import {
 } from "./session/routing.js";
 import { anchorHistoryToBottom } from "./session/scroll-anchor.js";
 import { SessionUiStateStore } from "./session-ui-state.js";
-import { setupSettingsEditors } from "./settings/editors.js";
+import { LegacyConfigGateway } from "./settings/config-gateway-legacy.js";
 import { setupPackageSkillsTab } from "./settings/package-skills-tab.js";
 import {
   clearSettingsSaveMessage,
@@ -55,6 +55,7 @@ import {
   showSettingsSaveError,
   showSettingsSaveSuccess,
 } from "./settings/save-status.js";
+import { setupSettingsConfig } from "./settings/settings-config.js";
 import { setupSkillsInstallTab } from "./settings/skills-install-tab.js";
 import { setupSkillsPage } from "./settings/skills-page.js";
 import { setupSkillsTabShell } from "./settings/skills-tab-shell.js";
@@ -6071,8 +6072,9 @@ setupSettingsToggles({
   onSuperAgentEnabledChanged: handleSuperAgentEnabledChanged,
 });
 
-({ loadApiKeysPanel, loadInlineConfigEditor, loadInlineModelsEditor } = setupSettingsEditors({
-  rpcCommand,
+const configGateway = new LegacyConfigGateway();
+({ loadApiKeysPanel, loadInlineConfigEditor, loadInlineModelsEditor } = setupSettingsConfig({
+  configGateway,
   onModelConfigurationChanged: async () => {
     await fetchModelInfo();
     updateUI();
