@@ -1464,6 +1464,7 @@ export async function buildModelCatalog(
         provider: providerName,
         displayName: registry.getProviderDisplayName(providerName),
         configured: Boolean(status.configured),
+        authType: "api-key",
         source: status.source,
         label: status.label,
         models: allModels

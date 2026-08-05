@@ -52,11 +52,14 @@ describe("embedded server thinking levels", () => {
 describe("embedded server model listing", () => {
   it("uses the cached model registry when session context is unavailable", async () => {
     const models = [{ provider: "anthropic", id: "claude-sonnet-5" }];
+    const store = new ModelPreferencesStore(
+      join(mkdtempSync(join(tmpdir(), "picot-models-")), "prefs.json"),
+    );
     const registry = {
       getAvailable: async () => models,
     };
 
-    await expect(getAvailableModelsForRpc(null, registry)).resolves.toEqual(models);
+    await expect(getAvailableModelsForRpc(null, registry, store)).resolves.toEqual(models);
   });
 
   it("excludes hidden models from the available model RPC list", async () => {
@@ -114,6 +117,7 @@ describe("embedded server model listing", () => {
           provider: "anthropic",
           displayName: "Anthropic",
           configured: true,
+          authType: "api-key",
           source: "stored",
           label: undefined,
           models: [
@@ -136,6 +140,7 @@ describe("embedded server model listing", () => {
           provider: "openai",
           displayName: "openai",
           configured: false,
+          authType: "api-key",
           source: undefined,
           label: undefined,
           models: [

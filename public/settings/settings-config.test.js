@@ -167,6 +167,25 @@ describe("models provider editor", () => {
     ]);
     expect(saved.providers.local.models[0].id).toBe("qwen");
   });
+
+  test("does not overwrite an existing provider when adding a custom provider", async () => {
+    const editor = setupSettingsConfig({ configGateway: { call } });
+    await editor.loadInlineModelsEditor();
+
+    document.querySelector(".models-provider-add").click();
+    document.querySelector(".provider-picker-card").click();
+    const inputs = [...document.querySelectorAll(".provider-setup-form input")];
+    inputs[0].value = "gateway";
+    inputs[1].value = "https://replacement.example/v1";
+    inputs[3].value = "replacement-model";
+    document.querySelector(".provider-setup-actions .ui-button--primary").click();
+
+    await vi.waitFor(() => expect(document.querySelector(".provider-setup-dialog")).not.toBeNull());
+    expect(
+      call.mock.calls.filter(([operation]) => operation === "write_models_config"),
+    ).toHaveLength(0);
+    expect(document.querySelector(".api-key-editor-error, .provider-setup-dialog")).not.toBeNull();
+  });
 });
 
 test("keeps provider keyboard focus inside the clipped sidebar", () => {
