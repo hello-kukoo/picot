@@ -12,6 +12,7 @@ tags: [troubleshoot, diagnostics, logs, memory, version]
 按本 skill 收集诊断信息（不是修 bug 本身，是"先看清楚发生了什么"）。
 
 **职责边界：**
+
 - **本 skill 负责**：定位并展示日志、内存/进程状态、版本号，给出初步诊断方向
 - **本 skill 不做**：自动修复代码、发布新版本；如需修 bug，诊断完成后转 `diagnosing-bugs` skill 或直接改代码
 
@@ -30,17 +31,21 @@ Picot 有两个独立的版本号，都要报：
    - 源头：`src-tauri/tauri.conf.json` → `version`，与 `package.json`、`src-tauri/Cargo.toml` 保持一致
    - 运行中的 app：Settings 面板里 `#setting-app-version-value`（前端用 `window.__TAURI__.app.getVersion()` 读取），或直接问用户「设置 → 关于」里看到的号码
    - 命令行核对源码里的号码：
+
      ```bash
      grep '"version"' package.json src-tauri/tauri.conf.json
      grep '^version' src-tauri/Cargo.toml
      ```
+
 2. **内嵌 pi runtime 版本**（Picot 打包进去的 pi 二进制，与用户 `$PATH` 上装的 pi 无关）：
    - 源头：`scripts/pi-version.json`
    - 运行中的 app 通过 HTTP 探测（Picot 原生窗口跑着本地 HostServer）：
+
      ```bash
      curl -s http://127.0.0.1:<port>/health | jq
      # => { "status": "ok", "protocolVersion": 2, "piVersion": "...", "lanUrl": "..." }
      ```
+
      `<port>` 从窗口地址栏 / `PI_STUDIO` 相关环境变量或 `lsof -iTCP -sTCP:LISTEN | grep picot` 里找
    - 也可以直接读取已解压的二进制：`./src-tauri/resources/pi/pi --version`（仅在本地开发目录下有效，打包后的 `.app` 里路径是 `Picot.app/Contents/Resources/pi/pi`）
 
@@ -50,10 +55,11 @@ Picot 用 `tauri-plugin-log`（见 `src-tauri/src/main.rs`），默认双路输�
 
 - **打包后的 .app（生产环境）** — 日志文件在系统日志目录（bundle id `works.earendil.picot`）：
   - macOS: `~/Library/Logs/works.earendil.picot/Picot.log`
-  - Windows: `%APPDATA%\works.earendil.picot\logs\Picot.log`
+  - Windows: `%LOCALAPPDATA%\works.earendil.picot\logs\Picot.log`
   - Linux: `$XDG_DATA_HOME/works.earendil.picot/logs/Picot.log`（一般是 `~/.local/share/...`）
 
   快速查看最近报错：
+
   ```bash
   tail -n 200 ~/Library/Logs/works.earendil.picot/Picot.log
   grep -i "error\|panic\|failed" ~/Library/Logs/works.earendil.picot/Picot.log | tail -n 50
@@ -84,11 +90,13 @@ ps -eo pid,ppid,rss,pcpu,comm | grep -iE "picot|^.*pi$" | sort -k3 -n -r
 # macOS 图形化：Activity Monitor 搜 "Picot" 和 "pi"
 # Windows：Task Manager / Get-Process 按名字过滤
 ```
+
 ```powershell
 Get-Process | Where-Object { $_.ProcessName -match "picot|pi" } | Select-Object Id,ProcessName,WorkingSet64
 ```
 
 排查要点：
+
 - **多个 `pi --mode rpc` 常驻不退出** → 可能是窗口关闭后子进程未清理，看 `NativePiManager::stop_all` 有没有被触发（对照 `[picot-native] started ...` / 关闭日志）
 - **单个 `pi` 进程 RSS 持续增长** → 长会话上下文/内存泄漏，记录 PID + RSS 随时间变化，转 `diagnosing-bugs` 深挖
 - **`picot` 主进程本身内存高但子进程正常** → 多半是 WebView（前端渲染大量消息/图片）问题，看 `public/app.js`（主编排）与 `public/ui/`（message-renderer / image-lightbox 等独立模块）相关代码

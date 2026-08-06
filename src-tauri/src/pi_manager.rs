@@ -1576,12 +1576,21 @@ fn resolve_pi_agent_root() -> Result<PathBuf, String> {
 
     std::fs::create_dir_all(&root)
         .map_err(|error| format!("failed to create Pi agent root {}: {error}", root.display()))?;
-    root.canonicalize().map_err(|error| {
+    let canonicalized = root.canonicalize().map_err(|error| {
         format!(
             "failed to canonicalize Pi agent root {}: {error}",
             root.display()
         )
-    })
+    })?;
+    // `canonicalize` on Windows returns a `\\?\`-prefixed extended-length
+    // path. Bun (the embedded pi runtime) cannot resolve modules from such a
+    // path, so every package extension fails with
+    // `Cannot find module '\\?\C:\...\node_modules\<pkg>\dist\index.js'`,
+    // which presents as a health-check timeout with no window. Strip the
+    // prefix so pi receives the plain `C:\...` form, matching macOS/Linux.
+    Ok(PathBuf::from(strip_verbatim_prefix(
+        &canonicalized.to_string_lossy(),
+    )))
 }
 
 /// Copy caller-provided environment markers while keeping the agent root under
@@ -2029,6 +2038,29 @@ No packages installed.";
     }
 
     #[test]
+    fn strip_verbatim_prefix_removes_extended_length_prefix() {
+        // Windows `std::fs::canonicalize` returns `\\?\`-prefixed paths.
+        // Bun (the embedded pi runtime) cannot resolve modules from such
+        // paths, so every package extension fails to load with
+        // "Cannot find module '\\?\C:\...\dist\index.js'". The prefix
+        // must be stripped before the path reaches pi.
+        assert_eq!(
+            strip_verbatim_prefix(r"\\?\C:\Users\WIN10\.pi\agent"),
+            r"C:\Users\WIN10\.pi\agent"
+        );
+        assert_eq!(
+            strip_verbatim_prefix(r"\\?\UNC\server\share"),
+            r"\\server\share"
+        );
+        // Plain paths are returned unchanged.
+        assert_eq!(strip_verbatim_prefix(r"C:\Users\WIN10"), r"C:\Users\WIN10");
+        assert_eq!(
+            strip_verbatim_prefix("/home/user/.pi/agent"),
+            "/home/user/.pi/agent"
+        );
+    }
+
+    #[test]
     fn resolve_pi_agent_root_prefers_explicit_non_empty_env() {
         let _lock = with_env_lock();
         let temp = tempfile::tempdir().expect("create temp root");
@@ -2038,7 +2070,14 @@ No packages installed.";
 
         let root = resolve_pi_agent_root().expect("resolve explicit agent root");
 
-        assert_eq!(root, explicit.canonicalize().unwrap());
+        // Compare via plain-form string rather than the raw canonicalize()
+        // result, because on Windows canonicalize() yields a `\\?\`-prefixed
+        // path that resolve_pi_agent_root intentionally strips (Bun cannot
+        // resolve modules from such a path).
+        assert_eq!(
+            root.to_string_lossy(),
+            strip_verbatim_prefix(&explicit.canonicalize().unwrap().to_string_lossy())
+        );
         assert!(root.is_dir());
         std::env::remove_var("PI_CODING_AGENT_DIR");
         if let Some(value) = old_agent {
