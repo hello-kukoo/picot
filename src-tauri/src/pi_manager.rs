@@ -9,7 +9,7 @@ use std::io::{BufRead, BufReader, Write};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, Command, Stdio};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc, Mutex, OnceLock,
@@ -197,6 +197,28 @@ fn configure_child_process_for_windows(command: &mut Command) {
 
 #[cfg(not(target_os = "windows"))]
 fn configure_child_process_for_windows(_command: &mut Command) {}
+
+fn format_pi_stderr_log_line(port: u16, line: &str) -> String {
+    format!("[pi-desktop] pi stderr port={port}: {line}")
+}
+
+/// Forward Pi's stderr into Picot's log so release builds retain startup errors.
+fn spawn_pi_stderr_logger(stderr: ChildStderr, port: u16) {
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines() {
+            match line {
+                Ok(line) if !line.is_empty() => {
+                    log::error!("{}", format_pi_stderr_log_line(port, &line));
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    log::warn!("[pi-desktop] failed reading pi stderr port={port}: {error}");
+                    break;
+                }
+            }
+        }
+    });
+}
 
 /// Build an augmented PATH for child processes.
 ///
@@ -851,10 +873,10 @@ impl PiManager {
         child
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            // Inherit stderr so pi's startup/runtime errors are visible in the same
-            // terminal running `bun run dev` — critical for diagnosing failures of
-            // new_session / open_workspace that would otherwise be silent.
-            .stderr(Stdio::inherit());
+            // Pipe stderr into Picot's logger. Release Windows builds use the
+            // windows subsystem and have no inherited console, so inheriting stderr
+            // would discard the startup failure that explains a health-check timeout.
+            .stderr(Stdio::piped());
 
         let spawn_started_at = Instant::now();
         let mut child = child.spawn().map_err(|e| {
@@ -866,6 +888,15 @@ impl PiManager {
                 e,
             )
         })?;
+        if let Some(stderr) = child.stderr.take() {
+            spawn_pi_stderr_logger(stderr, spec.port);
+        } else {
+            log::warn!(
+                "[pi-desktop] pi stderr pipe unavailable: port={} pid={}",
+                spec.port,
+                child.id()
+            );
+        }
         let pid = child.id();
         let identity = self.next_process_identity.fetch_add(1, Ordering::Relaxed);
         log::info!(
@@ -1754,6 +1785,14 @@ pub async fn wait_for_endpoint(port: u16, path: &str, timeout_secs: u64) -> Resu
 mod tests {
     use super::*;
     use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
+
+    #[test]
+    fn formats_pi_stderr_with_port_context() {
+        assert_eq!(
+            format_pi_stderr_log_line(47821, "failed to load extension"),
+            "[pi-desktop] pi stderr port=47821: failed to load extension"
+        );
+    }
 
     #[test]
     fn super_agent_workspace_detection_uses_canonical_paths() {

@@ -556,12 +556,12 @@ Tauri command handler（`new_session_core`、`switch_session_core`、
    （`ws://127.0.0.1:{port}/ws` 失败时每 `750 ms` 重连）。
 5. `wait_for_pi_health(port, 30)` —— 轮询 `GET /api/health`，最多 30 秒。
    轮询使用 `.no_proxy()` 构建的 `reqwest::Client`，确保 loopback 请求
-   绝不经由系统 HTTP 代理（见下方不变量 _loopback HTTP 必须绕过系统代理_）。
+   绝不经由系统代理（见下方不变量 _loopback HTTP 必须绕过系统代理_）。
 6. **成功：** `open_workspace_window(port, broker.url())` 创建 WebView；
    WebView 从 URL query string 读 `brokerWs`，然后连上 broker WebSocket。
-7. **失败：** `broker.unregister_port(port)`，**不创建**窗口。
-   只有当第 3 步派生 pi 本身就失败时（例如 binary 缺失），才会开
-   `bootstrap` 错误窗口。
+7. **失败：** 记录错误、终止未就绪的 Pi 进程，并打开 `bootstrap` 错误窗口。
+   Pi 的 stderr 通过 pipe 逐行转入 Picot 日志（带有端口上下文），因此
+   release 版 Windows 应用没有继承控制台时仍保留扩展加载/启动失败原因。
 
 `on_window_event` 处理器在窗口销毁时杀掉该工作区的专用 session
 进程以及主 pi 进程。`RunEvent::Exit` 触发 `manager.kill_all()` 走
@@ -577,7 +577,7 @@ Tauri command handler（`new_session_core`、`switch_session_core`、
 | Label              | 构造者                  | URL                                                               | 用途                                                |
 | ------------------ | ----------------------- | ----------------------------------------------------------------- | --------------------------------------------------- |
 | `workspace-{port}` | `open_workspace_window` | `http://localhost:{port}/?brokerWs=ws://localhost:{broker}/ui-ws` | 主聊天 UI。每个工作区一个。                         |
-| `bootstrap`        | `open_bootstrap_window` | `bootstrap.html?startupError=...`                                 | 错误兜底窗口。仅当 `manager.spawn` 派生失败时打开。 |
+| `bootstrap`        | `open_bootstrap_window` | `bootstrap.html?startupError=...`                                 | 错误兜底窗口。Pi 派生或健康检查失败时打开。 |
 
 同一工作区下开新 session **不会**开新 OS 窗口；它派生一个无头
 专用 pi 进程，再把现有 WebView 导航到新端口。之前在跑的 pi 进程

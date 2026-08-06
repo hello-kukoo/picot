@@ -785,6 +785,12 @@ fn open_native_workspace_window(
     Ok(())
 }
 
+fn startup_health_failure_message(error: &str) -> String {
+    format!(
+        "The embedded Pi did not become healthy.\n\n{error}\n\nCheck the Picot log for lines prefixed with '[pi-desktop] pi stderr'."
+    )
+}
+
 fn open_bootstrap_window(app: &AppHandle, startup_error: &str) -> Result<(), String> {
     let label = "bootstrap";
     let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))
@@ -2905,7 +2911,17 @@ fn main() {
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = wait_for_pi_health(initial_port, 30).await {
-                        log::error!("Pi failed to start: {}", e);
+                        let message = startup_health_failure_message(&e);
+                        log::error!("Pi failed to start: {}", message);
+                        if let Some(manager) = app_handle.try_state::<PiManagerState>() {
+                            manager.kill(initial_port);
+                        }
+                        if let Err(window_error) = open_bootstrap_window(&app_handle, &message) {
+                            log::error!(
+                                "Failed to open startup error window after Pi health failure: {}",
+                                window_error
+                            );
+                        }
                     } else if let Some(broker) = app_handle.try_state::<BrokerWsState>() {
                         // Register only after the embedded server owns the port;
                         // otherwise BrokerWs logs expected connection-refused
@@ -2966,7 +2982,17 @@ fn main() {
 
 #[cfg(test)]
 mod startup_tests {
-    use super::select_fresh_startup_target;
+    use super::{select_fresh_startup_target, startup_health_failure_message};
+
+    #[test]
+    fn startup_health_failure_message_explains_where_to_find_pi_logs() {
+        let message =
+            startup_health_failure_message("Timed out waiting for /api/health on port 47821");
+
+        assert!(message.contains("Timed out waiting for /api/health on port 47821"));
+        assert!(message.contains("Picot log"));
+        assert!(message.contains("embedded Pi"));
+    }
 
     #[test]
     fn keeps_the_latest_workspace_but_never_resumes_its_session_on_app_start() {
