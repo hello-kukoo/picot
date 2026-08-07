@@ -1,5 +1,5 @@
 // ABOUTME: Renders the Discovered tab from the server-authoritative Pi skill inventory.
-// ABOUTME: Owns Claude root enablement and existing skill toggle/tree behavior.
+// ABOUTME: Owns skill toggle/tree behavior; adding directories is handled by the Install tab.
 
 import { onLocaleChange, t } from "../i18n.js";
 import { createIcon } from "../icons.js";
@@ -118,14 +118,6 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
   const pendingTargets = new Set();
   let loadSeq = 0;
   let errorMessage = null;
-  let confirmingClaudeRoot = null;
-  let addingClaudeRoot = false;
-  let claudeRootOpenerSourceRoot = null;
-  /** Stable resolver for the root's Add button after a render rebuilds the DOM. */
-  const claudeRootOpener = () =>
-    [...container.querySelectorAll("[data-skill-root]")]
-      .find((root) => root.dataset.skillRoot === claudeRootOpenerSourceRoot)
-      ?.querySelector(".skills-add-root") ?? null;
   const unsubscribeLocale = onLocaleChange(() => render());
 
   function renderLoading() {
@@ -181,55 +173,6 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
     if (hasActivated) return;
     hasActivated = true;
     await load(scope);
-  }
-
-  function beginClaudeRootConfirmation(root) {
-    claudeRootOpenerSourceRoot = root.sourceRoot;
-    confirmingClaudeRoot = root;
-    render();
-  }
-
-  function cancelClaudeRootConfirmation() {
-    if (addingClaudeRoot) return;
-    confirmingClaudeRoot = null;
-    render();
-  }
-
-  async function addClaudeRoot(root) {
-    if (addingClaudeRoot) return;
-    addingClaudeRoot = true;
-    render();
-    const mutationScope = scope;
-    const mutationSeq = loadSeq;
-    let response;
-    try {
-      response = await rpcCommand({
-        type: "skill_add_root",
-        scope: mutationScope,
-        kind: root.rootKind,
-      });
-    } catch (error) {
-      showError?.(error instanceof Error ? error.message : t("settings.skills.addRootFailed"));
-      addingClaudeRoot = false;
-      render();
-      return;
-    }
-    if (!response?.success) {
-      showError?.(response?.error || t("settings.skills.addRootFailed"));
-      addingClaudeRoot = false;
-      render();
-      return;
-    }
-    if (scope !== mutationScope || loadSeq !== mutationSeq) {
-      addingClaudeRoot = false;
-      if (scope === mutationScope) void load(scope);
-      return;
-    }
-    inventory = response.data?.inventory ?? response.data;
-    confirmingClaudeRoot = null;
-    addingClaudeRoot = false;
-    showSuccess?.(t("settings.skills.rootAddedRestartRequired"));
-    render();
   }
 
   async function setEnabled(target, enabled) {
@@ -327,9 +270,6 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
 
   function renderRoot(root, rootDisabled) {
     const rootBasename = root.sourceRoot.split("/").pop() || root.sourceRoot;
-    const isClaude = root.rootKind === "claude-global" || root.rootKind === "claude-project";
-    const canAddRoot =
-      isClaude && !root.configuredForPi && !(root.scope === "project" && rootDisabled);
     return el("section", { class: "skills-root", dataset: { skillRoot: root.sourceRoot } }, [
       el("div", { class: "skills-root-header" }, [
         el("div", {}, [
@@ -339,14 +279,6 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
             text: t(`settings.skills.${root.scope === "user" ? "global" : "project"}`),
           }),
         ]),
-        canAddRoot
-          ? el("button", {
-              type: "button",
-              class: "skills-add-root",
-              text: t("settings.skills.addRoot"),
-              onClick: () => beginClaudeRootConfirmation(root),
-            })
-          : null,
       ]),
       el(
         "div",
@@ -540,48 +472,6 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
       ]),
     );
 
-    if (confirmingClaudeRoot) {
-      const dialogId = "skills-claude-root-confirm";
-      fragment.appendChild(
-        el(
-          "div",
-          {
-            class: "skills-add-root-confirmation",
-            role: "alertdialog",
-            "aria-modal": "true",
-            "aria-labelledby": `${dialogId}-title`,
-            "aria-describedby": `${dialogId}-desc`,
-          },
-          [
-            el("h4", {
-              id: `${dialogId}-title`,
-              class: "skills-add-root-confirmation-title",
-              text: t("settings.skills.addRootConfirmation"),
-            }),
-            el("div", { id: `${dialogId}-desc` }, [
-              el("code", { text: confirmingClaudeRoot.sourceRoot }),
-              el("code", { text: confirmingClaudeRoot.settingsPath || "" }),
-              el("code", { text: confirmingClaudeRoot.recommendedEntry || "" }),
-            ]),
-            el("button", {
-              type: "button",
-              class: "skills-add-root-confirm",
-              text: t("settings.skills.addRootConfirm"),
-              disabled: addingClaudeRoot ? "disabled" : undefined,
-              onClick: () => void addClaudeRoot(confirmingClaudeRoot),
-            }),
-            el("button", {
-              type: "button",
-              class: "skills-add-root-cancel",
-              text: t("settings.skills.addRootCancel"),
-              disabled: addingClaudeRoot ? "disabled" : undefined,
-              onClick: cancelClaudeRootConfirmation,
-            }),
-          ],
-        ),
-      );
-    }
-
     if (inventory.customRules && inventory.customRules.length > 0) {
       fragment.appendChild(
         el("div", { class: "skills-custom-rules" }, [
@@ -605,17 +495,7 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
 
     container.replaceChildren(fragment);
     container.scrollTop = scrollTop;
-    if (confirmingClaudeRoot) {
-      manageModalDialog(container.querySelector(".skills-add-root-confirmation"), {
-        initialFocus: container.querySelector(".skills-add-root-confirm"),
-        restoreFocusTo: claudeRootOpener,
-        inertRoot: document.body,
-        owner: "skills-discovered",
-        onCancel: cancelClaudeRootConfirmation,
-      });
-    } else {
-      manageModalDialog(null, { owner: "skills-discovered" });
-    }
+    manageModalDialog(null, { owner: "skills-discovered" });
   }
 
   function destroy() {

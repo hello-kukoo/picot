@@ -598,12 +598,6 @@
       "loadFailed": "Failed to load skills.",
       "saveFailed": "Failed to save skill settings.",
       "rescanFailed": "Failed to rescan skills.",
-      "addRoot": "Enable in Pi",
-      "addRootConfirmation": "Enable this Claude skills directory in Pi? The displayed settings entry applies after a new session or Pi restart.",
-      "addRootConfirm": "Enable",
-      "addRootCancel": "Cancel",
-      "addRootFailed": "Failed to enable this skills root.",
-      "rootAddedRestartRequired": "Enabled. Start a new session or restart Pi for the change to take effect.",
       "ambiguousRuleTarget": "This target maps to multiple roots; edit settings.json manually to change it.",
       "scopeSummary": "{total} skills · {groups} groups"
     },

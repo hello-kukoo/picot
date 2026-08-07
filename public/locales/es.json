@@ -596,15 +596,9 @@
       "rescanFailed": "Error al reescanear habilidades.",
       "ambiguousRuleTarget": "Este objetivo corresponde a múltiples raíces; edita settings.json manualmente para cambiarlo.",
       "scopeSummary": "{total} habilidades · {groups} grupos",
-      "addRoot": "Habilitar en Pi",
-      "addRootCancel": "Cancelar",
-      "addRootConfirm": "Habilitar",
-      "addRootConfirmation": "¿Habilitar este directorio de habilidades de Claude en Pi? La entrada de configuración mostrada se aplica después de una nueva sesión o reinicio de Pi.",
-      "addRootFailed": "No se pudo habilitar esta raíz de habilidades.",
       "discovered": "Descubiertas",
       "install": "Instalar",
       "packages": "Paquetes",
-      "rootAddedRestartRequired": "Habilitado. Inicia una nueva sesión o reinicia Pi para que el cambio surta efecto.",
       "sectionsAriaLabel": "Secciones de habilidades"
     },
     "installSkills": {

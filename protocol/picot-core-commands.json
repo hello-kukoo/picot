@@ -31,7 +31,6 @@
     "list_skills": "allowed",
     "list_skill_inventory": "desktopOwnerOnly",
     "set_skill_enabled": "desktopOwnerOnly",
-    "skill_add_root": "desktopOwnerOnly",
     "list_package_skill_inventory": "desktopOwnerOnly",
     "get_fork_messages": "deniedSessionLifecycle",
     "list_model_catalog": "allowed",

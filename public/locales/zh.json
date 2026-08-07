@@ -598,12 +598,6 @@
       "loadFailed": "加载技能失败。",
       "saveFailed": "保存技能设置失败。",
       "rescanFailed": "重新扫描技能失败。",
-      "addRoot": "启用到 Pi",
-      "addRootConfirmation": "要在 Pi 中启用此 Claude 技能目录吗？显示的设置项会在新建会话或重启 Pi 后生效。",
-      "addRootConfirm": "启用",
-      "addRootCancel": "取消",
-      "addRootFailed": "启用技能目录失败。",
-      "rootAddedRestartRequired": "已启用。新建会话或重启 Pi 后生效。",
       "ambiguousRuleTarget": "该目标同时命中多个根；请手动编辑 settings.json 来修改。",
       "scopeSummary": "{total} 个 skill · {groups} 个目录"
     },

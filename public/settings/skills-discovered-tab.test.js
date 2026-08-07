@@ -1,5 +1,5 @@
 // ABOUTME: Verifies the focused Discovered Skills tab keeps inventory ownership behavior.
-// ABOUTME: Covers activation, Claude root enablement payloads, and trust state exposure.
+// ABOUTME: Covers activation and trust state exposure.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -15,10 +15,9 @@ function inventory(overrides = {}) {
     trusted: true,
     roots: [
       {
-        sourceRoot: "/home/.claude/skills",
+        sourceRoot: "/home/.pi/agent/skills",
         scope: "user",
-        rootKind: "claude-global",
-        configuredForPi: false,
+        rootKind: "pi",
         children: [
           { kind: "skill", id: "skill", name: "review", description: "review", status: "enabled" },
         ],
@@ -44,53 +43,13 @@ describe("Discovered Skills tab", () => {
     expect(tab.isProjectTrusted()).toBe(true);
   });
 
-  it("cancels Claude root confirmation without mutation", async () => {
+  it("renders roots without a Claude-specific add-root affordance", async () => {
     const rpcCommand = vi.fn().mockResolvedValue({ success: true, data: inventory() });
     const tab = setupDiscoveredSkillsTab({ container, rpcCommand });
     await tab.activate();
-    container.querySelector(".skills-add-root").click();
-    container.querySelector(".skills-add-root-cancel").click();
-    expect(rpcCommand).toHaveBeenCalledTimes(1);
-  });
-
-  it("sends only opaque Claude scope and kind to enable the root", async () => {
-    const rpcCommand = vi
-      .fn()
-      .mockResolvedValueOnce({ success: true, data: inventory() })
-      .mockResolvedValueOnce({ success: true, data: { inventory: inventory({ roots: [] }) } });
-    const tab = setupDiscoveredSkillsTab({ container, rpcCommand });
-    await tab.activate();
-    container.querySelector(".skills-add-root").click();
-    expect(rpcCommand).toHaveBeenCalledTimes(1);
-    container.querySelector(".skills-add-root-confirm").click();
-    await vi.waitFor(() => expect(rpcCommand).toHaveBeenCalledTimes(2));
-    expect(rpcCommand).toHaveBeenLastCalledWith({
-      type: "skill_add_root",
-      scope: "global",
-      kind: "claude-global",
-    });
-  });
-
-  it("allows only one Claude root mutation while confirmation is submitting", async () => {
-    let resolveMutation;
-    const rpcCommand = vi
-      .fn()
-      .mockResolvedValueOnce({ success: true, data: inventory() })
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveMutation = resolve;
-          }),
-      );
-    const tab = setupDiscoveredSkillsTab({ container, rpcCommand });
-    await tab.activate();
-    container.querySelector(".skills-add-root").click();
-    const confirm = container.querySelector(".skills-add-root-confirm");
-    confirm.click();
-    confirm.click();
-    expect(rpcCommand).toHaveBeenCalledTimes(2);
-    expect(container.querySelector(".skills-add-root-confirm").disabled).toBe(true);
-    resolveMutation({ success: true, data: { inventory: inventory({ roots: [] }) } });
-    await vi.waitFor(() => expect(container.querySelector(".skills-add-root-confirm")).toBeNull());
+    // The Discovered tab no longer offers any "add root" button; adding
+    // directories is handled by the Install tab.
+    expect(container.querySelector(".skills-add-root")).toBeNull();
+    expect(container.querySelector(".skills-add-root-confirmation")).toBeNull();
   });
 });

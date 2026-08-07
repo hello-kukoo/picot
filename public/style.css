@@ -8597,7 +8597,6 @@ body.file-preview-resizing {
   display: none;
 }
 
-.skills-add-root-confirmation,
 .skills-install-header,
 .skills-install-scope,
 .skills-install-node,
@@ -8643,9 +8642,7 @@ body.file-preview-resizing {
   margin-left: 1rem;
 }
 
-.skills-install-confirm,
-.skills-add-root-confirm,
-.skills-add-root-cancel {
+.skills-install-confirm {
   margin-top: 0.75rem;
 }
 

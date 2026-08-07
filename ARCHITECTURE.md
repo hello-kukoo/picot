@@ -302,13 +302,11 @@ Settings → Skills 固定为 **Discovered / Install / Packages**。每个页签
 自己的 scope、load sequence 和本地展开/选择状态；`app.js` 只注入依赖并在首次
 选择时 lazy activate，不能把任一页签的数据或请求渲染到另一页签。
 
-- **Discovered**：`skill-discovery.ts` 收集 Pi、`.agents` 与仅限
-  `.claude/skills` 的候选；发现始终只读。`skill-inventory.ts` 使用 Pi 规则基准
-  计算状态。Claude root 只有通过 `skill_add_root {scope,kind}` 的显式确认才追加
-  `../../.claude/skills`（global）或 `../.claude/skills`（project）；等价 plain
-  path 的 canonical comparison 保持原始文本/顺序，glob 与 `!`/`+`/`-` 不会被当作
-  已配置 root。项目 Claude root 和所有项目 settings 写入都要求 retained Pi
-  context 信任项目。
+- **Discovered**：`skill-discovery.ts` 收集 Pi 与 `.agents` 的候选；发现始终只读。
+  `skill-inventory.ts` 使用 Pi 规则基准计算状态。Discovered 页面只反映 Pi 的默认
+  发现 + `settings.json` 已配置的 `skills[]` 条目，与 composer `/` 菜单同一份数据。
+  不提供任何“添加目录”入口——用户想加入任意目录（含 `.claude/skills`）的 skill
+  统一走 Install 页签。项目 settings 写入都要求 retained Pi context 信任项目。
 - **Packages**：`package-skill-inventory.ts` 仅从 global 或 trusted-project
   `settings.json.packages[]` 推导 package roots、Pi-compatible identity、
   `autoload:false` inheritance 和 manifest candidates。它绝不泛扫 npm/git/extensions，
@@ -348,10 +346,6 @@ Settings → Skills 固定为 **Discovered / Install / Packages**。每个页签
   fallback 到 `<packageRoot>/skills/`；`Array.isArray(pi.skills)`（含空数组）严格
   按清单处理（空数组 = 零 candidate）；非数组类型记录诊断后保守 fallback。这与 Pi
   `collectDefaultResources` 的 truthiness 语义一致。
-- **Claude root 幂等用 canonical（realpath）比较。** `detectConfiguredForPi` 与
-  `mutateClaudeSkillRoot` 判断既有 plain entry 是否指向同一 root 时，必须对双方
-  都走 `canonicalizeExistingPath`（realpath 成功解析 symlink，失败回退到 lexical
-  resolve）；否则不同 symlink spelling 会被误判为未配置而重复写入。
 
 ### `public/` —— vanilla-JS WebView 前端
 

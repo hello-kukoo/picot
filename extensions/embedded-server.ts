@@ -96,6 +96,12 @@ import {
 import { isLoopbackAddress, isLoopbackOnlyApiRequest } from "./request-access.ts";
 import { buildProjectSearchMatch } from "./session-search";
 import {
+  type ExpansionCommand,
+  type ExpansionFileReader,
+  type ExpansionResult,
+  expandSkillOrTemplate,
+} from "./skill-command-expansion.ts";
+import {
   type InstallCandidateSelection,
   type InstallHostSource,
   installSkillLinks,
@@ -103,7 +109,6 @@ import {
 } from "./skill-installation.ts";
 import {
   buildSkillInventory,
-  mutateClaudeSkillRoot,
   mutateSkillEnabled,
   readSettingsObject,
   type SkillScope,
@@ -823,6 +828,20 @@ export function normalizeSkillCommands(commands: SlashCommandLike[]): SkillComma
     }));
 }
 
+/**
+ * Resolve the text that the prompt handler is allowed to send. Keeping this
+ * boundary separate makes the send-before-expand invariant directly testable.
+ */
+export function preparePromptMessage(
+  message: string,
+  commands: ExpansionCommand[],
+  readFile: ExpansionFileReader,
+): { kind: "ready"; text: string } | { kind: "error"; message: string } {
+  const result: ExpansionResult = expandSkillOrTemplate(message, commands, readFile);
+  if (result.kind === "error") return result;
+  return { kind: "ready", text: result.kind === "expanded" ? result.text : message };
+}
+
 export type SkillInventoryMutation = {
   scope: SkillScope;
   target: SkillTarget;
@@ -879,37 +898,6 @@ export function parsePackageSkillInventoryRequest(command: unknown): {
     throw new Error("Invalid package skill inventory request");
   }
   return { scope: c.scope };
-}
-
-/**
- * Parse a `skill_add_root` request payload. Accepts only the two
- * `(global,claude-global)` and `(project,claude-project)` pairs and rejects any
- * extra path/settingsPath/cwd/owner/port fields so a browser cannot inject
- * filesystem authority into this host-only mutation.
- */
-export function parseSkillAddRootRequest(command: unknown): {
-  scope: SkillScope;
-  kind: "claude-global" | "claude-project";
-} {
-  if (typeof command !== "object" || command === null || Array.isArray(command)) {
-    throw new Error("Invalid skill add root request");
-  }
-  const c = command as Record<string, unknown>;
-  const knownKeys = new Set(["type", "scope", "kind"]);
-  for (const key of Object.keys(c)) {
-    if (!knownKeys.has(key)) {
-      throw new Error("Invalid skill add root request");
-    }
-  }
-  const scope = c.scope;
-  const kind = c.kind;
-  if (scope === "global" && kind === "claude-global") {
-    return { scope, kind };
-  }
-  if (scope === "project" && kind === "claude-project") {
-    return { scope, kind };
-  }
-  throw new Error("Invalid skill add root request");
 }
 
 /**
@@ -2284,26 +2272,6 @@ export default function (pi: ExtensionAPI) {
           }
           break;
         }
-        case "skill_add_root": {
-          try {
-            assertNonEphemeralSkillCommand("skill_add_root");
-            const req = parseSkillAddRootRequest(command);
-            const result = await mutateClaudeSkillRoot({
-              scope: req.scope,
-              cwd: ctx?.cwd ?? process.cwd(),
-              agentDir: PI_AGENT_ROOT,
-              projectTrusted: ctx?.isProjectTrusted() ?? false,
-              kind: req.kind,
-            });
-            sendTo(ws, success("skill_add_root", result));
-          } catch (e) {
-            sendTo(
-              ws,
-              error("skill_add_root", e instanceof Error ? e.message : "failed to add skill root"),
-            );
-          }
-          break;
-        }
         case "list_skill_inventory": {
           const a = requireApi("list_skill_inventory");
           if (!a) break;
@@ -2361,12 +2329,27 @@ export default function (pi: ExtensionAPI) {
         case "prompt": {
           const a = requireApi("prompt");
           if (!a) break;
+          // Expand `/skill:<name>` and `/<template>` commands before sending.
+          // Pi's sendUserMessage() intentionally skips slash/skill/template
+          // expansion (it calls prompt() with expandPromptTemplates:false), so
+          // a literal `/skill:foo` would reach the model as plain text and the
+          // model would improvise (e.g. bash+find). Here we reproduce Pi TUI's
+          // _expandSkillCommand / expandPromptTemplate on the success path.
+          // See docs/superpowers/specs/2026-08-07-composer-skill-discovery-and-execution-fixes.md §3.
+          const prepared = preparePromptMessage(command.message, a.getCommands(), (p) =>
+            fs.readFileSync(p, "utf-8"),
+          );
+          if (prepared.kind === "error") {
+            sendTo(ws, error("prompt", prepared.message));
+            break;
+          }
+          const messageText = prepared.text;
           if (ctx && !ctx.isIdle()) {
             promptBehavior = command.streamingBehavior || "steer";
             if (promptBehavior === "steer") {
-              a.sendUserMessage(command.message, { deliverAs: "steer" });
+              a.sendUserMessage(messageText, { deliverAs: "steer" });
             } else {
-              a.sendUserMessage(command.message, { deliverAs: "followUp" });
+              a.sendUserMessage(messageText, { deliverAs: "followUp" });
             }
           } else {
             // Build content with optional images
@@ -2376,7 +2359,7 @@ export default function (pi: ExtensionAPI) {
               const content: any[] = [
                 {
                   type: "text",
-                  text: command.message || "(see attached image)",
+                  text: messageText || "(see attached image)",
                 },
               ];
               for (const img of command.images) {
@@ -2413,9 +2396,9 @@ export default function (pi: ExtensionAPI) {
               if (promptHasImages) {
                 a.sendUserMessage(content);
               } else {
-                a.sendUserMessage(command.message);
+                a.sendUserMessage(messageText);
               }
-            } else a.sendUserMessage(command.message);
+            } else a.sendUserMessage(messageText);
           }
           sendTo(ws, success("prompt"));
           break;

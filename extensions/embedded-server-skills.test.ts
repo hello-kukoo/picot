@@ -9,11 +9,11 @@ import {
   authorizeSkillInstallInternalRequest,
   normalizeSkillCommands,
   parsePackageSkillInventoryRequest,
-  parseSkillAddRootRequest,
   parseSkillInstallLinksInternalRequest,
   parseSkillInstallScanInternalRequest,
   parseSkillInventoryMutation,
   parseSkillInventoryScope,
+  preparePromptMessage,
 } from "./embedded-server.ts";
 
 describe("normalizeSkillCommands", () => {
@@ -47,6 +47,64 @@ describe("normalizeSkillCommands", () => {
         scope: "personal",
       },
     ]);
+  });
+});
+
+describe("preparePromptMessage", () => {
+  const skill = {
+    name: "skill:review",
+    source: "skill" as const,
+    sourceInfo: { path: "/skills/review/SKILL.md", baseDir: "/skills/review" },
+  };
+  const template = {
+    name: "brief",
+    source: "prompt" as const,
+    sourceInfo: { path: "/prompts/brief.md" },
+  };
+
+  test("prepares an expanded skill for the idle send path", () => {
+    expect(
+      preparePromptMessage(
+        "/skill:review",
+        [skill],
+        () => `---
+description: review
+---
+Do review`,
+      ),
+    ).toEqual({
+      kind: "ready",
+      text: `<skill name="review" location="/skills/review/SKILL.md">
+References are relative to /skills/review.
+
+Do review
+</skill>`,
+    });
+  });
+
+  test("prepares a template for a follow-up send path", () => {
+    expect(
+      preparePromptMessage(
+        "/brief hello",
+        [template],
+        () => `---
+description: brief
+---
+$1`,
+      ),
+    ).toEqual({ kind: "ready", text: "hello" });
+  });
+
+  test("keeps unknown slash commands ready with their original text", () => {
+    expect(preparePromptMessage("/new", [], () => "")).toEqual({ kind: "ready", text: "/new" });
+  });
+
+  test("blocks a known source that cannot be expanded", () => {
+    expect(
+      preparePromptMessage("/skill:review", [skill], () => {
+        throw new Error("ENOENT");
+      }),
+    ).toMatchObject({ kind: "error" });
   });
 });
 
@@ -269,31 +327,5 @@ describe("parseSkillInstallLinksInternalRequest", () => {
     },
   ])("rejects malformed or browser-authority install payload %j", (body) => {
     expect(() => parseSkillInstallLinksInternalRequest(body)).toThrow(/links request/);
-  });
-});
-
-describe("parseSkillAddRootRequest", () => {
-  test.each([
-    [{ scope: "global", kind: "claude-global" }],
-    [{ scope: "project", kind: "claude-project" }],
-  ])("accepts the valid (scope, kind) pair %j", (payload) => {
-    expect(parseSkillAddRootRequest(payload)).toEqual(payload);
-  });
-
-  test.each([
-    null,
-    { scope: "global", kind: "claude-project" }, // mismatched pair
-    { scope: "project", kind: "claude-global" },
-    { scope: "global" },
-    { scope: "global", kind: "claude-global", path: "/etc/passwd" },
-    { scope: "global", kind: "claude-global", settingsPath: "/agent/settings.json" },
-    { scope: "global", kind: "claude-global", cwd: "/workspace" },
-    { scope: "global", kind: "claude-global", owner: "x" },
-    { scope: "global", kind: "claude-global", port: 8080 },
-    { scope: "user", kind: "claude-global" },
-    { scope: "global", kind: "pi" },
-    { scope: "global", kind: "claude-global", hostSource: "x" },
-  ])("rejects malformed payload %j", (payload) => {
-    expect(() => parseSkillAddRootRequest(payload)).toThrow(/Invalid skill add root/);
   });
 });

@@ -10,7 +10,6 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { minimatch } from "minimatch";
 import {
-  canonicalizeExistingPath,
   discoverSkillsFromRoot as discoverSharedFromRoot,
   type DiscoveredSkill as SharedDiscoveredSkill,
   type SkillDiagnostic as SharedSkillDiagnostic,
@@ -64,7 +63,7 @@ export type SkillGroupNode = {
 
 export type SkillChild = SkillInventoryItem | SkillGroupNode;
 
-export type SkillRootKind = "pi" | "agents" | "configured" | "claude-global" | "claude-project";
+export type SkillRootKind = "pi" | "agents" | "configured";
 
 export type SkillRoot = {
   sourceRoot: string;
@@ -72,9 +71,6 @@ export type SkillRoot = {
   scope: "user" | "project";
   source: "auto" | "local";
   rootKind?: SkillRootKind;
-  configuredForPi?: boolean;
-  recommendedEntry?: string;
-  settingsPath?: string;
   children: SkillChild[];
 };
 
@@ -367,10 +363,6 @@ function isEnabledByOverrides(
  * module. Two skills settings entries that alias the same directory via
  * different symlink spellings must be treated as the same root.
  */
-function canonicalExistingPath(p: string): string {
-  return canonicalizeExistingPath(resolve(p));
-}
-
 function precedenceRank(scope: "user" | "project", source: "auto" | "local"): number {
   const scopeBase = scope === "project" ? 0 : 2;
   return scopeBase + (source === "local" ? 0 : 1);
@@ -419,13 +411,6 @@ function globalRoots(opts: BuildSkillInventoryOptions, settingsSkills: string[])
       scope: "user",
       source: "auto",
     },
-    {
-      dir: join(home, ".claude", "skills"),
-      mode: "agents",
-      baseDir: opts.agentDir,
-      scope: "user",
-      source: "auto",
-    },
   ];
   for (const entry of settingsSkills) {
     if (isOverride(entry) || isPlainGlob(entry)) continue;
@@ -465,13 +450,6 @@ function projectRoots(
       source: "auto",
     });
   }
-  roots.push({
-    dir: join(opts.cwd, ".claude", "skills"),
-    mode: "agents",
-    baseDir: projectBase,
-    scope: "project",
-    source: "auto",
-  });
   for (const entry of settingsSkills) {
     if (isOverride(entry) || isPlainGlob(entry)) continue;
     roots.push({
@@ -497,82 +475,16 @@ function projectRootPaths(opts: BuildSkillInventoryOptions): string[] {
 }
 
 /**
- * Returns true if the directory is a Claude Code skills directory
- * (global: <homeDir>/.claude/skills, project: <cwd>/.claude/skills).
- */
-function isClaudeRoot(dir: string, opts: BuildSkillInventoryOptions): boolean {
-  const home = opts.homeDir ?? homedir();
-  return dir === join(home, ".claude", "skills") || dir === join(opts.cwd, ".claude", "skills");
-}
-
-/**
- * Classify a discovered root into a SkillRootKind for display. Claude
- * roots are distinguished from generic agents roots so the UI can render
- * an explicit enablement action.
+ * Classify a discovered root into a SkillRootKind for display.
  */
 function detectRootKind(dir: string, opts: BuildSkillInventoryOptions): SkillRootKind {
   const home = opts.homeDir ?? homedir();
-  if (dir === join(home, ".claude", "skills")) return "claude-global";
-  if (dir === join(opts.cwd, ".claude", "skills")) return "claude-project";
   if (dir === join(opts.agentDir, "skills")) return "pi";
   if (dir === join(opts.cwd, CONFIG_DIR_NAME, "skills")) return "pi";
   if (dir === join(home, ".agents", "skills")) return "agents";
   if (dir.startsWith(`${join(home, ".agents")}/skills/`)) return "agents";
   // Project local entry: depends on how it was registered.
   return "configured";
-}
-
-/**
- * The relative entry to recommend in settings.json when enabling Claude.
- * Returns undefined for non-Claude roots.
- */
-function detectRecommendedEntry(
-  dir: string,
-  opts: BuildSkillInventoryOptions,
-  claude: boolean,
-): string | undefined {
-  if (!claude) return undefined;
-  const home = opts.homeDir ?? homedir();
-  return dir === join(home, ".claude", "skills") ? "../../.claude/skills" : "../.claude/skills";
-}
-
-/**
- * Detect whether the user has already registered a settings.json entry that
- * resolves canonically to this Claude root. Override (`!`/`+`/`-`) and glob
- * entries never count as a root source — only plain paths that resolve to
- * the Claude root are treated as configured.
- */
-function detectConfiguredForPi(
-  dir: string,
-  opts: BuildSkillInventoryOptions,
-  claude: boolean,
-): boolean {
-  if (!claude) return false;
-  // Not exposed in the inventory function scope; rebuild a minimal lookup.
-  const home = opts.homeDir ?? homedir();
-  const claudeBase = resolve(
-    dir === join(home, ".claude", "skills")
-      ? join(home, ".claude", "skills")
-      : join(opts.cwd, ".claude", "skills"),
-  );
-  const settingsPath =
-    dir === join(home, ".claude", "skills")
-      ? join(opts.agentDir, "settings.json")
-      : join(opts.cwd, CONFIG_DIR_NAME, "settings.json");
-  const fileSettings = readSettingsSkills(settingsPath);
-  const claudeRootCanonical = canonicalExistingPath(claudeBase);
-  return fileSettings.skills.some((entry) => {
-    if (isOverride(entry) || isPlainGlob(entry)) return false;
-    const expanded =
-      entry === "~" ? homedir() : entry.startsWith("~/") ? join(homedir(), entry.slice(2)) : entry;
-    const resolved = isAbsolute(expanded)
-      ? resolve(expanded)
-      : resolve(
-          dir === join(home, ".claude", "skills") ? opts.agentDir : join(opts.cwd, CONFIG_DIR_NAME),
-          expanded,
-        );
-    return canonicalExistingPath(resolved) === claudeRootCanonical;
-  });
 }
 
 function settingsPathFor(scope: SkillScope, opts: BuildSkillInventoryOptions): string {
@@ -869,11 +781,6 @@ export function buildSkillInventory(opts: BuildSkillInventoryOptions): SkillInve
       scope: meta.scope,
       source: meta.source,
       rootKind: detectRootKind(meta.dir, opts),
-      configuredForPi: detectConfiguredForPi(meta.dir, opts, isClaudeRoot(meta.dir, opts)),
-      recommendedEntry: detectRecommendedEntry(meta.dir, opts, isClaudeRoot(meta.dir, opts)),
-      settingsPath: isClaudeRoot(meta.dir, opts)
-        ? settingsPathFor(meta.scope === "user" ? "global" : "project", opts)
-        : undefined,
       children: [],
     };
     for (const it of rootItems) insertSkillIntoTree(tree, it, meta);
@@ -1174,70 +1081,6 @@ export async function mutateSkillEnabled(
     });
 
     const inventory = buildSkillInventory(opts);
-    return { inventory, runtimeRestartRequired: true };
-  });
-}
-
-export type ClaudeRootKind = "claude-global" | "claude-project";
-
-export type MutateClaudeSkillRootOptions = BuildSkillInventoryOptions & {
-  kind: ClaudeRootKind;
-};
-
-/**
- * Atomically register a Claude Code skills root in the matching settings.json
- * with the recommended relative entry. The new entry resolves to the existing
- * `<homeDir>/.claude/skills` (global) or `<cwd>/.claude/skills` (project)
- * directory. The mutation is canonical-idempotent: any existing entry that
- * resolves to the same canonical path (relative, alternate relative, or
- * absolute) is left untouched and the recommended entry is not appended again.
- *
- * The function rejects unknown kind, untrusted project, missing Claude root,
- * and lock-timeout / atomic-write failures. It never rewrites unrelated keys,
- * ordinary entries, custom globs, or `!`/`+`/`-` rules.
- */
-export async function mutateClaudeSkillRoot(
-  opts: MutateClaudeSkillRootOptions,
-): Promise<SkillMutationResult> {
-  if (opts.kind !== "claude-global" && opts.kind !== "claude-project") {
-    throw new Error(`Unknown Claude root kind: ${String(opts.kind)}`);
-  }
-  if (opts.kind === "claude-project" && !opts.projectTrusted) {
-    throw new Error("Project is not trusted; cannot mutate project skills");
-  }
-  const scope: SkillScope = opts.kind === "claude-global" ? "global" : "project";
-  const settingsPath = settingsPathFor(scope, opts);
-  const home = opts.homeDir ?? homedir();
-  const claudeRoot = join(opts.kind === "claude-global" ? home : opts.cwd, ".claude", "skills");
-  if (!existsSync(claudeRoot)) {
-    throw new Error(`Claude root not found: ${claudeRoot}`);
-  }
-  const recommendedEntry =
-    opts.kind === "claude-global" ? "../../.claude/skills" : "../.claude/skills";
-  return serialized(settingsPath, async () => {
-    await withSettingsLock(settingsPath, () => {
-      const original = readSettingsObject(settingsPath);
-      const currentSkills = Array.isArray(original.skills)
-        ? (original.skills.filter((s) => typeof s === "string") as string[])
-        : [];
-      const claudeRootCanonical = canonicalExistingPath(claudeRoot);
-      // Skip override and glob entries; only plain paths can match the Claude root.
-      const hasCanonical = currentSkills.some((entry) => {
-        if (isOverride(entry) || isPlainGlob(entry)) return false;
-        const expanded =
-          entry === "~"
-            ? homedir()
-            : entry.startsWith("~/")
-              ? join(homedir(), entry.slice(2))
-              : entry;
-        const baseDir = scope === "global" ? opts.agentDir : join(opts.cwd, CONFIG_DIR_NAME);
-        const resolved = isAbsolute(expanded) ? resolve(expanded) : resolve(baseDir, expanded);
-        return canonicalExistingPath(resolved) === claudeRootCanonical;
-      });
-      const nextSkills = hasCanonical ? currentSkills : [...currentSkills, recommendedEntry];
-      writeSettingsAtomically(settingsPath, { ...original, skills: nextSkills });
-    });
-    const inventory = buildSkillInventory({ ...opts, scope });
     return { inventory, runtimeRestartRequired: true };
   });
 }

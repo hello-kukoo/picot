@@ -1,5 +1,13 @@
 # Claude Code Skills Discovery and Enablement Design
 
+> **⚠ SUPERSEDED (2026-08-07):** This document's approach — a hardcoded
+> `~/.claude/skills` scan in the Discovered tab plus a Claude-specific
+> Enable button — has been replaced by
+> [`2026-08-07-composer-skill-discovery-and-execution-fixes.md`](2026-08-07-composer-skill-discovery-and-execution-fixes.md).
+> The Discovered tab now uses Pi's native discovery only; adding any
+> directory (including `~/.claude/skills`) is done via the existing Install
+> tab. Kept for historical context.
+
 ## Status
 
 Proposed after discussion with Dr. Lin on 2026-07-27. This document extends

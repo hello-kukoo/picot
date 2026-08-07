@@ -596,15 +596,9 @@
       "rescanFailed": "スキルの再スキャンに失敗しました。",
       "ambiguousRuleTarget": "このターゲットは複数のルートにマップされます。settings.jsonを手動で編集して変更してください。",
       "scopeSummary": "{total}個のスキル · {groups}個のグループ",
-      "addRoot": "Piで有効にする",
-      "addRootCancel": "キャンセル",
-      "addRootConfirm": "有効にする",
-      "addRootConfirmation": "このClaudeスキルディレクトリをPiで有効にしますか？表示される設定エントリは、新しいセッションまたはPiの再起動後に適用されます。",
-      "addRootFailed": "スキルルートの有効化に失敗しました。",
       "discovered": "検出済み",
       "install": "インストール",
       "packages": "パッケージ",
-      "rootAddedRestartRequired": "有効にしました。変更を反映するには新しいセッションを開始するかPiを再起動してください。",
       "sectionsAriaLabel": "スキルセクション"
     },
     "installSkills": {
