@@ -5246,7 +5246,7 @@ if (settingsBackIcon) {
 const settingsNavItems = Array.from(document.querySelectorAll(".settings-nav-item"));
 const settingsTabs = Array.from(document.querySelectorAll(".settings-tab"));
 const themeGrid = document.getElementById("theme-grid");
-const languageOptions = document.getElementById("settings-language-options");
+const languageSelect = document.getElementById("settings-language-select");
 
 const toggleAutoCompact = document.getElementById("toggle-auto-compact");
 const thinkingEffortSteps = document.getElementById("thinking-effort-steps");
@@ -5897,23 +5897,31 @@ function refreshUsageIframeLocale() {
 }
 
 function buildLanguageSelector() {
-  if (!languageOptions) return;
-  languageOptions.replaceChildren();
+  if (!languageSelect) return;
   const current = getLanguagePreference();
+  languageSelect.replaceChildren();
 
   for (const lang of LANGUAGES) {
-    const btn = document.createElement("button");
-    btn.className = `theme-swatch${current === lang.value ? " active" : ""}`;
-    btn.textContent = lang.nativeLabel ?? t(lang.labelKey);
-    btn.addEventListener("click", () => {
-      setLocale(lang.value).then(() => {
-        buildLanguageSelector();
-        refreshUsageIframeLocale();
-      });
-    });
-    languageOptions.appendChild(btn);
+    const option = document.createElement("option");
+    option.value = lang.value;
+    option.textContent = lang.nativeLabel ?? t(lang.labelKey);
+    option.selected = current === lang.value;
+    languageSelect.append(option);
   }
 }
+
+async function handleLanguageSelectChange() {
+  languageSelect.disabled = true;
+  try {
+    await setLocale(languageSelect.value);
+    buildLanguageSelector();
+    refreshUsageIframeLocale();
+  } finally {
+    languageSelect.disabled = false;
+  }
+}
+
+languageSelect?.addEventListener("change", handleLanguageSelectChange);
 
 onLocaleChange(buildLanguageSelector);
 

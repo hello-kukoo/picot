@@ -51,8 +51,14 @@ export function resolveLocale(preference, systemLanguage = navigator.language) {
   const pref = normalizePreference(preference);
   if (pref === "en") return "en";
   if (pref === "zh") return "zh";
+  if (pref === "ja") return "ja";
+  if (pref === "es") return "es";
   // system
-  return systemLanguage?.toLowerCase().startsWith("zh") ? "zh" : "en";
+  const lang = systemLanguage?.toLowerCase() ?? "";
+  if (lang.startsWith("zh")) return "zh";
+  if (lang.startsWith("ja")) return "ja";
+  if (lang.startsWith("es")) return "es";
+  return "en";
 }
 
 // ── Cookie helpers (mirrors public/themes.js pattern) ─────────────────

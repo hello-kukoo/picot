@@ -812,20 +812,27 @@
               <div class="theme-grid" id="theme-grid"></div>
             </div>
             <div class="settings-section">
-              <div
-                class="settings-section-title"
-                data-i18n="settings.language.title"
-              >
-                Language
+              <div class="settings-row" id="setting-language">
+                <span class="settings-label settings-label-stack">
+                  <span
+                    class="settings-label-main"
+                    data-i18n="settings.language.title"
+                    >Language</span
+                  >
+                  <span
+                    class="settings-label-sub"
+                    data-i18n="settings.language.description"
+                    >Choose the interface language. System Default follows your
+                    operating system.</span
+                  >
+                </span>
+                <select
+                  class="ui-select settings-language-select"
+                  id="settings-language-select"
+                  aria-label="Language"
+                  data-i18n-aria-label="settings.language.title"
+                ></select>
               </div>
-              <p
-                class="settings-help"
-                data-i18n="settings.language.description"
-              >
-                Choose the interface language. System Default follows your
-                operating system.
-              </p>
-              <div class="theme-grid" id="settings-language-options"></div>
             </div>
             <div class="settings-section">
               <div class="settings-section-title" data-i18n="settings.agent">
@@ -1524,7 +1531,8 @@
       id="session-search-dialog"
       role="dialog"
       aria-modal="true"
-      aria-label="Search tasks" data-i18n-aria-label="migrated.index.ariaLabel.searchTasks"
+      aria-label="Search tasks"
+      data-i18n-aria-label="migrated.index.ariaLabel.searchTasks"
     >
       <div class="session-search-input-row">
         <svg
@@ -1546,7 +1554,8 @@
           type="text"
           class="session-search-dialog-input"
           id="session-search-dialog-input"
-          placeholder="Search tasks and messages…" data-i18n-ph="migrated.index.placeholder.searchTasksAndMessages"
+          placeholder="Search tasks and messages…"
+          data-i18n-ph="migrated.index.placeholder.searchTasksAndMessages"
           autocomplete="off"
           spellcheck="false"
         />
@@ -1555,7 +1564,8 @@
         class="session-search-results"
         id="session-search-results"
         role="listbox"
-        aria-label="Search results" data-i18n-aria-label="migrated.index.ariaLabel.searchResults"
+        aria-label="Search results"
+        data-i18n-aria-label="migrated.index.ariaLabel.searchResults"
       ></div>
     </div>
   </body>
