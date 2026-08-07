@@ -1598,16 +1598,30 @@ function setFileSidebarTab(tab) {
  * Expand the file sidebar and switch to the requested tab. Used by the
  * workspace-path and git-branch header pills so clicking them directly opens
  * the matching panel.
+ *
+ * The click is always an "open and focus" action — never a toggle. Even when
+ * the sidebar was already open on the target tab we re-trigger the refresh
+ * and flash the tab so the click is acknowledged rather than feeling inert.
  */
 function openFileSidebarTab(tab) {
-  const wasCollapsed = fileSidebar.classList.contains("collapsed");
   fileSidebar.classList.remove("collapsed");
   fileSidebarToggle.setAttribute("aria-pressed", "true");
   localStorage.setItem("pi-studio-file-sidebar", "open");
   setFileSidebarTab(tab);
-  if (tab === "files" && wasCollapsed) {
-    refreshFileBrowserForWorkspace(getCurrentWorkspacePath(), { force: true });
+  if (tab === "files") {
+    void refreshFileBrowserForWorkspace(getCurrentWorkspacePath(), { force: true });
   }
+  flashSidebarTab(tab);
+}
+
+function flashSidebarTab(tab) {
+  const el = tab === "git" ? fileSidebarGitTab : fileSidebarFilesTab;
+  if (!el) return;
+  el.classList.remove("flash-highlight");
+  // Reflow restarts the animation so repeated clicks re-flash.
+  void el.offsetWidth;
+  el.classList.add("flash-highlight");
+  el.addEventListener("animationend", () => el.classList.remove("flash-highlight"), { once: true });
 }
 
 workspaceIndicatorEl.addEventListener("click", () => openFileSidebarTab("files"));

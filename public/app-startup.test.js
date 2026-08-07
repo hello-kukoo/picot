@@ -145,6 +145,33 @@ test("opens the file sidebar and switches tabs from header indicator pills", asy
   expect(gitTab.classList.contains("active")).toBe(true);
 });
 
+test("header pills always open-and-focus: never collapse, and flash even when already open", async () => {
+  await import("./app.js?indicator-always-open");
+
+  const fileSidebar = document.getElementById("file-sidebar");
+  const filesTab = document.getElementById("file-sidebar-files-tab");
+  const gitTab = document.getElementById("file-sidebar-git-tab");
+  const workspaceIndicator = document.getElementById("workspace-indicator");
+  const gitIndicator = document.getElementById("git-branch-indicator");
+
+  // Sidebar already expanded, already on the Files tab — clicking the path
+  // pill must NOT toggle it closed, and must flash the Files tab.
+  fileSidebar.classList.remove("collapsed");
+  filesTab.classList.add("active");
+  gitTab.classList.remove("active");
+
+  workspaceIndicator.click();
+  expect(fileSidebar.classList.contains("collapsed")).toBe(false);
+  expect(filesTab.classList.contains("active")).toBe(true);
+  expect(filesTab.classList.contains("flash-highlight")).toBe(true);
+
+  // Same check for the Git pill when the sidebar is open on Files.
+  gitIndicator.click();
+  expect(fileSidebar.classList.contains("collapsed")).toBe(false);
+  expect(gitTab.classList.contains("active")).toBe(true);
+  expect(gitTab.classList.contains("flash-highlight")).toBe(true);
+});
+
 test("retries Git status when workspace generation arrives after opening Git", async () => {
   await import("./app.js?git-status-after-bootstrap");
   const socket = FakeWebSocket.instances.at(-1);

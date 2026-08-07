@@ -1543,6 +1543,7 @@ body {
     opacity 0.3s var(--ease);
   cursor: pointer;
   font-variant-numeric: tabular-nums;
+  -webkit-app-region: no-drag;
 }
 
 .workspace-indicator {
@@ -1551,6 +1552,7 @@ body {
   text-overflow: ellipsis;
   cursor: pointer;
   color: var(--header-pill-text, var(--text-dim));
+  -webkit-app-region: no-drag;
 }
 
 .git-branch-indicator {
@@ -1558,9 +1560,11 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--header-pill-text, var(--text-dim));
+  cursor: pointer;
   display: flex;
   align-items: center;
   gap: var(--space-1);
+  -webkit-app-region: no-drag;
 }
 
 .git-branch-indicator::before {
@@ -5222,6 +5226,26 @@ body.hide-thinking .thinking-block {
   100% {
     box-shadow: 0 0 0 0 transparent;
   }
+}
+
+/* Brief focus flash when a header pill opens a sidebar tab, so the click is
+   acknowledged even when that tab was already active. Stronger than the
+   message-jump flash: a filled accent tint plus an accent ring, so it reads
+   clearly against the sidebar background. */
+@keyframes sidebarTabFlash {
+  0% {
+    background: color-mix(in srgb, var(--accent) 24%, transparent);
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+  100% {
+    background: transparent;
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.file-sidebar-tab.flash-highlight {
+  animation: sidebarTabFlash 0.7s var(--ease);
+  border-radius: var(--radius-md);
 }
 
 /* ── Rail — no background, just floating ticks on the right edge ── */
