@@ -22,6 +22,5 @@ Scope for the worker:
 After fixing:
 
 - Re-run `hunk session review --repo <repo> --include-patch --include-notes --json` and confirm the comment text reflects the fix.
-- Remove each fixed comment via `hunk session comment rm --repo <repo> <comment-id>`.
 - Leave unresolved comments in place and explain why in the worker report.
 - Report: comment ids handled, files changed, focused verification commands and results, and any comments intentionally retained.
