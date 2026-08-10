@@ -175,7 +175,7 @@ afterEach(() => {
 
 describe("static workspace data", () => {
   test("shows the compact prototype rows immediately on open", () => {
-    const { qi, headerEl } = makeHarness();
+    const { headerEl } = makeHarness();
     headerEl.dispatchEvent(new FocusEvent("focusin"));
 
     const card = document.querySelector(".workspace-quick-info");
@@ -196,7 +196,7 @@ describe("static workspace data", () => {
         { filePath: "/s3.jsonl", name: "S3" },
       ],
     });
-    const { qi, headerEl } = makeHarness({ workspace: ws });
+    const { headerEl } = makeHarness({ workspace: ws });
     headerEl.dispatchEvent(new FocusEvent("focusin"));
 
     expect(document.querySelector(".wqi-count").textContent).toBe("3 threads");
@@ -204,7 +204,7 @@ describe("static workspace data", () => {
 
   test("derives folder name from last path segment when folderName missing", () => {
     const ws = makeWorkspace({ folderName: undefined, path: "/work/deep/beta" });
-    const { qi, headerEl } = makeHarness({ workspace: ws });
+    const { headerEl } = makeHarness({ workspace: ws });
     headerEl.dispatchEvent(new FocusEvent("focusin"));
 
     expect(document.querySelector(".wqi-folder-name").textContent).toBe("beta");
@@ -235,7 +235,7 @@ describe("inert text rendering", () => {
       folderName: "<script>alert(1)</script>",
       path: "/work/<img src=x onerror=alert(1)>",
     });
-    const { qi, headerEl } = makeHarness({ workspace: ws });
+    const { headerEl } = makeHarness({ workspace: ws });
     headerEl.dispatchEvent(new FocusEvent("focusin"));
 
     const folderEl = document.querySelector(".wqi-folder-name");
@@ -260,7 +260,7 @@ describe("inert text rendering", () => {
         detachedAt: null,
       }),
     }));
-    const { qi, headerEl } = makeHarness({ fetchImpl, workspace: ws });
+    const { headerEl } = makeHarness({ fetchImpl, workspace: ws });
     headerEl.dispatchEvent(new FocusEvent("focusin"));
     await vi.waitFor(() => {
       expect(document.querySelector(".wqi-repo").textContent).toBe("<b>evil/repo</b>");
@@ -281,7 +281,7 @@ describe("inert text rendering", () => {
       error: "capacity",
       changed: false,
     }));
-    const { qi, headerEl } = makeHarness({ pinStore });
+    const { headerEl } = makeHarness({ pinStore });
     headerEl.dispatchEvent(new FocusEvent("focusin"));
 
     const pinBtn = document.querySelector(".wqi-pin-btn");
@@ -297,7 +297,7 @@ describe("inert text rendering", () => {
 
 describe("hover intent", () => {
   test("pointer open waits 120ms before showing card", () => {
-    const { qi, headerEl, st, timeouts } = makeHarness();
+    const { headerEl, st, timeouts } = makeHarness();
     headerEl.dispatchEvent(new Event("pointerenter"));
 
     const card = document.querySelector(".workspace-quick-info");
@@ -313,7 +313,7 @@ describe("hover intent", () => {
   });
 
   test("pointer leave cancels hover intent before card opens", () => {
-    const { qi, headerEl, timeouts } = makeHarness();
+    const { headerEl, timeouts } = makeHarness();
     headerEl.dispatchEvent(new Event("pointerenter"));
     expect(timeouts.length).toBe(1);
 
@@ -330,7 +330,7 @@ describe("hover intent", () => {
 
 describe("keyboard focus", () => {
   test("focusin opens card immediately without timer", () => {
-    const { qi, headerEl, st } = makeHarness();
+    const { headerEl, st } = makeHarness();
     headerEl.dispatchEvent(new FocusEvent("focusin"));
 
     const card = document.querySelector(".workspace-quick-info");
@@ -344,7 +344,7 @@ describe("keyboard focus", () => {
 
 describe("Escape behavior", () => {
   test("Escape on card closes it and returns focus to header", () => {
-    const { qi, headerEl } = makeHarness();
+    const { headerEl } = makeHarness();
     headerEl.dispatchEvent(new FocusEvent("focusin"));
     headerEl.focus = vi.fn();
 
@@ -356,7 +356,7 @@ describe("Escape behavior", () => {
   });
 
   test("Escape on header closes the card", () => {
-    const { qi, headerEl } = makeHarness();
+    const { headerEl } = makeHarness();
     headerEl.dispatchEvent(new FocusEvent("focusin"));
 
     const card = document.querySelector(".workspace-quick-info");
@@ -414,7 +414,7 @@ describe("Pin/Unpin control", () => {
       error: "capacity",
       changed: false,
     }));
-    const { qi, headerEl } = makeHarness({ pinStore });
+    const { headerEl } = makeHarness({ pinStore });
     headerEl.dispatchEvent(new FocusEvent("focusin"));
 
     const pinBtn = document.querySelector(".wqi-pin-btn");
@@ -442,7 +442,7 @@ describe("Git metadata", () => {
         detachedAt: null,
       }),
     }));
-    const { qi, headerEl } = makeHarness({ fetchImpl, workspace: ws });
+    const { headerEl } = makeHarness({ fetchImpl, workspace: ws });
     headerEl.dispatchEvent(new FocusEvent("focusin"));
 
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
@@ -463,7 +463,7 @@ describe("Git metadata", () => {
         detachedAt: null,
       }),
     }));
-    const { qi, headerEl } = makeHarness({ fetchImpl });
+    const { headerEl } = makeHarness({ fetchImpl });
     headerEl.dispatchEvent(new FocusEvent("focusin"));
 
     await vi.waitFor(() => {
@@ -472,6 +472,7 @@ describe("Git metadata", () => {
     expect(document.querySelector(".wqi-repo-icon")).not.toBeNull();
     expect(document.querySelector(".wqi-type")).toBeNull();
     expect(document.querySelector(".wqi-branch")).toBeNull();
+    expect(document.querySelector(".wqi-git-region").hidden).toBe(false);
   });
 
   test("detached HEAD keeps the compact repository-only card", async () => {
@@ -486,7 +487,7 @@ describe("Git metadata", () => {
         detachedAt: "abc1234",
       }),
     }));
-    const { qi, headerEl } = makeHarness({ fetchImpl });
+    const { headerEl } = makeHarness({ fetchImpl });
     headerEl.dispatchEvent(new FocusEvent("focusin"));
 
     await vi.waitFor(() => {
@@ -501,15 +502,69 @@ describe("Git metadata", () => {
       status: 200,
       json: async () => ({ isGit: false }),
     }));
-    const { qi, headerEl } = makeHarness({ fetchImpl });
+    const { headerEl } = makeHarness({ fetchImpl });
     headerEl.dispatchEvent(new FocusEvent("focusin"));
 
     await vi.waitFor(() => {
       expect(document.querySelector(".wqi-git-loading").hidden).toBe(true);
     });
     expect(document.querySelector(".wqi-repo-row").hidden).toBe(true);
+    expect(document.querySelector(".wqi-git-region").hidden).toBe(true);
     expect(document.querySelector(".wqi-type-row")).toBeNull();
     expect(document.querySelector(".wqi-branch-row")).toBeNull();
+  });
+
+  test("switching back to a non-Git workspace clears the previous repo text", async () => {
+    const fetchImpl = vi.fn(async (url) => {
+      if (String(url).includes("history%3Aalpha")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            isGit: true,
+            repository: "OLD/repo",
+            kind: "repository",
+            branch: "old",
+            detachedAt: null,
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ isGit: false }) };
+    });
+    const ws1 = makeWorkspace({
+      workspaceId: "history:alpha",
+      path: "/work/alpha",
+      normalizedPath: "/work/alpha",
+    });
+    const ws2 = makeWorkspace({
+      workspaceId: "history:beta",
+      path: "/work/beta",
+      normalizedPath: "/work/beta",
+    });
+    const header1 = document.createElement("div");
+    header1.tabIndex = 0;
+    const header2 = document.createElement("div");
+    header2.tabIndex = 0;
+    const { qi } = makeHarness({ fetchImpl });
+    qi.bindHeader(header1, ws1);
+    qi.bindHeader(header2, ws2);
+
+    // Git workspace first — repo text populates.
+    header1.dispatchEvent(new FocusEvent("focusin"));
+    await vi.waitFor(() => {
+      expect(document.querySelector(".wqi-repo").textContent).toBe("OLD/repo");
+    });
+    expect(document.querySelector(".wqi-repo-row").hidden).toBe(false);
+
+    // Switch to the non-Git workspace — the repo text must be cleared so no
+    // stale repository name can linger on the card.
+    header2.dispatchEvent(new FocusEvent("focusin"));
+    await vi.waitFor(() => {
+      expect(document.querySelector(".wqi-git-loading").hidden).toBe(true);
+    });
+    expect(document.querySelector(".wqi-repo").textContent).toBe("");
+    expect(document.querySelector(".wqi-repo-row").hidden).toBe(true);
+    expect(document.querySelector(".wqi-git-region").hidden).toBe(true);
   });
 
   test("30s positive cache avoids refetch on re-open", async () => {
@@ -524,7 +579,7 @@ describe("Git metadata", () => {
         detachedAt: null,
       }),
     }));
-    const { qi, headerEl, workspace, flushTimeouts } = makeHarness({ fetchImpl });
+    const { headerEl } = makeHarness({ fetchImpl });
     headerEl.dispatchEvent(new FocusEvent("focusin"));
     await vi.waitFor(() => expect(document.querySelector(".wqi-repo").textContent).toBe("o/r"));
 
@@ -557,7 +612,7 @@ describe("Git metadata", () => {
       status: 404,
       json: async () => ({ error: "unknown" }),
     }));
-    const { qi, headerEl } = makeHarness({ fetchImpl });
+    const { headerEl } = makeHarness({ fetchImpl });
     headerEl.dispatchEvent(new FocusEvent("focusin"));
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
 
@@ -572,7 +627,7 @@ describe("Git metadata", () => {
       status: 500,
       json: async () => ({ error: "boom" }),
     }));
-    const { qi, headerEl } = makeHarness({ fetchImpl });
+    const { headerEl } = makeHarness({ fetchImpl });
     headerEl.dispatchEvent(new FocusEvent("focusin"));
 
     await vi.waitFor(() => {
@@ -702,7 +757,7 @@ describe("stale and abort", () => {
   });
 
   test("closing card aborts pending request", () => {
-    const { qi, headerEl, abortControllers } = makeHarness();
+    const { headerEl, abortControllers } = makeHarness();
     headerEl.dispatchEvent(new FocusEvent("focusin"));
     expect(abortControllers.length).toBe(1);
     expect(abortControllers[0].aborted).toBe(false);
@@ -830,7 +885,7 @@ describe("locale refresh", () => {
         detachedAt: null,
       }),
     }));
-    const { qi, headerEl } = makeHarness({ fetchImpl });
+    const { headerEl } = makeHarness({ fetchImpl });
     headerEl.dispatchEvent(new FocusEvent("focusin"));
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
 
@@ -873,7 +928,7 @@ describe("provisional→history identity replacement", () => {
       isProvisional: true,
       source: "instance",
     });
-    const { qi, headerEl, flushTimeouts } = makeHarness({
+    const { qi, headerEl } = makeHarness({
       fetchImpl,
       workspace: provisional,
     });
@@ -937,7 +992,7 @@ describe("teardown", () => {
 
 describe("close delay and pointer bridge", () => {
   test("pointer leaving header starts close delay", () => {
-    const { qi, headerEl, timeouts } = makeHarness();
+    const { headerEl, timeouts } = makeHarness();
     // Open via pointer.
     headerEl.dispatchEvent(new Event("pointerenter"));
     // Flush hover intent.
@@ -952,7 +1007,7 @@ describe("close delay and pointer bridge", () => {
   });
 
   test("entering card cancels close delay", () => {
-    const { qi, headerEl, timeouts } = makeHarness();
+    const { headerEl, timeouts } = makeHarness();
     headerEl.dispatchEvent(new Event("pointerenter"));
     timeouts.splice(0).forEach((e) => e?.cb());
 

@@ -8069,6 +8069,12 @@ body.file-preview-resizing {
   padding: 5px 0;
 }
 
+/* .wqi-row sets display: flex, which overrides the UA [hidden] rule; keep the
+   repo row (and any future hidden wqi row) actually hidden. */
+.wqi-row[hidden] {
+  display: none;
+}
+
 .wqi-row-value {
   flex: 1;
 }
@@ -8078,6 +8084,10 @@ body.file-preview-resizing {
   /* design-token-ignore: preserved literal sizing from private fork components */
   padding-top: 10px;
   border-top: 1px solid var(--border);
+}
+
+.wqi-git-region[hidden] {
+  display: none;
 }
 
 .wqi-git-loading,

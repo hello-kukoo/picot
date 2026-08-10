@@ -263,6 +263,7 @@ export class WorkspaceQuickInfo {
     // Git region
     const gitRegion = document.createElement("div");
     gitRegion.className = "wqi-git-region";
+    this._gitRegion = gitRegion;
 
     this._gitLoadingEl = document.createElement("div");
     this._gitLoadingEl.className = "wqi-git-loading";
@@ -364,6 +365,7 @@ export class WorkspaceQuickInfo {
     this._pathEl.textContent = "";
     this._gitLoadingEl.hidden = true;
     this._repoRow.hidden = true;
+    this._gitRegion.hidden = true;
     this._clearError();
   }
 
@@ -412,10 +414,13 @@ export class WorkspaceQuickInfo {
     );
 
     // Git metadata is intentionally unobtrusive while loading so the card
-    // retains its compact prototype layout.
+    // retains its compact prototype layout. Hiding the whole region (not just
+    // the rows) also removes the separator border for non-Git workspaces.
     this._gitLoadingEl.textContent = t("sidebar.quickInfo.loadingGit");
     this._gitLoadingEl.hidden = true;
+    this._repoEl.textContent = "";
     this._repoRow.hidden = true;
+    this._gitRegion.hidden = true;
   }
 
   async _loadGitMetadata(workspace) {
@@ -490,8 +495,9 @@ export class WorkspaceQuickInfo {
     if (result.kind === "git" && result.data?.repository) {
       this._repoEl.textContent = result.data.repository; // inert text
       this._repoRow.hidden = false;
+      this._gitRegion.hidden = false;
     }
-    // 'negative' and 'failure' leave the repository row hidden.
+    // 'negative' and 'failure' leave the region (and its separator) hidden.
   }
 
   _clearError() {
