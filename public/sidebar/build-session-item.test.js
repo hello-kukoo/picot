@@ -8,7 +8,7 @@ vi.mock("../i18n.js", () => ({
 }));
 
 import { JSDOM } from "jsdom";
-import { buildSessionItem } from "./build-session-item.js";
+import { buildSessionItem, formatSessionTime } from "./build-session-item.js";
 
 function fakeIcon(kind) {
   const span = document.createElement("span");
@@ -23,6 +23,35 @@ function makeSession(overrides = {}) {
 beforeEach(() => {
   const dom = new JSDOM("<!doctype html><div id=root></div>", { url: "http://localhost:3001" });
   globalThis.document = dom.window.document;
+});
+
+describe("formatSessionTime", () => {
+  const now = Date.now();
+  const at = (msAgo) => new Date(now - msAgo).toISOString();
+
+  test("maps elapsed time to the right label branch", () => {
+    expect(formatSessionTime(at(0))).toBe("sidebar.justNow");
+    expect(formatSessionTime(at(30 * 1000))).toBe("sidebar.justNow");
+    expect(formatSessionTime(at(5 * 60 * 1000))).toBe("sidebar.minutesAgo");
+    expect(formatSessionTime(at(2 * 3600 * 1000))).toBe("sidebar.hoursAgo");
+    expect(formatSessionTime(at(24 * 3600 * 1000))).toBe("sidebar.yesterday");
+  });
+
+  test("falls back to a localized date for older sessions", () => {
+    const weekday = formatSessionTime(at(3 * 86400000));
+    expect(weekday).toBeTruthy();
+    expect(weekday).not.toBe("");
+    expect(weekday).not.toMatch(/^sidebar\./);
+    const monthDay = formatSessionTime(at(30 * 86400000));
+    expect(monthDay).toBeTruthy();
+    expect(monthDay).not.toBe("");
+    expect(monthDay).not.toMatch(/^sidebar\./);
+  });
+
+  test("returns empty for an invalid timestamp", () => {
+    expect(formatSessionTime("not-a-date")).toBe("");
+    expect(formatSessionTime(undefined)).toBe("");
+  });
 });
 
 describe("buildSessionItem action visibility", () => {

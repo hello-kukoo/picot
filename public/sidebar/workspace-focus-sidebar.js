@@ -2,6 +2,7 @@
 // ABOUTME: Renders back/new-task controls, a workspace info card, and a session list.
 import { t } from "../i18n.js";
 import { createIcon } from "../icons.js";
+import { formatSessionTime } from "./build-session-item.js";
 
 const INITIAL_LIMIT = 5;
 const STEP = 10;
@@ -101,6 +102,7 @@ export class WorkspaceFocusSidebar {
         isActive: session.filePath === this.activeSessionFile,
         isUnread: this.unread.has(session.filePath),
         isStreaming: this.streaming.has(session.filePath),
+        formattedTime: formatSessionTime(session.timestamp),
         showPinButton: false,
         showArchiveButton: false,
         showDeleteButton: true,

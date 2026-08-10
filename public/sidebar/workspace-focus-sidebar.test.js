@@ -54,6 +54,10 @@ beforeEach(async () => {
             workspaceActions: "Workspace actions",
             newChat: "New chat",
             archived: "Archived",
+            justNow: "Just now",
+            minutesAgo: "{minutes}m ago",
+            hoursAgo: "{hours}h ago",
+            yesterday: "Yesterday",
           },
         }),
       };
@@ -153,6 +157,16 @@ describe("WorkspaceFocusSidebar", () => {
     expect(opts.showArchiveButton).toBe(false);
     expect(opts.showDeleteButton).toBe(true);
     expect(opts.isActive).toBe(true);
+  });
+
+  test("renders a session timestamp like the normal sidebar", () => {
+    const sidebar = makeSidebar({ sessions: makeSessions(1) });
+    sidebar.buildSessionItem = buildSessionItem;
+    sidebar.project.sessions[0].timestamp = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+    sidebar.render();
+    const time = sidebar.container.querySelector(".session-time");
+    expect(time).toBeTruthy();
+    expect(time.textContent).not.toBe("");
   });
 
   test("focus rows forward rename actions with the target session", () => {

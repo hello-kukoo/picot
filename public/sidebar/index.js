@@ -25,6 +25,7 @@ import { mergeWorkspaceProjects, resolvePinnedWorkspaceGroups } from "../workspa
 import { WorkspaceQuickInfo } from "../workspace-quick-info.js";
 import {
   buildSessionItem as buildSessionItemNode,
+  formatSessionTime,
   getSessionDisplayTitle,
 } from "./build-session-item.js";
 
@@ -1458,22 +1459,6 @@ export class SessionSidebar {
   }
 
   formatTime(isoTimestamp) {
-    try {
-      const date = new Date(isoTimestamp);
-      const now = new Date();
-      const diffMs = now.getTime() - date.getTime();
-      const diffMins = Math.floor(diffMs / 60000);
-      const diffHours = Math.floor(diffMs / 3600000);
-      const days = Math.floor(diffMs / 86400000);
-
-      if (diffMins < 1) return t("sidebar.justNow");
-      if (diffMins < 60) return t("sidebar.minutesAgo", { minutes: diffMins });
-      if (diffHours < 24) return t("sidebar.hoursAgo", { hours: diffHours });
-      if (days === 1) return t("sidebar.yesterday");
-      if (days < 7) return date.toLocaleDateString([], { weekday: "long" });
-      return date.toLocaleDateString([], { month: "short", day: "numeric" });
-    } catch {
-      return "";
-    }
+    return formatSessionTime(isoTimestamp);
   }
 }
