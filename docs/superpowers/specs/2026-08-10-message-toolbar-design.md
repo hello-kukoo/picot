@@ -3,9 +3,16 @@
 ## Status
 
 Product and interaction design confirmed with Dr. Lin on 2026-08-10. This
-document defines the per-message action toolbar (copy + timestamp in this
-phase) and its extension contract for future actions (fork / delete).
-Implementation has not started.
+document defines the per-message action toolbar (copy + timestamp + usage in
+this phase) and its extension contract for future actions (fork / delete).
+
+**Implemented** (working tree, uncommitted): the toolbar, per-role visibility
+(user hover/focus-gated via `.visible`; assistant always visible), the unified
+timestamp/usage styling, and the `formatMessageTime` helper are landed across
+`public/ui/message-renderer.js`, `public/app.js`, `public/native/app.js`, and
+`public/style.css`. The sections below describe that implementation; fork /
+delete remain deferred (see Future Work). The 2026-08-10 confirmation date is
+preserved as the original design snapshot.
 
 ## Goal
 
@@ -54,8 +61,9 @@ This phase delivers:
 | Timestamp source — real-time assistant | `Date.now()` at finalize (completion moment). Streaming shows no toolbar. |
 | Which messages show a timestamp | User messages + each turn's final assistant reply. Tool calls / thinking are folded as process noise and get no toolbar timestamp. |
 | Messages with no timestamp | No timestamp rendered. Toolbar still renders (copy + future actions). |
-| Toolbar reveal trigger | Hover over the whole `.message` container, plus keyboard `:focus-within`. |
-| Touch devices | Toolbar always visible under `@media (hover: none)`. |
+| Toolbar reveal — user | JS-driven show/hide: hovering the bubble or the toolbar toggles a `.visible` class (see `_setupUserToolbarHover`); `:focus-within` also reveals it for keyboard. Hidden by default, shown on enter, hidden again 80 ms after leave. Pure CSS `:hover` was rejected because long user messages fill the row width, so `:hover` on the block never ends. |
+| Toolbar reveal — assistant | Always visible (no hover gating); `:focus-within` still applies for keyboard but is a no-op visually since the row is already opaque. |
+| Touch devices | User toolbar always visible under `@media (hover: none)` (assistant already is). |
 | Toolbar visibility during assistant streaming | Hidden until finalize. |
 | Settings toggle | None. Timestamps show whenever available. |
 | User toolbar layout | `{timestamp} {copy}` — right-aligned (user block is right-aligned). |
@@ -236,23 +244,39 @@ for `.message.user` (block is right-aligned), left-aligned for
 
 ### Visibility model
 
+Visibility is **per role** — user toolbars are JS-gated, assistant
+toolbars are always visible:
+
 ```css
-/* Default: hidden. */
-.message-actions { opacity: 0; }
+/* User toolbar: hidden by default. A `.visible` class (toggled by
+   _setupUserToolbarHover) reveals it; :focus-within covers keyboard. */
+.message.user .message-actions { opacity: 0; }
+.message.user .message-actions.visible,
+.message.user:focus-within .message-actions { opacity: 1; }
 
-/* Reveal on hover over the whole message OR keyboard focus within. */
-.message:hover .message-actions,
-.message:focus-within .message-actions { opacity: 1; }
+/* Assistant toolbar: always visible. */
+.message.assistant .message-actions { opacity: 1; }
 
-/* Touch devices have no hover; keep the toolbar visible. */
+/* Touch devices have no hover; keep the user toolbar visible too. */
 @media (hover: none) {
-  .message-actions { opacity: 1; }
+  .message.user .message-actions { opacity: 1; }
 }
 ```
 
-- Transition on `opacity` for a soft reveal.
-- Keyboard users tabbing to the copy button (and future actions) trigger
-  `:focus-within`, so the toolbar stays visible while focused.
+`_setupUserToolbarHover(contentEl, actionsEl)` attaches `mouseenter` /
+`mouseleave` to **both** the bubble (`.message-content`) and the toolbar
+(`.message-actions`). An 80 ms grace timer keeps the toolbar visible while the
+pointer crosses the gap between bubble and toolbar, then hides it. This is
+JS-driven rather than pure CSS `:hover` because a long user message fills the
+row width, so `:hover` on the message block never actually ends when the
+pointer moves to the empty side — the toolbar would never hide. (A `width:auto`
+shrink-to-fit was tried first but fails for messages that wrap to the full row
+width; JS scoping the hover to bubble+toolbar is robust for all message
+lengths.)
+
+- Transition on `opacity` for a soft reveal on the user toolbar.
+- Keyboard users tabbing to the copy button trigger `:focus-within`, which
+  reveals the toolbar via the CSS fallback even without the `.visible` class.
 - The legacy always-visible copy button styling (`.message-copy-btn { opacity:
   0.45 }`) is removed; visibility is now owned by `.message-actions`.
 
@@ -350,10 +374,12 @@ phase.
   numerals where supported. Same baseline as the sidebar's `.session-time`.
 - **Copy button** — keeps today's icon, `copied` → "✓" feedback animation.
   Now lives inside the toolbar.
-- **Usage (cost)** — unchanged styling (`$0.0123`, dim), now inside the
-  assistant toolbar. Only shown when `cost > 0`.
-- **Hover target** — the entire `.message` container (message body + toolbar
-  area), so the user does not have to aim precisely.
+- **Usage (cost)** — styling unified with the timestamp: same `--font-size-sm`,
+  same `--text-dim` colour, same tabular numerals. No separate opacity. Only
+  shown when `cost > 0`.
+- **Hover target (user)** — the user message block (bubble + toolbar), sized
+  to content so mouse-leave hides the toolbar. The assistant toolbar needs no
+  hover target (always visible).
 - **No toolbar on**: error rows (`renderError`), welcome screen, system
   messages, folded process-detail groups (thinking / tool calls).
 
@@ -480,9 +506,12 @@ buttons without touching layout, alignment, or visibility logic.
       `MM/DD HH:MM` otherwise). Hovering the timestamp shows the full time.
 - [ ] Tooltips with no timestamp source (Quick/Side Chat, legacy sessions)
       render the toolbar without a time span.
-- [ ] Copy button and timestamp share a single `.message-actions` toolbar,
-      revealed on hover over the message and on keyboard focus within.
-- [ ] Touch devices show the toolbar persistently.
+- [ ] Copy button and timestamp share a single `.message-actions` toolbar.
+      The **user** toolbar is hover/focus-gated (hidden on mouse-leave); the
+      **assistant** toolbar is always visible.
+- [ ] Touch devices show the user toolbar persistently (assistant already is).
+- [ ] Assistant toolbar's timestamp and usage (cost) share one styling
+      (font-size, colour, tabular numerals).
 - [ ] Assistant streaming messages show no toolbar; it appears on finalize.
 - [ ] `formatMessageTime` is a standalone helper, not reusing
       `formatSessionTime`.

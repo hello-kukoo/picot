@@ -2732,7 +2732,8 @@ function handleMessageStart(message) {
     if (!lastSentMessage || getMessageText(message) !== lastSentMessage) {
       const content = getMessageText(message);
       const images = getMessageImages(message);
-      if (content || images.length > 0) renderNavigableUserMessage({ content, images });
+      if (content || images.length > 0)
+        renderNavigableUserMessage({ content, images, timestamp: Date.now() });
     }
     lastSentMessage = null;
   }
@@ -2759,8 +2760,11 @@ function getMessageImages(message) {
     }));
 }
 
-function renderNavigableUserMessage({ content, images, isHistory = false }) {
-  const element = messageRenderer.renderUserMessage({ content: content || "", images }, isHistory);
+function renderNavigableUserMessage({ content, images, isHistory = false, timestamp }) {
+  const element = messageRenderer.renderUserMessage(
+    { content: content || "", images, timestamp },
+    isHistory,
+  );
   return element;
 }
 
@@ -3112,7 +3116,7 @@ function sendMessage() {
   }
 
   lastSentMessage = message;
-  renderNavigableUserMessage({ content: message, images: cmd.images });
+  renderNavigableUserMessage({ content: message, images: cmd.images, timestamp: Date.now() });
   if (!hasAnySessionsLoaded()) {
     pendingNewSessionRefresh = true;
   }
@@ -3202,7 +3206,7 @@ function flushQueue() {
     }
 
     const cmd = messageQueue.shift();
-    renderNavigableUserMessage({ content: cmd.message, images: cmd.images });
+    renderNavigableUserMessage({ content: cmd.message, images: cmd.images, timestamp: Date.now() });
     renderQueuedMessages();
     trackPromptDelivery(wsClient.send(cmd), cmd.message);
     refreshSidebarAfterUserPrompt();
@@ -4892,6 +4896,7 @@ function renderSessionHistory(entries, { searchQuery = "" } = {}) {
         content: content || "",
         images: images.length > 0 ? images : undefined,
         isHistory: true,
+        timestamp: msg.timestamp,
       });
     }
   };
@@ -4939,6 +4944,7 @@ function renderSessionHistory(entries, { searchQuery = "" } = {}) {
             false,
             true,
             ensureGroup().body,
+            /* suppressToolbar */ true,
           );
           if (el) stepCount += 1;
         }
@@ -4951,7 +4957,7 @@ function renderSessionHistory(entries, { searchQuery = "" } = {}) {
         }
         if (answerBlocks.length > 0) {
           messageRenderer.renderAssistantMessage(
-            { content: answerBlocks, usage: msg.usage },
+            { content: answerBlocks, usage: msg.usage, timestamp: msg.timestamp },
             false,
             true,
           );
@@ -4962,7 +4968,13 @@ function renderSessionHistory(entries, { searchQuery = "" } = {}) {
           lastUsage = msg.usage;
         }
       } else {
-        const el = messageRenderer.renderAssistantMessage(msg, false, true, ensureGroup().body);
+        const el = messageRenderer.renderAssistantMessage(
+          msg,
+          false,
+          true,
+          ensureGroup().body,
+          /* suppressToolbar */ true,
+        );
         if (el) stepCount += 1;
         toolCallCount += renderHistoryToolCallBlocks(
           msg.content ?? [],

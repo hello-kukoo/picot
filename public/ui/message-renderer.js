@@ -8,6 +8,48 @@ import { onLocaleChange, t } from "../i18n.js";
 import { createIcon, setButtonIcon } from "../icons.js";
 import { renderMarkdown, renderStreamingMarkdown, renderUserMarkdown } from "./markdown.js";
 
+/**
+ * Format a message timestamp for a chat log.
+ *
+ * Same calendar day (local time) → "HH:MM". A different day → "MM/DD HH:MM"
+ * (no i18n — the numeric form reads the same across locales). Invalid or
+ * missing input → "" so callers can render unconditionally and omit the
+ * span when there is nothing to show. Intentionally does NOT reuse the
+ * sidebar's relative-time `formatSessionTime`; chat logs want absolute
+ * clock times, not "2h ago".
+ */
+export function formatMessageTime(timestampMs) {
+  // null / undefined must short-circuit before Number(): Number(null) === 0
+  // is a finite value and would otherwise render the epoch as a real time.
+  if (timestampMs == null) return "";
+  const ms = Number(timestampMs);
+  if (!Number.isFinite(ms)) return "";
+  const date = new Date(ms);
+  // Number.isFinite(1e20) passes, but new Date(1e20) is invalid (getTime → NaN).
+  if (Number.isNaN(date.getTime())) return "";
+  const now = new Date();
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  const pad = (n) => String(n).padStart(2, "0");
+  const hhmm = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  if (sameDay) return hhmm;
+  return `${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${hhmm}`;
+}
+
+/** Full timestamp for the hover `title` (screen-reader / exact reference). */
+function fullTimestampTitle(timestampMs) {
+  const ms = Number(timestampMs);
+  if (!Number.isFinite(ms)) return "";
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(
+    d.getHours(),
+  )}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 export class MessageRenderer {
   constructor(container) {
     this.container = container;
@@ -161,7 +203,15 @@ export class MessageRenderer {
     }
     this._appendMarkup(content, renderUserMarkdown(message.content));
     div.appendChild(content);
-    div.appendChild(this._createCopyButton());
+    const actions = this._createActionsBar({
+      order: "user",
+      timestamp: message.timestamp,
+      copyable: Boolean((content.textContent || "").trim()),
+    });
+    if (actions) {
+      div.appendChild(actions);
+      this._setupUserToolbarHover(content, actions);
+    }
     this.container.appendChild(div);
     this._setupCodeCopyButtons(div);
     this._setupCopyBtn(div);
@@ -169,7 +219,13 @@ export class MessageRenderer {
     return div;
   }
 
-  renderAssistantMessage(message, isStreaming = false, isHistory = false, targetContainer = null) {
+  renderAssistantMessage(
+    message,
+    isStreaming = false,
+    isHistory = false,
+    targetContainer = null,
+    suppressToolbar = false,
+  ) {
     // Remove welcome message if present
     const welcome = this.container.querySelector(".welcome");
     if (welcome) welcome.remove();
@@ -179,7 +235,6 @@ export class MessageRenderer {
     div.dataset.messageId = message.id || "streaming";
 
     let contentHtml = "";
-    let usageHtml = "";
     let rawStreamingText = "";
 
     if (typeof message.content === "string") {
@@ -205,26 +260,30 @@ export class MessageRenderer {
       div._streamingRawText = rawStreamingText;
     }
 
-    // Usage/cost info
-    if (message.usage?.cost) {
-      const cost = message.usage.cost.total;
-      if (cost > 0) {
-        usageHtml = `<span class="message-usage">$${cost.toFixed(4)}</span>`;
-      }
-    }
-
     const streamingClass = isStreaming ? " streaming" : "";
 
     const markup = `
       <div class="message-content${streamingClass}">${contentHtml}</div>
-      ${usageHtml}
-      ${!isStreaming ? `<button class="message-copy-btn" aria-label="${this.escapeHtml(t("messages.copyMessage"))}"></button>` : ""}
     `;
     this._replaceMarkup(div, markup);
 
     this._setupThinkingToggles(div);
     this._setupCodeCopyButtons(div);
-    if (!isStreaming) this._setupCopyBtn(div);
+    // The toolbar (copy + time + usage) attaches only once streaming has
+    // finished and the row is not a folded process-details render. Streaming
+    // rows and suppressed process rows get the toolbar later/at never.
+    if (!isStreaming && !suppressToolbar) {
+      const actions = this._createActionsBar({
+        order: "assistant",
+        timestamp: message.timestamp,
+        usage: message.usage,
+        copyable: Boolean((div.querySelector(".message-content")?.textContent || "").trim()),
+      });
+      if (actions) {
+        div.appendChild(actions);
+        this._setupCopyBtn(div);
+      }
+    }
     // History turns fold process content (thinking + tool calls) into a
     // collapsible "Process details" group; callers pass that group's body as
     // targetContainer so intermediate steps land inside it instead of the
@@ -340,27 +399,22 @@ export class MessageRenderer {
       this._setupCodeCopyButtons(contentDiv);
     }
 
-    // Add copy button only when there is visible (non-thinking) text to copy.
+    // Attach the toolbar (copy + finalize timestamp + usage) once streaming
+    // finishes. The finalize timestamp is Date.now() — the completion moment
+    // — matching the real-time assistant contract in the message-toolbar spec.
     if (
       this._copyableText(messageElement).trim() &&
-      !messageElement.querySelector(".message-copy-btn")
+      !messageElement.querySelector(".message-actions")
     ) {
-      const btn = document.createElement("button");
-      btn.className = "message-copy-btn";
-      btn.setAttribute("aria-label", t("messages.copyMessage"));
-      const icon = createIcon("copy", { size: 12 });
-      if (icon) btn.appendChild(icon);
-      messageElement.appendChild(btn);
-      this._setupCopyBtn(messageElement);
-    }
-
-    // Add usage info if available
-    if (usage?.cost && usage.cost.total > 0) {
-      if (!messageElement.querySelector(".message-usage")) {
-        const span = document.createElement("span");
-        span.className = "message-usage";
-        span.textContent = `$${usage.cost.total.toFixed(4)}`;
-        messageElement.appendChild(span);
+      const actions = this._createActionsBar({
+        order: "assistant",
+        timestamp: Date.now(),
+        usage,
+        copyable: true,
+      });
+      if (actions) {
+        messageElement.appendChild(actions);
+        this._setupCopyBtn(messageElement);
       }
     }
   }
@@ -430,8 +484,80 @@ export class MessageRenderer {
     return element;
   }
 
+  /**
+   * Build the .message-actions toolbar row. `order` selects the slot layout:
+   *   - "user":      time, copy
+   *   - "assistant": copy, time, usage (usage only when cost > 0)
+   * The time span is omitted when `formatMessageTime(timestamp)` returns "".
+   * The copy button is omitted when there is no copyable text (e.g. an
+   * image-only user message). The toolbar row itself is always returned
+   * (never null) so future actions still have a slot — per the design spec
+   * every rendered user message keeps its toolbar.
+   */
+  _createActionsBar({ order, timestamp = null, usage = null, copyable = true }) {
+    const actions = document.createElement("div");
+    actions.className = "message-actions";
+    const timeLabel = formatMessageTime(timestamp);
+    const timeSpan = () => {
+      const span = document.createElement("span");
+      span.className = "message-time";
+      span.textContent = timeLabel;
+      const title = fullTimestampTitle(timestamp);
+      if (title) span.title = title;
+      return span;
+    };
+    const copyBtn = copyable ? this._createCopyButton() : null;
+    if (order === "user") {
+      if (timeLabel) actions.appendChild(timeSpan());
+      if (copyBtn) actions.appendChild(copyBtn);
+    } else {
+      if (copyBtn) actions.appendChild(copyBtn);
+      if (timeLabel) actions.appendChild(timeSpan());
+      if (usage?.cost && usage.cost.total > 0) {
+        const usageSpan = document.createElement("span");
+        usageSpan.className = "message-usage";
+        usageSpan.textContent = `$${usage.cost.total.toFixed(4)}`;
+        actions.appendChild(usageSpan);
+      }
+    }
+    return actions;
+  }
+
+  /**
+   * Show/hide the user message toolbar on hover. The toolbar visibility is
+   * JS-driven (not pure CSS :hover) because a long user message fills the
+   * row width, so `:hover` on the message block never actually ends when the
+   * pointer moves to the empty side — the toolbar would never hide. Here we
+   * scope the hover to the bubble (.message-content) and the toolbar itself,
+   * with a tiny grace timer so moving between the two does not flicker.
+   * `:focus-within` still reveals the toolbar via CSS for keyboard users.
+   */
+  _setupUserToolbarHover(contentEl, actionsEl) {
+    if (!contentEl || !actionsEl) return;
+    let hideTimer = 0;
+    const show = () => {
+      if (hideTimer) {
+        clearTimeout(hideTimer);
+        hideTimer = 0;
+      }
+      actionsEl.classList.add("visible");
+    };
+    const hideSoon = () => {
+      if (hideTimer) clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => {
+        hideTimer = 0;
+        actionsEl.classList.remove("visible");
+      }, 80);
+    };
+    for (const el of [contentEl, actionsEl]) {
+      el.addEventListener("mouseenter", show);
+      el.addEventListener("mouseleave", hideSoon);
+    }
+  }
+
   _createCopyButton() {
     const button = document.createElement("button");
+    button.type = "button";
     button.className = "message-copy-btn";
     button.setAttribute("aria-label", t("messages.copyMessage"));
     const icon = createIcon("copy", { size: 12 });

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n, setLocale } from "../i18n.js";
-import { MessageRenderer } from "./message-renderer.js";
+import { formatMessageTime, MessageRenderer } from "./message-renderer.js";
 
 const enMessages = {
   messages: {
@@ -284,5 +284,131 @@ describe("MessageRenderer teardown", () => {
     // No re-render after destroy: the welcome stays English.
     await setLocale("zh");
     expect(welcomeP.textContent).toBe("Welcome to Picot");
+  });
+});
+
+describe("formatMessageTime", () => {
+  it("returns HH:MM for a timestamp on the same calendar day", () => {
+    const now = new Date();
+    const sameDay = new Date(now).setHours(14, 32, 0, 0);
+    expect(formatMessageTime(sameDay)).toBe("14:32");
+  });
+
+  it("returns MM/DD HH:MM for a timestamp on a different day", () => {
+    const old = new Date(2020, 0, 9, 9, 5); // Jan 9 2020, 09:05
+    expect(formatMessageTime(old.getTime())).toBe("01/09 09:05");
+  });
+
+  it("returns empty string for invalid / missing input", () => {
+    expect(formatMessageTime(null)).toBe("");
+    expect(formatMessageTime(undefined)).toBe("");
+    expect(formatMessageTime(NaN)).toBe("");
+    expect(formatMessageTime("not-a-date")).toBe("");
+    // 1e20 is finite but out of Date's valid range → Invalid Date.
+    expect(formatMessageTime(1e20)).toBe("");
+  });
+});
+
+describe("MessageRenderer action toolbar", () => {
+  let container;
+  let renderer;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    renderer = new MessageRenderer(container);
+  });
+
+  it("renderUserMessage builds a {time, copy} actions row", () => {
+    const ts = new Date().setHours(14, 32, 7, 0);
+    const el = renderer.renderUserMessage({ content: "hi", timestamp: ts });
+
+    const actions = el.querySelector(".message-actions");
+    expect(actions).not.toBeNull();
+    // Slot order for user: time, then copy.
+    const slots = actions.children;
+    expect(slots[0].classList.contains("message-time")).toBe(true);
+    expect(slots[0].textContent).toBe("14:32");
+    expect(slots[1].classList.contains("message-copy-btn")).toBe(true);
+    expect(slots[1].type).toBe("button");
+    // Full timestamp exposed via title.
+    expect(slots[0].title).toContain("14:32:07");
+  });
+
+  it("omits the time span when no timestamp is provided", () => {
+    const el = renderer.renderUserMessage({ content: "hi" });
+    const actions = el.querySelector(".message-actions");
+    expect(actions).not.toBeNull();
+    expect(actions.querySelector(".message-time")).toBeNull();
+    expect(actions.querySelector(".message-copy-btn")).not.toBeNull();
+    expect(actions.querySelector(".message-copy-btn").type).toBe("button");
+  });
+
+  it("renderAssistantMessage builds a {copy, time, usage} actions row", () => {
+    const ts = new Date().setHours(14, 32, 0, 0);
+    const el = renderer.renderAssistantMessage({
+      content: "hello",
+      timestamp: ts,
+      usage: { cost: { total: 0.0123 } },
+    });
+
+    const actions = el.querySelector(".message-actions");
+    expect(actions).not.toBeNull();
+    const slots = actions.children;
+    expect(slots[0].classList.contains("message-copy-btn")).toBe(true);
+    expect(slots[1].classList.contains("message-time")).toBe(true);
+    expect(slots[2].classList.contains("message-usage")).toBe(true);
+    expect(slots[2].textContent).toBe("$0.0123");
+  });
+
+  it("streaming assistant renders no toolbar", () => {
+    const el = renderer.renderAssistantMessage({ content: "" }, true);
+    expect(el.querySelector(".message-actions")).toBeNull();
+  });
+
+  it("suppressToolbar=true omits the whole actions row", () => {
+    const el = renderer.renderAssistantMessage(
+      { content: "process", timestamp: Date.now() },
+      false,
+      true,
+      null,
+      /* suppressToolbar */ true,
+    );
+    expect(el.querySelector(".message-actions")).toBeNull();
+    expect(el.querySelector(".message-copy-btn")).toBeNull();
+  });
+
+  it("finalizeStreamingMessage attaches a {copy, time, usage} toolbar", () => {
+    const el = renderer.renderAssistantMessage({ content: "" }, true);
+    renderer.updateStreamingMessage(el, "final answer");
+    renderer.finalizeStreamingMessage(el, { cost: { total: 0.05 } });
+
+    const actions = el.querySelector(".message-actions");
+    expect(actions).not.toBeNull();
+    expect(actions.querySelector(".message-copy-btn")).not.toBeNull();
+    expect(actions.querySelector(".message-time")).not.toBeNull();
+    expect(actions.querySelector(".message-usage").textContent).toBe("$0.0500");
+  });
+
+  it("finalizeStreamingMessage adds no toolbar when there is no copyable text", () => {
+    const el = renderer.renderAssistantMessage({ content: "" }, true);
+    renderer.finalizeStreamingMessage(el);
+    expect(el.querySelector(".message-actions")).toBeNull();
+  });
+
+  it("image-only user message still gets a toolbar row (without copy button)", () => {
+    const ts = new Date().setHours(14, 32, 0, 0);
+    const el = renderer.renderUserMessage({
+      content: "",
+      images: [{ data: "abc", mimeType: "image/png" }],
+      timestamp: ts,
+    });
+    const actions = el.querySelector(".message-actions");
+    // Toolbar exists (spec: every user message keeps its toolbar).
+    expect(actions).not.toBeNull();
+    // Time span is present.
+    expect(actions.querySelector(".message-time")).not.toBeNull();
+    // No copy button (nothing text-copyable), but the row is there for
+    // future actions.
+    expect(actions.querySelector(".message-copy-btn")).toBeNull();
   });
 });

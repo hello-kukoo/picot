@@ -3735,17 +3735,19 @@ body {
 
 .message.user {
   align-self: flex-end;
+  /* Size to content so the hover region is the bubble + toolbar, not the
+     full row. A full-width block keeps :hover active over empty space and
+     the toolbar never hides on mouse-leave. */
+  width: auto;
+  max-width: 100%;
 }
 .message.assistant {
   align-self: flex-start;
 }
-.message-usage {
-  display: inline-block;
-  font-size: var(--font-size-sm);
-  color: var(--text-dim);
-  margin-top: 2px;
-  opacity: 0.5;
-}
+/* Toolbar cost label shares .message-time styling above (font-size, colour,
+   tabular numerals). No margin-top: the actions row is already a flex row
+   with align-items:center, and a margin here would push cost below the
+   timestamp baseline. */
 
 /* biome-ignore lint/style/noDescendingSpecificity: base styles defined after scoped overrides intentionally */
 .message-content {
@@ -5476,8 +5478,50 @@ body.hide-thinking .thinking-block {
 
 /* Copy message button (below message) */
 
+/* Per-message action toolbar. Visibility is per-role: the user toolbar is
+   hover/focus-gated, the assistant toolbar is always visible. */
+.message-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  padding: var(--space-0-5) var(--space-1);
+  transition: opacity 0.15s var(--ease);
+}
+
+/* User toolbar: hidden by default. Visibility is JS-driven via a `.visible`
+   class (see _setupUserToolbarHover), because a long user message fills the
+   row width and a CSS :hover on the block never ends. :focus-within still
+   reveals it for keyboard users. */
+.message.user .message-actions {
+  opacity: 0;
+}
+
+.message.user .message-actions.visible,
+.message.user:focus-within .message-actions {
+  opacity: 1;
+}
+
+/* Assistant toolbar: always visible. */
+.message.assistant .message-actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .message.user .message-actions {
+    opacity: 1;
+  }
+}
+
+/* Timestamp + cost share one styling: same font size, colour, tabular numerals. */
+.message-time,
+.message-usage {
+  font-size: var(--font-size-sm);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .message-copy-btn {
-  opacity: 0.45;
   background: none;
   border: none;
   color: var(--text-dim);
@@ -5491,7 +5535,6 @@ body.hide-thinking .thinking-block {
 }
 
 .message-copy-btn:hover {
-  opacity: 1;
   color: var(--text-primary);
 }
 
@@ -6308,10 +6351,6 @@ body.file-dragging * {
   /* biome-ignore lint/style/noDescendingSpecificity: responsive override; .message .message-content scoped rule defined earlier */
   .message-content {
     font-size: var(--font-size-md);
-  }
-
-  .message-copy-btn {
-    opacity: 0.45;
   }
 
   /* Hide context bar on mobile */

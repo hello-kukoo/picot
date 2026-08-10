@@ -204,6 +204,23 @@ function runBuiltin(action) {
   }
 }
 
+function getAssistantText(message) {
+  if (typeof message?.content === "string") return message.content;
+  if (!Array.isArray(message?.content)) return "";
+  return message.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text || "")
+    .join("\n");
+}
+
+function getAssistantThinking(message) {
+  if (!Array.isArray(message?.content)) return "";
+  return message.content
+    .filter((block) => block.type === "thinking")
+    .map((block) => block.thinking || "")
+    .join("\n");
+}
+
 async function handleRuntimeEvent(event) {
   switch (event.type) {
     case "agent_start":
@@ -213,7 +230,8 @@ async function handleRuntimeEvent(event) {
       setStatus("Ready");
       break;
     case "message_start":
-      if (event.message?.role === "user") messageRenderer.renderUserMessage(event.message);
+      if (event.message?.role === "user")
+        messageRenderer.renderUserMessage({ ...event.message, timestamp: Date.now() });
       else if (event.message?.role === "assistant") {
         streamingElement = messageRenderer.renderAssistantMessage(event.message, true);
       }
@@ -222,12 +240,21 @@ async function handleRuntimeEvent(event) {
       if (!streamingElement) {
         streamingElement = messageRenderer.renderAssistantMessage(event.message, true);
       } else {
-        messageRenderer.updateStreamingMessage(streamingElement, event.message?.content ?? []);
+        messageRenderer.updateStreamingMessage(streamingElement, getAssistantText(event.message));
       }
       break;
     case "message_end":
       if (event.message?.role === "assistant" && streamingElement) {
-        messageRenderer.updateStreamingMessage(streamingElement, event.message.content ?? []);
+        const assistantText = getAssistantText(event.message);
+        messageRenderer.updateStreamingMessage(streamingElement, assistantText);
+        // Finalize attaches the toolbar (copy + finalize timestamp + usage).
+        // The native path has no turn folding, so every completed assistant
+        // message is treated as a final answer and gets a toolbar.
+        messageRenderer.finalizeStreamingMessage(
+          streamingElement,
+          event.message.usage ?? null,
+          getAssistantThinking(event.message),
+        );
         streamingElement = null;
       }
       break;
