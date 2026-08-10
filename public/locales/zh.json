@@ -34,6 +34,7 @@
     "conflicted": "冲突",
     "refresh": "刷新 Git 状态",
     "noStatus": "尚未加载 Git 状态",
+    "notGitRepo": "当前工作区不是 Git 仓库",
     "discardWarning": "此操作不可撤销",
     "writeUnavailable": "Git 写入授权不可用",
     "stage": "暂存",

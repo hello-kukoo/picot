@@ -34,6 +34,7 @@
     "conflicted": "Conflicted",
     "refresh": "Refresh Git status",
     "noStatus": "No Git status loaded",
+    "notGitRepo": "This workspace is not a Git repository",
     "discardWarning": "This action cannot be undone",
     "writeUnavailable": "Git write authorization unavailable",
     "stage": "Stage",

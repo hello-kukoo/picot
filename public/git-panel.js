@@ -16,6 +16,8 @@ export class GitPanel {
     this.onStatus = onStatus;
     this.fileList = fileList;
     this.snapshot = null;
+    this.notGitRepo = false;
+    this.pendingStatusRequestId = null;
     this.folded = new Set();
     this.selected = new Set();
     this.aiSnapshot = null;
@@ -29,6 +31,8 @@ export class GitPanel {
   }
   setSnapshot(snapshot) {
     this.snapshot = snapshot;
+    this.notGitRepo = false;
+    this.pendingStatusRequestId = null;
     const valid = new Set(
       (snapshot?.entries || []).flatMap((entry) =>
         this.groupsFor(entry).map(
@@ -47,9 +51,21 @@ export class GitPanel {
     this.render();
     this.onStatus?.(snapshot);
   }
+  setNotGitRepo(value = true) {
+    this.notGitRepo = value;
+    this.pendingStatusRequestId = null;
+    this.render();
+  }
+  /** True only for the failure of the most recent status probe, so stale or
+   *  concurrent non-status failures (diff/write/commit) cannot flip the panel
+   *  into the not-a-repository state. */
+  isStatusFailure(requestId) {
+    return requestId != null && requestId === this.pendingStatusRequestId;
+  }
   async refresh() {
     const id = this.client?.command({ type: "status" });
     if (!id) return null;
+    this.pendingStatusRequestId = id;
     return id;
   }
   async discard(entries = [], contextGroup = null) {
@@ -298,6 +314,12 @@ export class GitPanel {
     const scrollTop = this.container.scrollTop;
     this.container.replaceChildren();
     const snapshot = this.snapshot;
+    if (this.notGitRepo) {
+      const empty = document.createElement("p");
+      empty.textContent = t("git.notGitRepo");
+      this.container.append(empty);
+      return;
+    }
     if (!snapshot) {
       const empty = document.createElement("p");
       empty.textContent = t("git.noStatus");

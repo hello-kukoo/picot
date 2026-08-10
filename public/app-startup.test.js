@@ -193,6 +193,47 @@ test("retries Git status when workspace generation arrives after opening Git", a
   });
 });
 
+test("shows the not-a-git message only for the current status probe", async () => {
+  await import("./app.js?git-not-a-repo");
+  const socket = FakeWebSocket.instances.at(-1);
+  socket.readyState = FakeWebSocket.OPEN;
+
+  document.getElementById("file-sidebar-git-tab").click();
+  expect(socket.sent).toHaveLength(0);
+
+  socket.onmessage({ data: JSON.stringify({ type: "capabilities", class: "native" }) });
+  socket.onmessage({
+    data: JSON.stringify({ type: "owner_bootstrap", workspaceGeneration: 7, instances: [] }),
+  });
+  const panel = document.getElementById("git-panel");
+
+  // A stale failure that is not the current status probe (superseded probe or
+  // a concurrent diff/write) must not flip the panel into not-a-repository.
+  socket.onmessage({
+    data: JSON.stringify({
+      type: "git_command_failed",
+      requestId: "git-999",
+      workspaceGeneration: 7,
+      error: "fatal: not a git repository (or any of the parent directories): .git",
+    }),
+  });
+  expect(panel.textContent).not.toContain("This workspace is not a Git repository");
+
+  // The actual status probe fails because the workspace is not a Git
+  // repository; the broker answers with a git_command_failed frame instead of
+  // git_status, and only that requestId flips the panel.
+  socket.onmessage({
+    data: JSON.stringify({
+      type: "git_command_failed",
+      requestId: "git-1",
+      workspaceGeneration: 7,
+      error: "fatal: not a git repository (or any of the parent directories): .git",
+    }),
+  });
+  expect(panel.textContent).toContain("This workspace is not a Git repository");
+  expect(panel.textContent).not.toContain("No Git status loaded");
+});
+
 test("persists the selected sidebar tab and restores it on reload", async () => {
   // Simulate a session where the user picked the Git tab, then reloads.
   const storage = new Map([

@@ -17,6 +17,7 @@ setMessages({
     conflicted: "Conflicted",
     refresh: "Refresh",
     noStatus: "No Git status loaded",
+    notGitRepo: "This workspace is not a Git repository",
     stage: "Stage",
     unstage: "Unstage",
     discard: "Discard",
@@ -62,6 +63,43 @@ describe("GitPanel", () => {
     expect(panel.container.textContent).toContain("<unsafe>.js");
     expect(panel.container.querySelectorAll("section")).toHaveLength(4);
     expect(panel.container.querySelector("script")).toBeNull();
+  });
+
+  it("shows the not-a-repository message instead of no-status when setNotGitRepo is set", () => {
+    const panel = new GitPanel({
+      container: document.querySelector("#panel"),
+      client: { command: vi.fn() },
+    });
+    panel.setNotGitRepo(true);
+    expect(panel.container.textContent).toContain("This workspace is not a Git repository");
+    expect(panel.container.textContent).not.toContain("No Git status loaded");
+
+    // A successful snapshot clears the not-git state and renders groups again.
+    panel.setSnapshot({ entries: [{ entryKind: "ordinary", xy: ".M", displayPath: "app.js" }] });
+    expect(panel.container.textContent).toContain("app.js");
+    expect(panel.container.textContent).not.toContain("This workspace is not a Git repository");
+  });
+
+  it("only treats the most recent status probe failure as not-a-repository", () => {
+    const command = vi.fn().mockReturnValue("git-7");
+    const panel = new GitPanel({
+      container: document.querySelector("#panel"),
+      client: { command },
+    });
+    void panel.refresh();
+    expect(panel.isStatusFailure("git-7")).toBe(true);
+    // Stale / concurrent non-status failures must not match.
+    expect(panel.isStatusFailure("git-6")).toBe(false);
+    expect(panel.isStatusFailure(null)).toBe(false);
+    expect(panel.isStatusFailure(undefined)).toBe(false);
+
+    // A successful snapshot retires the pending probe.
+    panel.setSnapshot({ entries: [] });
+    expect(panel.isStatusFailure("git-7")).toBe(false);
+
+    // setNotGitRepo also retires the pending probe (idempotent re-entry).
+    panel.setNotGitRepo(true);
+    expect(panel.isStatusFailure("git-7")).toBe(false);
   });
 
   it("renders a compact status toolbar with primary commit and secondary refresh actions", () => {

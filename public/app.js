@@ -1406,6 +1406,7 @@ wsClient.addEventListener("ownerBootstrap", async (event) => {
     gitPanel.aiSnapshot = null;
     gitPanel.commitMessage = "";
     gitPanel.pendingConfirmationToken = null;
+    gitPanel.notGitRepo = false;
     if (!gitPanelElement.classList.contains("hidden")) void gitPanel.refresh();
     if (terminalPanel.toggleEl) terminalClient.requestList();
   }
@@ -1491,6 +1492,18 @@ wsClient.addEventListener("gitCommandFailed", (event) => {
   // the in-progress state so the dialog is retryable, with the error surfaced.
   if (event.detail?.requestId && event.detail.requestId === gitPanel.pendingCommitRequestId) {
     gitPanel.applyCommitFailure(event.detail?.error);
+  }
+  // A status probe against a non-repository workspace fails with git's
+  // "not a git repository" error and never produces a git_status frame, so the
+  // panel would otherwise sit on the generic "no status loaded" message.
+  // Surface the real reason instead — but only for the current status probe,
+  // never for stale or concurrent non-status failures.
+  if (
+    gitPanel.isStatusFailure(event.detail?.requestId) &&
+    typeof event.detail?.error === "string" &&
+    event.detail.error.includes("not a git repository")
+  ) {
+    gitPanel.setNotGitRepo(true);
   }
 });
 wsClient.addEventListener("ephemeralEvent", (event) => {
@@ -1589,6 +1602,7 @@ function setFileSidebarTab(tab) {
     // Clear any stale snapshot from a previous workspace so the panel
     // never shows old data while waiting for a fresh status response.
     gitPanel.snapshot = null;
+    gitPanel.notGitRepo = false;
     gitPanel.render();
     void gitPanel.refresh();
   }
@@ -4265,6 +4279,7 @@ async function handleSessionSelectImpl(session, project) {
     }
     // Clear stale Git panel state so old workspace files never leak in.
     gitPanel.snapshot = null;
+    gitPanel.notGitRepo = false;
     gitPanel.selected = new Set();
     gitPanel.commitMessage = "";
     gitPanel.pendingConfirmationToken = null;
@@ -4641,6 +4656,7 @@ function handleMirrorSync(data) {
     // snapshot. The file browser refreshes automatically via
     // refreshFileBrowserForWorkspace above; Git needs the same treatment.
     gitPanel.snapshot = null;
+    gitPanel.notGitRepo = false;
     gitPanel.selected = new Set();
     gitPanel.commitMessage = "";
     gitPanel.pendingConfirmationToken = null;
