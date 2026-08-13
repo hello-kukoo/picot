@@ -140,6 +140,10 @@
     "parentDirectory": "親ディレクトリ",
     "openInFileManager": "ファイルマネージャーで開く",
     "close": "ファイルブラウザを閉じる",
+    "refreshDirectory": "ディレクトリを更新",
+    "refreshDirectoryAria": "現在のディレクトリ一覧を更新",
+    "showHiddenFiles": "隠しファイルを表示",
+    "showHiddenFilesAria": "ドットファイルや無視されたディレクトリの表示/非表示",
     "preview": {
       "title": "プレビュー",
       "enlarge": "パネルを拡大",

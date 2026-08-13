@@ -140,6 +140,10 @@
     "parentDirectory": "Parent directory",
     "openInFileManager": "Open in file manager",
     "close": "Close file browser",
+    "refreshDirectory": "Refresh directory",
+    "refreshDirectoryAria": "Refresh current directory listing",
+    "showHiddenFiles": "Show hidden files",
+    "showHiddenFilesAria": "Show or hide dotfiles and ignored directories",
     "preview": {
       "title": "Preview",
       "enlarge": "Enlarge panel",

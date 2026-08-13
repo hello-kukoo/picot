@@ -204,6 +204,71 @@ describe("FileBrowser.load", () => {
   });
 });
 
+describe("FileBrowser refresh and visibility", () => {
+  test("refreshes the current directory and preserves showHidden in the request", async () => {
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
+    browser.currentPath = "/tmp/project/src";
+    browser.showHidden = true;
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ path: "/tmp/project/src", items: [] }),
+    });
+
+    await browser.refresh();
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/api/files?path=%2Ftmp%2Fproject%2Fsrc&scope=workspace&showHidden=1",
+    );
+  });
+
+  test("refreshes the active workspace root without an explicit stale path", async () => {
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ path: "/tmp/project", items: [] }),
+    });
+
+    await browser.refresh();
+
+    expect(globalThis.fetch).toHaveBeenCalledWith("/api/files?scope=workspace");
+  });
+
+  test("enabling hidden entries notifies once and reloads with showHidden=1", async () => {
+    const onShowHiddenChange = vi.fn();
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput(), {
+      onShowHiddenChange,
+    });
+    browser.currentPath = "/tmp/project";
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ path: "/tmp/project", items: [] }),
+    });
+
+    await browser.setShowHidden(true);
+    await browser.setShowHidden(true);
+
+    expect(onShowHiddenChange).toHaveBeenCalledTimes(1);
+    expect(onShowHiddenChange).toHaveBeenCalledWith(true);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/api/files?path=%2Ftmp%2Fproject&scope=workspace&showHidden=1",
+    );
+  });
+
+  test("resets hidden-entry visibility on a workspace change", () => {
+    const onShowHiddenChange = vi.fn();
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput(), {
+      onShowHiddenChange,
+    });
+    browser.showHidden = true;
+
+    browser.setWorkspaceRoot("/tmp/other-project");
+
+    expect(browser.showHidden).toBe(false);
+    expect(onShowHiddenChange).toHaveBeenLastCalledWith(false);
+  });
+});
+
 describe("FileBrowser locale change", () => {
   let originalFetch;
 

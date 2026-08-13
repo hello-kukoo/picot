@@ -49,16 +49,37 @@ test("sidebar action buttons share the main panel toggle visual contract", () =>
 });
 
 test("File panel actions share the same scoped button treatment", () => {
-  for (const id of ["file-sidebar-up", "file-sidebar-finder", "file-sidebar-close"]) {
+  for (const id of [
+    "file-sidebar-up",
+    "file-sidebar-refresh",
+    "file-sidebar-toggle-hidden",
+    "git-panel-refresh",
+    "file-sidebar-finder",
+    "file-sidebar-close",
+  ]) {
     const button = document.querySelector(`#${id}`);
     expect(button?.classList.contains("file-sidebar-action")).toBe(true);
     expect(button?.querySelector("svg")).toBeNull();
   }
   expect(appJs).toContain('[fileSidebarClose, "x", 16]');
   expect(appJs).toContain('[fileSidebarUp, "arrow-up", 16]');
-  expect(appJs).toContain('[fileSidebarFinder, "folder-open", 16]');
+  expect(appJs).toContain('[fileSidebarRefresh, "refresh-cw", 16]');
+  expect(appJs).toContain('[fileSidebarToggleHidden, "eye", 16]');
+  expect(appJs).toContain('[gitPanelRefresh, "refresh-cw", 16]');
+  expect(appJs).toContain('fileSidebarRefresh.classList.toggle("hidden", showGit)');
+  expect(appJs).toContain('fileSidebarToggleHidden.classList.toggle("hidden", showGit)');
+  expect(appJs).toContain('gitPanelRefresh.classList.toggle("hidden", !showGit)');
   expect(styleCss).toContain(".file-sidebar-header .file-sidebar-action");
   expect(styleCss).toContain(".file-sidebar-header .file-sidebar-action svg");
+});
+
+test("declares File and Git header controls with the expected initial state", () => {
+  expect(document.querySelector("#file-sidebar-refresh")).not.toBeNull();
+  expect(document.querySelector("#file-sidebar-toggle-hidden")?.getAttribute("aria-pressed")).toBe(
+    "false",
+  );
+  expect(document.querySelector("#git-panel-refresh")).not.toBeNull();
+  expect(document.querySelector("#git-panel-refresh")?.classList.contains("hidden")).toBe(true);
 });
 
 test("toolbar orders Side Chat, Terminal Panel, then File Browser", () => {

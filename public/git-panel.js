@@ -443,13 +443,6 @@ export class GitPanel {
     toolbar.append(details);
     const actions = document.createElement("div");
     actions.className = "git-panel-toolbar-actions";
-    const refresh = document.createElement("button");
-    refresh.type = "button";
-    refresh.className = "git-panel-refresh";
-    refresh.textContent = t("git.refresh");
-    refresh.setAttribute("aria-label", t("git.refresh"));
-    refresh.addEventListener("click", () => void this.refresh());
-    actions.append(refresh);
     const commit = document.createElement("button");
     commit.type = "button";
     commit.className = "git-panel-commit";

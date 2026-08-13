@@ -147,6 +147,39 @@ const HAS_BUN_SERVE =
   typeof (globalThis as { Bun?: BunRuntime }).Bun !== "undefined" &&
   typeof (globalThis as { Bun?: BunRuntime }).Bun?.serve === "function";
 
+const IGNORED_NAMES = new Set([
+  "node_modules",
+  ".git",
+  "__pycache__",
+  ".DS_Store",
+  ".Trash",
+  ".next",
+  ".nuxt",
+  "dist",
+  "build",
+  ".cache",
+  ".turbo",
+  "venv",
+  ".venv",
+  "env",
+  ".env.local",
+  ".pi",
+  "coverage",
+  ".nyc_output",
+  ".parcel-cache",
+]);
+
+export function filterFileListEntries<T extends { name: string }>(
+  entries: T[],
+  showHidden: boolean,
+): T[] {
+  if (showHidden) return entries;
+  return entries.filter(
+    (entry) =>
+      !(entry.name.startsWith(".") && entry.name !== ".env") && !IGNORED_NAMES.has(entry.name),
+  );
+}
+
 // Picot settings live under `pistudio` key in ~/.pi/agent/settings.json.
 // We only honor the fields that still make sense in desktop-only mode.
 // TODO(rename->picot): key is `pistudio` for historical reasons. Changing it to `picot`
@@ -3517,7 +3550,8 @@ export default function (pi: ExtensionAPI) {
           dirPath = resolved.path;
         }
 
-        await serveFileList(res, dirPath);
+        const showHidden = filesUrl.searchParams.get("showHidden") === "1";
+        await serveFileList(res, dirPath, showHidden);
       } catch (err: unknown) {
         sendJsonError(res, 500, errMessage(err));
       }
@@ -5016,34 +5050,12 @@ export default function (pi: ExtensionAPI) {
   // File browser
   // ═══════════════════════════════════════
 
-  const IGNORED_NAMES = new Set([
-    "node_modules",
-    ".git",
-    "__pycache__",
-    ".DS_Store",
-    ".Trash",
-    ".next",
-    ".nuxt",
-    "dist",
-    "build",
-    ".cache",
-    ".turbo",
-    "venv",
-    ".venv",
-    "env",
-    ".env.local",
-    ".pi",
-    "coverage",
-    ".nyc_output",
-    ".parcel-cache",
-  ]);
-
   // Uses fs.promises (not the *Sync variants) so a large/slow/network-mounted
   // directory listing doesn't block the Node.js event loop — synchronous I/O
   // here would stall every other in-flight request on this pi process,
   // including the Super Agent runtime panel's task polling and RPC/WebSocket
   // traffic for the active chat.
-  async function serveFileList(res: http.ServerResponse, dirPath: string) {
+  async function serveFileList(res: http.ServerResponse, dirPath: string, showHidden: boolean) {
     try {
       const dirStat = await fs.promises.stat(dirPath).catch(() => null);
       if (!dirStat?.isDirectory()) {
@@ -5055,10 +5067,7 @@ export default function (pi: ExtensionAPI) {
       const entries = await fs.promises.readdir(dirPath, {
         withFileTypes: true,
       });
-      const candidates = entries.filter(
-        (entry) =>
-          !(entry.name.startsWith(".") && entry.name !== ".env") && !IGNORED_NAMES.has(entry.name),
-      );
+      const candidates = filterFileListEntries(entries, showHidden);
 
       // biome-ignore lint/suspicious/noExplicitAny: dynamic file-browser entries (name/isDirectory/etc.)
       const statted: any[] = await Promise.all(

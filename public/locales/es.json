@@ -140,6 +140,10 @@
     "parentDirectory": "Directorio padre",
     "openInFileManager": "Abrir en el explorador de archivos",
     "close": "Cerrar explorador de archivos",
+    "refreshDirectory": "Actualizar directorio",
+    "refreshDirectoryAria": "Actualizar la lista del directorio actual",
+    "showHiddenFiles": "Mostrar archivos ocultos",
+    "showHiddenFilesAria": "Mostrar u ocultar archivos punto y directorios ignorados",
     "preview": {
       "title": "Vista previa",
       "enlarge": "Ampliar panel",

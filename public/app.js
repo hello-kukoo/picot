@@ -1047,10 +1047,16 @@ const fileSidebarToggle = document.getElementById("file-sidebar-toggle");
 setButtonIcon(fileSidebarToggle, "panel-right", { size: 16 });
 const fileSidebarClose = document.getElementById("file-sidebar-close");
 const fileSidebarUp = document.getElementById("file-sidebar-up");
+const fileSidebarRefresh = document.getElementById("file-sidebar-refresh");
+const fileSidebarToggleHidden = document.getElementById("file-sidebar-toggle-hidden");
+const gitPanelRefresh = document.getElementById("git-panel-refresh");
 const fileSidebarFinder = document.getElementById("file-sidebar-finder");
 for (const [button, iconName, size] of [
   [fileSidebarClose, "x", 16],
   [fileSidebarUp, "arrow-up", 16],
+  [fileSidebarRefresh, "refresh-cw", 16],
+  [fileSidebarToggleHidden, "eye", 16],
+  [gitPanelRefresh, "refresh-cw", 16],
   [fileSidebarFinder, "folder-open", 16],
   [document.getElementById("lan-qr-modal-close"), "x", 14],
   [document.getElementById("config-editor-close"), "x", 14],
@@ -1081,10 +1087,14 @@ const gitPanel = new GitPanel({
     latestGitDiffDescriptor = descriptor || null;
   },
 });
+const syncFileSidebarHiddenToggle = (showHidden) => {
+  fileSidebarToggleHidden?.setAttribute("aria-pressed", String(showHidden));
+};
 const fileBrowser = new FileBrowser(fileList, fileSidebarPath, messageInput, {
   onFileSelect: (filePath, metadata) => {
     void filePreviewPanel.openFile(filePath, metadata);
   },
+  onShowHiddenChange: syncFileSidebarHiddenToggle,
 });
 setupResizablePanel(fileSidebar, {
   storageKey: "pi-studio-file-sidebar-width",
@@ -1559,10 +1569,10 @@ async function refreshFileBrowserForWorkspace(
   const switched = await filePreviewPanel.setWorkspaceRoot(normalized);
   if (!switched) return false;
 
-  fileBrowser.workspaceRoot = normalized;
+  const workspaceChanged = normalized !== fileBrowserWorkspacePath;
+  if (workspaceChanged) fileBrowser.setWorkspaceRoot(normalized);
   const isCollapsed = fileSidebar.classList.contains("collapsed");
   if (isCollapsed && !force) {
-    fileBrowser.setWorkspaceRoot(normalized);
     fileBrowserWorkspacePath = normalized;
     fileBrowserWorkspacePort = getCurrentPort();
     return true;
@@ -1574,6 +1584,12 @@ async function refreshFileBrowserForWorkspace(
   fileBrowserWorkspacePort = getCurrentPort();
   return true;
 }
+
+fileSidebarRefresh?.addEventListener("click", () => void fileBrowser.refresh());
+fileSidebarToggleHidden?.addEventListener("click", () => {
+  void fileBrowser.setShowHidden(!fileBrowser.showHidden);
+});
+gitPanelRefresh?.addEventListener("click", () => void gitPanel.refresh());
 
 fileSidebarToggle.addEventListener("click", () => {
   const isCollapsed = fileSidebar.classList.toggle("collapsed");
@@ -1596,6 +1612,9 @@ function setFileSidebarTab(tab) {
   fileList.classList.toggle("hidden", showGit);
   gitPanelElement.classList.toggle("hidden", !showGit);
   fileSidebarUp.classList.toggle("hidden", showGit);
+  fileSidebarRefresh.classList.toggle("hidden", showGit);
+  fileSidebarToggleHidden.classList.toggle("hidden", showGit);
+  gitPanelRefresh.classList.toggle("hidden", !showGit);
   document.getElementById("file-sidebar-finder").classList.toggle("hidden", showGit);
   localStorage.setItem(FILE_SIDEBAR_TAB_STORAGE_KEY, tab);
   if (showGit) {

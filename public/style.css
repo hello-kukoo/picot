@@ -6166,6 +6166,11 @@ body.is-resizing-side-panel {
   color: var(--text-primary);
 }
 
+.file-sidebar-action[aria-pressed="true"] {
+  background: var(--bg-glass-hover);
+  color: var(--accent, currentColor);
+}
+
 .file-sidebar-header .file-sidebar-action:focus-visible {
   outline: 2px solid var(--accent, #0a84ff);
   outline-offset: 1px;

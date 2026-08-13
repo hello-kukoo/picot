@@ -102,7 +102,7 @@ describe("GitPanel", () => {
     expect(panel.isStatusFailure("git-7")).toBe(false);
   });
 
-  it("renders a compact status toolbar with primary commit and secondary refresh actions", () => {
+  it("renders commit controls but leaves status refresh to the shared sidebar header", () => {
     const command = vi.fn();
     const panel = new GitPanel({
       container: document.querySelector("#panel"),
@@ -120,7 +120,9 @@ describe("GitPanel", () => {
 
     const toolbar = panel.container.querySelector(".git-panel-toolbar");
     expect(toolbar?.querySelector(".git-panel-summary")?.textContent).toContain("summary");
-    expect(toolbar?.querySelector(".git-panel-refresh")).not.toBeNull();
+    expect(toolbar?.querySelector(".git-panel-stats")).not.toBeNull();
+    expect(toolbar?.querySelector(".git-panel-commit")).not.toBeNull();
+    expect(toolbar?.querySelector(".git-panel-refresh")).toBeNull();
     expect(panel.container.querySelector(".git-panel-commit")).not.toBeNull();
     expect(panel.container.querySelector(".git-panel-stats")).not.toBeNull();
   });

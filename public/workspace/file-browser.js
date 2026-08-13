@@ -19,6 +19,8 @@ export class FileBrowser {
     this.pathEl = pathEl;
     this.messageInput = messageInput;
     this.onFileSelect = options.onFileSelect || null;
+    this.onShowHiddenChange = options.onShowHiddenChange || null;
+    this.showHidden = false;
     this.currentPath = null;
     this.workspaceRoot = "";
     this.loadSequence = 0;
@@ -38,6 +40,9 @@ export class FileBrowser {
   }
 
   setWorkspaceRoot(path = "") {
+    const hadShownHidden = this.showHidden;
+    this.showHidden = false;
+    if (hadShownHidden) this.notifyShowHiddenChange();
     const normalized = normalizeLocalPath(path);
     this.workspaceRoot = normalized;
     // Invalidate any in-flight load so a stale /api/files response can't
@@ -47,7 +52,7 @@ export class FileBrowser {
     this.fileStatus = null;
     this.pathEl.textContent = normalized;
     this.pathEl.title = normalized;
-    this.container.innerHTML = "";
+    this.container.textContent = "";
   }
 
   async load(dirPath) {
@@ -55,9 +60,11 @@ export class FileBrowser {
     this.showFileStatus("loading");
 
     try {
-      const url = dirPath
-        ? `/api/files?path=${encodeURIComponent(dirPath)}&scope=workspace`
-        : "/api/files?scope=workspace";
+      const params = new URLSearchParams();
+      if (dirPath) params.set("path", dirPath);
+      params.set("scope", "workspace");
+      if (this.showHidden) params.set("showHidden", "1");
+      const url = `/api/files?${params.toString()}`;
       const res = await fetch(url);
       const data = await res.json();
 
@@ -82,6 +89,22 @@ export class FileBrowser {
       this.showFileStatus("failed", error instanceof Error ? error.message : String(error));
     }
   }
+  refresh() {
+    return this.currentPath ? this.load(this.currentPath) : this.load();
+  }
+
+  setShowHidden(value) {
+    const next = Boolean(value);
+    if (next === this.showHidden) return undefined;
+    this.showHidden = next;
+    this.notifyShowHiddenChange();
+    return this.refresh();
+  }
+
+  notifyShowHiddenChange() {
+    this.onShowHiddenChange?.(this.showHidden);
+  }
+
   getParentPath() {
     if (!this.currentPath) return null;
     const parent = parentLocalPath(this.currentPath);
@@ -109,7 +132,7 @@ export class FileBrowser {
   }
 
   render(items) {
-    this.container.innerHTML = "";
+    this.container.textContent = "";
 
     if (items.length === 0) {
       this.showFileStatus("empty");
@@ -260,7 +283,7 @@ export class FileBrowser {
   showFileStatus(status, errorText = null) {
     this.fileStatus = status;
     this.fileErrorText = errorText;
-    this.container.innerHTML = "";
+    this.container.textContent = "";
     const el = document.createElement("div");
     el.className = "file-loading";
     el.textContent = this.statusText();
