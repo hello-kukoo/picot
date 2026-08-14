@@ -203,7 +203,7 @@ describe("EphemeralChatView", () => {
     // this test does not break every time the icon definition is refactored.
     const arrowPath = sendIcon.querySelector("path");
     expect(arrowPath).not.toBeNull();
-    expect(arrowPath.getAttribute("d")).toBe("M12 19V5M5 12l7-7 7 7");
+    expect(arrowPath.getAttribute("d")).toBe("m5 12 7-7 7 7");
     expect(composer.querySelector('[data-role="ephemeral-send"]').textContent.trim()).toBe("");
     expect(composer.textContent).toContain("claude-3");
     expect(composer.textContent).toContain("Think high");

@@ -43,31 +43,27 @@ test("exposes distinct maximize, minimize and text-collapse action glyphs", () =
   expect(compact?.isEqualNode(maximize)).toBe(false);
 });
 
-test("refresh keeps the original sidebar arc geometry without spinning", () => {
+test("refresh keeps the approved sidebar arc geometry without spinning", () => {
   const button = document.createElement("button");
   setButtonIcon(button, "refresh-cw");
   const icon = button.querySelector("svg");
   expect(icon).not.toBeNull();
   expect(icon?.querySelector("path")?.getAttribute("d")).toBe(
-    "M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8",
+    "M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8",
   );
   expect(icon?.classList.contains("spin")).toBe(false);
   expect(icon?.classList.contains("spinning")).toBe(false);
 });
 
-test("sidebar and File panel icons match the approved prototype geometry", () => {
-  expect(createIcon("folder-plus")?.querySelector("path")?.getAttribute("d")).toBe(
-    "M4 5a2 2 0 0 1 2-2h4l2 3h6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z",
-  );
-  expect(createIcon("message-circle")?.querySelectorAll("path").length).toBe(2);
+test("sidebar and File panel icons match the Lucide v1 geometry", () => {
+  expect(createIcon("folder-plus")?.querySelector("path")?.getAttribute("d")).toBe("M12 10v6");
+  expect(createIcon("message-circle")?.querySelectorAll("path").length).toBe(1);
   expect(createIcon("message-square")?.querySelector("path")?.getAttribute("d")).toBe(
-    "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z",
+    "M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z",
   );
-  expect(createIcon("arrow-up")?.querySelector("path")?.getAttribute("d")).toBe(
-    "M12 19V5M5 12l7-7 7 7",
-  );
+  expect(createIcon("arrow-up")?.querySelector("path")?.getAttribute("d")).toBe("m5 12 7-7 7 7");
   expect(createIcon("folder-open")?.querySelector("path")?.getAttribute("d")).toContain(
-    "M6 14l1.5-2.9",
+    "m6 14 1.5-2.9",
   );
 });
 
