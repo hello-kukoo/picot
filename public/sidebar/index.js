@@ -20,6 +20,7 @@ import {
 } from "../sidebar-workspace-group.js";
 import { getSuperAgentProject, isSuperAgentProjectPath } from "../super-agent/session.js";
 import { isSuperAgentEnabled } from "../super-agent/settings.js";
+import { cacheSidebarProjects } from "../workspace/nav-state-cache.js";
 import { basenameLocalPath } from "../workspace/path-utils.js";
 import { mergeWorkspaceProjects, resolvePinnedWorkspaceGroups } from "../workspace-projects.js";
 import { WorkspaceQuickInfo } from "../workspace-quick-info.js";
@@ -365,6 +366,14 @@ export class SessionSidebar {
         this.loadCommitted = seq;
         this.projects = projects;
         this.render();
+        // Cache the resolved project tree so the next cross-port navigation
+        // can render the sidebar instantly from cache before /api/sessions
+        // responds. Best-effort; failures are swallowed by the helper.
+        try {
+          cacheSidebarProjects(projects);
+        } catch {
+          /* caching is best-effort */
+        }
         return this.projects;
       } catch (error) {
         lastError = error;

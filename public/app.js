@@ -126,6 +126,12 @@ import {
   withBrokerWs,
 } from "./workspace/actions.js";
 import { FileBrowser } from "./workspace/file-browser.js";
+import {
+  cacheSidebarProjects,
+  consumeNavState,
+  readCachedSidebarProjects,
+  snapshotNavState,
+} from "./workspace/nav-state-cache.js";
 
 // Initialize locale messages before constructing components that call t().
 const savedTheme = getCurrentTheme();
@@ -463,6 +469,21 @@ function resolveAndApplyFocus() {
 // Returns a `dismiss` function that rolls back the overlay if the
 // swap fails before navigation (e.g. openWorkspace rejects).
 function showSwapOverlay(label) {
+  // Snapshot ephemeral UI state before the page navigates away. The new
+  // page (on a different pi port) boots fresh; consumeNavState() restores
+  // scroll positions, sidebar expansion, search query, and the input draft
+  // so the workspace switch feels continuous instead of a reset to initial.
+  try {
+    snapshotNavState({
+      messageScroll: messagesContainer ? messagesContainer.scrollTop : null,
+      sidebarScroll: sidebarEl ? sidebarEl.scrollTop : null,
+      inputDraft: messageInput ? messageInput.value : "",
+      expandedWorkspaces: sidebar ? sidebar.expandedWorkspaces : [],
+      searchQuery: sidebar ? sidebar.searchQuery : "",
+    });
+  } catch {
+    /* snapshot is best-effort */
+  }
   try {
     sessionStorage.setItem("pi-studio:swapping-instance", "1");
   } catch {}
@@ -4088,9 +4109,12 @@ async function newSession() {
   }
 
   if (nativeAvailable()) {
-    // Default behavior is process-efficient: create the new chat in-place on
-    // the current pi process. Only spawn a dedicated process when a parallel
-    // task is actually running.
+    // Always create the new chat in-place on the current pi process: pi's
+    // `new_session` RPC aborts/settles any active stream safely (it persists
+    // the aborted turn to the old session before switching), so there is no
+    // need to spawn a dedicated process while streaming. Spawning a parallel
+    // process would force a cross-port page navigation (full reload + white
+    // flash), which we deliberately avoid.
     await startInWindowNewSession({
       transport,
       getCurrentCwd: getCurrentWorkspacePath,
@@ -4098,7 +4122,7 @@ async function newSession() {
       fetchInstances,
       navigate: navigateInWindow,
       onBeforeSwap: onBeforeInstanceSwap,
-      shouldSpawnParallel: () => state.isStreaming,
+      shouldSpawnParallel: () => false,
       onInPlaceSessionCreated: () => {
         resetUiForNewSession().catch(() => {});
       },
@@ -4172,15 +4196,16 @@ async function handleNewProjectChat(project) {
       return;
     }
 
-    // Prefer reuse: same project + no active parallel run => in-place
-    // new_session on current process. Spawn dedicated process only when
-    // a parallel run is active.
+    // Prefer reuse: same project => in-place new_session on current process,
+    // even while streaming (pi's new_session RPC aborts/settles the active
+    // turn safely). Only mobile mode keeps the spawn path (its window model
+    // cannot reuse the current process).
     const launched = await startNewProjectChat({
       project,
       transport,
       getCurrentPort: getActivePort,
       getCurrentCwd: getCurrentWorkspacePath,
-      shouldSpawnParallel: () => mobileClientMode || state.isStreaming,
+      shouldSpawnParallel: () => mobileClientMode,
       onInPlaceSessionCreated: () => {
         resetUiForNewSession().catch(() => {});
       },
@@ -6315,14 +6340,66 @@ restorePageFromHash();
 
 wsClient.connect();
 dismissBootSwapOverlayWhenReady();
+
+// --- Cross-port navigation state restore (B) + sidebar cache (C) ---
+// If the page booted because of a workspace/session swap, restore the
+// snapshot taken right before the navigation so scroll, sidebar expansion,
+// and input draft survive. Separately, hydrate the sidebar from a cached
+// project tree so it renders instantly before the real loadSessions fetch.
+const cachedProjects = readCachedSidebarProjects();
+// readCachedSidebarProjects already filters to complete projects (valid
+// workspaceId + path + sessions array), so hydration never renders broken
+// rows or empty titles while /api/sessions is still loading.
+if (cachedProjects) {
+  sidebar.projects = cachedProjects;
+  sidebar.render();
+}
+
 renderWorkspaceWelcome();
 initSuperAgentPath()
   .catch(() => {})
   .then(() => stopSuperAgentPortsFromUrl())
   .then(() => loadSessionsWithSuperAgentBootstrap())
-  .then(() => {
+  .then((projects) => {
     sessionsLoaded = true;
+    // Cache the fresh sidebar data for the next cross-port navigation (C).
+    try {
+      cacheSidebarProjects(projects || sidebar.projects);
+    } catch {
+      /* best-effort */
+    }
     updateUI();
+    // Restore the navigation snapshot now that sidebar + chat are rendered (B).
+    try {
+      const navState = consumeNavState();
+      if (navState) {
+        if (navState.sidebarScroll != null && sidebarEl) {
+          requestAnimationFrame(() => {
+            sidebarEl.scrollTop = navState.sidebarScroll;
+          });
+        }
+        if (navState.expandedWorkspaces.size > 0 && sidebar) {
+          for (const id of navState.expandedWorkspaces) {
+            sidebar.expandedWorkspaces.add(id);
+          }
+          sidebar.render();
+        }
+        if (navState.searchQuery && sidebar) {
+          sidebar.searchQuery = navState.searchQuery;
+          sidebar.render();
+        }
+        if (navState.messageScroll != null && messagesContainer) {
+          requestAnimationFrame(() => {
+            messagesContainer.scrollTop = navState.messageScroll;
+          });
+        }
+        if (navState.inputDraft && messageInput && !messageInput.value) {
+          messageInput.value = navState.inputDraft;
+        }
+      }
+    } catch {
+      /* restore is best-effort */
+    }
     if (!hasAnySessionsLoaded()) {
       renderWorkspaceWelcome();
     }
