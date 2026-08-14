@@ -1,6 +1,6 @@
 ---
 name: troubleshoot-picot
-description: 'Picot 故障排查助手 - 查看 error log、内存占用、Picot / 内嵌 pi 版本等诊断信息，定位启动失败、卡死、崩溃等问题'
+description: "Picot 故障排查助手 - 查看 error log、内存占用、Picot / 内嵌 pi 版本等诊断信息，定位启动失败、卡死、崩溃等问题"
 tags: [troubleshoot, diagnostics, logs, memory, version]
 ---
 
@@ -47,6 +47,7 @@ Picot 有两个独立的版本号，都要报：
      ```
 
      `<port>` 从窗口地址栏 / `PI_STUDIO` 相关环境变量或 `lsof -iTCP -sTCP:LISTEN | grep picot` 里找
+
    - 也可以直接读取已解压的二进制：`./src-tauri/resources/pi/pi --version`（仅在本地开发目录下有效，打包后的 `.app` 里路径是 `Picot.app/Contents/Resources/pi/pi`）
 
 ## Step 2: 找到 error log
