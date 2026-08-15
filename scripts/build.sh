@@ -25,9 +25,11 @@
 #     x86_64-pc-windows-gnu rustup target (auto-installed on first run)
 #
 # Scope:
-#   - macOS: ad-hoc signed only (signingIdentity: "-" in tauri.conf.json).
-#     No Apple Developer cert, no notarization. Gatekeeper will block the
-#     first launch; right-click Open to bypass.
+#   - macOS: ad-hoc signed by default (signingIdentity: "-" in
+#     tauri.conf.json). Gatekeeper will block the first launch;
+#     right-click Open to bypass. Export APPLE_SIGNING_IDENTITY (plus
+#     APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID for notarization) to build with
+#     a real Developer ID cert instead — Tauri picks these up directly.
 #   - Windows: bare .exe + zip. No MSI (requires Windows host tools).
 
 set -euo pipefail
@@ -125,6 +127,22 @@ run_picot_prebuild() {
 	bun run "$PROJECT_ROOT/scripts/fetch-cjk-font.js"
 	log_info "Building extensions bundle..."
 	bun run "$PROJECT_ROOT/scripts/build-extensions.js"
+}
+
+# Pre-signs the pi runtime's nested Mach-O binaries so notarization doesn't
+# reject them (Tauri's macOS bundler only signs the outer .app, not
+# arbitrary files pulled in via tauri.conf.json's `bundle.resources` map).
+# No-op when APPLE_SIGNING_IDENTITY is unset or ad-hoc ("-"). See
+# scripts/sign-pi-resources.sh for the full explanation; that same script
+# also runs as part of tauri.conf.json's beforeBuildCommand, so this call
+# is a belt-and-suspenders duplicate for the direct `tauri build`
+# invocations below (see the comment on run_picot_prebuild for why this
+# repo doesn't rely solely on the hook).
+sign_pi_resources() {
+    if [ -n "${APPLE_SIGNING_IDENTITY:-}" ] && [ "${APPLE_SIGNING_IDENTITY}" != "-" ]; then
+        log_info "Signing embedded pi native binaries for notarization..."
+    fi
+    bash "$PROJECT_ROOT/scripts/sign-pi-resources.sh"
 }
 
 # ---------- Builders ----------
@@ -356,6 +374,7 @@ main() {
 	check_requirements
 	install_deps
 	run_picot_prebuild
+	sign_pi_resources
 
 	case "$BUILD_PLATFORM" in
 	mac-arm) build_mac_arm ;;
