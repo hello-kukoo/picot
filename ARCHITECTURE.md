@@ -250,6 +250,14 @@ The one-shot Pi commit-message runner receives a host-created private request fi
   `embedded-server.ts` 的 `list_skill_inventory` / `set_skill_enabled` 两个
   owner-only 命令调用它，原子地读写对应 scope 的 `settings.json`。
 
+#### Settings 的配置与模型页面
+
+`#/settings/configuration` 只读取和写入 Pi Agent 的 `settings.json`；
+`#/settings/models` 管理 provider 凭证与 `models.json`。所有成功的 provider
+凭证、模型可见性或 `models.json` 变更都必须触发前端模型目录刷新，确保 composer
+和模型选择器读取新配置。桌面端不暴露 Protection / Require login UI：embedded
+server 的 app-auth 配置在 desktop mode 不可用，不能向用户展示无效开关。
+
 #### Skills 设置页（`#/settings/skills`）
 
 **架构不变量：**

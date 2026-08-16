@@ -82,7 +82,7 @@
   "models": {
     "searchPlaceholder": "搜索模型…",
     "emptyTitle": "无可用模型",
-    "emptyHelp": "未配置 API 密钥。请在设置 → 配置中设置密钥。",
+    "emptyHelp": "未配置 API 密钥。请在设置 → 模型中设置密钥。",
     "openSettings": "打开设置"
   },
   "queue": {
@@ -497,7 +497,7 @@
     "general": "通用",
     "extensions": "扩展",
     "usage": "使用量",
-    "configuration": "配置",
+    "configuration": "高级配置",
     "agentInbox": "智能体收件箱",
     "backToChat": "返回聊天",
     "appearance": "外观",
@@ -546,6 +546,7 @@
       "configured": "已配置"
     },
     "models": {
+      "title": "模型",
       "helpPre": "编辑",
       "helpPost1": "以添加自定义提供者（Ollama、vLLM、LM Studio、OpenAI 兼容代理、OpenRouter 路由覆盖等）。参见",
       "docsLink": "models.json 文档",

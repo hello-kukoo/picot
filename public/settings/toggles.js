@@ -48,7 +48,6 @@ export function setupSettingsToggles({
   thinkingMarker,
   thinkingName,
   toggleShowThinking,
-  toggleAuth,
   toggleSuperAgent,
   rpcCommand,
   getDefaultThinkingLevel,
@@ -100,14 +99,6 @@ export function setupSettingsToggles({
   });
 
   bindSuperAgentStartupToggle(toggleSuperAgent, onSuperAgentEnabledChanged);
-
-  toggleAuth?.addEventListener("click", async () => {
-    const isOn = toggleAuth.classList.contains("on");
-    const data = await rpcCommand({ type: "set_auth", enabled: !isOn });
-    if (data?.success) {
-      toggleAuth.className = `settings-toggle${!isOn ? " on" : ""}`;
-    }
-  });
 
   return {
     getDefaultThinkingLevel,

@@ -48,6 +48,7 @@ import {
 import { anchorHistoryToBottom } from "./session/scroll-anchor.js";
 import { SessionUiStateStore } from "./session-ui-state.js";
 import { LegacyConfigGateway } from "./settings/config-gateway-legacy.js";
+import { setupModelsPage } from "./settings/models-page.js";
 import { setupPackageSkillsTab } from "./settings/package-skills-tab.js";
 import {
   clearSettingsSaveMessage,
@@ -625,9 +626,10 @@ document.addEventListener("sa-prompt-task", (e) => insertTaskPrompt(e.detail));
 document.addEventListener("sa-view-session", (e) => viewSuperAgentChildSession(e.detail));
 installSuperAgentSessionNavigationReset(document);
 
-// <sa-chat-header> service buttons open Settings > Chat tab
+// <sa-chat-header> service buttons open Settings. The Agent Inbox tab is
+// temporarily disabled, so route to the default Settings page instead.
 window.__saOpenSettings = () => {
-  void openSettings("chat");
+  void openSettings();
 };
 // ── end Super Agent wiring ───────────────────────────────────────────────────
 
@@ -3419,9 +3421,9 @@ function currentOnboardingState() {
   });
 }
 
-function openConfigurationSettings() {
-  return openSettings("configuration").then(() => {
-    selectSettingsTab("configuration");
+function openModelsSettings() {
+  return openSettings("models").then(() => {
+    selectSettingsTab("models");
   });
 }
 
@@ -3584,7 +3586,7 @@ function openModelDropdown() {
       settingsButton.textContent = t("settings.openSettings");
       settingsButton.addEventListener("click", () => {
         closeModelDropdown();
-        openConfigurationSettings().catch(() => {});
+        openModelsSettings().catch(() => {});
       });
       content.append(title, help, settingsButton);
       empty.appendChild(content);
@@ -5340,14 +5342,11 @@ const thinkingEffortMarker = document.getElementById("thinking-effort-marker");
 const thinkingEffortName = document.getElementById("thinking-effort-name");
 const toggleShowThinking = document.getElementById("toggle-show-thinking");
 let toggleSuperAgent = document.getElementById("toggle-super-agent");
-const toggleAuth = document.getElementById("toggle-auth");
-const authSection = document.getElementById("settings-auth-section");
 const piVersionValue = document.getElementById("setting-pi-version-value");
 let piVersionCache = null;
 let piVersionInflight = null;
 let loadInlineConfigEditor = async () => {};
-let loadInlineModelsEditor = async () => {};
-let loadApiKeysPanel = async () => {};
+let modelsPage = { activate: async () => {} };
 
 async function handleSuperAgentEnabledChanged(enabled) {
   if (!enabled) {
@@ -5369,9 +5368,10 @@ function selectSettingsTab(tabKey = "general") {
     tab.classList.toggle("active", tab.dataset.settingsPanel === targetTabKey);
   });
   if (targetTabKey === "configuration") {
-    loadApiKeysPanel();
     loadInlineConfigEditor();
-    loadInlineModelsEditor();
+  }
+  if (targetTabKey === "models") {
+    void modelsPage.activate();
   }
   if (targetTabKey === "extensions") {
     loadBrowsePackages();
@@ -6024,9 +6024,11 @@ function normalizeSettingsTabKey(tabKey) {
   const rawTabKey = typeof tabKey === "string" ? tabKey : "general";
   const decodedTabKey = decodeURIComponent(rawTabKey || "general");
   const normalizedTabKey = decodedTabKey === "auth" ? "configuration" : decodedTabKey;
-  return settingsNavItems.some((item) => item.dataset.settingsTab === normalizedTabKey)
-    ? normalizedTabKey
-    : "general";
+  const navItem = settingsNavItems.find((item) => item.dataset.settingsTab === normalizedTabKey);
+  // Disabled nav items (e.g. the temporarily disabled Agent Inbox) are not
+  // routable: hash links and programmatic opens fall back to General.
+  if (navItem && !navItem.disabled) return normalizedTabKey;
+  return "general";
 }
 
 function settingsHashForTab(tabKey) {
@@ -6092,19 +6094,6 @@ async function openSettings(tabKey = "general", options = {}) {
   } catch (_e) {
     // Silent
   }
-
-  // Fetch auth state
-  try {
-    const authData = await rpcCommand({ type: "get_auth" });
-    if (authData?.success && authData.data?.configured) {
-      authSection.style.display = "";
-      toggleAuth.className = `settings-toggle${authData.data.enabled ? " on" : ""}`;
-    } else {
-      authSection.style.display = "none";
-    }
-  } catch {
-    authSection.style.display = "none";
-  }
 }
 
 function closeSettings(options = {}) {
@@ -6155,7 +6144,6 @@ setupSettingsToggles({
   thinkingMarker: thinkingEffortMarker,
   thinkingName: thinkingEffortName,
   toggleShowThinking,
-  toggleAuth,
   toggleSuperAgent,
   rpcCommand,
   getDefaultThinkingLevel: () => currentDefaultThinkingLevel,
@@ -6167,7 +6155,15 @@ setupSettingsToggles({
 });
 
 const configGateway = new LegacyConfigGateway();
-({ loadApiKeysPanel, loadInlineConfigEditor, loadInlineModelsEditor } = setupSettingsConfig({
+({ loadInlineConfigEditor } = setupSettingsConfig({
+  configGateway,
+  clearSettingsSaveMessage,
+  setSettingsSaveButtonSaving,
+  showSettingsSaveError,
+  showSettingsSaveSuccess,
+}));
+
+modelsPage = setupModelsPage({
   configGateway,
   onModelConfigurationChanged: async () => {
     await fetchModelInfo();
@@ -6177,7 +6173,7 @@ const configGateway = new LegacyConfigGateway();
   setSettingsSaveButtonSaving,
   showSettingsSaveError,
   showSettingsSaveSuccess,
-}));
+});
 
 const skillsSaveMessageEl = document.getElementById("settings-skills-save-message");
 const skillsPage = setupSkillsPage({

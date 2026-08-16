@@ -63,7 +63,6 @@ describe("thinking effort cycle controls", () => {
       thinkingSteps: track,
       thinkingMarker: thumb,
       toggleShowThinking: null,
-      toggleAuth: null,
       rpcCommand,
       getDefaultThinkingLevel: () => "medium",
       setDefaultThinkingLevel,
@@ -103,7 +102,6 @@ describe("thinking effort cycle controls", () => {
       thinkingMarker: document.querySelector("#thinking-effort-marker"),
       thinkingName: document.querySelector("#thinking-effort-name"),
       toggleShowThinking: null,
-      toggleAuth: null,
       rpcCommand,
       getDefaultThinkingLevel: () => "medium",
     });
@@ -174,7 +172,6 @@ describe("thinking effort cycle controls", () => {
       thinkingSteps: null,
       thinkingMarker: null,
       toggleShowThinking: null,
-      toggleAuth: null,
       toggleSuperAgent: toggle,
       rpcCommand: vi.fn(),
       getDefaultThinkingLevel: () => "medium",

@@ -786,10 +786,10 @@
         </button>
         <button
           class="settings-nav-item"
-          data-settings-tab="extensions"
-          data-i18n="settings.extensions"
+          data-settings-tab="models"
+          data-i18n="settings.models.title"
         >
-          Extensions
+          Models
         </button>
         <button
           class="settings-nav-item"
@@ -800,6 +800,20 @@
         </button>
         <button
           class="settings-nav-item"
+          data-settings-tab="extensions"
+          data-i18n="settings.extensions"
+        >
+          Extensions
+        </button>
+        <button
+          class="settings-nav-item"
+          data-settings-tab="configuration"
+          data-i18n="settings.configuration"
+        >
+          Advanced Configuration
+        </button>
+        <button
+          class="settings-nav-item"
           data-settings-tab="usage"
           data-i18n="settings.usage"
         >
@@ -807,15 +821,9 @@
         </button>
         <button
           class="settings-nav-item"
-          data-settings-tab="configuration"
-          data-i18n="settings.configuration"
-        >
-          Configuration
-        </button>
-        <button
-          class="settings-nav-item"
           data-settings-tab="chat"
           data-i18n="settings.agentInbox"
+          disabled
         >
           Agent Inbox
         </button>
@@ -1243,55 +1251,9 @@
 
         <div class="settings-tab" data-settings-panel="configuration">
           <div class="settings-header">
-            <h3 data-i18n="settings.configuration">Configuration</h3>
+            <h3 data-i18n="settings.configuration">Advanced Configuration</h3>
           </div>
           <div class="settings-body">
-            <div class="settings-section">
-              <div
-                class="settings-section-title"
-                data-i18n="settings.authentication"
-              >
-                Authentication
-              </div>
-              <p class="settings-help">
-                <span data-i18n="settings.auth.helpPre"
-                  >Keys are stored locally in</span
-                >
-                <code>~/.pi/agent/auth.json</code>
-                <span data-i18n="settings.auth.helpPost"
-                  >(chmod 600). Picot launched from Finder does not read shell
-                  environment variables, so set keys here for them to stick
-                  across launches.</span
-                >
-              </p>
-              <div class="settings-api-keys" id="settings-api-keys">
-                <div
-                  class="settings-api-keys-loading"
-                  data-i18n="settings.loadingProviders"
-                >
-                  Loading providers…
-                </div>
-              </div>
-            </div>
-            <div
-              class="settings-section"
-              id="settings-auth-section"
-              style="display: none"
-            >
-              <div
-                class="settings-section-title"
-                data-i18n="settings.protection"
-              >
-                Protection
-              </div>
-              <div class="settings-row">
-                <span class="settings-label" data-i18n="settings.requireLogin"
-                  >Require login</span
-                >
-                <button class="settings-toggle" id="toggle-auth"></button>
-              </div>
-            </div>
-
             <div class="settings-section">
               <div class="settings-section-title" data-i18n="settings.agent">
                 Agent
@@ -1331,6 +1293,41 @@
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+
+        <div class="settings-tab" data-settings-panel="models">
+          <div class="settings-header">
+            <h3 data-i18n="settings.models.title">Models</h3>
+          </div>
+          <div class="settings-body">
+            <div class="settings-section">
+              <div
+                class="settings-section-title"
+                data-i18n="settings.authentication"
+              >
+                Authentication
+              </div>
+              <p class="settings-help">
+                <span data-i18n="settings.auth.helpPre"
+                  >Keys are stored locally in</span
+                >
+                <code>~/.pi/agent/auth.json</code>
+                <span data-i18n="settings.auth.helpPost"
+                  >(chmod 600). Picot launched from Finder does not read shell
+                  environment variables, so set keys here for them to stick
+                  across launches.</span
+                >
+              </p>
+              <div class="settings-api-keys" id="settings-api-keys">
+                <div
+                  class="settings-api-keys-loading"
+                  data-i18n="settings.loadingProviders"
+                >
+                  Loading providers…
+                </div>
+              </div>
+            </div>
 
             <div class="settings-section">
               <div
@@ -1358,46 +1355,54 @@
                   restart needed.</span
                 >
               </p>
-              <div class="settings-config-meta">
-                <span class="settings-label" data-i18n="settings.providersFile"
-                  >Providers file</span
-                >
-                <span
-                  class="settings-static-value"
-                  id="inline-models-path"
-                ></span>
-              </div>
-              <textarea
-                class="config-editor-textarea settings-config-textarea"
-                id="inline-models-textarea"
-                spellcheck="false"
-                autocomplete="off"
-                autocorrect="off"
-                autocapitalize="off"
-                placeholder='{ "providers": { ... } }'
-              ></textarea>
-              <div class="settings-config-actions">
-                <div
-                  class="config-editor-error settings-save-status hidden"
-                  id="inline-models-error"
-                ></div>
-                <div class="settings-config-button-group">
-                  <button
-                    class="settings-value-btn"
-                    id="inline-models-insert-example"
-                    data-i18n="actions.insertExample"
+              <div class="models-config-layout" id="models-config-layout"></div>
+              <details class="models-config-source">
+                <summary data-i18n="settings.providers.advancedJsonEditor">
+                  Advanced JSON editor
+                </summary>
+                <div class="settings-config-meta">
+                  <span
+                    class="settings-label"
+                    data-i18n="settings.providersFile"
+                    >Providers file</span
                   >
-                    Insert example
-                  </button>
-                  <button
-                    class="btn-primary"
-                    id="inline-models-save"
-                    data-i18n="actions.save"
-                  >
-                    Save
-                  </button>
+                  <span
+                    class="settings-static-value"
+                    id="inline-models-path"
+                  ></span>
                 </div>
-              </div>
+                <textarea
+                  class="config-editor-textarea settings-config-textarea"
+                  id="inline-models-textarea"
+                  spellcheck="false"
+                  autocomplete="off"
+                  autocorrect="off"
+                  autocapitalize="off"
+                  placeholder='{ "providers": { ... } }'
+                ></textarea>
+                <div class="settings-config-actions">
+                  <div
+                    class="config-editor-error settings-save-status hidden"
+                    id="inline-models-error"
+                  ></div>
+                  <div class="settings-config-button-group">
+                    <button
+                      class="settings-value-btn"
+                      id="inline-models-insert-example"
+                      data-i18n="actions.insertExample"
+                    >
+                      Insert example
+                    </button>
+                    <button
+                      class="btn-primary"
+                      id="inline-models-save"
+                      data-i18n="actions.save"
+                    >
+                      Save
+                    </button>
+                  </div>
+                </div>
+              </details>
             </div>
           </div>
         </div>

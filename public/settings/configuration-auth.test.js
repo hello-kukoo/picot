@@ -3,11 +3,11 @@ import { join } from "node:path";
 import { JSDOM } from "jsdom";
 import { describe, expect, test } from "vitest";
 
-describe("settings authentication placement", () => {
+describe("settings page split", () => {
   const html = readFileSync(join(process.cwd(), "public/index.html"), "utf8");
   const appJs = readFileSync(join(process.cwd(), "public/app.js"), "utf8");
 
-  test("removes the Authentication tab and shows API keys inside Configuration", () => {
+  test("moves provider credentials and models.json into the Models panel", () => {
     const dom = new JSDOM(html);
     const { document } = dom.window;
 
@@ -15,13 +15,18 @@ describe("settings authentication placement", () => {
     expect(document.querySelector('[data-settings-panel="auth"]')).toBeNull();
 
     const configurationPanel = document.querySelector('[data-settings-panel="configuration"]');
-    expect(configurationPanel).not.toBeNull();
-    expect(configurationPanel.querySelector("#settings-api-keys")).not.toBeNull();
-    expect(configurationPanel.querySelector("#settings-auth-section")).not.toBeNull();
+    const modelsPanel = document.querySelector('[data-settings-panel="models"]');
+
+    expect(configurationPanel.querySelector("#inline-config-textarea")).not.toBeNull();
+    expect(configurationPanel.querySelector("#settings-api-keys")).toBeNull();
+    expect(configurationPanel.querySelector("#inline-models-textarea")).toBeNull();
+    expect(modelsPanel.querySelector("#settings-api-keys")).not.toBeNull();
+    expect(modelsPanel.querySelector("#inline-models-textarea")).not.toBeNull();
   });
 
-  test("opens API key setup through the Configuration settings tab", () => {
-    expect(appJs).toContain('selectSettingsTab("configuration")');
+  test("opens provider and model editing through their own tabs", () => {
+    expect(appJs).toContain('openSettings("models")');
+    expect(appJs).toContain('selectSettingsTab("models")');
     expect(appJs).not.toContain('selectSettingsTab("auth")');
   });
 

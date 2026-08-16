@@ -82,7 +82,7 @@
   "models": {
     "searchPlaceholder": "Search models…",
     "emptyTitle": "No models available",
-    "emptyHelp": "No API keys configured. Set a key in Settings → Configuration.",
+    "emptyHelp": "No API keys configured. Set a key in Settings → Models.",
     "openSettings": "Open Settings"
   },
   "queue": {
@@ -497,7 +497,7 @@
     "general": "General",
     "extensions": "Extensions",
     "usage": "Usage",
-    "configuration": "Configuration",
+    "configuration": "Advanced Configuration",
     "agentInbox": "Agent Inbox",
     "backToChat": "Back to chat",
     "appearance": "Appearance",
@@ -546,6 +546,7 @@
       "configured": "Configured"
     },
     "models": {
+      "title": "Models",
       "helpPre": "Edit",
       "helpPost1": "to add custom providers (Ollama, vLLM, LM Studio, OpenAI-compatible proxies, OpenRouter routing overrides, etc). See the",
       "docsLink": "models.json docs",

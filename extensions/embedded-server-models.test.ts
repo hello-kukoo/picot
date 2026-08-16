@@ -1,10 +1,11 @@
 // @vitest-environment node
 
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  backupConfigFile,
   buildModelCatalog,
   getAvailableModelsForRpc,
   getAvailableThinkingLevelsForModel,
@@ -221,5 +222,26 @@ describe("embedded server model listing", () => {
     expect(
       sanitizeHealthError("Request failed with key sk-ant-1234567890 and bearer abcdefghij"),
     ).toBe("Request failed with key [REDACTED] and bearer [REDACTED]");
+  });
+});
+
+describe("embedded server models.json backup", () => {
+  it("copies the current models.json to a .bak before an overwrite", () => {
+    const dir = mkdtempSync(join(tmpdir(), "picot-models-bak-"));
+    const configPath = join(dir, "models.json");
+    writeFileSync(configPath, '{"providers":{}}', "utf8");
+
+    backupConfigFile(configPath);
+
+    expect(readFileSync(`${configPath}.bak`, "utf8")).toBe('{"providers":{}}');
+    expect(readFileSync(configPath, "utf8")).toBe('{"providers":{}}');
+  });
+
+  it("is a no-op when the models.json does not exist yet", () => {
+    const dir = mkdtempSync(join(tmpdir(), "picot-models-bak-"));
+    const configPath = join(dir, "models.json");
+
+    expect(() => backupConfigFile(configPath)).not.toThrow();
+    expect(existsSync(`${configPath}.bak`)).toBe(false);
   });
 });

@@ -82,7 +82,7 @@
   "models": {
     "searchPlaceholder": "モデルを検索…",
     "emptyTitle": "利用可能なモデルがありません",
-    "emptyHelp": "APIキーが設定されていません。設定 → プロバイダーでキーを設定してください。",
+    "emptyHelp": "APIキーが設定されていません。設定 → モデルでキーを設定してください。",
     "openSettings": "設定を開く"
   },
   "queue": {
@@ -497,7 +497,7 @@
     "general": "一般",
     "extensions": "拡張機能",
     "usage": "使用量",
-    "configuration": "プロバイダー",
+    "configuration": "詳細設定",
     "agentInbox": "エージェント受信箱",
     "backToChat": "チャットに戻る",
     "appearance": "外観",
@@ -546,6 +546,7 @@
       "configured": "設定済み"
     },
     "models": {
+      "title": "モデル",
       "helpPre": "編集",
       "helpPost1": "でカスタムプロバイダーを追加できます（Ollama、vLLM、LM Studio、OpenAI互換プロキシ、OpenRouterルーティングオーバーライドなど）。完全なスキーマは",
       "docsLink": "models.jsonドキュメント",

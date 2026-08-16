@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════
-   Configuration tab — API keys, model catalog, agent-config
-   and models.json inline editors (public/native/settings-config.js)
+   Models page — API keys, model catalog, and models.json
+   editors (public/settings/models-page.js)
    ═══════════════════════════════════════════════════════ */
 
 .settings-config-meta {
@@ -32,7 +32,9 @@
 .models-config-layout {
   display: grid;
   grid-template-columns: minmax(180px, 28%) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-height: 420px;
+  max-height: min(560px, 65vh);
   overflow: hidden;
   background: var(--bg-glass);
   border: 1px solid var(--border);
@@ -43,6 +45,7 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   padding: var(--space-2) var(--space-1-5);
   background: var(--bg-glass-strong, var(--bg-glass));
   border-right: 1px solid var(--border);
@@ -142,8 +145,10 @@
 
 .models-config-main {
   min-width: 0;
+  min-height: 0;
   padding: var(--space-4);
   color: var(--text-primary);
+  overflow-y: auto;
 }
 
 .models-config-main h3 {
@@ -211,22 +216,6 @@
   margin-top: var(--space-3);
 }
 
-.models-config-footer {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
-}
-
-.models-config-footer .models-config-source {
-  flex: 1;
-  min-width: 0;
-}
-
-.models-config-footer-actions {
-  margin-top: var(--space-3);
-}
-
 @media (max-width: 650px) {
   .models-config-layout {
     grid-template-columns: 1fr;
@@ -236,14 +225,6 @@
     max-height: 240px;
     border-right: 0;
     border-bottom: 1px solid var(--border);
-  }
-
-  .models-config-footer {
-    flex-direction: column;
-  }
-
-  .models-config-footer-actions {
-    width: 100%;
   }
 }
 

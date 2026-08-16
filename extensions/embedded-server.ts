@@ -1202,6 +1202,16 @@ export async function removePersistedProviderApiKey(
   await credentials.delete(provider);
 }
 
+/**
+ * Copy the current models.json to `<path>.bak` before an overwrite, so a bad
+ * save can be rolled back. No-op when the file does not exist yet.
+ */
+export function backupConfigFile(configPath: string): void {
+  if (fs.existsSync(configPath)) {
+    fs.copyFileSync(configPath, `${configPath}.bak`);
+  }
+}
+
 type CatalogModel = {
   provider?: string;
   id?: string;
@@ -4219,6 +4229,9 @@ export default function (pi: ExtensionAPI) {
           }
           const configPath = path.join(PI_AGENT_ROOT, "models.json");
           fs.mkdirSync(path.dirname(configPath), { recursive: true });
+          // Keep a safety copy of the previous models.json so a bad save can
+          // be rolled back; the frontend exposes it as a restore hint.
+          backupConfigFile(configPath);
           fs.writeFileSync(configPath, content, "utf8");
           // Reload pi's in-memory model registry so the picker sees the new
           // providers/models without restarting the workspace.

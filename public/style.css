@@ -2034,6 +2034,17 @@ body {
   color: var(--text-primary);
 }
 
+.settings-nav-item:disabled {
+  cursor: not-allowed;
+  color: var(--text-dim);
+  opacity: 0.5;
+}
+
+.settings-nav-item:disabled:hover {
+  background: transparent;
+  color: var(--text-dim);
+}
+
 .settings-nav-item.active {
   background: var(--accent-subtle);
   border-color: var(--border);
