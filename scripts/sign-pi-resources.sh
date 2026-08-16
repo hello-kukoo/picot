@@ -11,11 +11,14 @@
 # gets bundled and signed. Signing the outer .app afterwards does not
 # disturb signatures already present on nested files.
 #
-# Runs as part of tauri.conf.json's beforeBuildCommand, so it fires for
-# both local Developer-ID builds (scripts/build.sh with
-# APPLE_SIGNING_IDENTITY exported) and CI (.github/workflows/release.yml,
-# where tauri-action imports the certificate into a keychain before
-# invoking `cargo tauri build`, which is what runs this hook).
+# Runs as part of tauri.conf.json's beforeBuildCommand, which fires before
+# Rust even compiles. Locally (scripts/build.sh with APPLE_SIGNING_IDENTITY
+# exported) the identity is already in the developer's login keychain, so
+# codesign just finds it. In CI (.github/workflows/release.yml), Tauri's own
+# bundler only imports APPLE_CERTIFICATE into a keychain right before it
+# signs the .app at the very end of the build — long after this hook runs —
+# so the identity isn't in any keychain yet. When that's the case and
+# APPLE_CERTIFICATE is set, import it into a temporary keychain ourselves.
 #
 # No-op when APPLE_SIGNING_IDENTITY is unset or ad-hoc ("-"), since ad-hoc
 # builds are never notarized and there's nothing to fix.
@@ -33,6 +36,29 @@ fi
 PI_DIR="$PROJECT_ROOT/src-tauri/resources/pi"
 if [ ! -d "$PI_DIR" ]; then
     exit 0
+fi
+
+if ! security find-identity -v -p codesigning | grep -qF "$IDENTITY"; then
+    if [ -z "${APPLE_CERTIFICATE:-}" ]; then
+        echo "[sign-pi-resources] ERROR: identity '$IDENTITY' not found in any keychain, and APPLE_CERTIFICATE is not set to import it" >&2
+        exit 1
+    fi
+
+    echo "[sign-pi-resources] Identity not in any keychain yet; importing APPLE_CERTIFICATE into a temporary keychain"
+
+    TMP_DIR="${RUNNER_TEMP:-$(mktemp -d)}"
+    KEYCHAIN_PATH="$TMP_DIR/sign-pi-resources.keychain-db"
+    KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+    CERT_PATH="$TMP_DIR/sign-pi-resources-cert.p12"
+
+    echo "$APPLE_CERTIFICATE" | base64 --decode >"$CERT_PATH"
+    security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+    security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+    security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+    security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "${APPLE_CERTIFICATE_PASSWORD:-}" -T /usr/bin/codesign
+    security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+    security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/"//g')
+    rm -f "$CERT_PATH"
 fi
 
 echo "[sign-pi-resources] Signing embedded pi native binaries with: $IDENTITY"
