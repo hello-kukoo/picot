@@ -38,7 +38,11 @@ if [ ! -d "$PI_DIR" ]; then
     exit 0
 fi
 
-if ! security find-identity -v -p codesigning | grep -qF "$IDENTITY"; then
+# APPLE_SIGNING_IDENTITY is set for the whole non-Linux CI matrix (both
+# macOS and Windows), but codesign/security are macOS-only tools. On other
+# platforms there's nothing to sign here, so fall through to the no-op scan
+# below instead of trying to run "security".
+if [ "$(uname)" = "Darwin" ] && ! security find-identity -v -p codesigning | grep -qF "$IDENTITY"; then
     if [ -z "${APPLE_CERTIFICATE:-}" ]; then
         echo "[sign-pi-resources] ERROR: identity '$IDENTITY' not found in any keychain, and APPLE_CERTIFICATE is not set to import it" >&2
         exit 1
