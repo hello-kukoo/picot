@@ -416,6 +416,8 @@
     "pinWorkspace": "Fijar espacio de trabajo",
     "unpinWorkspace": "Desfijar espacio de trabajo",
     "archiveWorkspaceSessions": "Archivar sesiones",
+    "deleteWorkspaceSessions": "Eliminar todas las sesiones",
+    "deleteWorkspaceConfirm": "¿Eliminar {count} sesiones de forma permanente? Esto no se puede deshacer.",
     "openInFinder": "Abrir en Finder",
     "workspaceActions": "Acciones del espacio de trabajo",
     "sessionCountTotal": "{count} sesiones",

@@ -416,6 +416,8 @@
     "pinWorkspace": "固定工作区",
     "unpinWorkspace": "取消固定工作区",
     "archiveWorkspaceSessions": "归档会话",
+    "deleteWorkspaceSessions": "删除全部会话",
+    "deleteWorkspaceConfirm": "永久删除 {count} 个会话？此操作无法撤销。",
     "openInFinder": "在访达中打开",
     "workspaceActions": "工作区操作",
     "sessionCountTotal": "{count} 个会话",

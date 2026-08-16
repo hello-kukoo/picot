@@ -95,6 +95,7 @@ import {
 } from "./pi-chat-setup";
 import { isLoopbackAddress, isLoopbackOnlyApiRequest } from "./request-access.ts";
 import { buildProjectSearchMatch } from "./session-search";
+import { removeSessionFileTrashFirst } from "./session-trash.ts";
 import {
   type ExpansionCommand,
   type ExpansionFileReader,
@@ -4010,7 +4011,16 @@ export default function (pi: ExtensionAPI) {
           const result = await applySessionDeletions(filePaths, {
             sessionsDir: SESSIONS_DIR,
             runningInstances: getRunningInstances(),
-            removeFile: (fp) => fs.promises.unlink(fp),
+            // Trash-first policy (matching Pi TUI's deleteSessionFile): move
+            // the file to the OS trash when possible, permanently unlink
+            // otherwise. A failed removal must reject so the planner counts
+            // the path in `errors` instead of reporting it deleted.
+            removeFile: async (fp: string) => {
+              const outcome = await removeSessionFileTrashFirst(fp);
+              if (!outcome.ok) {
+                throw new Error(outcome.error || "session file removal failed");
+              }
+            },
             onRemoved: (fp) => {
               globalState.sessionHeaderCache.delete(fp);
               globalState.sessionMetricsCache.delete(fp);

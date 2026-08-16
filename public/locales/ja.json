@@ -416,6 +416,8 @@
     "pinWorkspace": "ワークスペースをピン留め",
     "unpinWorkspace": "ワークスペースのピン留めを解除",
     "archiveWorkspaceSessions": "セッションをアーカイブ",
+    "deleteWorkspaceSessions": "すべてのセッションを削除",
+    "deleteWorkspaceConfirm": "{count} 件のセッションを完全に削除します。この操作は取り消せません。",
     "openInFinder": "Finderで開く",
     "workspaceActions": "ワークスペースの操作",
     "sessionCountTotal": "{count}件のセッション",

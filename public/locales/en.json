@@ -416,6 +416,8 @@
     "pinWorkspace": "Pin workspace",
     "unpinWorkspace": "Unpin workspace",
     "archiveWorkspaceSessions": "Archive sessions",
+    "deleteWorkspaceSessions": "Delete all sessions",
+    "deleteWorkspaceConfirm": "Delete {count} sessions permanently? This cannot be undone.",
     "openInFinder": "Open in Finder",
     "workspaceActions": "Workspace actions",
     "sessionCountTotal": "{count} sessions",

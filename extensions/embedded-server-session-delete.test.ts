@@ -2,6 +2,7 @@
 // ABOUTME: Verifies live-instance rejection, containment validation, and unlink failures.
 import { describe, expect, test, vi } from "vitest";
 import { applySessionDeletions } from "./embedded-server.js";
+import { removeSessionFileTrashFirst } from "./session-trash.js";
 
 const SESSIONS_DIR = "/sessions";
 
@@ -66,5 +67,26 @@ describe("applySessionDeletions", () => {
         removeFile: unlink,
       }),
     ).rejects.toThrow();
+  });
+
+  test("removeSessionFileTrashFirst fits the removeFile contract", async () => {
+    // The route binds `removeFile: removeSessionFileTrashFirst` and wraps it so
+    // a failed removal rejects (counted in `errors`); a successful one resolves.
+    await expect(
+      removeSessionFileTrashFirst(`${SESSIONS_DIR}/a.jsonl`, {
+        spawnTrash: () => ({ status: 0 }),
+        exists: () => true,
+        unlink: vi.fn(async () => {}),
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      removeSessionFileTrashFirst(`${SESSIONS_DIR}/b.jsonl`, {
+        spawnTrash: () => ({ status: 1, stderr: "trash: denied" }),
+        exists: () => true,
+        unlink: async () => {
+          throw new Error("EPERM");
+        },
+      }),
+    ).resolves.toMatchObject({ ok: false, method: "unlink" });
   });
 });

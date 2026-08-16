@@ -689,6 +689,11 @@ export class SessionSidebar {
         label: t("sidebar.archiveWorkspaceSessions"),
         action: () => this.archiveWorkspaceSessions(workspace),
       },
+      {
+        iconKind: "trash-2",
+        label: t("sidebar.deleteWorkspaceSessions"),
+        action: () => this.deleteWorkspaceSessions(workspace),
+      },
     ];
 
     const menu = document.createElement("div");
@@ -756,6 +761,48 @@ export class SessionSidebar {
     this.archived.push(...filePaths);
     this.saveArchived();
     this.render();
+  }
+
+  // Deletes every deletable session of a workspace in one confirmed batch.
+  // Mirrors deleteArchivedSession's response handling: paths the server
+  // reports as `running` or `errors` keep their local state (recent cookie,
+  // session pin, archived entry); only confirmed deletions are cleaned up.
+  async deleteWorkspaceSessions(workspace) {
+    const filePaths = (workspace?.sessions || [])
+      .map((session) => session?.filePath)
+      .filter(
+        (filePath) =>
+          typeof filePath === "string" && filePath && this.archiveDisabledReason(filePath) === null,
+      );
+    if (filePaths.length === 0) return;
+    const ok = await this.showFallbackConfirmDialog(
+      t("sidebar.deleteWorkspaceConfirm", { count: filePaths.length }),
+    );
+    if (!ok) return;
+
+    try {
+      const res = await fetch("/api/sessions/delete-batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filePaths }),
+      });
+      const data = await res.json();
+      const blocked = new Set([...(data.running || []), ...(data.errors || [])]);
+      for (const filePath of filePaths) {
+        if (blocked.has(filePath)) continue;
+        this.removeFromRecentSessions(filePath);
+        this.pinStore.unpinSession(filePath);
+      }
+      this.archived = this.archived.filter((p) => !filePaths.includes(p) || blocked.has(p));
+      this.saveArchived();
+      if ((data.running || []).length > 0) {
+        this.onSessionNotice?.(t("sidebar.deleteSessionRunning"));
+      }
+    } catch (err) {
+      console.error("[Sidebar] deleteWorkspaceSessions failed:", err);
+    }
+
+    await this.loadSessions();
   }
 
   closeContextMenu() {

@@ -824,6 +824,14 @@ live session。成功后清理跨端口 recent cookie 与 session pin；从归�
 本端 localStorage `pi-studio-archived` 条目。归档本身不会删除文件，但 active、streaming
 或 live-instance session 不可归档，批量归档也跳过它们。
 
+**删除语义：** `delete-batch` 的 `removeFile` 绑定 `removeSessionFileTrashFirst()`
+（`extensions/session-trash.ts`）——优先 `trash` CLI 移入系统回收站（可恢复，
+与 Pi TUI `/resume` + Ctrl-D 的 `deleteSessionFile` 同策略），trash 不可用或失败时
+退回永久 `unlink`；失败计入响应 `errors`，绝不谎报成功。workspace 上下文菜单提供
+「Delete all sessions」入口（`deleteWorkspaceSessions()`）：二次确认后一次批量提交
+该 workspace 全部可删除 session（active/streaming/live 同样被排除在提交列表外），
+按响应分类清理 recent/pin/archived，`running` 条目保留并提示。
+
 **跨边界与视觉验证不变量：** `embedded-server.ts` 的 HTTP 路由必须同时兼容
 Node HTTP 生命周期和 Bun Fetch adapter；adapter 路径以 `AbortSignal` 为标准，
 不得假设 `IncomingMessage` 的 EventEmitter 方法存在。替换 sidebar DOM 的共享状态
