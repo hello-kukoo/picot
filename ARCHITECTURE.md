@@ -203,7 +203,8 @@ HTTP+WS server。该 server 是**进程作用域**的 —— 它在 `new_session
   loopback）、`/api/files/raw`（图片 / PDF）、`/api/search`、
   `/api/cost-dashboard`、`/api/lan-qr`、`/api/instances`、
   `/api/workspace-info`、`/api/sessions/rename`（loopback-only）、`/api/open`、`/api/agent-config`、
-  `/api/models-config`、`/api/git-branch`、`/api/file-mentions`（`@` 文件提及
+  `/api/models-config`、`/api/agents-md` 与 `/api/append-system-md`（全局
+  `AGENTS.md` / `APPEND_SYSTEM.md` 编辑器，高级配置页）、`/api/git-branch`、`/api/file-mentions`（`@` 文件提及
   自动补全，仅 loopback、且仅由窗口主会话 Pi 提供服务），加 `POST /api/rpc` 透传。
   `public/` 下的静态资源在 `/` 下分发。网络策略集中在
   `extensions/request-access.ts`，文件系统 containment 集中在
@@ -260,7 +261,7 @@ server 的 app-auth 配置在 desktop mode 不可用，不能向用户展示无�
 
 #### Models OAuth 认证边界
 
-Picot 仅将 Pi provider-owned OAuth 的非敏感交互投影给拥有当前原生窗口的 desktop owner；Pi runtime 独占 OAuth token exchange、refresh 与 credential persistence。WebView 永不接收 OAuth credential。OAuth start/cancel/status 是 desktop-owner-only，operation 绑定 owner 与 Pi process generation，不能向 LAN、remote 或 ephemeral runtime 暴露。已验证 seam：`ModelRuntime.login(providerId, "oauth", interaction)`（Pi 0.84 公开方法，`AuthInteraction` 由 Picot 注入，含 AbortSignal 与 device-code/progress 事件投影）。
+Picot 仅将 Pi provider-owned OAuth 的非敏感交互投影给拥有当前原生窗口的 desktop owner；Pi runtime 独占 OAuth token exchange、refresh 与 credential persistence。WebView 永不接收 OAuth credential。OAuth capabilities/start/cancel/status/logout 全部是 desktop-owner-only（对应 `get_oauth_login_capabilities` / `start_oauth_login` / `cancel_oauth_login` / `get_oauth_login_status` / `logout_oauth_login`，后者删除持久 credential），operation 绑定 owner 与 Pi process generation，不能向 LAN、remote 或 ephemeral runtime 暴露。已验证 seam：`ModelRuntime.login(providerId, "oauth", interaction)`（Pi 0.84 公开方法，`AuthInteraction` 由 Picot 注入，含 AbortSignal 与 device-code/progress 事件投影）。
 
 #### Skills 设置页（`#/settings/skills`）
 
