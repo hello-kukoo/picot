@@ -41,6 +41,41 @@ describe("LegacyConfigGateway", () => {
     ).resolves.toEqual({ ok: true });
   });
 
+  test("reads AGENTS.md through the legacy endpoint", async () => {
+    const fetchMock = vi.fn(async (url) => {
+      expect(url).toBe("/api/agents-md");
+      return new Response(
+        JSON.stringify({
+          success: true,
+          content: "# Global rules",
+          path: "/home/.pi/agent/AGENTS.md",
+          exists: true,
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(new LegacyConfigGateway().call("read_agents_md")).resolves.toEqual({
+      ok: true,
+      data: { path: "/home/.pi/agent/AGENTS.md", content: "# Global rules", exists: true },
+    });
+  });
+
+  test("writes APPEND_SYSTEM.md through the legacy endpoint", async () => {
+    const fetchMock = vi.fn(async (url, options) => {
+      expect(url).toBe("/api/append-system-md");
+      expect(options.method).toBe("PUT");
+      expect(JSON.parse(options.body)).toEqual({ content: "Be terse." });
+      return new Response(JSON.stringify({ success: true }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new LegacyConfigGateway().call("write_append_system_md", { content: "Be terse." }),
+    ).resolves.toEqual({ ok: true });
+  });
+
   test("maps legacy errors without throwing", async () => {
     vi.stubGlobal(
       "fetch",
@@ -100,4 +135,20 @@ test("maps OAuth capabilities error to ok:false", async () => {
     ok: false,
     error: "unavailable",
   });
+});
+
+test("maps OAuth logout through the legacy RPC with the provider param", async () => {
+  const fetchMock = vi.fn(async (_url, options) => {
+    expect(options.method).toBe("POST");
+    expect(JSON.parse(options.body)).toEqual({
+      type: "logout_oauth_login",
+      provider: "openai-codex",
+    });
+    return new Response(JSON.stringify({ success: true, data: {} }), { status: 200 });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  await expect(
+    new LegacyConfigGateway().call("logout_oauth_login", { provider: "openai-codex" }),
+  ).resolves.toEqual({ ok: true });
 });

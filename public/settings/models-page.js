@@ -181,7 +181,7 @@ export function setupModelsPage({
       list.appendChild(item);
     }
 
-    if (codexOAuthCapability) {
+    if (codexOAuthCapability && !codexOAuthCapability.configured) {
       const divider = document.createElement("div");
       divider.className = "models-provider-divider";
       list.appendChild(divider);
@@ -190,9 +190,14 @@ export function setupModelsPage({
       item.className = "models-provider-item models-oauth-provider-item";
       item.classList.toggle("selected", selectedAuthProvider === "openai-codex");
       item.append(providerIcon("openai-codex", "models-provider-icon"));
+      // Keep the sidebar label identical to the logged-in state: the provider
+      // name, not the sign-in action label.
+      const codexLabel =
+        providers.find((provider) => provider.provider === "openai-codex")?.displayName ||
+        "OpenAI Codex";
       item.appendChild(
         Object.assign(document.createElement("span"), {
-          textContent: t("settings.models.oauth.signInWithChatGPT"),
+          textContent: codexLabel,
         }),
       );
       item.addEventListener("click", () => {
@@ -204,28 +209,29 @@ export function setupModelsPage({
     sidebar.appendChild(list);
 
     const selected = providers.find((provider) => provider.provider === selectedAuthProvider);
-    if (selectedAuthProvider === "openai-codex" && codexOAuthCapability) {
+    if (
+      selectedAuthProvider === "openai-codex" &&
+      codexOAuthCapability &&
+      !codexOAuthCapability.configured
+    ) {
       const card = document.createElement("div");
       card.className = "provider-manager-card";
       const title = document.createElement("div");
       title.className = "api-key-row-name";
       title.textContent = t("settings.models.oauth.signInWithChatGPT");
       card.appendChild(title);
-      if (codexOAuthCapability.configured) {
-        const connected = document.createElement("p");
-        connected.textContent = t("settings.models.oauth.connected");
-        card.appendChild(connected);
-      } else {
-        const loginBtn = document.createElement("button");
-        loginBtn.type = "button";
-        loginBtn.className = "ui-button ui-button--primary";
-        loginBtn.textContent = t("settings.models.oauth.signInWithChatGPT");
-        loginBtn.addEventListener("click", () => startOAuthLogin());
-        card.appendChild(loginBtn);
-      }
+      const loginBtn = document.createElement("button");
+      loginBtn.type = "button";
+      loginBtn.className = "ui-button ui-button--primary oauth-login-cta";
+      loginBtn.textContent = t("settings.models.oauth.signInWithChatGPT");
+      loginBtn.addEventListener("click", () => startOAuthLogin());
+      card.appendChild(loginBtn);
       main.appendChild(card);
     } else if (selected) {
-      const card = buildApiKeyRow(selected);
+      const card =
+        selectedAuthProvider === "openai-codex" && codexOAuthCapability?.configured
+          ? buildConfiguredCodexRow(selected)
+          : buildApiKeyRow(selected);
       card.classList.add("provider-manager-card");
       card.querySelector(".api-key-row-header")?.classList.add("provider-manager-card-header");
       card.querySelector(".api-model-list")?.classList.add("provider-manager-model-list");
@@ -506,10 +512,24 @@ export function setupModelsPage({
 
     const actions = document.createElement("div");
     actions.className = "api-key-row-actions";
+    const isCodexOAuth = p.provider === "openai-codex" && codexOAuthCapability;
     const setBtn = document.createElement("button");
     setBtn.type = "button";
-    setBtn.textContent = p.configured ? t("actions.update") : t("actions.setKey");
-    setBtn.addEventListener("click", () => openApiKeyEditor(row, p));
+    if (isCodexOAuth) {
+      // OAuth credentials are owned by Pi: the primary action toggles between
+      // Logout (credential stored) and the sign-in entry (no credential).
+      setBtn.className = "api-key-row-oauth-action";
+      setBtn.textContent = p.configured
+        ? t("settings.models.oauth.logout")
+        : t("settings.models.oauth.signInWithChatGPT");
+      setBtn.addEventListener("click", () => {
+        if (p.configured) void logoutCodex(p);
+        else startOAuthLogin();
+      });
+    } else {
+      setBtn.textContent = p.configured ? t("actions.update") : t("actions.setKey");
+      setBtn.addEventListener("click", () => openApiKeyEditor(row, p));
+    }
 
     const models = getProviderModels(p);
     const hasConfiguredModels = p.configured && models.length > 0;
@@ -523,7 +543,7 @@ export function setupModelsPage({
       actions.appendChild(checkHealthBtn);
     }
     actions.appendChild(setBtn);
-    if (p.configured && p.source === "stored") {
+    if (p.configured && p.source === "stored" && !isCodexOAuth) {
       const removeBtn = document.createElement("button");
       removeBtn.type = "button";
       removeBtn.className = "danger";
@@ -574,6 +594,17 @@ export function setupModelsPage({
     } else {
       toggle.hidden = true;
     }
+    return row;
+  }
+
+  function buildConfiguredCodexRow(provider) {
+    const row = buildApiKeyRow(provider);
+    const status = document.createElement("p");
+    status.className = "models-oauth-connected-status";
+    status.textContent = t("settings.models.oauth.connected");
+    const modelList = row.querySelector(".api-model-list");
+    if (modelList) row.insertBefore(status, modelList);
+    else row.appendChild(status);
     return row;
   }
 
@@ -897,6 +928,21 @@ export function setupModelsPage({
     if (resp?.ok) {
       await onModelConfigurationChanged?.();
       loadApiKeysPanel();
+    }
+  }
+
+  async function logoutCodex(p) {
+    const ok = confirm(
+      t("settings.models.oauth.logoutConfirm", { provider: p.displayName || p.provider }),
+    );
+    if (!ok) return;
+    const resp = await call("logout_oauth_login", { provider: "openai-codex" }).catch(() => null);
+    if (resp?.ok) {
+      await onModelConfigurationChanged?.();
+      await loadApiKeysPanel();
+      // Re-query the capability surface so the card flips back to the sign-in
+      // entry once Pi confirms the stored OAuth credential is gone.
+      await loadOAuthCapability();
     }
   }
 
@@ -1442,6 +1488,9 @@ export function setupModelsPage({
       onSuccess: async () => {
         await onModelConfigurationChanged?.();
         await loadApiKeysPanel();
+        // Re-query the capability surface: it still reports unconfigured, so
+        // the card must be re-rendered with the fresh configured state.
+        await loadOAuthCapability();
         await loadInlineModelsEditor();
       },
     });
@@ -1461,5 +1510,5 @@ export function setupModelsPage({
     renderApiKeysPanel(catalogProviders);
   }
 
-  return { activate, loadApiKeysPanel, loadInlineModelsEditor };
+  return { activate, loadApiKeysPanel, loadInlineModelsEditor, loadOAuthCapability };
 }

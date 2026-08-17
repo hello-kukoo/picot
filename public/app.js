@@ -5346,6 +5346,8 @@ const piVersionValue = document.getElementById("setting-pi-version-value");
 let piVersionCache = null;
 let piVersionInflight = null;
 let loadInlineConfigEditor = async () => {};
+let loadAgentsMdEditor = async () => {};
+let loadAppendSystemMdEditor = async () => {};
 let modelsPage = { activate: async () => {} };
 
 async function handleSuperAgentEnabledChanged(enabled) {
@@ -5369,6 +5371,8 @@ function selectSettingsTab(tabKey = "general") {
   });
   if (targetTabKey === "configuration") {
     loadInlineConfigEditor();
+    loadAgentsMdEditor();
+    loadAppendSystemMdEditor();
   }
   if (targetTabKey === "models") {
     void modelsPage.activate();
@@ -6155,7 +6159,7 @@ setupSettingsToggles({
 });
 
 const configGateway = new LegacyConfigGateway();
-({ loadInlineConfigEditor } = setupSettingsConfig({
+({ loadInlineConfigEditor, loadAgentsMdEditor, loadAppendSystemMdEditor } = setupSettingsConfig({
   configGateway,
   clearSettingsSaveMessage,
   setSettingsSaveButtonSaving,

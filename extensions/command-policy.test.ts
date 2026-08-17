@@ -107,6 +107,7 @@ describe("assertEphemeralCommandAllowed", () => {
     "start_oauth_login",
     "cancel_oauth_login",
     "get_oauth_login_status",
+    "logout_oauth_login",
   ]) {
     it(`classifies ${command} as desktopOwnerOnly`, () => {
       expect(classifyCoreCommand(command)).toBe("desktopOwnerOnly");

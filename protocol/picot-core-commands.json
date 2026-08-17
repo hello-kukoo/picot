@@ -41,6 +41,7 @@
     "get_oauth_login_capabilities": "desktopOwnerOnly",
     "start_oauth_login": "desktopOwnerOnly",
     "cancel_oauth_login": "desktopOwnerOnly",
-    "get_oauth_login_status": "desktopOwnerOnly"
+    "get_oauth_login_status": "desktopOwnerOnly",
+    "logout_oauth_login": "desktopOwnerOnly"
   }
 }

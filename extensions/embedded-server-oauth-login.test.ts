@@ -45,7 +45,7 @@ function fakePiRuntime(): VerifiedPublicPiRuntime {
       return { type: "oauth" } as Credential;
     },
     async checkAuth() {
-      return { configured: false };
+      return undefined;
     },
     async logout() {},
   };

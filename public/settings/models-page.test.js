@@ -143,6 +143,9 @@ describe("models provider editor", () => {
     );
     const oauthItem = document.querySelector(".models-oauth-provider-item");
     expect(oauthItem).not.toBeNull();
+    // The sidebar keeps the provider name (same as the logged-in state), not
+    // the sign-in action label.
+    expect(oauthItem.textContent.trim()).toBe("OpenAI Codex");
     oauthItem.click();
     expect(
       document.querySelector("#settings-api-keys .models-config-main .provider-manager-card"),
@@ -159,6 +162,182 @@ describe("models provider editor", () => {
     const page = setupModelsPage({ configGateway: { call: noCapabilityCall } });
     await page.activate();
     expect(document.querySelector(".models-oauth-provider-item")).toBeNull();
+  });
+
+  test("keeps configured Codex models visible alongside connected OAuth state", async () => {
+    const configuredCall = vi.fn(async (operation) => {
+      if (operation === "get_oauth_login_capabilities") {
+        return {
+          ok: true,
+          data: {
+            providers: [{ providerId: "openai-codex", deviceCode: true, configured: true }],
+          },
+        };
+      }
+      if (operation === "list_model_catalog") {
+        return {
+          ok: true,
+          data: {
+            providers: [
+              {
+                provider: "openai-codex",
+                displayName: "OpenAI Codex",
+                configured: true,
+                source: "stored",
+                models: [
+                  {
+                    provider: "openai-codex",
+                    id: "gpt-5.5",
+                    name: "GPT-5.5",
+                    available: true,
+                    visible: true,
+                    health: { status: "healthy" },
+                  },
+                ],
+              },
+            ],
+          },
+        };
+      }
+      return call(operation);
+    });
+    const page = setupModelsPage({ configGateway: { call: configuredCall } });
+    await page.activate();
+
+    // Configured Codex keeps its model list and the connected badge; the
+    // OAuth sidebar entry and the API-key remove button are not shown.
+    expect(document.querySelector(".models-oauth-provider-item")).toBeNull();
+    expect(document.querySelector(".api-model-name")?.textContent).toBe("GPT-5.5");
+    expect(document.querySelector(".models-oauth-connected-status")).not.toBeNull();
+    const actions = document.querySelector(".api-key-row-actions");
+    expect(actions).not.toBeNull();
+    expect(actions.querySelector(".api-model-check-visible")).not.toBeNull();
+    expect(actions.querySelector(".api-key-row-oauth-action")).not.toBeNull();
+    expect(actions.querySelector(".danger")).toBeNull();
+  });
+
+  test("logout of configured Codex calls Pi logout and flips back to sign-in", async () => {
+    let capabilityCalls = 0;
+    const logoutCall = vi.fn(async (operation) => {
+      if (operation === "get_oauth_login_capabilities") {
+        capabilityCalls += 1;
+        return {
+          ok: true,
+          data: {
+            providers: [
+              { providerId: "openai-codex", deviceCode: true, configured: capabilityCalls === 1 },
+            ],
+          },
+        };
+      }
+      if (operation === "list_model_catalog") {
+        return {
+          ok: true,
+          data: {
+            providers: [
+              {
+                provider: "openai-codex",
+                displayName: "OpenAI Codex",
+                configured: true,
+                source: "stored",
+                models: [
+                  {
+                    provider: "openai-codex",
+                    id: "gpt-5.5",
+                    name: "GPT-5.5",
+                    available: true,
+                    visible: true,
+                    health: { status: "healthy" },
+                  },
+                ],
+              },
+            ],
+          },
+        };
+      }
+      if (operation === "logout_oauth_login") return { ok: true };
+      return call(operation);
+    });
+    const page = setupModelsPage({ configGateway: { call: logoutCall } });
+    await page.activate();
+
+    const logoutBtn = document.querySelector(".api-key-row-oauth-action");
+    expect(logoutBtn).not.toBeNull();
+    logoutBtn.click();
+    expect(confirm).toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(logoutCall.mock.calls.some(([operation]) => operation === "logout_oauth_login")).toBe(
+        true,
+      ),
+    );
+    // Capability re-query reports unconfigured; the OAuth sign-in entry returns.
+    await vi.waitFor(() =>
+      expect(document.querySelector(".models-oauth-provider-item")).not.toBeNull(),
+    );
+  });
+
+  test("after a successful login the card flips to the configured Codex row", async () => {
+    let loggedIn = false;
+    const loginCall = vi.fn(async (operation) => {
+      if (operation === "get_oauth_login_capabilities") {
+        return {
+          ok: true,
+          data: {
+            providers: [{ providerId: "openai-codex", deviceCode: true, configured: loggedIn }],
+          },
+        };
+      }
+      if (operation === "list_model_catalog") {
+        return {
+          ok: true,
+          data: {
+            providers: [
+              {
+                provider: "openai-codex",
+                displayName: "OpenAI Codex",
+                configured: loggedIn,
+                source: "stored",
+                models: [
+                  {
+                    provider: "openai-codex",
+                    id: "gpt-5.5",
+                    name: "GPT-5.5",
+                    available: true,
+                    visible: true,
+                    health: { status: "healthy" },
+                  },
+                ],
+              },
+            ],
+          },
+        };
+      }
+      return call(operation);
+    });
+    const page = setupModelsPage({ configGateway: { call: loginCall } });
+    await page.activate();
+
+    // Initially unconfigured: select the sidebar entry, then the sign-in card
+    // is shown.
+    const oauthItem = document.querySelector(".models-oauth-provider-item");
+    expect(oauthItem).not.toBeNull();
+    oauthItem.click();
+    const loginCta = document.querySelector(".oauth-login-cta");
+    expect(loginCta).not.toBeNull();
+    expect(document.querySelector(".api-key-row-oauth-action")).toBeNull();
+
+    // The user completes authorization in the browser; Pi now reports the
+    // credential. The onSuccess refresh sequence re-queries both surfaces.
+    loggedIn = true;
+    await page.loadApiKeysPanel();
+    await page.loadOAuthCapability();
+
+    // The card now renders the configured row (model list + logout), and the
+    // sign-in CTA is gone.
+    expect(document.querySelector(".oauth-login-cta")).toBeNull();
+    expect(document.querySelector(".api-key-row-oauth-action")).not.toBeNull();
+    expect(document.querySelector(".api-model-name")?.textContent).toBe("GPT-5.5");
+    expect(document.querySelector(".models-oauth-connected-status")).not.toBeNull();
   });
 
   test("splits API-key providers and custom providers into separate panels", async () => {

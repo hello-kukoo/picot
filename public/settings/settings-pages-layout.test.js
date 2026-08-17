@@ -31,6 +31,8 @@ describe("settings page split", () => {
     expect(configurationPanel).not.toBeNull();
     expect(modelsPanel).not.toBeNull();
     expect(configurationPanel.querySelector("#inline-config-textarea")).not.toBeNull();
+    expect(configurationPanel.querySelector("#agents-md-textarea")).not.toBeNull();
+    expect(configurationPanel.querySelector("#append-system-md-textarea")).not.toBeNull();
     expect(configurationPanel.querySelector("#settings-api-keys")).toBeNull();
     expect(configurationPanel.querySelector("#inline-models-textarea")).toBeNull();
     expect(modelsPanel.querySelector("#settings-api-keys")).not.toBeNull();

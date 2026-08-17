@@ -411,6 +411,15 @@
   gap: var(--space-3);
   margin-top: var(--space-2);
 }
+
+/* OAuth CTAs keep their accent fill on hover; the generic ui-button hover
+   swaps in --bg-glass-hover, which reads as a disabled state on primary
+   sign-in actions. */
+.oauth-login-cta:hover:not(:disabled),
+.oauth-login-dialog [data-action="oauth-open-browser"]:hover:not(:disabled) {
+  background-color: var(--accent);
+  border-color: var(--accent);
+}
 .provider-picker-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

@@ -47,7 +47,7 @@ function fakeSupportedSurface(
       return { type: "oauth", ...secretShape } as never;
     },
     async checkAuth() {
-      return { configured: false };
+      return undefined;
     },
     async logout() {},
   };
@@ -78,6 +78,30 @@ test("reports supported for a runtime exposing ModelRuntime.login and checkAuth"
     provider: "openai-codex",
     methods: ["device_code"],
   });
+});
+
+test("selects Pi's device-code method prompt without exposing OAuth input", async () => {
+  let selectedMethod: string | undefined;
+  const runtime = fakeSupportedSurface();
+  runtime.login = async (_providerId, _type, interaction) => {
+    selectedMethod = await interaction.prompt({
+      type: "select",
+      message: "Select OpenAI Codex login method:",
+      options: [
+        { id: "browser", label: "Browser login" },
+        { id: "device_code", label: "Device code login" },
+      ],
+    });
+    return { type: "oauth" } as never;
+  };
+  const adapter = createPiOAuthLoginAdapter(runtime);
+
+  await adapter.startCodexDeviceCodeLogin(
+    { onDeviceCode: () => {}, onProgress: () => {} } as PiOAuthLoginEvents,
+    new AbortController().signal,
+  );
+
+  expect(selectedMethod).toBe("device_code");
 });
 
 test("forwards a non-secret device-code event and progress", async () => {

@@ -1,7 +1,14 @@
 // ABOUTME: Adapts Pi's verified public Codex device-code OAuth API for Picot.
 // ABOUTME: Emits only non-secret device-code and progress data; Pi owns tokens and persistence.
 
-import type { AuthEvent, AuthInteraction, AuthType, Credential } from "@earendil-works/pi-ai";
+import type {
+  AuthCheck,
+  AuthEvent,
+  AuthInteraction,
+  AuthPrompt,
+  AuthType,
+  Credential,
+} from "@earendil-works/pi-ai";
 
 export type { AuthEvent, AuthInteraction, AuthType };
 
@@ -38,7 +45,7 @@ export type OAuthCapability =
  */
 export type VerifiedPublicPiRuntime = {
   login(providerId: string, type: AuthType, interaction: AuthInteraction): Promise<Credential>;
-  checkAuth(providerId: string): Promise<{ configured?: boolean } | undefined>;
+  checkAuth(providerId: string): Promise<AuthCheck | undefined>;
   logout(providerId: string): Promise<void>;
 };
 
@@ -46,6 +53,17 @@ export type PiOAuthLoginAdapter = {
   getCodexCapability(): Promise<OAuthCapability>;
   startCodexDeviceCodeLogin(events: PiOAuthLoginEvents, signal: AbortSignal): Promise<void>;
 };
+
+async function promptForCodexDeviceCode(prompt: AuthPrompt): Promise<string> {
+  if (prompt.type !== "select") {
+    throw new Error("Codex device-code flow does not require manual input");
+  }
+  const deviceCodeOption = prompt.options.find((option) => option.id === "device_code");
+  if (!deviceCodeOption) {
+    throw new Error("Pi does not expose the Codex device-code login method");
+  }
+  return deviceCodeOption.id;
+}
 
 /**
  * Create the adapter over the verified public Pi runtime surface. The runtime
@@ -75,9 +93,7 @@ export function createPiOAuthLoginAdapter(runtime: VerifiedPublicPiRuntime): PiO
     ): Promise<void> {
       const interaction: AuthInteraction = {
         signal,
-        prompt: async () => {
-          throw new Error("Codex device-code flow does not require manual input");
-        },
+        prompt: promptForCodexDeviceCode,
         notify: (event: AuthEvent) => {
           switch (event.type) {
             case "device_code":
@@ -137,9 +153,7 @@ export async function probeCodexDeviceCodeCapability(
   try {
     await candidate.login("openai-codex", "oauth", {
       signal,
-      prompt: async () => {
-        throw new Error("Codex device-code flow does not require manual input");
-      },
+      prompt: promptForCodexDeviceCode,
       notify: (event: AuthEvent) => {
         if (event.type === "device_code") sawDeviceCode = true;
         if (event.type === "progress") sawProgress = true;

@@ -247,6 +247,15 @@ function resolvePiAgentRoot(): string {
 
 const PI_AGENT_ROOT = resolvePiAgentRoot();
 
+// Markdown files in the pi agent root exposed for the Settings → Advanced
+// Configuration editors. Keys are HTTP paths, values are file names under
+// PI_AGENT_ROOT. Deliberately a closed allowlist — never expand to arbitrary
+// paths from the request.
+const AGENT_TEXT_FILES: Record<string, string> = {
+  "/api/agents-md": "AGENTS.md",
+  "/api/append-system-md": "APPEND_SYSTEM.md",
+};
+
 export const LAN_BIND_HOST = "0.0.0.0";
 
 function isLoopbackHost(host: string): boolean {
@@ -2829,11 +2838,12 @@ export default function (pi: ExtensionAPI) {
 
         // ─── OAuth login (Phase 1, desktop-owner-only) ───
         //
-        // All four commands are `desktopOwnerOnly` in the command manifest and
+        // All five commands are `desktopOwnerOnly` in the command manifest and
         // are only reachable on the initiating connection (never via the
         // broker or ephemeral runtimes). `get_oauth_login_capabilities` is a
         // read-only capability surface; start/cancel/status are owner-bound
-        // through the operation manager.
+        // through the operation manager; logout removes the stored OAuth
+        // credential through Pi's own ModelRuntime.logout.
         case "get_oauth_login_capabilities": {
           try {
             assertNonEphemeralOAuthCommand("get_oauth_login_capabilities");
@@ -2856,9 +2866,10 @@ export default function (pi: ExtensionAPI) {
             const adapter = createPiOAuthLoginAdapter(runtime);
             const capability = await adapter.getCodexCapability();
             if (capability.kind === "supported") {
-              const configured = Boolean(
-                (await runtime.checkAuth("openai-codex"))?.configured ?? false,
-              );
+              // ModelRuntime.checkAuth returns AuthCheck | undefined; an
+              // AuthCheck means Pi has a usable credential, regardless of
+              // whether it came from OAuth or another provider-owned method.
+              const configured = Boolean(await runtime.checkAuth("openai-codex"));
               sendTo(
                 ws,
                 success("get_oauth_login_capabilities", {
@@ -3050,6 +3061,42 @@ export default function (pi: ExtensionAPI) {
             sendTo(ws, success("get_oauth_login_status", status));
           } catch (e: unknown) {
             sendTo(ws, error("get_oauth_login_status", errMessage(e)));
+          }
+          break;
+        }
+
+        case "logout_oauth_login": {
+          try {
+            assertNonEphemeralOAuthCommand("logout_oauth_login");
+          } catch (e: unknown) {
+            sendTo(ws, error("logout_oauth_login", errMessage(e)));
+            break;
+          }
+          if (command.provider !== "openai-codex") {
+            sendTo(ws, error("logout_oauth_login", "Unsupported OAuth provider"));
+            break;
+          }
+          const runtime = getOAuthRuntime();
+          if (!runtime) {
+            sendTo(
+              ws,
+              error("logout_oauth_login", "Model runtime not ready yet — try again in a moment."),
+            );
+            break;
+          }
+          try {
+            // Pi's own logout removes the stored OAuth credential from its
+            // persistent store and re-runs catalog composition; Picot never
+            // deletes credentials itself.
+            await runtime.logout("openai-codex");
+            try {
+              await refreshOAuthCatalog();
+            } catch (e: unknown) {
+              console.warn("[Embedded] OAuth catalog refresh after logout failed:", errMessage(e));
+            }
+            sendTo(ws, success("logout_oauth_login", { provider: "openai-codex" }));
+          } catch (e: unknown) {
+            sendTo(ws, error("logout_oauth_login", errMessage(e)));
           }
           break;
         }
@@ -4428,6 +4475,60 @@ export default function (pi: ExtensionAPI) {
           const configPath = path.join(PI_AGENT_ROOT, "settings.json");
           fs.mkdirSync(path.dirname(configPath), { recursive: true });
           fs.writeFileSync(configPath, content, "utf8");
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: true }));
+        } catch (e: unknown) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: false, error: errMessage(e) }));
+        }
+      });
+      return;
+    }
+
+    // Global agent context / system-prompt append file read/write
+    //
+    // Exposes two markdown files from the pi agent root that shape the
+    // system prompt and project context (see pi docs/usage.md "System Prompt
+    // Files"): AGENTS.md is injected as global context instructions, and
+    // APPEND_SYSTEM.md is appended to the system prompt without replacing
+    // it. Project-level .pi/AGENTS.md / .pi/APPEND_SYSTEM.md are workspace
+    // files and are edited through the workspace file browser instead.
+    const agentTextFile = AGENT_TEXT_FILES[urlPath];
+    if (agentTextFile && req.method === "GET") {
+      try {
+        const filePath = path.join(PI_AGENT_ROOT, agentTextFile);
+        const exists = fs.existsSync(filePath);
+        const content = exists ? fs.readFileSync(filePath, "utf8") : "";
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true, content, path: filePath, exists }));
+      } catch (e: unknown) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: false, error: errMessage(e) }));
+      }
+      return;
+    }
+
+    if (agentTextFile && req.method === "PUT") {
+      let body = "";
+      req.on("data", (chunk: Buffer) => {
+        body += chunk.toString();
+      });
+      req.on("end", () => {
+        try {
+          const { content } = JSON.parse(body);
+          if (typeof content !== "string") {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(
+              JSON.stringify({
+                success: false,
+                error: "content must be a string",
+              }),
+            );
+            return;
+          }
+          const filePath = path.join(PI_AGENT_ROOT, agentTextFile);
+          fs.mkdirSync(path.dirname(filePath), { recursive: true });
+          fs.writeFileSync(filePath, content, "utf8");
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ success: true }));
         } catch (e: unknown) {
