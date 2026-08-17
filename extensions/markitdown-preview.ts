@@ -18,12 +18,17 @@ export const TIMEOUT_MS = 20_000;
 export const MAX_CONCURRENCY = 2;
 export const POSIX_KILL_GRACE_MS = 500;
 
-export const MARKITDOWN_ARGS = (suffix: ConvertibleSuffix): string[] => [
-  "-m",
-  "markitdown",
-  "-x",
-  `.${suffix}`,
-];
+/**
+ * Args passed to the resolved executable during conversion. In python-module
+ * mode the executable is a python interpreter, so args start with
+ * `-m markitdown`. In cli mode the executable IS the markitdown launcher
+ * (installed via `uv tool install` / `pipx install`), so only `-x .suffix`
+ * is passed.
+ */
+export const MARKITDOWN_ARGS = (
+  suffix: ConvertibleSuffix,
+  mode: "python-module" | "cli" = "python-module",
+): string[] => (mode === "cli" ? ["-x", `.${suffix}`] : ["-m", "markitdown", "-x", `.${suffix}`]);
 
 export type DependencyReason =
   | "pythonMissing"
@@ -86,6 +91,7 @@ type DependencyProbe =
       launcherArgs: string[];
       displayCommand: string;
       pythonVersion: string;
+      mode: "python-module" | "cli";
     }
   | {
       status: "unavailable";
@@ -240,18 +246,38 @@ function runChild(
   });
 }
 
-function candidateList(
-  platform: NodeJS.Platform,
-): Array<{ command: string; launcherArgs: string[]; displayCommand: string }> {
+type Candidate = {
+  command: string;
+  launcherArgs: string[];
+  displayCommand: string;
+  /**
+   * `cli` candidates ARE the markitdown launcher itself (installed via
+   * `uv tool install` / `pipx install`). `python-module` candidates are
+   * Python interpreters that may have markitdown importable as a module.
+   */
+  mode: "python-module" | "cli";
+};
+
+function candidateList(platform: NodeJS.Platform): Candidate[] {
+  const cliCandidates: Candidate[] = [
+    { command: "markitdown", launcherArgs: [], displayCommand: "markitdown", mode: "cli" },
+  ];
   if (platform === "win32") {
     return [
-      { command: "py", launcherArgs: ["-3"], displayCommand: "py -3" },
-      { command: "python.exe", launcherArgs: [], displayCommand: "python.exe" },
+      ...cliCandidates,
+      { command: "py", launcherArgs: ["-3"], displayCommand: "py -3", mode: "python-module" },
+      {
+        command: "python.exe",
+        launcherArgs: [],
+        displayCommand: "python.exe",
+        mode: "python-module",
+      },
     ];
   }
   return [
-    { command: "python3", launcherArgs: [], displayCommand: "python3" },
-    { command: "python", launcherArgs: [], displayCommand: "python" },
+    ...cliCandidates,
+    { command: "python3", launcherArgs: [], displayCommand: "python3", mode: "python-module" },
+    { command: "python", launcherArgs: [], displayCommand: "python", mode: "python-module" },
   ];
 }
 
@@ -289,6 +315,30 @@ export function createMarkItDownPreviewService(dependencies: ServiceDependencies
       let incompatibleVersion: string | undefined;
       let incompatibleCommand: string | undefined;
       for (const candidate of candidateList(platform)) {
+        if (candidate.mode === "cli") {
+          // CLI candidates (installed via `uv tool install` / `pipx install`)
+          // are standalone launchers. Probe by checking `--help` for the
+          // `-x/--extension` flag; no python version check needed.
+          const help = await runChild(
+            spawn,
+            candidate.command,
+            ["--help"],
+            MINIMAL_PROBE_OPTIONS(probeEnv),
+          );
+          if (help.code === 0 && /(--extension|-x)/.test(help.stdout)) {
+            return {
+              status: "available",
+              executable: candidate.command,
+              launcherArgs: [],
+              displayCommand: candidate.displayCommand,
+              pythonVersion: "cli",
+              mode: "cli",
+            };
+          }
+          // CLI not found / incompatible — fall through to python-module candidates.
+          continue;
+        }
+
         const versionResult = await runChild(
           spawn,
           candidate.command,
@@ -346,6 +396,7 @@ export function createMarkItDownPreviewService(dependencies: ServiceDependencies
           launcherArgs: [],
           displayCommand: candidate.displayCommand,
           pythonVersion: parsed.version,
+          mode: "python-module",
         };
       }
       if (oldVersion && !missingPackageVersion && !incompatibleVersion) {
@@ -432,7 +483,7 @@ export function createMarkItDownPreviewService(dependencies: ServiceDependencies
     try {
       child = spawn(
         dependency.executable,
-        [...dependency.launcherArgs, ...MARKITDOWN_ARGS(request.suffix)],
+        [...dependency.launcherArgs, ...MARKITDOWN_ARGS(request.suffix, dependency.mode)],
         {
           shell: false,
           env,

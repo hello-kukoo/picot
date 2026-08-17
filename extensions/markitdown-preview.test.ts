@@ -23,6 +23,9 @@ function availableService(options: ServiceOptions = {}) {
   const spawn =
     providedSpawn ??
     (vi.fn((_command: string, args: string[]) => {
+      // CLI candidate (markitdown) — fail so probe falls through to python3.
+      // Tests using this helper exercise the python-module conversion path.
+      if (_command === "markitdown") return childWithOutput("", 1);
       if (args.includes("--help")) return childWithOutput("--extension -x\n");
       if (args.includes("-m") && args.includes("markitdown"))
         return child ?? childWithOutput("# ok\n");
@@ -93,6 +96,7 @@ describe("MarkItDown preview service", () => {
     expect(INPUT_BYTE_CAP).toBe(32 * 1024 * 1024);
     expect(MAX_CONCURRENCY).toBe(2);
     expect(MARKITDOWN_ARGS("docx")).toEqual(["-m", "markitdown", "-x", ".docx"]);
+    expect(MARKITDOWN_ARGS("docx", "cli")).toEqual(["-x", ".docx"]);
     expect(MARKITDOWN_ARGS("docx")).not.toContain(expect.stringMatching(/workspace|report/));
   });
 
@@ -107,11 +111,14 @@ describe("MarkItDown preview service", () => {
       reason: "pythonMissing",
     });
     const calls = spawn.mock.calls as Array<readonly unknown[]>;
-    expect(calls.slice(0, 2).map((call) => call[0])).toEqual(["python3", "python"]);
+    // markitdown CLI is probed first, then python3 / python.
+    expect(calls.slice(0, 3).map((call) => call[0])).toEqual(["markitdown", "python3", "python"]);
   });
 
   test("uses a sanitized PATH only while discovering the interpreter", async () => {
     const spawn = vi.fn((_command: string, args: string[]) => {
+      // CLI candidate fails so probe falls through to python3.
+      if (_command === "markitdown") return childWithOutput("", 1);
       if (args.includes("--help")) return childWithOutput("--extension -x\n");
       if (args.includes("-m") && args.includes("markitdown")) return childWithOutput("# ok\n");
       if (args.some((arg) => arg.includes("sys.version_info")))
@@ -319,6 +326,8 @@ describe("MarkItDown preview service", () => {
     ).resolves.toMatchObject({ status: "dependencyUnavailable" });
 
     const winSpawn = vi.fn((_command: string, args: string[]) => {
+      // CLI candidate fails so probe falls through to py -3.
+      if (_command === "markitdown") return childWithOutput("", 1);
       if (args.includes("--help")) return childWithOutput("--extension -x\n");
       if (args.includes("-m") && args.includes("markitdown")) return winChild;
       if (args.some((arg) => arg.includes("sys.version_info")))
@@ -355,6 +364,54 @@ describe("MarkItDown preview service", () => {
         ([command, args]) => String(command).endsWith("taskkill.exe") && args.includes("/t"),
       ),
     ).toBe(true);
+  });
+
+  test("discovers markitdown CLI (uv tool / pipx) without python module", async () => {
+    // Simulates `uv tool install markitdown` / `pipx install markitdown`:
+    // the `markitdown` command is on PATH and `--help` works, but `python3
+    // -m markitdown` fails (module not importable in system python).
+    const spawn = vi.fn((_command: string, args: string[]) => {
+      if (_command === "markitdown" && args.includes("--help"))
+        return childWithOutput("--extension -x\n");
+      // python3 probes should not be reached because CLI candidate succeeds first.
+      return childWithOutput("", 1);
+    });
+    const service = createMarkItDownPreviewService({
+      platform: "darwin",
+      spawn: spawn as never,
+    });
+    await expect(service.probe()).resolves.toMatchObject({
+      status: "available",
+      executable: "markitdown",
+      mode: "cli",
+    });
+
+    // Conversion uses `markitdown -x .docx` (no `-m markitdown`).
+    const conversionSpawn = vi.fn((_command: string, args: string[]) => {
+      if (args.includes("--help")) return childWithOutput("--extension -x\n");
+      return childWithOutput("# converted\n");
+    });
+    const convertService = createMarkItDownPreviewService({
+      platform: "darwin",
+      spawn: conversionSpawn as never,
+      resolveExecutable: async () => "/usr/bin/python3",
+    });
+    const fd = fs.openSync("/dev/null", fs.constants.O_RDONLY);
+    try {
+      await convertService.convertFromDescriptor({
+        fd,
+        size: 0,
+        suffix: "docx",
+        signal: new AbortController().signal,
+      });
+    } finally {
+      fs.closeSync(fd);
+    }
+    const conversionCall = conversionSpawn.mock.calls.find(
+      ([command, args]) => command === "markitdown" && args.includes("-x"),
+    );
+    expect(conversionCall).toBeDefined();
+    expect(conversionCall?.[1]).not.toContain("-m");
   });
 
   test("returns dependency reason without spawning a conversion", async () => {
