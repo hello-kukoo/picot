@@ -102,6 +102,25 @@ describe("assertEphemeralCommandAllowed", () => {
     expect(() => assertEphemeralCommandAllowed("set_api_key", true)).not.toThrow();
   });
 
+  for (const command of [
+    "get_oauth_login_capabilities",
+    "start_oauth_login",
+    "cancel_oauth_login",
+    "get_oauth_login_status",
+  ]) {
+    it(`classifies ${command} as desktopOwnerOnly`, () => {
+      expect(classifyCoreCommand(command)).toBe("desktopOwnerOnly");
+      expect(() => assertEphemeralCommandAllowed(command, false)).toThrow();
+    });
+    it(`${command} passes the generic gate for a desktop owner (absolute ephemeral gate rejects)`, () => {
+      // The embedded server calls assertEphemeralCommandAllowed(type, true);
+      // desktopOwnerOnly is only refused when the flag is false. Ephemeral
+      // runtimes are instead denied by the absolute assertNonEphemeralOAuthCommand
+      // gate (see embedded-server.ts), never by this flag.
+      expect(() => assertEphemeralCommandAllowed(command, true)).not.toThrow();
+    });
+  }
+
   it("denies unknown commands with the same generic message", () => {
     expect(() => assertEphemeralCommandAllowed("does_not_exist", true)).toThrow(
       "Command is not available in temporary chat",

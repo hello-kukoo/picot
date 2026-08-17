@@ -37,6 +37,10 @@
     "set_model_visibility": "allowed",
     "check_model_health": "allowed",
     "ephemeral_snapshot_request": "allowed",
-    "extension_ui_response": "allowed"
+    "extension_ui_response": "allowed",
+    "get_oauth_login_capabilities": "desktopOwnerOnly",
+    "start_oauth_login": "desktopOwnerOnly",
+    "cancel_oauth_login": "desktopOwnerOnly",
+    "get_oauth_login_status": "desktopOwnerOnly"
   }
 }

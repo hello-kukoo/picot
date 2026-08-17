@@ -75,6 +75,14 @@ export class LegacyConfigGateway {
           return { ok: false, error: resp?.error || "Health check failed" };
         }
 
+        case "get_oauth_login_capabilities": {
+          const resp = await withTimeout(postRpc(operation), timeoutMs, operation);
+          if (resp?.success) {
+            return { ok: true, data: resp.data ?? {} };
+          }
+          return { ok: false, error: resp?.error || "Failed to load OAuth capabilities" };
+        }
+
         case "set_model_visibility": {
           const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);
           return resp?.success ? { ok: true } : { ok: false, error: resp?.error };

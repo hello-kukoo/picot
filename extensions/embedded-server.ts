@@ -82,6 +82,11 @@ import {
   createMarkItDownPreviewService,
   serializeConversionOutcome,
 } from "./markitdown-preview.ts";
+import {
+  createOAuthLoginOperationManager,
+  type OAuthLoginOperationManager,
+  type OAuthOperationEvent,
+} from "./oauth-login-operations.ts";
 import { getOpenCommand, resolveHomePath } from "./open-path.ts";
 import { buildPackageSkillInventory } from "./package-skill-inventory.ts";
 import { isPathWithinRoot } from "./path-safety.ts";
@@ -93,6 +98,10 @@ import {
   observeTelegramPrivateDm,
   type TelegramBotIdentity,
 } from "./pi-chat-setup";
+import {
+  createPiOAuthLoginAdapter,
+  type VerifiedPublicPiRuntime,
+} from "./pi-oauth-login-adapter.ts";
 import { isLoopbackAddress, isLoopbackOnlyApiRequest } from "./request-access.ts";
 import { buildProjectSearchMatch } from "./session-search";
 import { removeSessionFileTrashFirst } from "./session-trash.ts";
@@ -951,6 +960,23 @@ export function assertNonEphemeralSkillCommand(_commandName: string): void {
   }
 }
 
+/**
+ * Reject every OAuth login command when running in an ephemeral Pi process.
+ * Like `assertNonEphemeralSkillCommand`, this is an absolute gate: the generic
+ * `assertEphemeralCommandAllowed` only refuses desktopOwnerOnly commands when
+ * the desktop-owner flag is false, but ephemeral runtimes (Quick/Side Chat)
+ * must never start an OAuth flow regardless of that flag. OAuth operations are
+ * owner-bound to a desktop WebView; an ephemeral process cannot own one.
+ *
+ * Re-reads the ephemeral env at call time (rather than the module-level
+ * `EPHEMERAL_ENV` snapshot) so tests can toggle it without reloading.
+ */
+export function assertNonEphemeralOAuthCommand(_commandName: string): void {
+  if (parseEphemeralEnv()) {
+    throw new Error("OAuth login commands are not available in temporary chat");
+  }
+}
+
 const INSTALL_SOURCE_ID_MAX = 128;
 const INSTALL_SECRET_MAX = 256;
 
@@ -1085,7 +1111,7 @@ export function parseSkillInstallLinksInternalRequest(body: unknown): {
   };
 }
 
-type UnifiedWS = {
+export type UnifiedWS = {
   readyState: number;
   send: (data: string) => unknown;
   close: () => void;
@@ -1156,6 +1182,11 @@ type EmbeddedServerGlobal = {
   lastSessionProjects: SessionProject[];
   nextGeneration: number;
   activeSessionBinding: ActiveSessionBinding | null;
+  // Owner-bound OAuth login operations (Phase 1). Process-scoped: aborted on
+  // connection close, extension reload, and process shutdown. Incremented on
+  // reload so stale operations are rejected by generation mismatch.
+  oauthLoginOperations: OAuthLoginOperationManager | null;
+  oauthProcessGeneration: number;
 };
 
 type AvailableModelRegistry = {
@@ -1759,9 +1790,11 @@ function getOrCreateGlobalState(): EmbeddedServerGlobal {
       markitdownPreviewService: null,
       sessionHeaderCache: new Map<string, SessionFileCacheEntry<unknown>>(),
       sessionMetricsCache: new Map<string, SessionFileCacheEntry<unknown>>(),
-      lastSessionProjects: [],
+      lastSessionProjects: [] as SessionProject[],
       nextGeneration: 0,
       activeSessionBinding: null,
+      oauthLoginOperations: null,
+      oauthProcessGeneration: 0,
     } as EmbeddedServerGlobal;
   }
   return g[EMBEDDED_GLOBAL_KEY] as EmbeddedServerGlobal;
@@ -1857,6 +1890,31 @@ export async function renameManagedSession(
 
 export default function (pi: ExtensionAPI) {
   const globalState = getOrCreateGlobalState();
+
+  /**
+   * Resolve the ModelRuntime for the OAuth adapter from the process-scoped
+   * registry. `registry.runtime` is the pi-ai ModelRuntime (Pi 0.82+); returns
+   * null when no OAuth-capable runtime is available.
+   */
+  function getOAuthRuntime(): VerifiedPublicPiRuntime | null {
+    const runtime = (
+      globalState.modelRegistry as unknown as {
+        runtime?: VerifiedPublicPiRuntime;
+      } | null
+    )?.runtime;
+    return runtime ?? null;
+  }
+
+  /**
+   * Refresh the model catalog after a successful OAuth login so the picker
+   * and Models page see the newly configured provider without restarting.
+   */
+  async function refreshOAuthCatalog(): Promise<void> {
+    const registry = globalState.modelRegistry;
+    if (registry && typeof (registry as { refresh?: unknown }).refresh === "function") {
+      await (registry as { refresh: () => unknown }).refresh();
+    }
+  }
 
   // Store latest context reference for use in command handlers
   let latestCtx: ExtensionContext | null = null;
@@ -2765,6 +2823,233 @@ export default function (pi: ExtensionAPI) {
             sendTo(ws, success("remove_api_key", { provider }));
           } catch (e: unknown) {
             sendTo(ws, error("remove_api_key", errMessage(e)));
+          }
+          break;
+        }
+
+        // ─── OAuth login (Phase 1, desktop-owner-only) ───
+        //
+        // All four commands are `desktopOwnerOnly` in the command manifest and
+        // are only reachable on the initiating connection (never via the
+        // broker or ephemeral runtimes). `get_oauth_login_capabilities` is a
+        // read-only capability surface; start/cancel/status are owner-bound
+        // through the operation manager.
+        case "get_oauth_login_capabilities": {
+          try {
+            assertNonEphemeralOAuthCommand("get_oauth_login_capabilities");
+          } catch (e: unknown) {
+            sendTo(ws, error("get_oauth_login_capabilities", errMessage(e)));
+            break;
+          }
+          const runtime = getOAuthRuntime();
+          if (!runtime) {
+            sendTo(
+              ws,
+              error(
+                "get_oauth_login_capabilities",
+                "Model runtime not ready yet — try again in a moment.",
+              ),
+            );
+            break;
+          }
+          try {
+            const adapter = createPiOAuthLoginAdapter(runtime);
+            const capability = await adapter.getCodexCapability();
+            if (capability.kind === "supported") {
+              const configured = Boolean(
+                (await runtime.checkAuth("openai-codex"))?.configured ?? false,
+              );
+              sendTo(
+                ws,
+                success("get_oauth_login_capabilities", {
+                  providers: [{ providerId: "openai-codex", deviceCode: true, configured }],
+                }),
+              );
+            } else {
+              sendTo(ws, success("get_oauth_login_capabilities", { providers: [] }));
+            }
+          } catch (e: unknown) {
+            sendTo(ws, error("get_oauth_login_capabilities", errMessage(e)));
+          }
+          break;
+        }
+
+        case "start_oauth_login": {
+          try {
+            assertNonEphemeralOAuthCommand("start_oauth_login");
+          } catch (e: unknown) {
+            sendTo(ws, error("start_oauth_login", errMessage(e)));
+            break;
+          }
+          if (command.provider !== "openai-codex" || command.method !== "device_code") {
+            sendTo(ws, error("start_oauth_login", "Unsupported OAuth provider or method"));
+            break;
+          }
+          const runtime = getOAuthRuntime();
+          if (!runtime) {
+            sendTo(
+              ws,
+              error("start_oauth_login", "Model runtime not ready yet — try again in a moment."),
+            );
+            break;
+          }
+          const manager = globalState.oauthLoginOperations;
+          if (!manager) {
+            sendTo(ws, error("start_oauth_login", "OAuth login manager is not ready"));
+            break;
+          }
+          let started: { operationId: string; signal: AbortSignal } | null = null;
+          try {
+            started = manager.start(ws, globalState.oauthProcessGeneration, "openai-codex");
+          } catch (e: unknown) {
+            sendTo(ws, error("start_oauth_login", errMessage(e)));
+            break;
+          }
+          sendTo(
+            ws,
+            success("start_oauth_login", {
+              operationId: started.operationId,
+              provider: "openai-codex",
+              state: "starting",
+            }),
+          );
+
+          const adapter = createPiOAuthLoginAdapter(runtime);
+          const emit = (event: OAuthOperationEvent) => sendTo(ws, { type: "oauth_event", event });
+          // Track the device-code expiry so the bridge can emit
+          // `oauth_login_expired` when the code's lifetime lapses (the Pi
+          // adapter does not signal expiry itself). Cleared once the operation
+          // reaches any terminal state.
+          let expiryTimer: ReturnType<typeof setTimeout> | null = null;
+          const clearExpiryTimer = () => {
+            if (expiryTimer) {
+              clearTimeout(expiryTimer);
+              expiryTimer = null;
+            }
+          };
+          void adapter
+            .startCodexDeviceCodeLogin(
+              {
+                onDeviceCode: (code) => {
+                  const event = manager.bindDeviceCode(ws, started.operationId, code);
+                  emit(event);
+                  if (code.expiresInSeconds && code.expiresInSeconds > 0) {
+                    clearExpiryTimer();
+                    expiryTimer = setTimeout(() => {
+                      expiryTimer = null;
+                      try {
+                        const expiredEvent = manager.expire(ws, started.operationId);
+                        emit(expiredEvent);
+                      } catch {
+                        // Operation already terminal (completed/cancelled);
+                        // nothing to emit.
+                      }
+                    }, code.expiresInSeconds * 1000);
+                  }
+                },
+                onProgress: (message) => {
+                  const event = manager.bindProgress(ws, started.operationId, message);
+                  emit(event);
+                },
+              },
+              started.signal,
+            )
+            .then(
+              async () => {
+                clearExpiryTimer();
+                let event: OAuthOperationEvent;
+                try {
+                  event = manager.complete(ws, started.operationId);
+                } catch {
+                  // Operation already removed (e.g. cancelled, expired, or
+                  // owner disconnected) — nothing to complete.
+                  return;
+                }
+                emit(event);
+                // Success refreshes the model catalog exactly once; the
+                // frontend's onModelConfigurationChanged callback then
+                // reloads Models-page local state.
+                try {
+                  await refreshOAuthCatalog();
+                } catch (e: unknown) {
+                  console.warn("[Embedded] OAuth catalog refresh failed:", errMessage(e));
+                }
+              },
+              async (error: unknown) => {
+                clearExpiryTimer();
+                if ((error as Error | null)?.name === "AbortError") {
+                  // The signal was aborted by cancel_oauth_login, owner close,
+                  // or generation change. The operation may already have been
+                  // removed by the cancel command — tolerate that.
+                  try {
+                    const event = manager.cancel(ws, started.operationId);
+                    emit(event);
+                  } catch {
+                    // Already terminal; nothing to emit.
+                  }
+                } else {
+                  try {
+                    const event = manager.fail(ws, started.operationId, error);
+                    emit(event);
+                  } catch {
+                    // Already terminal; nothing to emit.
+                  }
+                }
+              },
+            )
+            .catch((error: unknown) => {
+              // Belt-and-braces: never let a rejection on the fire-and-forget
+              // chain escape into the Pi process as an unhandled rejection.
+              console.warn("[Embedded] OAuth login chain error:", errMessage(error));
+            });
+          break;
+        }
+
+        case "cancel_oauth_login": {
+          try {
+            assertNonEphemeralOAuthCommand("cancel_oauth_login");
+          } catch (e: unknown) {
+            sendTo(ws, error("cancel_oauth_login", errMessage(e)));
+            break;
+          }
+          const manager = globalState.oauthLoginOperations;
+          const operationId = typeof command.operationId === "string" ? command.operationId : "";
+          if (!manager || !operationId) {
+            sendTo(ws, error("cancel_oauth_login", "OAuth login manager is not ready"));
+            break;
+          }
+          try {
+            const event = manager.cancel(ws, operationId);
+            sendTo(ws, { type: "oauth_event", event });
+            // Every command resolves with a response frame; the frontend
+            // channel resolves on `{ type: "response", id }`. Send the success
+            // response after the owner-scoped event so the cancel promise is
+            // not left hanging until the connection closes.
+            sendTo(ws, success("cancel_oauth_login", { operationId }));
+          } catch (e: unknown) {
+            sendTo(ws, error("cancel_oauth_login", errMessage(e)));
+          }
+          break;
+        }
+
+        case "get_oauth_login_status": {
+          try {
+            assertNonEphemeralOAuthCommand("get_oauth_login_status");
+          } catch (e: unknown) {
+            sendTo(ws, error("get_oauth_login_status", errMessage(e)));
+            break;
+          }
+          const manager = globalState.oauthLoginOperations;
+          const operationId = typeof command.operationId === "string" ? command.operationId : "";
+          if (!manager || !operationId) {
+            sendTo(ws, error("get_oauth_login_status", "OAuth login manager is not ready"));
+            break;
+          }
+          try {
+            const status = manager.getStatus(ws, operationId);
+            sendTo(ws, success("get_oauth_login_status", status));
+          } catch (e: unknown) {
+            sendTo(ws, error("get_oauth_login_status", errMessage(e)));
           }
           break;
         }
@@ -5284,6 +5569,13 @@ export default function (pi: ExtensionAPI) {
   // session changes.
   function startServer(ctx: ExtensionContext) {
     globalState.markitdownPreviewService ??= createMarkItDownPreviewService();
+    // OAuth login operations are process-scoped; initialize once and bump the
+    // generation on every session_start (extension reloads fire session_start
+    // on the new instance). Any operation bound to a stale generation is
+    // aborted so the WebView never receives events from a torn-down session.
+    globalState.oauthLoginOperations ??= createOAuthLoginOperationManager();
+    globalState.oauthProcessGeneration += 1;
+    globalState.oauthLoginOperations.abortAllForGenerationChange();
     const binding = publishActiveSessionBinding(
       globalState,
       pi,
@@ -5380,6 +5672,9 @@ export default function (pi: ExtensionAPI) {
     function onClientClosed(ws: UnifiedWS) {
       console.log("[Embedded] Browser client disconnected");
       globalState.clients.delete(ws);
+      // The owning connection is gone; abort its OAuth operation so no event
+      // is ever replayed to a later connection.
+      globalState.oauthLoginOperations?.abortAllForOwner(ws);
     }
 
     // ─── Heartbeat (process-scoped, identical across runtimes) ───────────
@@ -5896,7 +6191,7 @@ export default function (pi: ExtensionAPI) {
   // ═══════════════════════════════════════
   // Per-session teardown (NOT process shutdown — see EmbeddedServerGlobal)
   // ═══════════════════════════════════════
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", () => {
     if (publishedGeneration !== null) clearActiveSessionBinding(globalState, publishedGeneration);
     // Drop our captured ctx so we don't accidentally use a torn-down session
     // before the next instance re-publishes its bindings.

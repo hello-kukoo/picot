@@ -2,6 +2,7 @@
 // ABOUTME: Refreshes the active model catalog after successful model configuration mutations.
 
 import { onLocaleChange, t } from "../i18n.js";
+import { createModelsOAuthLoginDialog } from "./models-oauth-login.js";
 import {
   clearSettingsSaveMessage as clearSettingsSaveMessageGlobal,
   setSettingsSaveButtonSaving as setSettingsSaveButtonSavingGlobal,
@@ -179,10 +180,51 @@ export function setupModelsPage({
       });
       list.appendChild(item);
     }
+
+    if (codexOAuthCapability) {
+      const divider = document.createElement("div");
+      divider.className = "models-provider-divider";
+      list.appendChild(divider);
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "models-provider-item models-oauth-provider-item";
+      item.classList.toggle("selected", selectedAuthProvider === "openai-codex");
+      item.append(providerIcon("openai-codex", "models-provider-icon"));
+      item.appendChild(
+        Object.assign(document.createElement("span"), {
+          textContent: t("settings.models.oauth.signInWithChatGPT"),
+        }),
+      );
+      item.addEventListener("click", () => {
+        selectedAuthProvider = "openai-codex";
+        renderApiKeysPanel(providers);
+      });
+      list.appendChild(item);
+    }
     sidebar.appendChild(list);
 
     const selected = providers.find((provider) => provider.provider === selectedAuthProvider);
-    if (selected) {
+    if (selectedAuthProvider === "openai-codex" && codexOAuthCapability) {
+      const card = document.createElement("div");
+      card.className = "provider-manager-card";
+      const title = document.createElement("div");
+      title.className = "api-key-row-name";
+      title.textContent = t("settings.models.oauth.signInWithChatGPT");
+      card.appendChild(title);
+      if (codexOAuthCapability.configured) {
+        const connected = document.createElement("p");
+        connected.textContent = t("settings.models.oauth.connected");
+        card.appendChild(connected);
+      } else {
+        const loginBtn = document.createElement("button");
+        loginBtn.type = "button";
+        loginBtn.className = "ui-button ui-button--primary";
+        loginBtn.textContent = t("settings.models.oauth.signInWithChatGPT");
+        loginBtn.addEventListener("click", () => startOAuthLogin());
+        card.appendChild(loginBtn);
+      }
+      main.appendChild(card);
+    } else if (selected) {
       const card = buildApiKeyRow(selected);
       card.classList.add("provider-manager-card");
       card.querySelector(".api-key-row-header")?.classList.add("provider-manager-card-header");
@@ -866,6 +908,9 @@ export function setupModelsPage({
   const modelsConfigDocsLink = document.getElementById("models-config-docs-link");
   let selectedModelsConfigItem = null;
   let selectedAuthProvider = null;
+  // Codex OAuth capability from the read-only command; null until queried.
+  let codexOAuthCapability = null;
+  let oauthDialog = null;
 
   const MODELS_JSON_EXAMPLE = `{
   "providers": {
@@ -1295,7 +1340,125 @@ export function setupModelsPage({
   });
 
   async function activate() {
-    await Promise.all([loadApiKeysPanel(), loadInlineModelsEditor()]);
+    await Promise.all([loadApiKeysPanel(), loadInlineModelsEditor(), loadOAuthCapability()]);
+  }
+
+  /**
+   * Query the read-only OAuth capability surface and stash it for the
+   * authentication panel. Never infers OAuth from the API-key catalog.
+   */
+  /**
+   * Dedicated same-origin /ws channel for the OAuth session (spec: Owner-scoped
+   * events 与传输). The desktop WebView origin is the instance server's loopback
+   * origin, so `new WebSocket("/ws")` passes the loopback gate; bare commands on
+   * this connection are not broker_command envelopes and pass the desktopOwnerOnly
+   * broker rejection. The connection object is the server-side ownerConnection;
+   * no token or owner id is ever sent.
+   */
+  function createOAuthWsChannel() {
+    let ws = null;
+    let seq = 0;
+    const pending = new Map();
+    const listeners = new Set();
+
+    function open() {
+      return new Promise((resolve, reject) => {
+        ws = new WebSocket("/ws");
+        ws.onopen = () => resolve();
+        ws.onerror = () => reject(new Error("OAuth connection failed"));
+        ws.onmessage = (event) => {
+          let message;
+          try {
+            message = JSON.parse(event.data);
+          } catch {
+            return;
+          }
+          if (message.type === "response") {
+            const waiter = pending.get(message.id);
+            if (waiter) {
+              pending.delete(message.id);
+              waiter(message);
+            }
+          } else if (message.type === "oauth_event") {
+            for (const listener of listeners) listener(message);
+          }
+        };
+        ws.onclose = () => {
+          for (const waiter of pending.values())
+            waiter({ success: false, error: "OAuth connection closed" });
+          pending.clear();
+        };
+      });
+    }
+
+    async function command(cmd) {
+      if (ws?.readyState !== 1) await open();
+      const id = `oauth-${++seq}`;
+      return new Promise((resolve) => {
+        pending.set(id, resolve);
+        ws.send(JSON.stringify({ ...cmd, id }));
+      });
+    }
+
+    function subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    }
+
+    function close() {
+      ws?.close();
+      ws = null;
+    }
+
+    return { command, subscribe, close };
+  }
+
+  /**
+   * Start the Codex device-code login. Uses a dedicated /ws channel and the
+   * owner-scoped dialog; on success refreshes the global model data and the
+   * Models page local state exactly once.
+   */
+  function startOAuthLogin() {
+    oauthDialog?.destroy();
+    const channel = createOAuthWsChannel();
+    oauthDialog = createModelsOAuthLoginDialog({
+      command: channel.command,
+      subscribe: channel.subscribe,
+      openExternal: (url) => {
+        call("open_external", { url }).catch(() => {
+          const link = document.createElement("a");
+          link.href = url;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          link.click();
+        });
+      },
+      copyText: (text) => {
+        void navigator.clipboard?.writeText(text);
+      },
+      // Release the dedicated /ws connection on every terminal state, not
+      // just success, so the socket is not left open after failure/cancel.
+      onTerminal: () => channel.close(),
+      onSuccess: async () => {
+        await onModelConfigurationChanged?.();
+        await loadApiKeysPanel();
+        await loadInlineModelsEditor();
+      },
+    });
+    // Never leave an unhandled rejection in the WebView if the dedicated /ws
+    // fails to open or the start command is rejected.
+    void oauthDialog.start().catch(() => {});
+  }
+
+  async function loadOAuthCapability() {
+    try {
+      const resp = await call("get_oauth_login_capabilities");
+      const providers = resp?.ok && Array.isArray(resp.data?.providers) ? resp.data.providers : [];
+      codexOAuthCapability = providers.find((p) => p.providerId === "openai-codex") ?? null;
+    } catch {
+      codexOAuthCapability = null;
+    }
+    renderApiKeysPanel(catalogProviders);
   }
 
   return { activate, loadApiKeysPanel, loadInlineModelsEditor };

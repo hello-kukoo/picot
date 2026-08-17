@@ -252,7 +252,8 @@
     "insertExample": "Insertar ejemplo",
     "remove": "Eliminar",
     "delete": "Borrar",
-    "openLink": "Abrir enlace"
+    "openLink": "Abrir enlace",
+    "close": "Cerrar"
   },
   "status": {
     "saving": "Guardando...",
@@ -552,7 +553,20 @@
       "docsLink": "documentación de models.json",
       "helpPost2": "para el esquema completo. Los cambios se aplican inmediatamente — no se requiere reinicio.",
       "replaceConfirm": "¿Reemplazar el contenido actual con el ejemplo de Ollama?",
-      "docsOpenFailed": "No se pudo abrir el enlace de documentación"
+      "docsOpenFailed": "No se pudo abrir el enlace de documentación",
+      "oauth": {
+        "signInWithChatGPT": "Iniciar sesión con ChatGPT",
+        "preparing": "Preparando el inicio de sesión con ChatGPT…",
+        "completeInBrowser": "Completa la autorización en tu navegador para continuar.",
+        "openBrowser": "Abrir navegador",
+        "copyCode": "Copiar código",
+        "cancel": "Cancelar",
+        "connected": "ChatGPT conectado.",
+        "cancelled": "Inicio de sesión con ChatGPT cancelado.",
+        "expired": "Este código de dispositivo ha caducado. Empieza de nuevo.",
+        "failed": "Error al iniciar sesión con ChatGPT.",
+        "retry": "Reintentar"
+      }
     },
     "apiKeys": {
       "noProviders": "No hay proveedores conocidos.",

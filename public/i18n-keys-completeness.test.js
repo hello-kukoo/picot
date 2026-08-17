@@ -157,6 +157,8 @@ describe("JS t() literal key references", () => {
     "app/voice-input.js",
     "sidebar/index.js",
     "settings/settings-config.js",
+    "settings/models-page.js",
+    "settings/models-oauth-login.js",
     "settings/skills-page.js",
     "settings/package-skills-tab.js",
     "settings/toggles.js",

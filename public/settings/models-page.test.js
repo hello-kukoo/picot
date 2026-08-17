@@ -47,6 +47,14 @@ describe("models provider editor", () => {
         };
       }
       if (operation === "write_models_config") return { ok: true };
+      if (operation === "get_oauth_login_capabilities") {
+        return {
+          ok: true,
+          data: {
+            providers: [{ providerId: "openai-codex", deviceCode: true, configured: false }],
+          },
+        };
+      }
       if (operation === "list_model_catalog") {
         return {
           ok: true,
@@ -124,6 +132,33 @@ describe("models provider editor", () => {
     const config = JSON.parse(document.getElementById("inline-models-textarea").value);
     expect(Object.keys(config.providers)).toEqual(["gateway", "local"]);
     expect(config.providers.local.baseUrl).toBe("http://127.0.0.1:11434/v1");
+  });
+
+  test("renders the Codex OAuth entry only when capability reports it", async () => {
+    const page = setupModelsPage({ configGateway: { call } });
+    await page.activate();
+
+    expect(call.mock.calls.map(([operation]) => operation)).toContain(
+      "get_oauth_login_capabilities",
+    );
+    const oauthItem = document.querySelector(".models-oauth-provider-item");
+    expect(oauthItem).not.toBeNull();
+    oauthItem.click();
+    expect(
+      document.querySelector("#settings-api-keys .models-config-main .provider-manager-card"),
+    ).not.toBeNull();
+  });
+
+  test("hides the Codex OAuth entry when capability is absent", async () => {
+    const noCapabilityCall = vi.fn(async (operation) => {
+      if (operation === "get_oauth_login_capabilities") {
+        return { ok: true, data: { providers: [] } };
+      }
+      return call(operation);
+    });
+    const page = setupModelsPage({ configGateway: { call: noCapabilityCall } });
+    await page.activate();
+    expect(document.querySelector(".models-oauth-provider-item")).toBeNull();
   });
 
   test("splits API-key providers and custom providers into separate panels", async () => {

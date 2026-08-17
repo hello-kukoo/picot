@@ -66,3 +66,38 @@ describe("LegacyConfigGateway", () => {
     ).resolves.toMatchObject({ ok: false, error: expect.stringContaining("timed out") });
   });
 });
+
+test("maps OAuth login capabilities through the legacy RPC", async () => {
+  const fetchMock = vi.fn(async (_url, options) => {
+    expect(options.method).toBe("POST");
+    expect(JSON.parse(options.body)).toEqual({ type: "get_oauth_login_capabilities" });
+    return new Response(
+      JSON.stringify({
+        success: true,
+        data: { providers: [{ providerId: "openai-codex", deviceCode: true, configured: false }] },
+      }),
+      { status: 200 },
+    );
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  await expect(new LegacyConfigGateway().call("get_oauth_login_capabilities")).resolves.toEqual({
+    ok: true,
+    data: { providers: [{ providerId: "openai-codex", deviceCode: true, configured: false }] },
+  });
+});
+
+test("maps OAuth capabilities error to ok:false", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify({ success: false, error: "unavailable" }), { status: 200 }),
+    ),
+  );
+
+  await expect(new LegacyConfigGateway().call("get_oauth_login_capabilities")).resolves.toEqual({
+    ok: false,
+    error: "unavailable",
+  });
+});

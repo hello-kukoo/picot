@@ -349,6 +349,68 @@
   /* design-token-ignore: ported from origin/main provider picker literals */
   font-size: 15px;
 }
+
+/* Owner-scoped Codex OAuth device-code dialog (Settings → Models). */
+.oauth-login-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+  background: rgb(0 0 0 / 55%);
+}
+.oauth-login-dialog {
+  width: min(440px, 100%);
+  box-sizing: border-box;
+  padding: var(--space-5);
+  background: var(--bg-primary, #fff);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 30%);
+  display: grid;
+  gap: var(--space-3);
+}
+.oauth-login-dialog-title {
+  font-size: var(--font-size-lg);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.oauth-login-dialog-code {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  text-align: center;
+  padding: var(--space-2);
+  background: var(--bg-glass);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+.oauth-login-dialog-url {
+  font-size: var(--font-size-sm);
+  color: var(--text-dim);
+  word-break: break-all;
+  text-align: center;
+}
+.oauth-login-dialog-countdown {
+  font-size: var(--font-size-sm);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.oauth-login-dialog-status {
+  font-size: var(--font-size-sm);
+  color: var(--text-dim);
+  text-align: center;
+}
+.oauth-login-dialog-actions {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
 .provider-picker-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
