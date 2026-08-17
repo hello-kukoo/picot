@@ -258,6 +258,10 @@ The one-shot Pi commit-message runner receives a host-created private request fi
 和模型选择器读取新配置。桌面端不暴露 Protection / Require login UI：embedded
 server 的 app-auth 配置在 desktop mode 不可用，不能向用户展示无效开关。
 
+#### Models OAuth 认证边界
+
+Picot 仅将 Pi provider-owned OAuth 的非敏感交互投影给拥有当前原生窗口的 desktop owner；Pi runtime 独占 OAuth token exchange、refresh 与 credential persistence。WebView 永不接收 OAuth credential。OAuth start/cancel/status 是 desktop-owner-only，operation 绑定 owner 与 Pi process generation，不能向 LAN、remote 或 ephemeral runtime 暴露。已验证 seam：`ModelRuntime.login(providerId, "oauth", interaction)`（Pi 0.84 公开方法，`AuthInteraction` 由 Picot 注入，含 AbortSignal 与 device-code/progress 事件投影）。
+
 #### Skills 设置页（`#/settings/skills`）
 
 **架构不变量：**
