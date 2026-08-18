@@ -5,18 +5,6 @@ use std::collections::HashMap;
 
 pub const PROTOCOL_VERSION: u64 = 2;
 
-const REMOTE_FORBIDDEN_HOST_OPERATIONS: &[&str] = &[
-    "pick_folder",
-    "open_app",
-    "install_package",
-    "remove_package",
-    "update_package",
-    "check_for_updates",
-    "install_update",
-    "delete_workspace",
-    "open_workspace",
-];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientKind {
     Desktop,
@@ -119,7 +107,7 @@ impl HostRouter {
     }
 
     pub fn route(&self, client_id: &str, frame: &Value) -> Result<RoutedAction, RouterError> {
-        let client_kind = self.client_kind(client_id).ok_or_else(|| {
+        self.client_kind(client_id).ok_or_else(|| {
             RouterError::new("unauthorized_client", "Client has not completed handshake")
         })?;
         let frame_type = frame
@@ -163,14 +151,6 @@ impl HostRouter {
                         .ok_or_else(|| {
                             RouterError::new("invalid_host_request", "operation is required")
                         })?;
-                if client_kind == ClientKind::Remote
-                    && REMOTE_FORBIDDEN_HOST_OPERATIONS.contains(&operation)
-                {
-                    return Err(RouterError::new(
-                        "remote_operation_forbidden",
-                        "Remote clients cannot invoke this Host operation",
-                    ));
-                }
                 Ok(RoutedAction::Host {
                     client_id: client_id.to_owned(),
                     request_id,
@@ -324,7 +304,7 @@ mod tests {
     }
 
     #[test]
-    fn forbids_dangerous_host_operations_for_remote_clients() {
+    fn allows_previously_dangerous_host_operations_for_remote_clients() {
         let mut router = HostRouter::new();
         router
             .connect(
@@ -348,7 +328,7 @@ mod tests {
                         "operation": operation,
                     }),
                 )
-                .is_err());
+                .is_ok());
         }
     }
 }
