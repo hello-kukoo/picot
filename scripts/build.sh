@@ -139,10 +139,10 @@ run_picot_prebuild() {
 # invocations below (see the comment on run_picot_prebuild for why this
 # repo doesn't rely solely on the hook).
 sign_pi_resources() {
-    if [ -n "${APPLE_SIGNING_IDENTITY:-}" ] && [ "${APPLE_SIGNING_IDENTITY}" != "-" ]; then
-        log_info "Signing embedded pi native binaries for notarization..."
-    fi
-    bash "$PROJECT_ROOT/scripts/sign-pi-resources.sh"
+	if [ -n "${APPLE_SIGNING_IDENTITY:-}" ] && [ "${APPLE_SIGNING_IDENTITY}" != "-" ]; then
+		log_info "Signing embedded pi native binaries for notarization..."
+	fi
+	bash "$PROJECT_ROOT/scripts/sign-pi-resources.sh"
 }
 
 # ---------- Builders ----------
