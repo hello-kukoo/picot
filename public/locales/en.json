@@ -103,7 +103,7 @@
   "models": {
     "searchPlaceholder": "Search models…",
     "emptyTitle": "No models available",
-    "emptyHelp": "No API keys configured. Set a key in Settings → Providers.",
+    "emptyHelp": "No API keys configured. Set a key in Settings → Models.",
     "openSettings": "Open Settings"
   },
   "queue": {
@@ -578,7 +578,7 @@
     "general": "General",
     "extensions": "Extensions",
     "usage": "Usage",
-    "configuration": "Providers",
+    "configuration": "Advanced Configuration",
     "agentInbox": "Agent Inbox",
     "backToChat": "Back to chat",
     "appearance": "Appearance",
@@ -602,6 +602,10 @@
     "protection": "Protection",
     "requireLogin": "Require login",
     "agentConfigFile": "Agent config file",
+    "agentsMd": "AGENTS.md",
+    "agentsContextFile": "Agent context file (AGENTS.md)",
+    "appendSystemMd": "APPEND_SYSTEM.md",
+    "appendSystemPromptFile": "Append system prompt file (APPEND_SYSTEM.md)",
     "providersFile": "Providers file",
     "llmProviders": "LLM providers",
     "browseCommunityPackages": "Browse Community Packages",
@@ -640,6 +644,7 @@
       "configured": "Configured"
     },
     "models": {
+      "title": "Models",
       "helpPre": "Edit",
       "helpPost1": "to add custom providers (Ollama, vLLM, LM Studio, OpenAI-compatible proxies, OpenRouter routing overrides, etc). See the",
       "docsLink": "models.json docs",
