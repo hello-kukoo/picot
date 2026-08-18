@@ -5,9 +5,12 @@ use crate::host_router::{HostRouter, RoutedAction, PROTOCOL_VERSION};
 use crate::native_pi_manager::NativePiManager;
 use crate::remote_auth::RemoteAuth;
 use crate::runtime_coordinator::RuntimeTarget;
+use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::Query;
 use axum::extract::{DefaultBodyLimit, Json, State};
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, PRAGMA};
+use axum::http::HeaderValue;
 use axum::http::StatusCode;
 use axum::response::Response;
 use axum::routing::{get, post};
@@ -17,14 +20,62 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::convert::Infallible;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::oneshot;
-use tower_http::services::{ServeDir, ServeFile};
+use tower::ServiceBuilder;
+use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
 
 const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
 const MAX_WS_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Fingerprints the static bundle by (path, size, mtime) of every file under
+/// `static_dir`, without reading file contents — cheap enough to run once on
+/// every server startup even for a bundle with vendored JS/fonts/images, and
+/// still changes on every real build (build tooling always rewrites file
+/// mtimes). Used to version the URL prefix static assets are served under;
+/// see the comment at its call site for why the version string alone isn't
+/// enough.
+fn fingerprint_static_dir(static_dir: &std::path::Path) -> String {
+    use sha2::{Digest, Sha256};
+    fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(static_dir, &mut files);
+    files.sort();
+
+    let mut hasher = Sha256::new();
+    for path in &files {
+        let Ok(meta) = fs::metadata(path) else {
+            continue;
+        };
+        if let Ok(relative) = path.strip_prefix(static_dir) {
+            hasher.update(relative.to_string_lossy().as_bytes());
+        }
+        hasher.update(meta.len().to_le_bytes());
+        if let Ok(modified) = meta.modified() {
+            if let Ok(since_epoch) = modified.duration_since(std::time::UNIX_EPOCH) {
+                hasher.update(since_epoch.as_millis().to_le_bytes());
+            }
+        }
+    }
+    hex::encode(&hasher.finalize()[..8])
+}
 
 struct HostState {
     router: Mutex<HostRouter>,
@@ -67,12 +118,69 @@ impl HostServer {
             data,
         });
         let index = static_dir.join("index.html");
-        let static_service = ServeDir::new(static_dir).fallback(ServeFile::new(index));
+        // Serve this build's JS/CSS/HTML under a version-stamped path
+        // (`/v/<version>/...`) and point index.html's `<base>` at it. The
+        // `Cache-Control: no-store` headers below are meant to stop the
+        // WebView from reusing stale assets across an auto-update +
+        // relaunch (the host listens on a stable port across restarts), but
+        // WebKit has been observed to keep serving a URL's very first
+        // cached response indefinitely without ever revalidating it against
+        // fresh headers. A version-scoped URL sidesteps that entirely: each
+        // release is a guaranteed cache miss for every asset, no matter how
+        // the WebView's cache behaves.
+        // A version string alone isn't a reliable cache-busting key: a
+        // hotfix or dev build can ship with the app version unchanged (no
+        // version bump), which would leave the WebView's cache pinned to
+        // stale assets exactly like the bug this route exists to avoid. A
+        // content fingerprint changes on every real rebuild regardless of
+        // whether anyone remembered to bump the version.
+        let versioned_prefix = format!("/v/{}", fingerprint_static_dir(&static_dir));
+        let index_html = fs::read_to_string(&index).unwrap_or_default().replacen(
+            "<base href=\"/\" />",
+            &format!("<base href=\"{versioned_prefix}/\" />"),
+            1,
+        );
+        let index_fallback = tower::service_fn(move |_req: axum::extract::Request| {
+            let html = index_html.clone();
+            std::future::ready(Ok::<_, Infallible>(
+                Response::builder()
+                    .header(CONTENT_TYPE, "text/html; charset=utf-8")
+                    .body(Body::from(html))
+                    .expect("static index.html response is well-formed"),
+            ))
+        });
+        let static_service = ServeDir::new(static_dir.clone()).fallback(index_fallback);
+        // Always disable caching for the static bundle, not just in debug
+        // builds: the host listens on a stable port across app restarts, so
+        // after an auto-update + relaunch the WebView's HTTP cache would
+        // otherwise keep serving the previous release's JS/CSS/HTML until a
+        // manual hard reload.
+        let static_service = ServiceBuilder::new()
+            .layer(SetResponseHeaderLayer::overriding(
+                CACHE_CONTROL,
+                HeaderValue::from_static("no-store, no-cache, must-revalidate, max-age=0"),
+            ))
+            .layer(SetResponseHeaderLayer::overriding(
+                PRAGMA,
+                HeaderValue::from_static("no-cache"),
+            ))
+            .service(static_service);
+        let versioned_service = ServiceBuilder::new()
+            .layer(SetResponseHeaderLayer::overriding(
+                CACHE_CONTROL,
+                HeaderValue::from_static("no-store, no-cache, must-revalidate, max-age=0"),
+            ))
+            .layer(SetResponseHeaderLayer::overriding(
+                PRAGMA,
+                HeaderValue::from_static("no-cache"),
+            ))
+            .service(ServeDir::new(static_dir));
         let app = Router::new()
             .route("/health", get(health))
             .route("/v2/ws", get(websocket_upgrade))
             .route("/v2/bootstrap", get(bootstrap_target))
             .route("/v2/auth/exchange", post(exchange_pairing))
+            .nest_service(&versioned_prefix, versioned_service)
             .fallback_service(static_service)
             .layer(DefaultBodyLimit::max(MAX_HTTP_BODY_BYTES))
             .with_state(state);
@@ -729,6 +837,62 @@ mod tests {
             .await
             .unwrap();
         assert!(index.contains("Picot native host"));
+
+        host.stop();
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[tokio::test]
+    async fn serves_static_assets_under_a_content_fingerprinted_path() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-versioned-{nonce}"));
+        let public = temp.join("public");
+        fs::create_dir_all(public.join("native")).unwrap();
+        fs::write(
+            public.join("index.html"),
+            "<html><head><base href=\"/\" /></head><body>Picot</body></html>",
+        )
+        .unwrap();
+        fs::write(public.join("native/app.js"), "export const marker = 1;").unwrap();
+        let metadata = MetadataStore::open(&temp.join("picot.sqlite3")).unwrap();
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(metadata)));
+        let host = HostServer::start(public.clone(), NativePiManager::new(32), auth)
+            .await
+            .unwrap();
+
+        // The entry document's <base> should point at a `/v/<fingerprint>/`
+        // path derived from the bundle contents, not the literal "/" that's
+        // on disk — every relative script/import resolves under it.
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let index = client
+            .get(format!("{}/app/settings", host.origin()))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        let base_start = index.find("<base href=\"").unwrap() + "<base href=\"".len();
+        let base_end = index[base_start..].find('"').unwrap();
+        let base_href = &index[base_start..base_start + base_end];
+        assert!(
+            base_href.starts_with("/v/") && base_href.ends_with('/'),
+            "expected a versioned base href, got {base_href:?}"
+        );
+
+        // The versioned path actually serves the underlying files.
+        let app_js = client
+            .get(format!("{}{}native/app.js", host.origin(), base_href))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert_eq!(app_js, "export const marker = 1;");
 
         host.stop();
         fs::remove_dir_all(temp).unwrap();
