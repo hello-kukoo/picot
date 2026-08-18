@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { initI18n, setLocale } from "../../i18n.js";
 import { setupSettingsConfig } from "./settings-config.js";
 
-describe("settings advanced configuration markdown editors", () => {
+describe("settings configuration tab editors", () => {
   let dom;
   let call;
 
@@ -74,6 +74,43 @@ describe("settings advanced configuration markdown editors", () => {
   function createEditors() {
     return setupSettingsConfig({ configGateway: { call } });
   }
+
+  test("loads and pretty-prints settings.json", async () => {
+    const editors = createEditors();
+    await editors.loadInlineConfigEditor();
+
+    expect(document.querySelector("#inline-config-path").textContent).toBe(
+      "/home/.pi/agent/settings.json",
+    );
+    expect(document.querySelector("#inline-config-textarea").value).toBe('{\n  "foo": true\n}');
+  });
+
+  test("does not write invalid settings.json content", async () => {
+    createEditors();
+    document.querySelector("#inline-config-textarea").value = "{invalid";
+    document.querySelector("#inline-config-save").click();
+
+    // Validation fails client-side before any gateway call is made.
+    expect(call).not.toHaveBeenCalledWith("write_agent_config", expect.anything());
+    const errorEl = document.querySelector("#inline-config-error");
+    expect(errorEl.classList.contains("hidden")).toBe(false);
+    expect(errorEl.dataset.tone).toBe("error");
+    expect(errorEl.textContent).toContain("Invalid JSON");
+  });
+
+  test("writes valid settings.json content", async () => {
+    createEditors();
+    document.querySelector("#inline-config-textarea").value = '{"foo":true}';
+    document.querySelector("#inline-config-save").click();
+
+    await vi.waitFor(() =>
+      expect(call).toHaveBeenCalledWith(
+        "write_agent_config",
+        { content: '{"foo":true}' },
+        undefined,
+      ),
+    );
+  });
 
   test("loads AGENTS.md verbatim", async () => {
     const editors = createEditors();
