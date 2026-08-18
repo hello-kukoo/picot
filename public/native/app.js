@@ -1577,6 +1577,9 @@ function setupFileBrowser() {
   const upBtn = document.getElementById("file-sidebar-up");
   if (upBtn) upBtn.disabled = true; // disabled until we've navigated into a subdir
 
+  const refreshBtn = document.getElementById("file-sidebar-refresh");
+  const toggleHiddenBtn = document.getElementById("file-sidebar-toggle-hidden");
+
   fileBrowser = new NativeFileBrowser(fileList, pathEl, data, target.workspaceId, {
     showViewSwitch: false,
     onFileOpen(entry) {
@@ -1601,6 +1604,14 @@ function setupFileBrowser() {
       // Enable the up button only when we're inside a subdirectory.
       if (upBtn) upBtn.disabled = path === "";
     },
+    onShowHiddenChange(showHidden) {
+      toggleHiddenBtn?.setAttribute("aria-pressed", String(showHidden));
+    },
+  });
+
+  refreshBtn?.addEventListener("click", () => fileBrowser?.refresh()?.catch(showError));
+  toggleHiddenBtn?.addEventListener("click", () => {
+    fileBrowser?.setShowHidden(!fileBrowser.showHidden)?.catch(showError);
   });
 
   document.getElementById("file-sidebar-finder")?.addEventListener("click", async () => {
@@ -2004,7 +2015,7 @@ function renderHistory(messages) {
           const leadingText = processBlocks.filter((b) => b.type === "text");
           if (leadingText.length > 0) {
             messageRenderer.renderAssistantMessage(
-              { content: leadingText, usage: message.usage },
+              { content: leadingText, usage: message.usage, timestamp: message.timestamp },
               false,
               true,
             );
@@ -2042,7 +2053,7 @@ function renderHistory(messages) {
         }
         if (answerBlocks.length > 0) {
           messageRenderer.renderAssistantMessage(
-            { content: answerBlocks, usage: message.usage },
+            { content: answerBlocks, usage: message.usage, timestamp: message.timestamp },
             false,
             true,
           );

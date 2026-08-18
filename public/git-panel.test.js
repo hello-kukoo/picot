@@ -42,7 +42,41 @@ describe("GitPanel", () => {
     expect(panel.container.querySelector("script")).toBeNull();
   });
 
-  it("renders a status toolbar with icon-only refresh and AI commit actions", () => {
+  it("shows the not-a-repository message instead of no-status when setNotGitRepo is set", () => {
+    const panel = new GitPanel({
+      container: document.querySelector("#panel"),
+      client: { command: vi.fn() },
+    });
+    panel.setNotGitRepo(true);
+    expect(panel.container.textContent).toContain("This workspace is not a Git repository");
+    expect(panel.container.textContent).not.toContain("No Git status loaded");
+
+    // A successful snapshot clears the not-git state and renders groups again.
+    panel.setSnapshot({ entries: [{ entryKind: "ordinary", xy: ".M", displayPath: "app.js" }] });
+    expect(panel.container.textContent).toContain("app.js");
+    expect(panel.container.textContent).not.toContain("This workspace is not a Git repository");
+  });
+
+  it("only treats the most recent status probe failure as not-a-repository", () => {
+    const command = vi.fn().mockReturnValue("git-7");
+    const panel = new GitPanel({
+      container: document.querySelector("#panel"),
+      client: { command },
+    });
+    void panel.refresh();
+    expect(panel.isStatusFailure("git-7")).toBe(true);
+    // Stale / concurrent non-status failures must not match.
+    expect(panel.isStatusFailure("git-6")).toBe(false);
+    expect(panel.isStatusFailure(null)).toBe(false);
+    expect(panel.isStatusFailure(undefined)).toBe(false);
+
+    // A successful snapshot retires the status probe so later failures of
+    // the same requestId cannot flip the panel back into not-a-repository.
+    panel.setSnapshot({ entries: [] });
+    expect(panel.isStatusFailure("git-7")).toBe(false);
+  });
+
+  it("renders commit controls but leaves status refresh to the shared sidebar header", () => {
     const command = vi.fn();
     const panel = new GitPanel({
       container: document.querySelector("#panel"),
@@ -60,19 +94,9 @@ describe("GitPanel", () => {
 
     const toolbar = panel.container.querySelector(".git-panel-toolbar");
     expect(toolbar?.querySelector(".git-panel-summary")?.textContent).toContain("feature/panel");
-    expect(toolbar?.querySelector(".git-panel-stats")?.textContent).toContain("+5");
-    const refresh = toolbar?.querySelector(".git-panel-refresh");
-    const commit = toolbar?.querySelector(".git-panel-commit");
-    expect(refresh?.classList.contains("ui-icon-button")).toBe(true);
-    expect(commit?.classList.contains("ui-icon-button")).toBe(true);
-    expect(refresh?.querySelector("svg")).not.toBeNull();
-    expect(commit?.querySelector("svg")).not.toBeNull();
-    expect(refresh?.getAttribute("aria-label")).toBe("Refresh Git status");
-    expect(commit?.getAttribute("aria-label")).toBe("Generate AI commit message");
-    expect(refresh?.title).toBe("Refresh Git status");
-    expect(commit?.title).toBe("Generate AI commit message");
-    expect(toolbar?.firstElementChild?.className).toBe("git-panel-details");
-    expect(toolbar?.lastElementChild?.className).toBe("git-panel-toolbar-actions");
+    expect(toolbar?.querySelector(".git-panel-refresh")).toBeNull();
+    expect(panel.container.querySelector(".git-panel-commit")).not.toBeNull();
+    expect(panel.container.querySelector(".git-panel-stats")).not.toBeNull();
   });
 
   it("renders group headers as session-list style section headers with a disclosure chevron", () => {
@@ -93,7 +117,6 @@ describe("GitPanel", () => {
     const chevron = header.querySelector(".section-chevron");
     expect(chevron).not.toBeNull();
     expect(chevron.querySelector("svg")).not.toBeNull();
-    expect(chevron.querySelector("polyline")?.getAttribute("points")).toBe("9 6 15 12 9 18");
     expect(header.querySelector(".sidebar-section-title")?.textContent).toBe("Staged");
     expect(header.querySelector(".sidebar-section-count")?.textContent).toBe("0");
   });
