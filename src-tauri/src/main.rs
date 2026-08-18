@@ -791,6 +791,24 @@ fn startup_health_failure_message(error: &str) -> String {
     )
 }
 
+fn report_startup_spawn_error(app: &tauri::App, error: &str) {
+    log::error!("[pi-desktop] startup failed to spawn pi: {}", error);
+    if let Err(window_err) = open_bootstrap_window(&app.handle().clone(), error) {
+        log::error!(
+            "[pi-desktop] failed to open bootstrap window after startup error: {}",
+            window_err
+        );
+        app.dialog()
+            .message(format!(
+                "Picot could not start the embedded pi runtime.\n\n{}\n\nThe Picot installation may be incomplete or corrupted. Please reinstall Picot and try again.",
+                error
+            ))
+            .title("Picot startup failed")
+            .kind(MessageDialogKind::Error)
+            .show(|_| {});
+    }
+}
+
 fn open_bootstrap_window(app: &AppHandle, startup_error: &str) -> Result<(), String> {
     let label = "bootstrap";
     let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))
@@ -1060,8 +1078,13 @@ fn select_fresh_startup_target(
 ) -> (String, Option<String>) {
     let cwd = latest_session
         .map(|(session_cwd, _session_path)| session_cwd)
+        .filter(|cwd| PathBuf::from(cwd).is_dir())
         .unwrap_or(home_cwd);
     (cwd, None)
+}
+
+fn is_invalid_working_directory_error(error: &str) -> bool {
+    error.contains("(os error 267)")
 }
 
 fn native_runtime_enabled() -> bool {
@@ -2841,8 +2864,8 @@ fn main() {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            let (cwd, session_path) =
-                select_fresh_startup_target(home_cwd, find_latest_session_boot_target());
+            let (mut cwd, mut session_path) =
+                select_fresh_startup_target(home_cwd.clone(), find_latest_session_boot_target());
             log::info!(
                 "[pi-desktop] fresh startup session selected for cwd={}",
                 cwd
@@ -2870,7 +2893,7 @@ fn main() {
             // tradeoff is that `http://localhost:47821` is no longer a
             // guaranteed entry point — but Picot doesn't promise that;
             // the WebView discovers its port via the window URL.
-            let initial_port = manager.next_port();
+            let mut initial_port = manager.next_port();
 
             let mut startup_ok = true;
             if initial_port != 47821 {
@@ -2880,21 +2903,26 @@ fn main() {
                 );
             }
             if let Err(err) = manager.spawn(&cwd, initial_port, session_path.as_deref()) {
-                startup_ok = false;
-                log::error!("[pi-desktop] startup failed to spawn pi: {}", err);
-                if let Err(window_err) = open_bootstrap_window(&app.handle().clone(), &err) {
-                    log::error!(
-                        "[pi-desktop] failed to open bootstrap window after startup error: {}",
-                        window_err
+                if is_invalid_working_directory_error(&err) && cwd != home_cwd {
+                    log::warn!(
+                        "[pi-desktop] startup cwd rejected by Windows; retrying from home: cwd={} error={}",
+                        cwd,
+                        err
                     );
-                    app.dialog()
-                        .message(format!(
-                            "Picot could not start the embedded pi runtime.\n\n{}\n\nThe Picot installation may be incomplete or corrupted. Please reinstall Picot and try again.",
-                            err
-                        ))
-                        .title("Picot startup failed")
-                        .kind(MessageDialogKind::Error)
-                        .show(|_| {});
+                    cwd = home_cwd;
+                    session_path = None;
+                    initial_port = manager.next_port();
+                    log::info!(
+                        "[pi-desktop] retrying startup from home on port={}",
+                        initial_port
+                    );
+                    if let Err(retry_error) = manager.spawn(&cwd, initial_port, None) {
+                        startup_ok = false;
+                        report_startup_spawn_error(app, &retry_error);
+                    }
+                } else {
+                    startup_ok = false;
+                    report_startup_spawn_error(app, &err);
                 }
             }
 
@@ -2982,7 +3010,31 @@ fn main() {
 
 #[cfg(test)]
 mod startup_tests {
-    use super::{select_fresh_startup_target, startup_health_failure_message};
+    use super::{
+        is_invalid_working_directory_error, select_fresh_startup_target,
+        startup_health_failure_message,
+    };
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("picot-startup-{label}-{suffix}"))
+    }
+
+    #[test]
+    fn detects_windows_invalid_working_directory_spawn_error() {
+        assert!(is_invalid_working_directory_error(
+            "Failed to spawn embedded pi: 目录名称无效。 (os error 267)"
+        ));
+        assert!(!is_invalid_working_directory_error(
+            "Failed to spawn embedded pi: Access is denied. (os error 5)"
+        ));
+    }
 
     #[test]
     fn startup_health_failure_message_explains_where_to_find_pi_logs() {
@@ -2995,15 +3047,40 @@ mod startup_tests {
     }
 
     #[test]
-    fn keeps_the_latest_workspace_but_never_resumes_its_session_on_app_start() {
+    fn keeps_an_existing_latest_workspace_but_never_resumes_its_session_on_app_start() {
+        let home = unique_temp_dir("startup-home");
+        let workspace = unique_temp_dir("startup-workspace");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&workspace).unwrap();
+
         let selected = select_fresh_startup_target(
-            "/home/user".to_string(),
+            home.to_string_lossy().into_owned(),
             Some((
-                "/work/project".to_string(),
+                workspace.to_string_lossy().into_owned(),
                 "/sessions/old-session.jsonl".to_string(),
             )),
         );
 
-        assert_eq!(selected, ("/work/project".to_string(), None));
+        assert_eq!(selected, (workspace.to_string_lossy().into_owned(), None));
+        let _ = fs::remove_dir_all(home);
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn falls_back_to_home_when_latest_workspace_no_longer_exists() {
+        let home = unique_temp_dir("startup-home");
+        fs::create_dir_all(&home).unwrap();
+        let missing_workspace = home.join("deleted-workspace");
+
+        let selected = select_fresh_startup_target(
+            home.to_string_lossy().into_owned(),
+            Some((
+                missing_workspace.to_string_lossy().into_owned(),
+                "/sessions/old-session.jsonl".to_string(),
+            )),
+        );
+
+        assert_eq!(selected, (home.to_string_lossy().into_owned(), None));
+        let _ = fs::remove_dir_all(home);
     }
 }

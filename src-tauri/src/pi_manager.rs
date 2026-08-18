@@ -881,10 +881,12 @@ impl PiManager {
         let spawn_started_at = Instant::now();
         let mut child = child.spawn().map_err(|e| {
             format!(
-                "Failed to spawn embedded pi ({}): {}. \
+                "Failed to spawn embedded pi (program: {}; raw resource path: {}; cwd: {}): {}. \
                  The bundled binary may be corrupted or unsupported on this OS/arch. \
                  Reinstall Picot, or for dev rerun `bun run fetch:pi`.",
+                pi_bin_str,
                 pi_bin.display(),
+                cwd,
                 e,
             )
         })?;
