@@ -6083,15 +6083,19 @@ async function openSettings(tabKey = "general", options = {}) {
       const s = data.data;
       // Auto-compaction toggle
       toggleAutoCompact.className = `settings-toggle${s.autoCompactionEnabled ? " on" : ""}`;
-      // Thinking level
-      currentThinkingLevel = s.thinkingLevel || "off";
-      currentDefaultThinkingLevel = s.defaultThinkingLevel || "medium";
-      updateThinkingBtn();
-      renderThinkingEffort(currentDefaultThinkingLevel, {
-        thinkingSteps: thinkingEffortSteps,
-        thinkingMarker: thinkingEffortMarker,
-        thinkingName: thinkingEffortName,
-      });
+      // Thinking level. The get_state request was issued when Settings opened;
+      // if the user picked a level in the meantime, that snapshot is stale and
+      // must not revert their choice (check-and-reset marker from toggles.js).
+      if (!settingsToggles?.takeUserChangedLevel()) {
+        currentThinkingLevel = s.thinkingLevel || "off";
+        currentDefaultThinkingLevel = s.defaultThinkingLevel || "medium";
+        updateThinkingBtn();
+        renderThinkingEffort(currentDefaultThinkingLevel, {
+          thinkingSteps: thinkingEffortSteps,
+          thinkingMarker: thinkingEffortMarker,
+          thinkingName: thinkingEffortName,
+        });
+      }
       // Session name
       inputSessionName.value = s.sessionName || "";
     }
@@ -6142,7 +6146,7 @@ settingsNavItems.forEach((item) => {
   });
 });
 
-setupSettingsToggles({
+const settingsToggles = setupSettingsToggles({
   toggleAutoCompact,
   thinkingSteps: thinkingEffortSteps,
   thinkingMarker: thinkingEffortMarker,
@@ -6154,7 +6158,10 @@ setupSettingsToggles({
   setDefaultThinkingLevel: (level) => {
     currentDefaultThinkingLevel = level;
   },
-  updateThinkingBtn,
+  onRuntimeLevelChanged: (level) => {
+    currentThinkingLevel = level;
+    updateThinkingBtn();
+  },
   onSuperAgentEnabledChanged: handleSuperAgentEnabledChanged,
 });
 

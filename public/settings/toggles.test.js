@@ -114,6 +114,101 @@ describe("thinking effort cycle controls", () => {
     ).toEqual(["off", "minimal", "low", "medium", "high"]);
   });
 
+  test("applies a saved default thinking level to the live session when the model supports it", async () => {
+    const html = readFileSync(join(process.cwd(), "public/index.html"), "utf8");
+    const dom = new JSDOM(html, { url: "http://localhost" });
+    const { document } = dom.window;
+    vi.stubGlobal("localStorage", dom.window.localStorage);
+    const track = document.querySelector("#thinking-effort-steps");
+    const rpcCommand = vi
+      .fn()
+      .mockResolvedValueOnce({ success: true, data: { level: "high" } })
+      .mockResolvedValueOnce({ success: true, data: { levels: ["off", "low", "high"] } })
+      .mockResolvedValueOnce({ success: true, data: { level: "high" } });
+    const onRuntimeLevelChanged = vi.fn();
+
+    setupSettingsToggles({
+      toggleAutoCompact: null,
+      thinkingSteps: track,
+      thinkingMarker: document.querySelector("#thinking-effort-marker"),
+      thinkingName: document.querySelector("#thinking-effort-name"),
+      toggleShowThinking: null,
+      rpcCommand,
+      getDefaultThinkingLevel: () => "medium",
+      onRuntimeLevelChanged,
+    });
+
+    track.querySelector('[data-level="high"]').click();
+    // The handler chains three awaited RPCs (save default → probe levels →
+    // apply); a single microtask tick can't observe all of them.
+    await vi.waitFor(() => expect(onRuntimeLevelChanged).toHaveBeenCalledWith("high"));
+
+    expect(rpcCommand).nthCalledWith(1, { type: "set_default_thinking_level", level: "high" });
+    expect(rpcCommand).nthCalledWith(2, { type: "get_available_thinking_levels" });
+    expect(rpcCommand).nthCalledWith(3, { type: "set_thinking_level", level: "high" });
+  });
+
+  test("skips applying the saved level when the active model does not support it", async () => {
+    const html = readFileSync(join(process.cwd(), "public/index.html"), "utf8");
+    const dom = new JSDOM(html, { url: "http://localhost" });
+    const { document } = dom.window;
+    vi.stubGlobal("localStorage", dom.window.localStorage);
+    const track = document.querySelector("#thinking-effort-steps");
+    const rpcCommand = vi
+      .fn()
+      .mockResolvedValueOnce({ success: true, data: { level: "high" } })
+      .mockResolvedValueOnce({ success: true, data: { levels: ["off", "medium"] } });
+    const onRuntimeLevelChanged = vi.fn();
+
+    setupSettingsToggles({
+      toggleAutoCompact: null,
+      thinkingSteps: track,
+      thinkingMarker: document.querySelector("#thinking-effort-marker"),
+      thinkingName: document.querySelector("#thinking-effort-name"),
+      toggleShowThinking: null,
+      rpcCommand,
+      getDefaultThinkingLevel: () => "medium",
+      onRuntimeLevelChanged,
+    });
+
+    track.querySelector('[data-level="high"]').click();
+    await Promise.resolve();
+
+    expect(rpcCommand).toHaveBeenCalledTimes(2);
+    expect(rpcCommand).not.toHaveBeenCalledWith({ type: "set_thinking_level", level: "high" });
+    expect(onRuntimeLevelChanged).not.toHaveBeenCalled();
+  });
+
+  test("marks a user level pick so one stale settings snapshot can be skipped", async () => {
+    const html = readFileSync(join(process.cwd(), "public/index.html"), "utf8");
+    const dom = new JSDOM(html, { url: "http://localhost" });
+    const { document } = dom.window;
+    vi.stubGlobal("localStorage", dom.window.localStorage);
+    const track = document.querySelector("#thinking-effort-steps");
+    const rpcCommand = vi.fn().mockResolvedValue({ success: true, data: { level: "medium" } });
+
+    const toggles = setupSettingsToggles({
+      toggleAutoCompact: null,
+      thinkingSteps: track,
+      thinkingMarker: document.querySelector("#thinking-effort-marker"),
+      thinkingName: document.querySelector("#thinking-effort-name"),
+      toggleShowThinking: null,
+      rpcCommand,
+      getDefaultThinkingLevel: () => "medium",
+    });
+
+    // No user pick yet — a settings-open snapshot is safe to apply.
+    expect(toggles.takeUserChangedLevel()).toBe(false);
+
+    track.querySelector('[data-level="medium"]').click();
+    await Promise.resolve();
+
+    // The pick is visible once (skip the stale in-flight snapshot) …
+    expect(toggles.takeUserChangedLevel()).toBe(true);
+    // … and the marker resets, so later snapshots sync normally again.
+    expect(toggles.takeUserChangedLevel()).toBe(false);
+  });
+
   test("renderThinkingEffort highlights the active level and positions the thumb", () => {
     const html = readFileSync(join(process.cwd(), "public/index.html"), "utf8");
     const dom = new JSDOM(html);
