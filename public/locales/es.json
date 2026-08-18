@@ -116,7 +116,7 @@
   "models": {
     "searchPlaceholder": "Buscar modelos…",
     "emptyTitle": "No hay modelos disponibles",
-    "emptyHelp": "No hay claves API configuradas. Establece una clave en Ajustes → Proveedores.",
+    "emptyHelp": "No hay claves API configuradas. Establece una clave en Ajustes → Modelos.",
     "openSettings": "Abrir ajustes"
   },
   "queue": {
@@ -593,7 +593,7 @@
     "general": "General",
     "extensions": "Extensiones",
     "usage": "Uso",
-    "configuration": "Proveedores",
+    "configuration": "Configuración avanzada",
     "remoteAccess": "Acceso remoto",
     "remoteAccessHelp": "Abre o escanea esta URL en un dispositivo de la misma red. Pulsa Solicitar acceso y apruébalo en Picot de escritorio.",
     "remoteAccessUrl": "URL del lanzador LAN",
@@ -628,6 +628,10 @@
     "protection": "Protección",
     "requireLogin": "Requerir inicio de sesión",
     "agentConfigFile": "Archivo de configuración del agente",
+    "agentsMd": "AGENTS.md",
+    "agentsContextFile": "Archivo de contexto del agente (AGENTS.md)",
+    "appendSystemMd": "APPEND_SYSTEM.md",
+    "appendSystemPromptFile": "Archivo de anexo al prompt del sistema (APPEND_SYSTEM.md)",
     "providersFile": "Archivo de proveedores",
     "llmProviders": "Proveedores LLM",
     "browseCommunityPackages": "Explorar paquetes de la comunidad",
@@ -666,6 +670,7 @@
       "configured": "Configurado"
     },
     "models": {
+      "title": "Modelos",
       "helpPre": "Edita",
       "helpPost1": "para añadir proveedores personalizados (Ollama, vLLM, LM Studio, proxies compatibles con OpenAI, anulaciones de enrutamiento de OpenRouter, etc). Consulta la",
       "docsLink": "documentación de models.json",

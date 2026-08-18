@@ -1450,10 +1450,17 @@
         </button>
         <button
           class="settings-nav-item"
+          data-settings-tab="models"
+          data-i18n="settings.models.title"
+        >
+          Models
+        </button>
+        <button
+          class="settings-nav-item"
           data-settings-tab="configuration"
           data-i18n="settings.configuration"
         >
-          Providers
+          Advanced Configuration
         </button>
         <button
           class="settings-nav-item"
@@ -2004,7 +2011,10 @@
           </div>
         </div>
 
-        <div class="settings-tab" data-settings-panel="configuration">
+        <div class="settings-tab" data-settings-panel="models">
+          <div class="settings-header">
+            <h3 data-i18n="settings.models.title">Models</h3>
+          </div>
           <div class="settings-body">
             <div class="settings-section">
               <div
@@ -2037,25 +2047,87 @@
                 </div>
               </div>
             </div>
-            <div
-              class="settings-section"
-              id="settings-auth-section"
-              style="display: none"
-            >
+            <div class="settings-section">
               <div
                 class="settings-section-title"
-                data-i18n="settings.protection"
+                data-i18n="settings.llmProviders"
               >
-                Protection
+                LLM providers
               </div>
-              <div class="settings-row">
-                <span class="settings-label" data-i18n="settings.requireLogin"
-                  >Require login</span
+              <p class="settings-help">
+                <span data-i18n="settings.models.helpPre">Edit</span>
+                <code data-i18n="migrated.index.text.piAgentModelsJson"
+                  >~/.pi/agent/models.json</code
                 >
-                <button class="settings-toggle" id="toggle-auth"></button>
+                <span data-i18n="settings.models.helpPost1"
+                  >to add custom providers (Ollama, vLLM, LM Studio,
+                  OpenAI-compatible proxies, OpenRouter routing overrides, etc).
+                  See the</span
+                >
+                <a
+                  href="https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/docs/models.md"
+                  id="models-config-docs-link"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-i18n="settings.models.docsLink"
+                  >models.json docs</a
+                >
+                <span data-i18n="settings.models.helpPost2"
+                  >for the full schema. Changes are picked up immediately — no
+                  restart needed.</span
+                >
+              </p>
+              <div class="settings-config-meta">
+                <span class="settings-label" data-i18n="settings.providersFile"
+                  >Providers file</span
+                >
+                <span
+                  class="settings-static-value"
+                  id="inline-models-path"
+                ></span>
+              </div>
+              <textarea
+                class="ui-textarea config-editor-textarea settings-config-textarea"
+                id="inline-models-textarea"
+                spellcheck="false"
+                autocomplete="off"
+                autocorrect="off"
+                autocapitalize="off"
+                placeholder='{ "providers": { ... } }'
+                data-i18n-ph="migrated.index.placeholder.providers"
+              ></textarea>
+              <div class="settings-config-actions">
+                <div
+                  class="config-editor-error settings-save-status hidden"
+                  id="inline-models-error"
+                  aria-live="polite"
+                  role="status"
+                ></div>
+                <div class="settings-config-button-group">
+                  <button
+                    class="ui-button ui-button--secondary"
+                    id="inline-models-insert-example"
+                    data-i18n="actions.insertExample"
+                  >
+                    Insert example
+                  </button>
+                  <button
+                    class="ui-button ui-button--primary"
+                    id="inline-models-save"
+                    data-i18n="migrated.index.text.save"
+                  >
+                    Save
+                  </button>
+                </div>
               </div>
             </div>
-
+          </div>
+        </div>
+        <div class="settings-tab" data-settings-panel="configuration">
+          <div class="settings-header">
+            <h3 data-i18n="settings.configuration">Advanced Configuration</h3>
+          </div>
+          <div class="settings-body">
             <div class="settings-section">
               <div class="settings-section-title" data-i18n="settings.agent">
                 Agent
@@ -2126,74 +2198,86 @@
                 </div>
               </div>
             </div>
-
             <div class="settings-section">
-              <div
-                class="settings-section-title"
-                data-i18n="settings.llmProviders"
-              >
-                LLM providers
+              <div class="settings-section-title" data-i18n="settings.agentsMd">
+                AGENTS.md
               </div>
-              <p class="settings-help">
-                <span data-i18n="settings.models.helpPre">Edit</span>
-                <code data-i18n="migrated.index.text.piAgentModelsJson"
-                  >~/.pi/agent/models.json</code
-                >
-                <span data-i18n="settings.models.helpPost1"
-                  >to add custom providers (Ollama, vLLM, LM Studio,
-                  OpenAI-compatible proxies, OpenRouter routing overrides, etc).
-                  See the</span
-                >
-                <a
-                  href="https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/docs/models.md"
-                  id="models-config-docs-link"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  data-i18n="settings.models.docsLink"
-                  >models.json docs</a
-                >
-                <span data-i18n="settings.models.helpPost2"
-                  >for the full schema. Changes are picked up immediately — no
-                  restart needed.</span
-                >
-              </p>
               <div class="settings-config-meta">
-                <span class="settings-label" data-i18n="settings.providersFile"
-                  >Providers file</span
+                <span
+                  class="settings-label"
+                  data-i18n="settings.agentsContextFile"
+                  >Agent context file (AGENTS.md)</span
                 >
                 <span
                   class="settings-static-value"
-                  id="inline-models-path"
+                  id="agents-md-path"
+                  title=""
                 ></span>
               </div>
               <textarea
                 class="ui-textarea config-editor-textarea settings-config-textarea"
-                id="inline-models-textarea"
+                id="agents-md-textarea"
                 spellcheck="false"
                 autocomplete="off"
                 autocorrect="off"
                 autocapitalize="off"
-                placeholder='{ "providers": { ... } }'
-                data-i18n-ph="migrated.index.placeholder.providers"
               ></textarea>
               <div class="settings-config-actions">
                 <div
                   class="config-editor-error settings-save-status hidden"
-                  id="inline-models-error"
+                  id="agents-md-error"
                   aria-live="polite"
                   role="status"
                 ></div>
                 <div class="settings-config-button-group">
                   <button
-                    class="ui-button ui-button--secondary"
-                    id="inline-models-insert-example"
-                    data-i18n="actions.insertExample"
+                    class="ui-button ui-button--primary"
+                    id="agents-md-save"
+                    data-i18n="migrated.index.text.save"
                   >
-                    Insert example
+                    Save
                   </button>
+                </div>
+              </div>
+            </div>
+            <div class="settings-section">
+              <div
+                class="settings-section-title"
+                data-i18n="settings.appendSystemMd"
+              >
+                APPEND_SYSTEM.md
+              </div>
+              <div class="settings-config-meta">
+                <span
+                  class="settings-label"
+                  data-i18n="settings.appendSystemPromptFile"
+                  >Append system prompt file (APPEND_SYSTEM.md)</span
+                >
+                <span
+                  class="settings-static-value"
+                  id="append-system-md-path"
+                  title=""
+                ></span>
+              </div>
+              <textarea
+                class="ui-textarea config-editor-textarea settings-config-textarea"
+                id="append-system-md-textarea"
+                spellcheck="false"
+                autocomplete="off"
+                autocorrect="off"
+                autocapitalize="off"
+              ></textarea>
+              <div class="settings-config-actions">
+                <div
+                  class="config-editor-error settings-save-status hidden"
+                  id="append-system-md-error"
+                  aria-live="polite"
+                  role="status"
+                ></div>
+                <div class="settings-config-button-group">
                   <button
                     class="ui-button ui-button--primary"
-                    id="inline-models-save"
+                    id="append-system-md-save"
                     data-i18n="migrated.index.text.save"
                   >
                     Save

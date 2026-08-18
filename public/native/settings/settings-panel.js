@@ -3,6 +3,7 @@ import { applyTheme, getCurrentTheme, themes } from "../../themes.js";
 import { applyLoadingPlaceholder, clearLoadingPlaceholder } from "../../ui/loading-placeholder.js";
 import { loadCostDashboard } from "./cost-dashboard.js";
 import { setupLanguageSelector } from "./language-selector.js";
+import { setupModelsPage } from "./models-page.js";
 import { setupPackageBrowse } from "./package-browse.js";
 import { setupPackageManager } from "./package-manager.js";
 import { setupPackageSkillsTab } from "./package-skills-tab.js";
@@ -73,8 +74,9 @@ export function setupSettingsPanel({
     onRestarted,
     onBrowseRevealed: () => void packageBrowse.load(),
   });
-  const config = configGateway
-    ? setupSettingsConfig({ configGateway, onModelConfigurationChanged })
+  const config = configGateway ? setupSettingsConfig({ configGateway }) : null;
+  const modelsPage = configGateway
+    ? setupModelsPage({ configGateway, onModelConfigurationChanged })
     : null;
   const thinkingControl = setupThinkingEffortControl({
     runtime,
@@ -158,9 +160,15 @@ export function setupSettingsPanel({
 
   function loadConfiguration() {
     if (!config) return;
-    void config.loadApiKeysPanel();
     void config.loadInlineConfigEditor();
-    void config.loadInlineModelsEditor();
+    void config.loadAgentsMdEditor();
+    void config.loadAppendSystemMdEditor();
+  }
+
+  function loadModels() {
+    if (!modelsPage) return;
+    void modelsPage.loadApiKeysPanel();
+    void modelsPage.loadInlineModelsEditor();
   }
 
   function setExtensionsView(mode) {
@@ -195,6 +203,7 @@ export function setupSettingsPanel({
     }
     if (target === "skills") void skillsPage.activate();
     if (target === "configuration") loadConfiguration();
+    if (target === "models") loadModels();
     if (target === "remote-access") void remoteAccess.load();
   }
 

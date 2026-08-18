@@ -2329,7 +2329,10 @@ function renderEmptyModelDropdown(container) {
   settingsButton.textContent = t("migrated.native.app.textcontent.openSettings");
   settingsButton.addEventListener("click", () => {
     closeModelDropdown();
-    settingsPanel?.openSettings("configuration");
+    // Provider credentials / models.json live on the Models tab since the
+    // settings split; Advanced Configuration is the agent settings.json
+    // editor and would land the user on the wrong page.
+    settingsPanel?.openSettings("models");
   });
 
   empty.append(title, message, settingsButton);
