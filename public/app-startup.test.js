@@ -234,6 +234,63 @@ test("shows the not-a-git message only for the current status probe", async () =
   expect(panel.textContent).not.toContain("No Git status loaded");
 });
 
+test("hides the Git tab and returns to Files when the workspace is not a Git repository", async () => {
+  await import("./app.js?git-tab-hidden-non-repo");
+  const socket = FakeWebSocket.instances.at(-1);
+  socket.readyState = FakeWebSocket.OPEN;
+
+  const filesTab = document.getElementById("file-sidebar-files-tab");
+  const gitTab = document.getElementById("file-sidebar-git-tab");
+  expect(gitTab.classList.contains("hidden")).toBe(false);
+
+  // Open the Git tab, then the status probe confirms the workspace is not a
+  // Git repository.
+  gitTab.click();
+  expect(gitTab.getAttribute("aria-selected")).toBe("true");
+
+  socket.onmessage({ data: JSON.stringify({ type: "capabilities", class: "native" }) });
+  socket.onmessage({
+    data: JSON.stringify({ type: "owner_bootstrap", workspaceGeneration: 7, instances: [] }),
+  });
+  socket.onmessage({
+    data: JSON.stringify({
+      type: "git_command_failed",
+      requestId: "git-1",
+      workspaceGeneration: 7,
+      error: "fatal: not a git repository (or any of the parent directories): .git",
+    }),
+  });
+
+  // The Git entry disappears and the sidebar bounces back to the Files tab.
+  expect(gitTab.classList.contains("hidden")).toBe(true);
+  expect(filesTab.getAttribute("aria-selected")).toBe("true");
+  expect(gitTab.getAttribute("aria-selected")).toBe("false");
+});
+
+test("restores the Git tab once a status probe proves the workspace is a Git repository", async () => {
+  await import("./app.js?git-tab-shown-repo");
+  const socket = FakeWebSocket.instances.at(-1);
+  socket.readyState = FakeWebSocket.OPEN;
+
+  const gitTab = document.getElementById("file-sidebar-git-tab");
+  // Simulate a prior non-Git discovery that hid the tab.
+  gitTab.classList.add("hidden");
+
+  socket.onmessage({ data: JSON.stringify({ type: "capabilities", class: "native" }) });
+  socket.onmessage({
+    data: JSON.stringify({ type: "owner_bootstrap", workspaceGeneration: 7, instances: [] }),
+  });
+  socket.onmessage({
+    data: JSON.stringify({
+      type: "git_status",
+      workspaceGeneration: 7,
+      snapshot: { entries: [], totalEntryCount: 0, returnedEntryCount: 0 },
+    }),
+  });
+
+  expect(gitTab.classList.contains("hidden")).toBe(false);
+});
+
 test("persists the selected sidebar tab and restores it on reload", async () => {
   // Simulate a session where the user picked the Git tab, then reloads.
   const storage = new Map([

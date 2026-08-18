@@ -1464,6 +1464,9 @@ const gitResponseMatchesGeneration = (detail) =>
 wsClient.addEventListener("gitStatus", (event) => {
   if (!gitResponseMatchesGeneration(event.detail)) return;
   gitPanel.setSnapshot(event.detail.snapshot);
+  // A successful status probe proves this workspace is a Git repository, so
+  // the Git entry is usable even if the workspace-info probe was inconclusive.
+  syncGitTabVisibility(true);
 });
 wsClient.addEventListener("gitAiCommitMessage", (event) => {
   if (!gitResponseMatchesGeneration(event.detail)) return;
@@ -1537,6 +1540,10 @@ wsClient.addEventListener("gitCommandFailed", (event) => {
     event.detail.error.includes("not a git repository")
   ) {
     gitPanel.setNotGitRepo(true);
+    // The workspace is not a Git repository — remove the Git entry entirely
+    // (and bounce out of the Git tab when it was active) instead of keeping a
+    // dead panel that only renders the not-a-repository notice.
+    syncGitTabVisibility(false);
   }
 });
 wsClient.addEventListener("ephemeralEvent", (event) => {
@@ -1647,6 +1654,38 @@ function setFileSidebarTab(tab) {
     gitPanel.notGitRepo = false;
     gitPanel.render();
     void gitPanel.refresh();
+  }
+}
+
+// ── Git entry visibility ────────────────────────────────────────────
+// Hide the file-sidebar Git tab for workspaces that are not Git
+// repositories, so a non-Git project never shows a dead Git panel. The tab is
+// driven by the authoritative /api/workspace-info isGit probe on workspace
+// switches, with the lazy git status probe result as fallback (see the
+// gitStatus / git_command_failed handlers).
+function syncGitTabVisibility(show) {
+  fileSidebarGitTab?.classList.toggle("hidden", !show);
+  // Bounce out of the Git tab when hiding it, so a non-Git workspace never
+  // leaves the user staring at the empty panel.
+  if (!show && fileSidebarGitTab?.getAttribute("aria-selected") === "true") {
+    setFileSidebarTab("files");
+  }
+}
+
+async function syncGitEntryForWorkspace(workspaceId) {
+  if (!workspaceId) return;
+  try {
+    const params = new URLSearchParams();
+    params.set("workspaceId", workspaceId);
+    const res = await fetch(`/api/workspace-info?${params.toString()}`);
+    if (!res.ok) return syncGitTabVisibility(true);
+    const data = await res.json();
+    // Only an explicit non-Git answer hides the entry; anything inconclusive
+    // (missing flag, failed request) leaves the tab usable so the lazy probe
+    // can still correct it.
+    syncGitTabVisibility(data?.isGit !== false);
+  } catch {
+    syncGitTabVisibility(true);
   }
 }
 
@@ -4711,6 +4750,10 @@ function handleMirrorSync(data) {
     gitPanel.commitMessage = "";
     gitPanel.pendingConfirmationToken = null;
     if (!gitPanelElement.classList.contains("hidden")) void gitPanel.refresh();
+    // Re-evaluate the Git entry for the newly-active workspace: hide the tab
+    // when the authoritative workspace-info probe says the folder is not a Git
+    // repository, show it again for a real repository.
+    void syncGitEntryForWorkspace(data.workspaceId);
   }
   wsClient.setRoutingContext({
     workspaceId:
