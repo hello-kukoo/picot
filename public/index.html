@@ -10,6 +10,42 @@
     <title>Picot</title>
     <link rel="icon" type="image/svg+xml" href="icons/logo-dark.svg" />
     <meta name="theme-color" content="#f5f3ef" />
+    <script id="theme-bootstrap">
+      // Resolve the theme before loading CSS so the browser's first paint
+      // uses the saved palette instead of the default dark tokens.
+      (() => {
+        const supportedThemes = new Set([
+          "night",
+          "dawn",
+          "midnight",
+          "clean",
+          "terracotta",
+          "sage",
+        ]);
+        let savedTheme = null;
+        try {
+          const prefix = "pi-studio-theme=";
+          const entry = document.cookie
+            .split("; ")
+            .find((cookie) => cookie.startsWith(prefix));
+          if (entry) {
+            savedTheme = decodeURIComponent(entry.slice(prefix.length));
+          } else {
+            savedTheme = localStorage.getItem("pi-studio-theme");
+          }
+        } catch (_e) {}
+
+        if (savedTheme === "dark") savedTheme = "night";
+        if (savedTheme === "light") savedTheme = "terracotta";
+        if (!supportedThemes.has(savedTheme)) {
+          savedTheme = window.matchMedia?.("(prefers-color-scheme: light)")
+            .matches
+            ? "terracotta"
+            : "night";
+        }
+        document.documentElement.dataset.theme = savedTheme;
+      })();
+    </script>
     <link rel="stylesheet" href="style-theme.css" />
     <link rel="stylesheet" href="design-system.css" />
     <link rel="stylesheet" href="style.css" />
