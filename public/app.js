@@ -1660,9 +1660,10 @@ function setFileSidebarTab(tab) {
 // ── Git entry visibility ────────────────────────────────────────────
 // Hide the file-sidebar Git tab for workspaces that are not Git
 // repositories, so a non-Git project never shows a dead Git panel. The tab is
-// driven by the authoritative /api/workspace-info isGit probe on workspace
-// switches, with the lazy git status probe result as fallback (see the
-// gitStatus / git_command_failed handlers).
+// driven by the authoritative, generation-guarded git status probe
+// (gitStatus / git_command_failed on workspace entry and on open). The
+// /api/workspace-info probe is only a seq-guarded fast-path hint: it hides the
+// tab on an explicit non-Git answer and never forces the tab visible.
 function syncGitTabVisibility(show) {
   fileSidebarGitTab?.classList.toggle("hidden", !show);
   // Bounce out of the Git tab when hiding it, so a non-Git workspace never
@@ -1672,20 +1673,27 @@ function syncGitTabVisibility(show) {
   }
 }
 
+// Fast-path hint for the Git entry: when the workspace-info probe answers, it
+// nudges the tab toward the right state, but it is never the source of truth.
+// A non-OK / inconclusive probe leaves the tab as-is so the authoritative git
+// status probe (gitPanel.refresh on workspace entry) decides. A stale response
+// from a previous workspace (seq guard) must not re-show a just-hidden tab.
+let gitEntryProbeSeq = 0;
 async function syncGitEntryForWorkspace(workspaceId) {
   if (!workspaceId) return;
+  const seq = ++gitEntryProbeSeq;
   try {
     const params = new URLSearchParams();
     params.set("workspaceId", workspaceId);
     const res = await fetch(`/api/workspace-info?${params.toString()}`);
-    if (!res.ok) return syncGitTabVisibility(true);
-    const data = await res.json();
+    if (seq !== gitEntryProbeSeq) return; // superseded by a newer workspace
+    const data = res.ok ? await res.json() : null;
+    if (seq !== gitEntryProbeSeq) return;
     // Only an explicit non-Git answer hides the entry; anything inconclusive
-    // (missing flag, failed request) leaves the tab usable so the lazy probe
-    // can still correct it.
-    syncGitTabVisibility(data?.isGit !== false);
+    // (missing flag) defers to the git status probe.
+    if (data && data.isGit === false) syncGitTabVisibility(false);
   } catch {
-    syncGitTabVisibility(true);
+    // Failed fast-path: leave the tab alone; the git status probe drives it.
   }
 }
 
@@ -4740,19 +4748,26 @@ function handleMirrorSync(data) {
     void refreshFileBrowserForWorkspace(syncWorkspacePath, { force: true }).catch((error) => {
       console.error("[App] Failed to refresh file browser after session switch:", error);
     });
-    // When the Git tab is visible, also refresh the Git panel state so it
-    // shows the new workspace's files instead of the old workspace's stale
-    // snapshot. The file browser refreshes automatically via
-    // refreshFileBrowserForWorkspace above; Git needs the same treatment.
+    // Reset the Git panel state and probe the newly-active workspace on every
+    // entry (not only when the panel is open). The generation-guarded
+    // git_status / git_command_failed result both drives the Git tab's
+    // visibility and repaints the panel with the new workspace's files instead
+    // of a stale snapshot; the file browser refreshes separately via
+    // refreshFileBrowserForWorkspace above.
     gitPanel.snapshot = null;
     gitPanel.notGitRepo = false;
     gitPanel.selected = new Set();
     gitPanel.commitMessage = "";
     gitPanel.pendingConfirmationToken = null;
-    if (!gitPanelElement.classList.contains("hidden")) void gitPanel.refresh();
-    // Re-evaluate the Git entry for the newly-active workspace: hide the tab
-    // when the authoritative workspace-info probe says the folder is not a Git
-    // repository, show it again for a real repository.
+    // Probe the new workspace's Git status on EVERY entry, not just when the
+    // Git panel is already open. The git_command_failed / git_status result is
+    // the authoritative, generation-safe signal that drives the Git tab's
+    // visibility — a non-Git workspace hides its tab on entry, before it is
+    // ever clicked open.
+    void gitPanel.refresh();
+    // Fast-path hint only: syncGitEntryForWorkspace never forces the tab
+    // visible on a non-OK probe; the git status probe above is the source of
+    // truth for the newly-active workspace.
     void syncGitEntryForWorkspace(data.workspaceId);
   }
   wsClient.setRoutingContext({

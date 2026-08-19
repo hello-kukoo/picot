@@ -291,6 +291,167 @@ test("restores the Git tab once a status probe proves the workspace is a Git rep
   expect(gitTab.classList.contains("hidden")).toBe(false);
 });
 
+test("proactively hides the Git tab via workspace-info on the first mirror sync", async () => {
+  // The lazy click-probe is the fallback; the authoritative /api/workspace-info
+  // probe must hide the tab on its own, without any user interaction.
+  globalThis.fetch = vi.fn(async (input) => {
+    const url = String(input);
+    if (url.startsWith("/api/workspace-info")) {
+      return new Response(JSON.stringify({ isGit: false }));
+    }
+    if (url === "/locales/en.json") {
+      return new Response(JSON.stringify(enMessages));
+    }
+    if (url === "/api/sessions") {
+      // Resolve immediately so the deferred mirror sync replays without the
+      // 2.5s load-retry backoff a 404 would trigger.
+      return new Response(JSON.stringify({ projects: [] }));
+    }
+    return new Response(JSON.stringify({}), { status: 404 });
+  });
+  await import("./app.js?git-tab-proactive-hide");
+  const socket = FakeWebSocket.instances.at(-1);
+  socket.readyState = FakeWebSocket.OPEN;
+
+  const gitTab = document.getElementById("file-sidebar-git-tab");
+  expect(gitTab.classList.contains("hidden")).toBe(false);
+
+  socket.onmessage({ data: JSON.stringify({ type: "capabilities", class: "native" }) });
+  // Mirror snapshots carry the server's `workspace:<cwd>` routing id
+  // (withRouteMeta); the Git-entry probe must re-query it verbatim.
+  socket.onmessage({
+    data: JSON.stringify({
+      type: "mirror_sync",
+      entries: [],
+      sessionFile: "/sessions/demo.jsonl",
+      workspaceId: "workspace:/tmp/non-git",
+    }),
+  });
+
+  await vi.waitFor(() => expect(gitTab.classList.contains("hidden")).toBe(true));
+  expect(globalThis.fetch).toHaveBeenCalledWith(
+    expect.stringContaining("workspaceId=workspace%3A%2Ftmp%2Fnon-git"),
+  );
+});
+
+test("re-hides the Git tab when switching to a non-Git workspace while the panel is open", async () => {
+  globalThis.fetch = vi.fn(async (input) => {
+    const url = String(input);
+    if (url.startsWith("/api/workspace-info")) {
+      // /work/git-a is a repo; /work/nongit-b is not.
+      return new Response(JSON.stringify({ isGit: !url.includes("nongit-b") }));
+    }
+    if (url === "/locales/en.json") {
+      return new Response(JSON.stringify(enMessages));
+    }
+    if (url === "/api/sessions") {
+      return new Response(JSON.stringify({ projects: [] }));
+    }
+    return new Response(JSON.stringify({}), { status: 404 });
+  });
+  await import("./app.js?git-tab-switch-open");
+  const socket = FakeWebSocket.instances.at(-1);
+  socket.readyState = FakeWebSocket.OPEN;
+
+  const gitTab = document.getElementById("file-sidebar-git-tab");
+  const filesTab = document.getElementById("file-sidebar-files-tab");
+
+  // Enter a Git workspace and open the Git tab.
+  socket.onmessage({ data: JSON.stringify({ type: "capabilities", class: "native" }) });
+  socket.onmessage({
+    data: JSON.stringify({ type: "owner_bootstrap", workspaceGeneration: 7, instances: [] }),
+  });
+  socket.onmessage({
+    data: JSON.stringify({
+      type: "mirror_sync",
+      entries: [],
+      sessionFile: "/sessions/a.jsonl",
+      workspaceId: "workspace:/work/git-a",
+    }),
+  });
+  await vi.waitFor(() => expect(gitTab.classList.contains("hidden")).toBe(false));
+  gitTab.click();
+  await vi.waitFor(() => expect(gitTab.getAttribute("aria-selected")).toBe("true"));
+
+  // Switch to the non-Git workspace; the Git tab must hide on its own.
+  socket.onmessage({
+    data: JSON.stringify({ type: "owner_bootstrap", workspaceGeneration: 8, instances: [] }),
+  });
+  socket.onmessage({
+    data: JSON.stringify({
+      type: "mirror_sync",
+      entries: [],
+      sessionFile: "/sessions/b.jsonl",
+      workspaceId: "workspace:/work/nongit-b",
+    }),
+  });
+
+  await vi.waitFor(() => expect(gitTab.classList.contains("hidden")).toBe(true));
+  expect(filesTab.getAttribute("aria-selected")).toBe("true");
+});
+
+test("hides the Git tab on entry to a non-Git workspace via the entry status probe even when workspace-info is unavailable", async () => {
+  // Real-world failure mode: the /api/workspace-info fast path 404s, leaving
+  // only the git status probe to drive visibility. The probe must fire on
+  // workspace entry even when the Git panel is CLOSED, so a non-Git workspace
+  // hides its tab without requiring a click.
+  globalThis.fetch = vi.fn(async (input) => {
+    const url = String(input);
+    if (url.startsWith("/api/workspace-info")) {
+      return new Response(JSON.stringify({ error: "Unknown workspace" }), { status: 404 });
+    }
+    if (url === "/locales/en.json") {
+      return new Response(JSON.stringify(enMessages));
+    }
+    if (url === "/api/sessions") {
+      return new Response(JSON.stringify({ projects: [] }));
+    }
+    return new Response(JSON.stringify({}), { status: 404 });
+  });
+  await import("./app.js?git-tab-entry-probe-closed");
+  const socket = FakeWebSocket.instances.at(-1);
+  socket.readyState = FakeWebSocket.OPEN;
+
+  const gitTab = document.getElementById("file-sidebar-git-tab");
+  expect(gitTab.classList.contains("hidden")).toBe(false);
+
+  socket.onmessage({ data: JSON.stringify({ type: "capabilities", class: "native" }) });
+  socket.onmessage({
+    data: JSON.stringify({ type: "owner_bootstrap", workspaceGeneration: 9, instances: [] }),
+  });
+  socket.onmessage({
+    data: JSON.stringify({
+      type: "mirror_sync",
+      entries: [],
+      sessionFile: "/sessions/non-git.jsonl",
+      workspaceId: "workspace:/work/nongit-entry",
+    }),
+  });
+
+  // The entry probe must be sent even though the Git panel is closed.
+  await vi.waitFor(() => {
+    const probe = socket.sent.find(
+      (frame) => frame.type === "git_command" && frame.command?.type === "status",
+    );
+    expect(probe).toBeTruthy();
+    return probe;
+  });
+  const probe = socket.sent.find(
+    (frame) => frame.type === "git_command" && frame.command?.type === "status",
+  );
+
+  // The non-Git status probe fails, which must hide the Git tab on its own.
+  socket.onmessage({
+    data: JSON.stringify({
+      type: "git_command_failed",
+      requestId: probe.requestId,
+      workspaceGeneration: 9,
+      error: "fatal: not a git repository (or any of the parent directories): .git",
+    }),
+  });
+  await vi.waitFor(() => expect(gitTab.classList.contains("hidden")).toBe(true));
+});
+
 test("persists the selected sidebar tab and restores it on reload", async () => {
   // Simulate a session where the user picked the Git tab, then reloads.
   const storage = new Map([

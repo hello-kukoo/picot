@@ -19,6 +19,16 @@ describe("workspace info", () => {
     );
     expect(resolveWorkspaceInfoPath("/etc", [], [])).toBeNull();
   });
+  it("resolves the server-broadcast workspace: id against running instances", () => {
+    // mirror_sync payloads carry `workspace:<cwd>` (embedded-server withRouteMeta);
+    // /api/workspace-info must resolve its own broadcast ids or the frontend
+    // Git-entry probe 404s and never hides the tab proactively.
+    expect(resolveWorkspaceInfoPath("workspace:/work/live", [], [{ cwd: "/work/live" }])).toBe(
+      "/work/live",
+    );
+    // Same guard as path:: only registered instance cwds resolve.
+    expect(resolveWorkspaceInfoPath("workspace:/etc", [], [{ cwd: "/work/live" }])).toBeNull();
+  });
   it("parses supported remotes", () => {
     expect(parseRepositoryName("https://github.com/owner/repo.git", "/work/repo")).toBe(
       "owner/repo",

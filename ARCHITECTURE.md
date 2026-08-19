@@ -807,8 +807,9 @@ Pin cookie 使用版本化 JSON；每次变更先重读 cookie，再执行有序
 unavailable。旧 `pi-studio-favourites` 仅在当前 origin 尽力迁移。
 
 `GET /api/workspace-info?workspaceId=` 只接受 `/api/sessions` 历史记录或
-运行实例登记表中已知的 `history:` / `path:` ID，绝不接收任意文件系统路径。
-它按需以参数数组的 `execFile` 读取本地 Git 元数据：无 shell、无网络操作、
+运行实例登记表中已知的 `history:` / `path:` / `workspace:` ID，绝不接收任意文件系统路径。
+其中 `workspace:<cwd>` 是本服务 `withRouteMeta` 随 `mirror_sync` 等消息广播的路由 ID，
+解析时与 `path:` 同样仅匹配运行实例登记表中的 `cwd`。它按需以参数数组的 `execFile` 读取本地 Git 元数据：无 shell、无网络操作、
 3 秒总 deadline、64 KiB 输出上限，并固定 `GIT_OPTIONAL_LOCKS=0` 和
 `GIT_TERMINAL_PROMPT=0`。Git 输出和所有 Pin 文本均是不可信数据，前端只能
 用 `textContent` 渲染。
