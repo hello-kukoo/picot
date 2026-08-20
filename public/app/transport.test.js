@@ -73,6 +73,43 @@ describe("WsTransport", () => {
     );
   });
 
+  test("package management methods send exact broker payloads and timeouts", async () => {
+    const ws = fakeWsClient();
+    const transport = new WsTransport(ws, {});
+
+    await transport.checkPiPackageUpdates();
+    await transport.removePiPackage("npm:foo", { local: true });
+    await transport.updatePiPackage("npm:foo", { local: true });
+    await transport.setPiPackageDisabled("npm:foo", "project", true, "/workspace");
+    await transport.restartRuntime("workspace-1", "session-1");
+
+    expect(ws.sendControl).toHaveBeenCalledWith(
+      "check_pi_package_updates",
+      {},
+      { timeoutMs: 120000 },
+    );
+    expect(ws.sendControl).toHaveBeenCalledWith(
+      "remove_pi_package",
+      { source: "npm:foo", local: true },
+      { timeoutMs: 120000 },
+    );
+    expect(ws.sendControl).toHaveBeenCalledWith(
+      "update_pi_package",
+      { source: "npm:foo", local: true },
+      { timeoutMs: 120000 },
+    );
+    expect(ws.sendControl).toHaveBeenCalledWith(
+      "set_pi_package_disabled",
+      { source: "npm:foo", scope: "project", disabled: true, cwd: "/workspace" },
+      { timeoutMs: 120000 },
+    );
+    expect(ws.sendControl).toHaveBeenCalledWith(
+      "restart_runtime",
+      { workspaceId: "workspace-1", sessionId: "session-1" },
+      { timeoutMs: 60000 },
+    );
+  });
+
   test("native ops map to their control commands", async () => {
     const ws = fakeWsClient();
     const transport = createTransport({ wsClient: ws, env: { location: { port: "47821" } } });

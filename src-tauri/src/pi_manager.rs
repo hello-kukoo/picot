@@ -1456,16 +1456,31 @@ impl PiManager {
 
     /// Run `pi <args...>` with the embedded binary and return stdout.
     /// Used by Settings UI package management operations (install/remove/list).
+    #[allow(dead_code)]
     pub fn run_pi_command(&self, args: &[String]) -> Result<String, String> {
+        self.run_pi_command_at(args, None)
+    }
+
+    pub fn run_pi_command_at(
+        &self,
+        args: &[String],
+        cwd: Option<&std::path::Path>,
+    ) -> Result<String, String> {
         let pi_bin = self.resolve_bundled_pi()?;
         let pi_bin_str = strip_verbatim_prefix(&pi_bin.to_string_lossy());
         let augmented_path = build_augmented_path();
+        let agent_root = resolve_pi_agent_root()?;
         log_child_path_diagnostics("run_pi_command", &augmented_path);
         let mut command = Command::new(&pi_bin_str);
         configure_child_process_for_windows(&mut command);
         command
             .args(args)
             .env("PATH", augmented_path)
+            .env("PI_CODING_AGENT_DIR", agent_root);
+        if let Some(cwd) = cwd {
+            command.current_dir(cwd);
+        }
+        command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -1494,27 +1509,65 @@ impl PiManager {
     }
 
     /// Parse `pi list` output and extract package sources.
+    #[allow(dead_code)]
     pub fn list_configured_package_sources(&self) -> Result<Vec<String>, String> {
         let args = vec!["list".to_string()];
         let output = self.run_pi_command(&args)?;
         Ok(parse_package_sources(&output))
     }
 
+    #[allow(dead_code)]
     pub fn install_package_source(&self, source: &str) -> Result<(), String> {
-        let args = vec!["install".to_string(), source.to_string()];
-        let _ = self.run_pi_command(&args)?;
+        self.install_package_source_scoped(source, false, None)
+    }
+
+    pub fn install_package_source_scoped(
+        &self,
+        source: &str,
+        local: bool,
+        cwd: Option<&std::path::Path>,
+    ) -> Result<(), String> {
+        let mut args = vec!["install".to_string(), source.to_string()];
+        if local {
+            args.push("-l".to_string());
+        }
+        let _ = self.run_pi_command_at(&args, cwd)?;
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn remove_package_source(&self, source: &str) -> Result<(), String> {
-        let args = vec!["remove".to_string(), source.to_string()];
-        let _ = self.run_pi_command(&args)?;
+        self.remove_package_source_scoped(source, false, None)
+    }
+
+    pub fn remove_package_source_scoped(
+        &self,
+        source: &str,
+        local: bool,
+        cwd: Option<&std::path::Path>,
+    ) -> Result<(), String> {
+        let mut args = vec!["remove".to_string(), source.to_string()];
+        if local {
+            args.push("-l".to_string());
+        }
+        let _ = self.run_pi_command_at(&args, cwd)?;
+        Ok(())
+    }
+
+    pub fn update_package_source(
+        &self,
+        source: &str,
+        cwd: Option<&std::path::Path>,
+    ) -> Result<(), String> {
+        let args = vec!["update".to_string(), source.to_string()];
+        let _ = self.run_pi_command_at(&args, cwd)?;
         Ok(())
     }
 }
 
 /// Parse `pi list` stdout into the list of configured package sources.
 /// Pure extraction of the loop previously inlined in `list_configured_package_sources`.
+#[allow(dead_code)]
 fn parse_package_sources(output: &str) -> Vec<String> {
     let mut sources = Vec::new();
     for line in output.lines() {

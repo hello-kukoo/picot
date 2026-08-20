@@ -263,6 +263,14 @@ server 的 app-auth 配置在 desktop mode 不可用，不能向用户展示无�
 
 Picot 仅将 Pi provider-owned OAuth 的非敏感交互投影给拥有当前原生窗口的 desktop owner；Pi runtime 独占 OAuth token exchange、refresh 与 credential persistence。WebView 永不接收 OAuth credential。OAuth capabilities/start/cancel/status/logout 全部是 desktop-owner-only（对应 `get_oauth_login_capabilities` / `start_oauth_login` / `cancel_oauth_login` / `get_oauth_login_status` / `logout_oauth_login`，后者删除持久 credential），operation 绑定 owner 与 Pi process generation，不能向 LAN、remote 或 ephemeral runtime 暴露。已验证 seam：`ModelRuntime.login(providerId, "oauth", interaction)`（Pi 0.84 公开方法，`AuthInteraction` 由 Picot 注入，含 AbortSignal 与 device-code/progress 事件投影）。
 
+#### Extensions 包管理页（`#/settings/extensions`）
+
+Settings → Extensions 固定为 **已安装 / 社区** 两个内部页签，打开时默认选中已安装；它不是左侧边栏或资源对话框入口。已安装页是 host 解析的 configured-package 管理面板，社区页只负责 registry 发现与安装/卸载入口，社区页不再提供 installed-only 筛选器。
+
+浏览器只接收 native host 返回的 rich package records；包元数据、资源路径、settings 写入、Pi 命令执行和 scope 解析均由 host 负责。所有包变更和 runtime 生命周期操作要求已认证的 desktop owner；LAN/mobile 客户端可以浏览社区目录但不能管理包。包变更不会自动重启 Pi；已安装页的 **Reload agent** 明确重启当前 owner 的 workspace/session runtime，成功后前端重新连接。
+
+已安装页通过两个独立的 native broker control 工作：`list_pi_packages` 先返回包列表，页面立即渲染；`check_pi_package_updates` 随后按 Pi `DefaultPackageManager.checkForAvailableUpdates()` 的规则逐个检查。未固定版本的 npm 包通过配置的 npm 命令查询 registry 版本，未固定 ref 的 Git 包比较本地 `HEAD` 与远端 upstream/HEAD；local、固定 npm 版本、固定 Git ref、离线模式或检查失败均不会报告可更新。列表初始和检查进行中，Update 按钮保持禁用；只有第二个 control 返回匹配 `{scope, source}` 且 `available: true` 时才启用。每次进入已安装页（含重新打开设置页）都会以禁用状态重新加载并重新检查，并发加载会合并为一次；「刷新」按钮强制重新列出全部已安装扩展并重新检查版本。检查失败保留列表并显示提示，按钮继续禁用。加载与检查全程 footer 显示「正在检查版本更新…」提示，检查完成后清除。「重新加载 Agent」的 workspace 与活动会话由 native host 从认证 owner 解析，前端不因会话标识缺失而拒绝；重启成功后清除提示。浏览器不执行 registry/Git 检查，也不接收或解析 Pi TUI 的启动通知。
+
 #### Skills 设置页（`#/settings/skills`）
 
 **架构不变量：**

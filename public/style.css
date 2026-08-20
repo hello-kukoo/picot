@@ -2373,20 +2373,6 @@ body {
   border-color: var(--accent);
 }
 
-.pkg-browse-installed-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1-5);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  user-select: none;
-}
-
-.pkg-browse-installed-toggle input {
-  cursor: pointer;
-  accent-color: var(--accent);
-}
-
 .pkg-browse-sort {
   padding: var(--space-1-5) var(--space-2);
   font-size: var(--font-size-sm);
@@ -8630,6 +8616,301 @@ body.file-preview-resizing {
   color: var(--text-secondary);
   font-size: var(--font-size-sm);
   border-bottom: 1px solid var(--border);
+}
+
+/* ═══════════════════════════════════════════════════════
+   Settings > Extensions package manager
+   ═══════════════════════════════════════════════════════ */
+.extensions-page-tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.extensions-page-tab {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0.5rem 0.75rem;
+}
+
+.extensions-page-tab[aria-selected="true"] {
+  border-bottom-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.extensions-page-panel.hidden,
+.package-manager-page.hidden,
+.package-browse-page.hidden {
+  display: none;
+}
+
+.pkg-manager-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.32fr) minmax(0, 1fr);
+  gap: var(--space-3);
+  height: min(48rem, 72vh);
+  min-height: 360px;
+}
+
+.pkg-manager-groups,
+.pkg-manager-detail {
+  min-width: 0;
+  height: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-glass-strong, var(--bg-glass));
+}
+
+.pkg-manager-groups {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-2);
+}
+
+.pkg-manager-detail {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.pkg-manager-group-header {
+  padding: var(--space-2) var(--space-2) var(--space-1);
+  color: var(--text-dim);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.pkg-manager-sidebar-row {
+  display: block;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.pkg-manager-sidebar-row:hover,
+.pkg-manager-sidebar-row.is-selected {
+  border-color: var(--border-hover);
+  background: var(--bg-glass-hover);
+}
+
+.pkg-manager-sidebar-name,
+.pkg-manager-sidebar-meta,
+.pkg-manager-status-row,
+.pkg-manager-resource-row {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pkg-manager-sidebar-name {
+  font-size: var(--font-size-sm);
+}
+
+.pkg-manager-sidebar-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: 0.2rem;
+  color: var(--text-dim);
+  font-size: var(--font-size-xs);
+}
+
+.pkg-manager-status-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.pkg-manager-status-dot.is-loaded {
+  background: var(--accent);
+}
+.pkg-manager-status-dot.is-installed {
+  background: #f59e0b;
+}
+.pkg-manager-status-dot.is-disabled {
+  background: var(--text-dim);
+}
+
+.pkg-manager-update-badge {
+  flex: 0 0 auto;
+  color: var(--warning, #f59e0b);
+  font-weight: 600;
+}
+
+.pkg-manager-detail {
+  padding: var(--space-3);
+}
+
+.pkg-manager-detail-header,
+.pkg-manager-actions,
+.pkg-manager-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.pkg-manager-detail-header {
+  min-width: 0;
+  margin-bottom: var(--space-3);
+}
+
+.pkg-manager-source,
+.pkg-manager-resource-path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pkg-manager-scope {
+  flex: 0 0 auto;
+  padding: 0.2rem 0.4rem;
+  border-radius: var(--radius-sm);
+  background: var(--accent-subtle);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.pkg-manager-source {
+  flex: 1;
+}
+.pkg-manager-actions {
+  margin-bottom: var(--space-3);
+}
+.pkg-manager-btn.is-danger {
+  color: #ef4444;
+}
+
+/* Disabled manager buttons must look disabled: the shared settings-value-btn base
+   has no :disabled style, so without this the Update button stays visually bright
+   while functionally disabled (e.g. before the update check completes). */
+.pkg-manager-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pkg-manager-btn:disabled:hover {
+  background: var(--bg-glass);
+  border-color: var(--border);
+}
+
+.pkg-manager-toggle {
+  position: relative;
+  width: 2.2rem;
+  height: 1.25rem;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--border-hover);
+  cursor: pointer;
+}
+
+.pkg-manager-toggle.is-on {
+  background: var(--accent);
+}
+.pkg-manager-toggle:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+.pkg-manager-toggle span {
+  position: absolute;
+  top: 0.15rem;
+  left: 0.15rem;
+  width: 0.95rem;
+  height: 0.95rem;
+  border-radius: 50%;
+  background: white;
+  transition: transform var(--duration) var(--ease);
+}
+.pkg-manager-toggle.is-on span {
+  transform: translateX(0.95rem);
+}
+
+.pkg-manager-status-grid {
+  display: grid;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+}
+.pkg-manager-status-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.3fr) minmax(0, 1fr);
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+.pkg-manager-status-row span:first-child {
+  color: var(--text-dim);
+}
+.pkg-manager-status-row span:last-child {
+  min-width: 0;
+}
+
+.pkg-manager-status-row span.is-wrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.pkg-manager-resource-list {
+  display: grid;
+  gap: var(--space-1);
+}
+.pkg-manager-resource-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.4fr) minmax(0, 1fr);
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--font-size-sm);
+}
+.pkg-manager-resource-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pkg-manager-footer {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-top: var(--space-3);
+}
+.pkg-manager-footer-summary {
+  margin-right: auto;
+  color: var(--text-dim);
+  font-size: var(--font-size-sm);
+}
+.pkg-manager-empty {
+  padding: var(--space-3);
+}
+
+@media (max-width: 760px) {
+  .pkg-manager-layout {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+    min-height: 0;
+  }
+
+  .pkg-manager-groups {
+    max-height: 22rem;
+  }
+
+  .pkg-manager-detail {
+    min-height: 24rem;
+    height: auto;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════

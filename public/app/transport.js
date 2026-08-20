@@ -119,12 +119,36 @@ export class WsTransport {
     return this._control("list_pi_packages", {});
   }
 
+  checkPiPackageUpdates() {
+    return this._control("check_pi_package_updates", {}, { timeoutMs: PACKAGE_TIMEOUT_MS });
+  }
+
   installPiPackage(source) {
     return this._control("install_pi_package", { source }, { timeoutMs: PACKAGE_TIMEOUT_MS });
   }
 
-  removePiPackage(source) {
-    return this._control("remove_pi_package", { source }, { timeoutMs: PACKAGE_TIMEOUT_MS });
+  removePiPackage(source, { local = false } = {}) {
+    return this._control("remove_pi_package", { source, local }, { timeoutMs: PACKAGE_TIMEOUT_MS });
+  }
+
+  updatePiPackage(source, { local = false } = {}) {
+    return this._control("update_pi_package", { source, local }, { timeoutMs: PACKAGE_TIMEOUT_MS });
+  }
+
+  setPiPackageDisabled(source, scope, disabled, cwd = "") {
+    return this._control(
+      "set_pi_package_disabled",
+      { source, scope, disabled, cwd },
+      { timeoutMs: PACKAGE_TIMEOUT_MS },
+    );
+  }
+
+  restartRuntime(workspaceId, sessionId) {
+    return this._control(
+      "restart_runtime",
+      { workspaceId, sessionId },
+      { timeoutMs: SPAWN_TIMEOUT_MS },
+    );
   }
 
   // ── Native-only ops (need an OS host; reject when capabilities.native=false) ─

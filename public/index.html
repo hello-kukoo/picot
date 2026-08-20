@@ -1088,7 +1088,67 @@
             <h3 data-i18n="settings.extensions">Extensions</h3>
           </div>
           <div class="settings-body">
-            <div class="settings-section">
+            <div
+              class="extensions-page-tabs"
+              role="tablist"
+              data-i18n-aria-label="extensions.sectionsAriaLabel"
+              aria-label="Extensions sections"
+            >
+              <button
+                type="button"
+                id="extensions-installed-tab"
+                class="extensions-page-tab"
+                role="tab"
+                data-extensions-tab="installed"
+                aria-selected="true"
+                data-i18n="extensions.installedTab"
+              >
+                Installed
+              </button>
+              <button
+                type="button"
+                id="extensions-community-tab"
+                class="extensions-page-tab"
+                role="tab"
+                data-extensions-tab="community"
+                aria-selected="false"
+                data-i18n="extensions.communityTab"
+              >
+                Community
+              </button>
+            </div>
+            <section
+              id="extensions-installed"
+              class="settings-section extensions-page-panel"
+              role="tabpanel"
+              aria-labelledby="extensions-installed-tab"
+            >
+              <div
+                class="settings-section-title"
+                data-i18n="extensions.installedTitle"
+              >
+                Installed packages
+              </div>
+              <p class="settings-help" data-i18n="extensions.installedHelp">
+                Manage packages installed for this Pi runtime.
+              </p>
+              <div class="pkg-manager-layout">
+                <div id="pkg-manager-groups" class="pkg-manager-groups"></div>
+                <div
+                  id="pkg-manager-detail"
+                  class="pkg-manager-detail"
+                  aria-live="polite"
+                ></div>
+              </div>
+              <div id="pkg-manager-footer" class="pkg-manager-footer"></div>
+            </section>
+            <section
+              id="extensions-community"
+              class="settings-section extensions-page-panel"
+              role="tabpanel"
+              aria-labelledby="extensions-community-tab"
+              hidden
+            >
               <div
                 class="settings-section-title"
                 data-i18n="settings.browseCommunityPackages"
@@ -1151,12 +1211,6 @@
                     Prompts
                   </button>
                 </div>
-                <label class="pkg-browse-installed-toggle">
-                  <input type="checkbox" id="pkg-browse-installed-only" />
-                  <span data-i18n="extensions.installedOnly"
-                    >Installed only</span
-                  >
-                </label>
                 <select
                   id="pkg-browse-sort"
                   class="pkg-browse-sort"
@@ -1190,7 +1244,7 @@
                 id="pkg-browse-pagination"
                 hidden
               ></div>
-            </div>
+            </section>
           </div>
         </div>
 

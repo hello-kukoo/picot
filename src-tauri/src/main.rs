@@ -8,6 +8,7 @@ mod host_router;
 mod host_server;
 mod metadata_store;
 mod native_pi_manager;
+mod package_manager;
 // Public API staged for the broker (Task 5) and host lifecycle (Task 7a).
 #[allow(dead_code)]
 mod command_policy;
@@ -1693,8 +1694,42 @@ fn install_control_handler(
                         Ok(result)
                     }
                     "list_pi_packages" => {
-                        let sources = manager.list_configured_package_sources()?;
-                        Ok(serde_json::to_value(sources).unwrap_or(Value::Null))
+                        require_native_owner(&ctx)?;
+                        let owner = ctx
+                            .owner_id
+                            .as_ref()
+                            .ok_or("verified window owner required")?;
+                        let (workspace, _) = owner_registry
+                            .current_workspace(owner)
+                            .ok_or("workspace is not available")?;
+                        let locations = package_manager::locations_for_workspace(Some(&workspace))?;
+                        let output = manager.run_pi_command_at(
+                            &["list".to_string(), "--approve".to_string()],
+                            Some(&workspace),
+                        )?;
+                        let packages =
+                            package_manager::inspect_pi_list_output(&output, &locations)?;
+                        serde_json::to_value(packages).map_err(|error| error.to_string())
+                    }
+                    "check_pi_package_updates" => {
+                        require_native_owner(&ctx)?;
+                        let owner = ctx
+                            .owner_id
+                            .as_ref()
+                            .ok_or("verified window owner required")?;
+                        let (workspace, _) = owner_registry
+                            .current_workspace(owner)
+                            .ok_or("workspace is not available")?;
+                        let locations = package_manager::locations_for_workspace(Some(&workspace))?;
+                        let output = manager.run_pi_command_at(
+                            &["list".to_string(), "--approve".to_string()],
+                            Some(&workspace),
+                        )?;
+                        let packages =
+                            package_manager::inspect_pi_list_output(&output, &locations)?;
+                        let updates =
+                            package_manager::check_available_updates(&packages, &locations).await;
+                        serde_json::to_value(updates).map_err(|error| error.to_string())
                     }
                     "get_cached_models" => Ok(manager
                         .cached_models()
@@ -1745,23 +1780,99 @@ fn install_control_handler(
                         )?)
                         .map_err(|error| error.to_string())
                     }
-                    "install_pi_package" => {
+                    "install_pi_package" | "remove_pi_package" | "update_pi_package" => {
+                        require_native_owner(&ctx)?;
+                        let owner = ctx
+                            .owner_id
+                            .as_ref()
+                            .ok_or("verified window owner required")?;
                         let source = arg_str("source").unwrap_or_default();
                         if source.trim().is_empty() {
                             return Err("Package source cannot be empty".to_string());
                         }
-                        manager.install_package_source(source.trim())?;
+                        let local = arg_bool("local").unwrap_or(false);
+                        let workspace = if local {
+                            Some(
+                                owner_registry
+                                    .current_workspace(owner)
+                                    .ok_or("workspace is not available")?
+                                    .0,
+                            )
+                        } else {
+                            None
+                        };
+                        let operation = command.as_str();
+                        match operation {
+                            "install_pi_package" => manager.install_package_source_scoped(
+                                source.trim(),
+                                local,
+                                workspace.as_deref(),
+                            )?,
+                            "remove_pi_package" => manager.remove_package_source_scoped(
+                                source.trim(),
+                                local,
+                                workspace.as_deref(),
+                            )?,
+                            "update_pi_package" => manager
+                                .update_package_source(source.trim(), workspace.as_deref())?,
+                            _ => unreachable!(),
+                        }
                         manager.invalidate_cached_models();
                         Ok(Value::Null)
                     }
-                    "remove_pi_package" => {
+                    "set_pi_package_disabled" => {
+                        require_native_owner(&ctx)?;
+                        let owner = ctx
+                            .owner_id
+                            .as_ref()
+                            .ok_or("verified window owner required")?;
+                        let scope = arg_str("scope").unwrap_or_default();
+                        let disabled = arg_bool("disabled").ok_or("disabled is required")?;
+                        let workspace = owner_registry
+                            .current_workspace(owner)
+                            .ok_or("workspace is not available")?
+                            .0;
+                        let locations = package_manager::locations_for_workspace(Some(&workspace))?;
                         let source = arg_str("source").unwrap_or_default();
-                        if source.trim().is_empty() {
-                            return Err("Package source cannot be empty".to_string());
-                        }
-                        manager.remove_package_source(source.trim())?;
+                        let changed = package_manager::set_package_disabled(
+                            &locations,
+                            &scope,
+                            source.trim(),
+                            disabled,
+                        )?;
                         manager.invalidate_cached_models();
-                        Ok(Value::Null)
+                        Ok(serde_json::json!({ "changed": changed }))
+                    }
+                    "restart_runtime" => {
+                        require_native_owner(&ctx)?;
+                        let owner = ctx
+                            .owner_id
+                            .as_ref()
+                            .ok_or("verified window owner required")?;
+                        if owner_registry.workspace_transition_in_progress(owner) {
+                            return Err("workspace transition is in progress".to_string());
+                        }
+                        let (workspace, old_port) = owner_registry
+                            .current_workspace(owner)
+                            .ok_or("workspace is not available")?;
+                        let session = broker
+                            .session_for_port(old_port)
+                            .filter(|value| !value.is_empty());
+                        let new_port = open_workspace_core(
+                            &workspace.to_string_lossy(),
+                            session.as_deref(),
+                            false,
+                            false,
+                            true,
+                            false,
+                            &manager,
+                            &broker,
+                            None,
+                        )
+                        .await?;
+                        stop_instance_core(old_port, &manager, &broker);
+                        owner_registry.replace_primary_port(owner, new_port)?;
+                        Ok(serde_json::json!({ "instanceId": new_port.to_string() }))
                     }
                     "check_for_update" => check_for_update_core(&app).await,
                     "download_and_install_update" => {

@@ -294,6 +294,16 @@ impl WindowOwnerRegistry {
         state.owners.get(owner).map(|r| r.workspace_generation)
     }
 
+    pub fn replace_primary_port(&self, owner: &OwnerId, port: u16) -> Result<(), String> {
+        let mut state = self.inner.lock().expect("owner registry lock poisoned");
+        let record = state
+            .owners
+            .get_mut(owner)
+            .ok_or_else(|| "unknown owner".to_string())?;
+        record.primary_port = port;
+        Ok(())
+    }
+
     /// The pending navigation permit's target origin, if one is prepared but not
     /// yet committed. Used by the workspace-transition commit path.
     pub fn pending_target_origin(&self, owner: &OwnerId) -> Option<String> {
