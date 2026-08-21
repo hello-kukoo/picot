@@ -127,6 +127,7 @@
   },
   "tools": {
     "copyOutput": "出力をコピー",
+    "openInPreview": "プレビューで開く",
     "streaming": "実行中",
     "complete": "完了",
     "error": "エラー",
@@ -191,7 +192,8 @@
         "remoteImageHidden": "リモート画像は非表示です"
       },
       "conflictMessage": "{name}がディスク上で変更されました。再読み込みしますか、それともディスクバージョンを上書きしますか？",
-      "tabpanelLabel": "ファイルプレビュー"
+      "tabpanelLabel": "ファイルプレビュー",
+      "htmlLive": "HTML ライブプレビュー"
     },
     "unsaved": {
       "title": "未保存の変更",
@@ -257,7 +259,7 @@
     "notOnDisk": "ディスク上にありません",
     "resolvedResources": "解決済みリソース",
     "update": "更新",
-    "remove": "削除",
+    "remove": "アンインストール",
     "refresh": "更新",
     "reloadAgent": "エージェントを再読み込み",
     "reloadingAgent": "エージェントを再読み込み中…",
@@ -266,15 +268,19 @@
     "enablePackage": "パッケージを有効化",
     "disablePackage": "パッケージを無効化",
     "updateMessage": "{source} を更新しました",
-    "removeMessage": "{source} を削除しました",
+    "removeMessage": "{source} をアンインストールしました",
     "packageDisabledMessage": "{source} を無効化しました",
     "packageEnabledMessage": "{source} を有効化しました",
     "updateTip": "このパッケージを更新",
-    "removeTip": "このパッケージを削除",
+    "removeTip": "このパッケージをアンインストール",
     "statusLoaded": "読み込み済み",
     "statusInstalled": "インストール済み",
     "statusDisabled": "無効",
-    "updateAvailable": "更新あり"
+    "updateAvailable": "更新あり",
+    "updateAll": "すべて更新（{count}）",
+    "updatingAll": "拡張機能を更新中 {done}/{total}…",
+    "updatedAllMessage": "{count} 個の拡張機能を更新しました。",
+    "updatedAllWithFailures": "{count} 個を更新、{failed} 個が失敗しました。"
   },
   "actions": {
     "retry": "再試行",
@@ -414,6 +420,9 @@
     "refreshSessions": "セッションを更新",
     "settings": "設定",
     "updateAvailable": "アップデートが利用可能",
+    "extensionUpdates": "拡張機能",
+    "extensionUpdatesAvailable": "拡張機能の更新があります",
+    "extensionOpenInSettings": "設定で拡張機能の更新を開く",
     "update": "更新",
     "recent": "最近",
     "pinned": "ピン留め",
@@ -485,6 +494,15 @@
     "archiveDisabledActive": "アクティブなセッションはアーカイブできません",
     "archiveDisabledStreaming": "ストリーミング中のセッションはアーカイブできません",
     "archiveDisabledRunning": "実行中のセッションはアーカイブできません"
+  },
+  "sessionInfo": {
+    "title": "セッション情報",
+    "heading": "セッション情報",
+    "file": "ファイル",
+    "inMemory": "メモリ内（未保存）",
+    "copyFile": "ファイルパスをコピー",
+    "copied": "コピーしました",
+    "copyFailed": "コピーに失敗しました"
   },
   "updater": {
     "update": "更新",

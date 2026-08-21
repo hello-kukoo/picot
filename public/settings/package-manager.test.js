@@ -22,16 +22,27 @@ function t(key, params = {}) {
     "extensions.notOnDisk": "Not on disk",
     "extensions.resolvedResources": "Resolved resources",
     "extensions.update": "Update",
-    "extensions.remove": "Remove",
+    "extensions.remove": "Uninstall",
     "extensions.refresh": "Refresh",
     "extensions.reloadAgent": "Reload",
     "extensions.reloadingAgent": "Reloading",
     "extensions.checkingUpdates": "Checking for updates",
     "extensions.packageDisabledMessage": `Disabled ${params.source}`,
     "extensions.packageEnabledMessage": `Enabled ${params.source}`,
+    "extensions.updateMessage": `Updated ${params.source}`,
+    "extensions.updateAll": `Update all (${params.count})`,
+    "extensions.updatingAll": `Updating ${params.done}/${params.total}`,
+    "extensions.updatedAllMessage": `Updated ${params.count} extensions`,
+    "extensions.updatedAllWithFailures": `Updated ${params.count}, ${params.failed} failed`,
     "extensions.resourceCount": `${params.count} ${params.label}`,
   };
   return values[key] || key;
+}
+
+// Clicking a button does not propagate its handler's promise, so async
+// handlers need several microtask flushes before their state settles.
+async function settle(ticks = 24) {
+  for (let i = 0; i < ticks; i += 1) await Promise.resolve();
 }
 
 function createRoot() {
@@ -396,12 +407,14 @@ describe("Installed package manager", () => {
     expect(root.querySelector("#pkg-manager-footer").textContent).not.toContain("Reloading");
   });
 
-  it("keeps loaded packages when native capability drops mid-session", async () => {
+  it("keeps loaded packages silently when native capability drops mid-session", async () => {
     const root = createRoot();
     let native = true;
     const transport = {
       listPiPackages: vi.fn().mockResolvedValue(records),
-      checkPiPackageUpdates: vi.fn().mockResolvedValue([]),
+      checkPiPackageUpdates: vi
+        .fn()
+        .mockResolvedValue([{ source: "npm:global-tool", scope: "global", available: true }]),
     };
     const manager = setupPackageManager({
       root,
@@ -410,13 +423,91 @@ describe("Installed package manager", () => {
       t,
     });
     await manager.load();
-    expect(root.querySelectorAll(".pkg-manager-sidebar-row")).toHaveLength(2);
+    root.querySelectorAll(".pkg-manager-sidebar-row")[0].click();
+    expect(root.querySelector(".pkg-manager-actions button").disabled).toBe(false);
 
+    // A transient reconnect window must not show the misleading
+    // "desktop only" notice nor wipe update states; the capabilities event
+    // re-triggers the refresh once the handshake returns.
     native = false;
     await manager.refresh();
     expect(root.querySelectorAll(".pkg-manager-sidebar-row")).toHaveLength(2);
     expect(manager.getPackages()).toHaveLength(2);
-    expect(root.querySelector("#pkg-manager-footer").textContent).toContain("Desktop only");
+    expect(transport.listPiPackages).toHaveBeenCalledTimes(1);
+    expect(root.querySelector("#pkg-manager-footer").textContent).not.toContain("Desktop only");
+    expect(root.querySelector(".pkg-manager-actions button").disabled).toBe(false);
+  });
+
+  it("updating one package skips the network update re-check", async () => {
+    const root = createRoot();
+    const transport = {
+      listPiPackages: vi.fn().mockResolvedValue(records),
+      checkPiPackageUpdates: vi.fn().mockResolvedValue([
+        { source: "npm:global-tool", scope: "global", available: true },
+        { source: "npm:project-tool", scope: "project", available: true },
+      ]),
+      updatePiPackage: vi.fn().mockResolvedValue({}),
+    };
+    const manager = setupPackageManager({
+      root,
+      transport,
+      nativeAvailable: () => true,
+      t,
+    });
+    await manager.load();
+    expect(transport.checkPiPackageUpdates).toHaveBeenCalledTimes(1);
+
+    // Select the first package and update it; only the updated package flips
+    // to false, the other keeps its known state, and no re-check runs.
+    root.querySelectorAll(".pkg-manager-sidebar-row")[0].click();
+    const updateBtn = root.querySelectorAll(".pkg-manager-actions button")[0];
+    updateBtn.click();
+    await settle();
+
+    expect(transport.updatePiPackage).toHaveBeenCalledWith("npm:global-tool", { local: false });
+    expect(transport.listPiPackages).toHaveBeenCalledTimes(2);
+    expect(transport.checkPiPackageUpdates).toHaveBeenCalledTimes(1);
+    const [first, second] = manager.getPackages();
+    expect(first.updateAvailable).toBe(false);
+    expect(second.updateAvailable).toBe(true);
+  });
+
+  it("update-all updates every updatable package sequentially", async () => {
+    const root = createRoot();
+    const transport = {
+      listPiPackages: vi.fn().mockResolvedValue(records),
+      checkPiPackageUpdates: vi.fn().mockResolvedValue([
+        { source: "npm:global-tool", scope: "global", available: true },
+        { source: "npm:project-tool", scope: "project", available: true },
+      ]),
+      updatePiPackage: vi.fn().mockResolvedValue({}),
+    };
+    const manager = setupPackageManager({
+      root,
+      transport,
+      nativeAvailable: () => true,
+      t,
+    });
+    await manager.load();
+
+    const updateAllBtn = root.querySelector("#pkg-manager-update-all-btn");
+    expect(updateAllBtn.disabled).toBe(false);
+    expect(updateAllBtn.textContent).toContain("Update all (2)");
+    updateAllBtn.click();
+    await settle();
+
+    expect(transport.updatePiPackage).toHaveBeenCalledTimes(2);
+    expect(transport.updatePiPackage).toHaveBeenNthCalledWith(1, "npm:global-tool", {
+      local: false,
+    });
+    expect(transport.updatePiPackage).toHaveBeenNthCalledWith(2, "npm:project-tool", {
+      local: true,
+    });
+    expect(transport.checkPiPackageUpdates).toHaveBeenCalledTimes(1);
+    expect(manager.getUpdateCount()).toBe(0);
+    // render() rebuilt the footer; re-query the fresh button element.
+    expect(root.querySelector("#pkg-manager-update-all-btn").disabled).toBe(true);
+    expect(root.querySelector("#pkg-manager-footer").textContent).toContain("Updated 2 extensions");
   });
 
   it("refreshes records when native capability arrives after initial activation", async () => {
@@ -441,5 +532,74 @@ describe("Installed package manager", () => {
     await manager.refresh();
     expect(transport.listPiPackages).toHaveBeenCalledTimes(1);
     expect(root.querySelectorAll(".pkg-manager-sidebar-row")).toHaveLength(2);
+  });
+
+  it("blocks per-package actions while update-all is in progress", async () => {
+    const root = createRoot();
+    let resolveFirstUpdate;
+    const firstUpdate = new Promise((resolve) => {
+      resolveFirstUpdate = resolve;
+    });
+    const transport = {
+      listPiPackages: vi.fn().mockResolvedValue(records),
+      checkPiPackageUpdates: vi.fn().mockResolvedValue([
+        { source: "npm:global-tool", scope: "global", available: true },
+        { source: "npm:project-tool", scope: "project", available: true },
+      ]),
+      updatePiPackage: vi.fn().mockReturnValueOnce(firstUpdate).mockResolvedValue({}),
+      removePiPackage: vi.fn().mockResolvedValue({}),
+      setPiPackageDisabled: vi.fn().mockResolvedValue({}),
+      restartRuntime: vi.fn().mockResolvedValue({}),
+    };
+    const manager = setupPackageManager({
+      root,
+      transport,
+      nativeAvailable: () => true,
+      t,
+    });
+    await manager.load();
+
+    const updateAllBtn = root.querySelector("#pkg-manager-update-all-btn");
+    updateAllBtn.click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // update-all has claimed the only updatable target for the first round
+    // and is parked on a pending updatePiPackage. While it is running, the
+    // per-package buttons must be disabled and ignore further clicks.
+    expect(transport.updatePiPackage).toHaveBeenCalledTimes(1);
+
+    const sidebarRows = root.querySelectorAll(".pkg-manager-sidebar-row");
+    sidebarRows[0].click();
+    const toggle = root.querySelector(".pkg-manager-toggle");
+    const [updateBtn, removeBtn] = root.querySelectorAll(".pkg-manager-actions button");
+    const reloadBtn = root.querySelector("#pkg-manager-reload-btn");
+
+    expect(toggle.disabled).toBe(true);
+    expect(updateBtn.disabled).toBe(true);
+    expect(removeBtn.disabled).toBe(true);
+    expect(reloadBtn.disabled).toBe(true);
+
+    toggle.click();
+    removeBtn.click();
+    updateBtn.click();
+    reloadBtn.click();
+    await settle();
+
+    expect(transport.setPiPackageDisabled).not.toHaveBeenCalled();
+    expect(transport.removePiPackage).not.toHaveBeenCalled();
+    expect(transport.restartRuntime).not.toHaveBeenCalled();
+    expect(transport.updatePiPackage).toHaveBeenCalledTimes(1);
+
+    resolveFirstUpdate({});
+    await settle();
+
+    expect(transport.updatePiPackage).toHaveBeenCalledTimes(2);
+    expect(transport.updatePiPackage).toHaveBeenNthCalledWith(1, "npm:global-tool", {
+      local: false,
+    });
+    expect(transport.updatePiPackage).toHaveBeenNthCalledWith(2, "npm:project-tool", {
+      local: true,
+    });
   });
 });

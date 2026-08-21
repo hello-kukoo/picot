@@ -99,6 +99,11 @@ export class RpivTodoMirrorPanel {
     return true;
   }
 
+  /** True when the panel actually renders something the user can look at. */
+  get hasVisibleTasks() {
+    return this.#state.tasks.some((task) => task.status !== "deleted");
+  }
+
   setState(state) {
     this.#state = state ?? EMPTY_STATE;
     this.#render();

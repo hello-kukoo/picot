@@ -198,6 +198,21 @@ export class FilePreviewPanel {
     return tab;
   }
 
+  /**
+   * Open a file the agent just wrote. Reloads an existing clean tab so the
+   * live preview (including HTML iframes) picks up disk changes; leaves a
+   * dirty tab alone aside from focusing it.
+   */
+  async revealWrite(filePath) {
+    const normalizedPath = normalizeLocalPath(filePath);
+    if (!normalizedPath) return null;
+    const existing = this.state.getTabs().find((tab) => tab.filePath === normalizedPath);
+    if (existing?.dirty) return this.openFile(normalizedPath);
+    const tab = await this.openFile(normalizedPath);
+    if (existing) await this._reloadTab(existing.id, { skipConfirmation: true });
+    return tab;
+  }
+
   async closePanel() {
     this._captureActiveRenderer();
     const dirtyTabs = this.state.getTabs().filter((tab) => tab.dirty);
@@ -1390,7 +1405,7 @@ export class FilePreviewPanel {
     const classification = tab && classifyFilePath(tab.filePath);
     // The initial open occurs before the bounded content request has filled
     // `tab.content`/`editable`; classification is the only safe signal here.
-    if (["markdown", "text"].includes(classification?.contentType)) this.toolbarOpen = true;
+    if (["markdown", "text", "html"].includes(classification?.contentType)) this.toolbarOpen = true;
   }
 
   _renderToolbar() {
@@ -1417,8 +1432,9 @@ export class FilePreviewPanel {
       contentType !== "image" &&
       contentType !== "pdf" &&
       contentType !== "convertible" &&
-      (contentType !== "markdown" || tab.mode === "edit");
-    const editorToolbarVisible = isDiff || (editable && ["markdown", "text"].includes(contentType));
+      ((contentType !== "markdown" && contentType !== "html") || tab.mode === "edit");
+    const editorToolbarVisible =
+      isDiff || (editable && ["markdown", "text", "html"].includes(contentType));
     controls.toolbar?.classList.toggle(
       "hidden",
       !editorToolbarVisible || (!isDiff && !this.toolbarOpen),

@@ -298,6 +298,37 @@ describe("FilePreviewPanel", () => {
     p.destroy();
   });
 
+  test("revealWrite reloads the browser-opened absolute tab without duplicating it", async () => {
+    const p = createPanel();
+    // This is what a workspace browser open produces: an absolute normalized id.
+    const browserTab = await p.openFile("/test/workspace/README.md");
+    const tabCountAfterOpen = p.state.getTabs().length;
+
+    // The follow module resolves a write to the same workspace-absolute path,
+    // so revealWrite must find the existing tab and reload it, not add a new one.
+    const tab = await p.revealWrite("/test/workspace/README.md");
+
+    expect(tabCountAfterOpen).toBe(1);
+    expect(tab.id).toBe(browserTab.id);
+    expect(p.state.getTabs()).toHaveLength(1);
+    expect(p.state.getTabs()[0].filePath).toBe("/test/workspace/README.md");
+    expect(tabBar.children).toHaveLength(1);
+    // A live preview reload should have issued a second content fetch.
+    const contentCalls = global.fetch.mock.calls.filter(([url]) =>
+      String(url).startsWith("/api/files/content"),
+    );
+    expect(contentCalls.length).toBeGreaterThan(1);
+    p.destroy();
+  });
+
+  test("opens html tabs with the editor toolbar open by default", async () => {
+    const p = createPanel();
+    const tab = await p.openFile("/test/workspace/index.html");
+    expect(tab?.filePath).toBe("/test/workspace/index.html");
+    expect(p.toolbarOpen).toBe(true);
+    p.destroy();
+  });
+
   test("uses the server-discovered Python command in dependency guidance", async () => {
     global.fetch = vi.fn(() =>
       Promise.resolve({

@@ -888,10 +888,16 @@ design spec 要列出可见/省略字段、图标、分隔线和截断，测试�
    [`docs/superpowers/specs/2026-07-15-quick-and-side-chat-design.md`](docs/superpowers/specs/2026-07-15-quick-and-side-chat-design.md)。
 4. `file-preview-renderers.js` 按 `file-language.js` 的分类分派：
    Markdown 经 allowlist sanitizer 后预览，普通文本用 CodeMirror，
-   图片走 `<img>`，PDF 用 PDF.js canvas renderer。可编辑 Markdown / 文本首次
-   打开时显示 editor toolbar；Wrap 偏好首次默认为开启，但显式保存的用户选择优先。
-   toolbar 下方只显示当前文件相对 canonical workspace root 的路径，无法证明
-   containment 时不伪造相对路径。CodeMirror / PDF.js 是
+   图片走 `<img>`，PDF 用 PDF.js canvas renderer。HTML（.html/.htm）在 preview 模式
+   渲染为沙箱 iframe（`sandbox="allow-scripts allow-forms"`，无 `allow-same-origin`，
+   `referrerpolicy=no-referrer`），脚本运行在不透明 origin，无法接触 Picot WebView；
+   edit 模式用 CodeMirror 编辑源码。`file-preview-follow.js` 跟随 write 类工具的
+   成功结果，通过 `panel.revealWrite()` 重载干净 tab（脏 tab 只聚焦不覆盖），
+   使 live iframe 预览自动反映磁盘变化；工具卡 args preview 的文件路径渲染为
+   `.tool-file-ref` 按钮，经冒泡的 `previewfile` 事件走同一 follow 模块打开预览。
+   可编辑 Markdown / 文本 / HTML 首次打开时显示 editor toolbar；Wrap 偏好首次默认为开启，
+   但显式保存的用户选择优先。toolbar 下方只显示当前文件相对 canonical workspace root 的路径，
+   无法证明 containment 时不伪造相对路径。CodeMirror / PDF.js 是
    `scripts/build-frontend.js` 打出的同源 vendor bundle；源代码在 Vitest 中仍直接解析 npm 包。
 5. Git Diff 是内存 tab，不进入 `FileTabState`。关闭 Wrap 时保留独立双栏和横向
    阅读；开启 Wrap 时 renderer 改为单一纵向 scroller 中的 logical two-column grid row，
@@ -1111,7 +1117,7 @@ Quick Chat 与 Side Chat 是隔离的、**不持久化**的临时 Pi 会话进�
 ### 安全与能力边界（Rust 宿主拥有）
 
 - `window_owner.rs`：每个原生工作区窗口一个不透明 owner 记录，绑定窗口 label、规范化 cwd、主端口、当前精确 Pi origin、256-bit OS 随机 bearer capability（`subtle` 常量时间校验）。capability 绝不进 URL/存储/日志/事件。
-- 精确源导航：`on_navigation` 委托 `authorize_navigation`，仅批准 owner 的当前 origin 或一次性短寿 pending origin；拒绝外部 HTTPS/LAN/file/自定义 scheme/未注册 loopback 端口/重定向。`on_new_window` 一律 `Deny`（消除 `window.open` 依赖）。
+- 精确源导航：`on_navigation` 委托 `authorize_navigation`，仅批准 owner 的当前 origin 或一次性短寿 pending origin；拒绝外部 HTTPS/LAN/file/自定义 scheme/未注册 loopback 端口/重定向。`on_new_window` 一律 `Deny`（消除 `window.open` 依赖）。唯一例外：`about:srcdoc`/`about:blank` 始终放行——wry 的 WKWebView 导航 delegate 对 iframe 子框架也会触发且不区分主/子框架，沙箱 srcdoc iframe（HTML 文件预览）导航到 `about:srcdoc` 时其内容完全来自嵌入文档而非网络 origin，无可授权目标；其余 `about:` 路径与 `data:` 等 scheme 仍拒绝。
 - `capability_initialization_script`：仅当 `location` 为 Picot 的 http loopback hostname 时把 capability 注入为 non-enumerable 属性（导航回调之后的纵深防御）。
 - `command_policy.rs` + `protocol/picot-core-commands.json` + `extensions/command-policy.ts`：单一版本化清单，把每个 core RPC 命令机械分类为 `allowed`/`deniedSessionLifecycle`/`desktopOwnerOnly`；未知命令对临时路由 fail-closed；Rust 与 TS 实现共享同一 JSON。
 

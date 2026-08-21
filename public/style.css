@@ -515,6 +515,13 @@ body {
   background: #ff9f0a;
 }
 
+/* Extension updates sit right of the app-update pill and use the accent tone
+   to distinguish package updates from app updates. */
+.sidebar-update-pill.sidebar-extension-pill {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
 .sidebar-update-pill[data-tone="error"] {
   background: #ff453a;
 }
@@ -4204,6 +4211,22 @@ body.hide-thinking .thinking-block {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 360px;
+}
+
+.tool-file-ref {
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.tool-file-ref:hover,
+.tool-file-ref:focus-visible {
+  color: var(--accent-text);
+  text-decoration: underline;
 }
 
 .tool-header-right {
@@ -7941,6 +7964,23 @@ body.file-preview-resizing {
   max-height: 100%;
   object-fit: contain;
   border-radius: var(--radius-xs);
+}
+
+.file-html-preview {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  background: var(--bg-solid);
+}
+
+.file-html-frame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  /* design-token-ignore: live HTML preview mimics a browser canvas */
+  background: #fff;
 }
 
 /* PDF preview */

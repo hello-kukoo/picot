@@ -18,6 +18,8 @@ import { resolveWebSocketUrl, WebSocketClient } from "./app/websocket-client.js"
 import { setupComposerCommandMenu } from "./composer-command-menu.js";
 import { setupComposerImageAttachments } from "./composer-image-attachments.js";
 import { EphemeralChatView } from "./ephemeral-chat-view.js";
+import { setupExtensionUpdateIndicator } from "./extension-update-indicator.js";
+import { createFilePreviewFollow } from "./file-preview-follow.js";
 import { FilePreviewPanel } from "./file-preview-panel.js";
 import { GitClient } from "./git-client.js";
 import { GitPanel } from "./git-panel.js";
@@ -46,6 +48,7 @@ import {
   shouldSuppressFileBrowserLoad,
 } from "./session/routing.js";
 import { anchorHistoryToBottom } from "./session/scroll-anchor.js";
+import { setupSessionInfo } from "./session/session-info.js";
 import { SessionUiStateStore } from "./session-ui-state.js";
 import { LegacyConfigGateway } from "./settings/config-gateway-legacy.js";
 import { setupExtensionsTabShell } from "./settings/extensions-tab-shell.js";
@@ -564,7 +567,7 @@ const canUseSessionControl = () => transport.capabilities.native;
 const state = new StateManager();
 const messagesElement = document.getElementById("messages");
 const messageRenderer = new MessageRenderer(messagesElement);
-const toolCardRenderer = new ToolCardRenderer(messagesElement);
+const toolCardRenderer = new ToolCardRenderer(messagesElement, { enableFileRefs: true });
 initImageLightbox(messagesElement);
 const dialogHandler = new DialogHandler({
   container: document.getElementById("dialog-container"),
@@ -607,6 +610,16 @@ const sidebar = new SessionSidebar(
     onFocusRefresh: () => refreshFocusView(),
   },
 );
+
+// Header session-info popover: file path from the active session mirror.
+// Getter is lazy so late-arriving state (first session file, reconnect)
+// is reflected on every open.
+const sessionInfo = setupSessionInfo({
+  toggle: document.getElementById("session-info-toggle"),
+  panel: document.getElementById("session-info-panel"),
+  fileValue: document.getElementById("session-info-file"),
+  getFilePath: () => mirrorActiveSessionFile || sidebar.activeSessionFile || "",
+});
 
 // ── Super Agent wiring ──────────────────────────────────────────────────────
 // Compatibility surface for Super Agent add-on Web Components.
@@ -1147,6 +1160,12 @@ const filePreviewPanel = new FilePreviewPanel({
       body: JSON.stringify({ filePath }),
     });
   },
+});
+// Follow the agent's write-tool calls so the preview panel hot-reloads the
+// file on disk (HTML iframes pick up edits without manual reopening).
+const filePreviewFollow = createFilePreviewFollow({
+  panel: filePreviewPanel,
+  getWorkspacePath: async () => getCurrentWorkspacePath() || "",
 });
 let fileBrowserWorkspacePath = null;
 let fileBrowserWorkspacePort = null;
@@ -2211,6 +2230,12 @@ new MutationObserver(rebuildNavDots).observe(messagesContainer, { childList: tru
 window.addEventListener("resize", rebuildNavDots);
 
 // ── Session fork via "Fork from here" button on user messages ──────────────
+// Tool-card file references dispatch "previewfile" bubbles from the message
+// container; open (or refresh) the file preview for that path.
+messagesContainer.addEventListener("previewfile", (event) => {
+  const path = event.detail?.path;
+  if (path) void filePreviewFollow.openPath(path).catch(() => {});
+});
 messagesContainer.addEventListener("messagefork", async (e) => {
   const { entryId } = e.detail || {};
   if (!entryId) return;
@@ -2980,6 +3005,7 @@ function handleToolExecutionStart(event) {
   });
 
   toolCardRenderer.createToolCard(state.getToolExecution(toolCallId));
+  filePreviewFollow.onToolStart(event);
 }
 
 function handleToolExecutionUpdate(event) {
@@ -3005,6 +3031,9 @@ function handleToolExecutionEnd(event) {
   });
 
   toolCardRenderer.finalizeToolCard(toolCallId, result, isError);
+  // Follow the agent's writes so the live preview (e.g. HTML iframes)
+  // reflects disk changes without manual reopening.
+  void filePreviewFollow.onToolEnd(event).catch(() => {});
   // rpiv-todo emits `todo` tool results whose `details` carry the reducer
   // snapshot. Mirror the latest snapshot onto the floating panel.
   if (event.toolName === "todo" && !isError && result?.details) {
@@ -3031,7 +3060,10 @@ function handleExtensionUIRequest(event) {
       // listing each status section. The floating panel already mirrors the
       // same state natively, so expand it instead of rendering a duplicate
       // toast — both would otherwise flash the same content for 5 seconds.
-      if (isRpivTodoCommandNotify(event.message)) {
+      // When nothing is mirrored (the panel stays hidden, e.g. "No todos
+      // yet"), fall through and render the message so /todos is never a
+      // silent no-op.
+      if (isRpivTodoCommandNotify(event.message) && todoMirrorPanel.hasVisibleTasks) {
         todoMirrorPanel.expand();
         break;
       }
@@ -4302,6 +4334,9 @@ async function handleSessionSelectImpl(session, project) {
   // entries) we don't want the prior turn's list still pinned in the
   // composer. clear() also drops the sticky is-hover-expanded class.
   todoMirrorPanel.clear();
+  // Pending write-tool paths belong to the previous session's run; don't
+  // let a stale toolCallId surface another session's file.
+  filePreviewFollow.clear();
   // An explicit session selection supersedes any pending deferred switch.
   // Leaving it set would (a) suppress all live rendering for the newly
   // selected session via the `pendingSessionSwitchPath` guard in
@@ -4426,6 +4461,7 @@ async function handleSessionSelectImpl(session, project) {
         targetPort: targetLiveInstance.port,
       });
       mirrorActiveSessionFile = session.filePath;
+      sessionInfo.refresh();
       viewingActiveSession = true;
       updateMirrorInputState();
       wsClient.send({ type: "mirror_sync_request" });
@@ -4583,6 +4619,7 @@ async function switchSession(sessionFile, session = null, project = null) {
     // Drop the previous session's todo snapshot — the next renderSessionHistory
     // call below will rehydrate from the new session's history if applicable.
     todoMirrorPanel.clear();
+    filePreviewFollow.clear();
 
     if (sessionFile && session) {
       messageRenderer.renderSystemMessage(t("status.loadingSession"));
@@ -4619,6 +4656,7 @@ async function switchSession(sessionFile, session = null, project = null) {
         foregroundPort = liveInstance.port;
         syncWorkspaceIndicatorFromInstances();
         mirrorActiveSessionFile = sessionFile;
+        sessionInfo.refresh();
         viewingActiveSession = true;
         wsClient.setRoutingContext({
           workspaceId: `workspace:${liveInstance.cwd || getCurrentWorkspacePath() || "unknown"}`,
@@ -5550,7 +5588,10 @@ wsClient.addEventListener("capabilities", () => {
   const showEphemeral = nativeAvailable();
   document.getElementById("side-chat-btn")?.classList.toggle("hidden", !showEphemeral);
   document.getElementById("quick-chat-btn")?.classList.toggle("hidden", !showEphemeral);
-  if (showEphemeral) void packageManager?.refresh();
+  if (showEphemeral) {
+    void packageManager?.refresh();
+    void extensionUpdateIndicator?.refresh();
+  }
 });
 
 function buildThemeGrid() {
@@ -5827,6 +5868,14 @@ packageManager = setupPackageManager({
   getWorkspaceId: () => `workspace:${getCurrentWorkspacePath() || "unknown"}`,
   getSessionId: () => mirrorActiveSessionFile || sidebar.activeSessionFile || wsClient.sessionId,
   onRestarted: () => wsClient.forceReconnect(),
+  onUpdatesChecked: (count) => extensionUpdateIndicator.setCount(count),
+});
+const extensionUpdateIndicator = setupExtensionUpdateIndicator({
+  transport,
+  nativeAvailable,
+  t,
+  buttonEl: document.getElementById("sidebar-extension-update-btn"),
+  onOpen: () => void openSettings("extensions"),
 });
 extensionsTabs = setupExtensionsTabShell({
   tabs: document.querySelectorAll("[data-extensions-tab]"),

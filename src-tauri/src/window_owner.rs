@@ -173,6 +173,16 @@ impl WindowOwnerRegistry {
     }
 
     pub fn authorize_navigation(&self, owner: &OwnerId, url: &tauri::Url) -> bool {
+        // Wry invokes this delegate for every navigation, including iframe
+        // subframes, and does not expose the target frame. Sandboxed `srcdoc`
+        // iframes (the HTML file preview) navigate to about:srcdoc, whose
+        // content comes entirely from the embedding document — there is no
+        // network origin to authorize, so allow the opaque about: documents.
+        // Top-level navigation to them never occurs in this app.
+        if url.scheme() == "about" {
+            let path = url.path();
+            return path == "srcdoc" || path == "blank";
+        }
         let Some(origin) = url_origin(url) else {
             return false;
         };
@@ -505,6 +515,19 @@ mod tests {
         assert!(reg.authorize_navigation(&owner, &url("http://127.0.0.1:3001/chat")));
         // Same host, different port is not equivalent.
         assert!(!reg.authorize_navigation(&owner, &url("http://127.0.0.1:3002/chat")));
+    }
+
+    #[test]
+    fn sandboxed_about_documents_are_authorized_for_subframes() {
+        let reg = WindowOwnerRegistry::default();
+        let (owner, _) = new_owner(&reg, "w1", 3001);
+        // Sandboxed srcdoc iframes (HTML file preview) navigate to about:srcdoc;
+        // their content comes from the embedding document, not a network origin.
+        assert!(reg.authorize_navigation(&owner, &url("about:srcdoc")));
+        assert!(reg.authorize_navigation(&owner, &url("about:blank")));
+        // Other about: paths (or non-http schemes) stay unauthorized.
+        assert!(!reg.authorize_navigation(&owner, &url("about:config")));
+        assert!(!reg.authorize_navigation(&owner, &url("data:text/html,<h1>x</h1>")));
     }
 
     #[test]

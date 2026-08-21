@@ -92,7 +92,7 @@
     "followUp": "Follow-up"
   },
   "input": {
-    "typeMessage": "Type a message...",
+    "typeMessage": "Message… Type / for commands, @ for files",
     "attachImage": "Attach image",
     "commands": "Commands",
     "switchModel": "Switch model",
@@ -127,6 +127,7 @@
   },
   "tools": {
     "copyOutput": "Copy output",
+    "openInPreview": "Open in preview",
     "streaming": "streaming",
     "complete": "complete",
     "error": "error",
@@ -170,6 +171,7 @@
       "conflictReload": "Reload",
       "conflictOverwrite": "Overwrite",
       "tabpanelLabel": "File preview",
+      "htmlLive": "Live HTML preview",
       "outsideWorkspace": "File is outside the active workspace",
       "unsupportedBinary": "This file cannot be previewed.",
       "tooLarge": "This file is too large to preview.",
@@ -257,7 +259,7 @@
     "notOnDisk": "Not on disk",
     "resolvedResources": "Resolved resources",
     "update": "Update",
-    "remove": "Remove",
+    "remove": "Uninstall",
     "refresh": "Refresh",
     "reloadAgent": "Reload agent",
     "reloadingAgent": "Reloading agent…",
@@ -266,15 +268,19 @@
     "enablePackage": "Enable package",
     "disablePackage": "Disable package",
     "updateMessage": "Updated {source}",
-    "removeMessage": "Removed {source}",
+    "removeMessage": "Uninstalled {source}",
     "packageDisabledMessage": "Disabled {source}",
     "packageEnabledMessage": "Enabled {source}",
     "updateTip": "Update this package",
-    "removeTip": "Remove this package",
+    "removeTip": "Uninstall this package",
     "statusLoaded": "Loaded",
     "statusInstalled": "Installed",
     "statusDisabled": "Disabled",
-    "updateAvailable": "Update available"
+    "updateAvailable": "Update available",
+    "updateAll": "Update all ({count})",
+    "updatingAll": "Updating extensions {done}/{total}…",
+    "updatedAllMessage": "Updated {count} extensions.",
+    "updatedAllWithFailures": "Updated {count} extensions, {failed} failed."
   },
   "actions": {
     "retry": "Retry",
@@ -414,6 +420,9 @@
     "refreshSessions": "Refresh sessions",
     "settings": "Settings",
     "updateAvailable": "Update available",
+    "extensionUpdates": "Extensions",
+    "extensionUpdatesAvailable": "Extension updates available",
+    "extensionOpenInSettings": "Open extension updates in settings",
     "update": "Update",
     "recent": "RECENT",
     "pinned": "PINNED",
@@ -485,6 +494,15 @@
     "archiveDisabledActive": "Cannot archive the active session",
     "archiveDisabledStreaming": "Cannot archive a streaming session",
     "archiveDisabledRunning": "Cannot archive a running session"
+  },
+  "sessionInfo": {
+    "title": "Session info",
+    "heading": "Session Info",
+    "file": "File",
+    "inMemory": "In memory (not saved yet)",
+    "copyFile": "Copy file path",
+    "copied": "Copied",
+    "copyFailed": "Copy failed"
   },
   "updater": {
     "update": "Update",

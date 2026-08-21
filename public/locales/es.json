@@ -127,6 +127,7 @@
   },
   "tools": {
     "copyOutput": "Copiar salida",
+    "openInPreview": "Abrir en vista previa",
     "streaming": "ejecutando",
     "complete": "completo",
     "error": "error",
@@ -191,7 +192,8 @@
         "remoteImageHidden": "Imagen remota oculta"
       },
       "conflictMessage": "{name} fue modificado en disco. ¿Recargar o sobreescribir la versión del disco?",
-      "tabpanelLabel": "Vista previa del archivo"
+      "tabpanelLabel": "Vista previa del archivo",
+      "htmlLive": "Vista previa de HTML"
     },
     "unsaved": {
       "title": "Cambios sin guardar",
@@ -257,7 +259,7 @@
     "notOnDisk": "No está en el disco",
     "resolvedResources": "Recursos resueltos",
     "update": "Actualizar",
-    "remove": "Eliminar",
+    "remove": "Desinstalar",
     "refresh": "Actualizar lista",
     "reloadAgent": "Recargar agente",
     "reloadingAgent": "Recargando agente…",
@@ -266,15 +268,19 @@
     "enablePackage": "Activar paquete",
     "disablePackage": "Desactivar paquete",
     "updateMessage": "Se actualizó {source}",
-    "removeMessage": "Se eliminó {source}",
+    "removeMessage": "Se desinstaló {source}",
     "packageDisabledMessage": "Se desactivó {source}",
     "packageEnabledMessage": "Se activó {source}",
     "updateTip": "Actualizar este paquete",
-    "removeTip": "Eliminar este paquete",
+    "removeTip": "Desinstalar este paquete",
     "statusLoaded": "Cargado",
     "statusInstalled": "Instalado",
     "statusDisabled": "Desactivado",
-    "updateAvailable": "Actualización disponible"
+    "updateAvailable": "Actualización disponible",
+    "updateAll": "Actualizar todo ({count})",
+    "updatingAll": "Actualizando extensiones {done}/{total}…",
+    "updatedAllMessage": "Se actualizaron {count} extensiones.",
+    "updatedAllWithFailures": "{count} actualizadas, {failed} fallidas."
   },
   "actions": {
     "retry": "Reintentar",
@@ -414,6 +420,9 @@
     "refreshSessions": "Actualizar sesiones",
     "settings": "Ajustes",
     "updateAvailable": "Actualización disponible",
+    "extensionUpdates": "Extensiones",
+    "extensionUpdatesAvailable": "Actualizaciones de extensiones disponibles",
+    "extensionOpenInSettings": "Abrir actualizaciones de extensiones en configuración",
     "update": "Actualizar",
     "recent": "RECIENTE",
     "pinned": "FIJADO",
@@ -485,6 +494,15 @@
     "archiveDisabledActive": "No se puede archivar la sesión activa",
     "archiveDisabledStreaming": "No se puede archivar una sesión en streaming",
     "archiveDisabledRunning": "No se puede archivar una sesión en ejecución"
+  },
+  "sessionInfo": {
+    "title": "Información de sesión",
+    "heading": "Información de sesión",
+    "file": "Archivo",
+    "inMemory": "En memoria (aún sin guardar)",
+    "copyFile": "Copiar ruta del archivo",
+    "copied": "Copiado",
+    "copyFailed": "Error al copiar"
   },
   "updater": {
     "update": "Actualizar",

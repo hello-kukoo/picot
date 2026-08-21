@@ -71,6 +71,7 @@ export function setupPackageManager({
   getWorkspaceId,
   getSessionId,
   onRestarted,
+  onUpdatesChecked,
 }) {
   const groupsEl = root.getElementById("pkg-manager-groups");
   if (!groupsEl) return { load: async () => {} };
@@ -81,6 +82,7 @@ export function setupPackageManager({
   let selectedKey = null;
   let busyKey = null;
   let restarting = false;
+  let updatingAll = false;
   let pendingLoad = null;
   let notice = null;
 
@@ -104,23 +106,33 @@ export function setupPackageManager({
       .filter((pkg) => pkg.source);
   }
 
-  async function runLoad() {
-    packages = packages.map((pkg) => ({ ...pkg, updateAvailable: null }));
-    // Surface the whole load (list + update check) in the footer so the user can
-    // see why every Update button is disabled.
-    notice = t("extensions.checkingUpdates");
-    render();
+  async function runLoad({ recheck = true, updatedKeys = null } = {}) {
+    if (!nativeAvailable() && packages.length) {
+      // Transient capability loss (reconnect window): keep the loaded list and
+      // its update states untouched. The ws capabilities event re-triggers this
+      // load once the handshake returns, so the refresh is not lost.
+      return;
+    }
+    const previousByKey = new Map(packages.map((pkg) => [packageKey(pkg), pkg.updateAvailable]));
+    if (recheck) {
+      packages = packages.map((pkg) => ({ ...pkg, updateAvailable: null }));
+      // Surface the whole load (list + update check) in the footer so the user can
+      // see why every Update button is disabled.
+      notice = t("extensions.checkingUpdates");
+      render();
+    }
     if (!nativeAvailable()) {
-      // Transient capability loss (e.g. during a reconnect) must not wipe an
-      // already-loaded list; the capabilities event triggers a recovery refresh.
       notice = t("extensions.managementUnavailable");
       return render();
     }
     try {
-      packages = normalized(await transport.listPiPackages()).map((pkg) => ({
-        ...pkg,
-        updateAvailable: null,
-      }));
+      packages = normalized(await transport.listPiPackages()).map((pkg) => {
+        const key = packageKey(pkg);
+        if (updatedKeys?.includes(key)) return { ...pkg, updateAvailable: false };
+        if (!recheck && previousByKey.has(key))
+          return { ...pkg, updateAvailable: previousByKey.get(key) };
+        return { ...pkg, updateAvailable: null };
+      });
       if (!packages.some((pkg) => packageKey(pkg) === selectedKey)) {
         selectedKey = packages[0] ? packageKey(packages[0]) : null;
       }
@@ -131,6 +143,14 @@ export function setupPackageManager({
       detailEl?.replaceChildren();
       renderFooter();
       return;
+    }
+
+    if (!recheck) {
+      // Skip the network update check: the caller just updated `updatedKeys`
+      // and every other package keeps its last known update state.
+      notice = null;
+      onUpdatesChecked?.(updateCount());
+      return render();
     }
 
     try {
@@ -146,6 +166,7 @@ export function setupPackageManager({
         updateAvailable: availableByKey.get(packageKey(pkg)) ?? false,
       }));
       notice = null;
+      onUpdatesChecked?.(updateCount());
     } catch (error) {
       notice = errorText(error);
     }
@@ -154,9 +175,9 @@ export function setupPackageManager({
 
   // Every entry into the Installed page re-runs the list + update check with all
   // update buttons disabled first; concurrent activations share one in-flight load.
-  function load() {
+  function load(options = {}) {
     if (pendingLoad) return pendingLoad;
-    pendingLoad = runLoad().finally(() => {
+    pendingLoad = runLoad(options).finally(() => {
       pendingLoad = null;
     });
     return pendingLoad;
@@ -234,7 +255,7 @@ export function setupPackageManager({
     detailEl.replaceChildren();
     if (!pkg) return;
     const key = packageKey(pkg);
-    const busy = busyKey === key;
+    const busy = busyKey === key || updatingAll;
     const header = root.createElement("div");
     header.className = "pkg-manager-detail-header";
     const toggle = root.createElement("button");
@@ -330,6 +351,10 @@ export function setupPackageManager({
     parent.appendChild(row);
   }
 
+  function updateCount() {
+    return packages.filter((pkg) => pkg.updateAvailable === true).length;
+  }
+
   function renderFooter() {
     if (!footerEl) return;
     footerEl.replaceChildren();
@@ -346,17 +371,25 @@ export function setupPackageManager({
     const reload = button(
       root,
       restarting ? t("extensions.reloadingAgent") : t("extensions.reloadAgent"),
-      { disabled: !packages.length || Boolean(busyKey) || restarting },
+      { disabled: !packages.length || Boolean(busyKey) || restarting || updatingAll },
     );
     reload.id = "pkg-manager-reload-btn";
     reload.addEventListener("click", restartRuntime);
-    const refresh = button(root, t("extensions.refresh"), { disabled: restarting });
+    const updatable = updateCount();
+    const updateAllBtn = button(root, t("extensions.updateAll", { count: updatable }), {
+      disabled: updatingAll || restarting || Boolean(busyKey) || updatable === 0,
+    });
+    updateAllBtn.id = "pkg-manager-update-all-btn";
+    updateAllBtn.addEventListener("click", () => void updateAll());
+    const refresh = button(root, t("extensions.refresh"), {
+      disabled: updatingAll || restarting,
+    });
     refresh.addEventListener("click", () => load());
-    footerEl.append(reload, refresh);
+    footerEl.append(reload, updateAllBtn, refresh);
   }
 
   async function setDisabled(pkg, key) {
-    if (busyKey) return;
+    if (busyKey || updatingAll) return;
     busyKey = key;
     render();
     try {
@@ -375,13 +408,15 @@ export function setupPackageManager({
   }
 
   async function updatePackage(pkg, key) {
-    if (busyKey) return;
+    if (busyKey || updatingAll) return;
     busyKey = key;
     render();
     try {
       await transport.updatePiPackage(pkg.source, { local: pkg.scope === "project" });
       notice = t("extensions.updateMessage", { source: pkg.source });
-      await load();
+      // Re-list without re-running the network update check: the updated
+      // package is now latest and every other package keeps its last state.
+      await load({ recheck: false, updatedKeys: [key] });
     } catch (error) {
       notice = errorText(error);
       render();
@@ -391,8 +426,35 @@ export function setupPackageManager({
     }
   }
 
+  async function updateAll() {
+    if (busyKey || restarting || updatingAll) return;
+    const targets = packages.filter((pkg) => pkg.updateAvailable === true);
+    if (!targets.length) return;
+    updatingAll = true;
+    render();
+    const updatedKeys = [];
+    let failed = 0;
+    for (let index = 0; index < targets.length; index += 1) {
+      const pkg = targets[index];
+      notice = t("extensions.updatingAll", { done: index, total: targets.length });
+      render();
+      try {
+        await transport.updatePiPackage(pkg.source, { local: pkg.scope === "project" });
+        updatedKeys.push(packageKey(pkg));
+      } catch {
+        failed += 1;
+      }
+    }
+    updatingAll = false;
+    await load({ recheck: false, updatedKeys });
+    notice = failed
+      ? t("extensions.updatedAllWithFailures", { count: updatedKeys.length, failed })
+      : t("extensions.updatedAllMessage", { count: updatedKeys.length });
+    render();
+  }
+
   async function removePackage(pkg, key) {
-    if (busyKey) return;
+    if (busyKey || updatingAll) return;
     busyKey = key;
     render();
     try {
@@ -409,7 +471,7 @@ export function setupPackageManager({
   }
 
   async function restartRuntime() {
-    if (restarting || busyKey) return;
+    if (restarting || busyKey || updatingAll) return;
     // The host resolves the workspace and active session from the authenticated
     // owner, so a missing client-side session id must not block the reload.
     const workspaceId = getWorkspaceId?.() || "";
@@ -429,5 +491,11 @@ export function setupPackageManager({
     }
   }
 
-  return { load, refresh: () => load(), getPackages: () => packages.slice() };
+  return {
+    load,
+    refresh: () => load(),
+    updateAll: () => updateAll(),
+    getPackages: () => packages.slice(),
+    getUpdateCount: updateCount,
+  };
 }

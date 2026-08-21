@@ -92,7 +92,7 @@
     "followUp": "后续"
   },
   "input": {
-    "typeMessage": "输入消息...",
+    "typeMessage": "消息…输入 / 使用命令，输入 @ 查找文件",
     "attachImage": "附加图片",
     "commands": "命令",
     "switchModel": "切换模型",
@@ -127,6 +127,7 @@
   },
   "tools": {
     "copyOutput": "复制输出",
+    "openInPreview": "在预览中打开",
     "streaming": "执行中",
     "complete": "完成",
     "error": "错误",
@@ -170,6 +171,7 @@
       "conflictReload": "重新加载",
       "conflictOverwrite": "覆盖",
       "tabpanelLabel": "文件预览",
+      "htmlLive": "实时 HTML 预览",
       "outsideWorkspace": "文件不在当前工作区内",
       "unsupportedBinary": "此文件无法预览。",
       "tooLarge": "此文件过大，无法预览。",
@@ -257,7 +259,7 @@
     "notOnDisk": "不在磁盘上",
     "resolvedResources": "已解析资源",
     "update": "更新",
-    "remove": "移除",
+    "remove": "卸载",
     "refresh": "刷新",
     "reloadAgent": "重新加载 Agent",
     "reloadingAgent": "正在重新加载 Agent…",
@@ -266,15 +268,19 @@
     "enablePackage": "启用包",
     "disablePackage": "禁用包",
     "updateMessage": "已更新 {source}",
-    "removeMessage": "已移除 {source}",
+    "removeMessage": "已卸载 {source}",
     "packageDisabledMessage": "已禁用 {source}",
     "packageEnabledMessage": "已启用 {source}",
     "updateTip": "更新此包",
-    "removeTip": "移除此包",
+    "removeTip": "卸载此包",
     "statusLoaded": "已加载",
     "statusInstalled": "已安装",
     "statusDisabled": "已禁用",
-    "updateAvailable": "有可用更新"
+    "updateAvailable": "有可用更新",
+    "updateAll": "一键更新（{count}）",
+    "updatingAll": "正在更新扩展 {done}/{total}…",
+    "updatedAllMessage": "已更新 {count} 个扩展。",
+    "updatedAllWithFailures": "已更新 {count} 个扩展，{failed} 个失败。"
   },
   "actions": {
     "retry": "重试",
@@ -414,6 +420,9 @@
     "refreshSessions": "刷新会话",
     "settings": "设置",
     "updateAvailable": "有可用更新",
+    "extensionUpdates": "扩展",
+    "extensionUpdatesAvailable": "扩展有可用更新",
+    "extensionOpenInSettings": "在设置中打开扩展更新",
     "update": "更新",
     "recent": "最近访问",
     "pinned": "置顶",
@@ -485,6 +494,15 @@
     "archiveDisabledActive": "无法归档当前会话",
     "archiveDisabledStreaming": "无法归档正在流式输出的会话",
     "archiveDisabledRunning": "无法归档正在运行的会话"
+  },
+  "sessionInfo": {
+    "title": "会话信息",
+    "heading": "会话信息",
+    "file": "文件",
+    "inMemory": "内存中（尚未保存）",
+    "copyFile": "复制文件路径",
+    "copied": "已复制",
+    "copyFailed": "复制失败"
   },
   "updater": {
     "update": "更新",
