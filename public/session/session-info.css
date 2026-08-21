@@ -55,6 +55,14 @@
   flex-shrink: 0;
 }
 
+/* The bare .icon-btn base paints its icon in --text-dim (≈30% white), which
+   reads as a disabled control — the only such button in the header. Rest at
+   --text-secondary like other interactive header controls; hover/expanded
+   bump to --text-primary via the .header-left .icon-btn rules in style.css. */
+.session-info-toggle {
+  color: var(--text-secondary);
+}
+
 .session-info-toggle[aria-expanded="true"] {
   color: var(--text-primary);
   background: var(--bg-glass-hover);

@@ -112,19 +112,6 @@
     "collapseAllTools": "すべてのツールを折りたたむ",
     "collapseAllToolsDesc": "すべてのツールカードを折りたたむ"
   },
-  "messages": {
-    "attachedImage": "添付画像",
-    "copyMessage": "メッセージをコピー",
-    "thinking": "考え中",
-    "copy": "コピー",
-    "copied": "コピーしました！",
-    "processDetails": "プロセス詳細",
-    "processStep": "{count} ステップ",
-    "processSteps": "{count} ステップ",
-    "processToolCall": "{count} ツール呼び出し",
-    "processToolCalls": "{count} ツール呼び出し",
-    "scrollToBottom": "最新のメッセージまでスクロール"
-  },
   "tools": {
     "copyOutput": "出力をコピー",
     "openInPreview": "プレビューで開く",
@@ -377,6 +364,20 @@
     "compactionFailed": "コンテキスト圧縮に失敗しました。",
     "compactionFailedDetail": "コンテキスト圧縮に失敗しました：{error}"
   },
+  "messages": {
+    "attachedImage": "添付画像",
+    "copyMessage": "メッセージをコピー",
+    "thinking": "考え中",
+    "copy": "コピー",
+    "copied": "コピーしました！",
+    "processDetails": "プロセス詳細",
+    "processStep": "{count} ステップ",
+    "processSteps": "{count} ステップ",
+    "processToolCall": "{count} ツール呼び出し",
+    "processToolCalls": "{count} ツール呼び出し",
+    "scrollToBottom": "最新のメッセージまでスクロール",
+    "turnFiles": "このターンで変更されたファイル（{count}）："
+  },
   "onboarding": {
     "openProject": "チャットを始めるためにプロジェクトを開いてください。",
     "configureKey": "チャットを始めるためにAPIキーまたはプロバイダーを設定してください。"
@@ -420,7 +421,7 @@
     "refreshSessions": "セッションを更新",
     "settings": "設定",
     "updateAvailable": "アップデートが利用可能",
-    "extensionUpdates": "拡張機能",
+    "extensionUpdates": "拡張を更新",
     "extensionUpdatesAvailable": "拡張機能の更新があります",
     "extensionOpenInSettings": "設定で拡張機能の更新を開く",
     "update": "更新",

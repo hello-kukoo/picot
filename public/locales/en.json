@@ -112,19 +112,6 @@
     "collapseAllTools": "Collapse All Tools",
     "collapseAllToolsDesc": "Collapse all tool cards"
   },
-  "messages": {
-    "attachedImage": "Attached image",
-    "copyMessage": "Copy message",
-    "thinking": "Thinking",
-    "copy": "Copy",
-    "copied": "Copied!",
-    "scrollToBottom": "Scroll to latest message",
-    "processDetails": "Process details",
-    "processStep": "{count} step",
-    "processSteps": "{count} steps",
-    "processToolCall": "{count} tool call",
-    "processToolCalls": "{count} tool calls"
-  },
   "tools": {
     "copyOutput": "Copy output",
     "openInPreview": "Open in preview",
@@ -377,6 +364,20 @@
     "modelsMustBeObject": "models.json must be a JSON object.",
     "providersMustBeObject": "'providers' must be an object."
   },
+  "messages": {
+    "attachedImage": "Attached image",
+    "copyMessage": "Copy message",
+    "thinking": "Thinking",
+    "copy": "Copy",
+    "copied": "Copied!",
+    "scrollToBottom": "Scroll to latest message",
+    "processDetails": "Process details",
+    "processStep": "{count} step",
+    "processSteps": "{count} steps",
+    "processToolCall": "{count} tool call",
+    "processToolCalls": "{count} tool calls",
+    "turnFiles": "Files changed this turn ({count}):"
+  },
   "onboarding": {
     "openProject": "Open a project to start chatting.",
     "configureKey": "Configure an API key or provider to start chatting."
@@ -420,7 +421,7 @@
     "refreshSessions": "Refresh sessions",
     "settings": "Settings",
     "updateAvailable": "Update available",
-    "extensionUpdates": "Extensions",
+    "extensionUpdates": "Update extensions",
     "extensionUpdatesAvailable": "Extension updates available",
     "extensionOpenInSettings": "Open extension updates in settings",
     "update": "Update",

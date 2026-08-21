@@ -112,19 +112,6 @@
     "collapseAllTools": "Colapsar todas las herramientas",
     "collapseAllToolsDesc": "Colapsar todas las tarjetas de herramientas"
   },
-  "messages": {
-    "attachedImage": "Imagen adjunta",
-    "copyMessage": "Copiar mensaje",
-    "thinking": "Pensando",
-    "copy": "Copiar",
-    "copied": "¡Copiado!",
-    "processDetails": "Detalles del proceso",
-    "processStep": "{count} paso",
-    "processSteps": "{count} pasos",
-    "processToolCall": "{count} llamada a herramienta",
-    "processToolCalls": "{count} llamadas a herramientas",
-    "scrollToBottom": "Desplazarse al último mensaje"
-  },
   "tools": {
     "copyOutput": "Copiar salida",
     "openInPreview": "Abrir en vista previa",
@@ -377,6 +364,20 @@
     "compactionFailed": "La compactación del contexto falló.",
     "compactionFailedDetail": "La compactación del contexto falló: {error}"
   },
+  "messages": {
+    "attachedImage": "Imagen adjunta",
+    "copyMessage": "Copiar mensaje",
+    "thinking": "Pensando",
+    "copy": "Copiar",
+    "copied": "¡Copiado!",
+    "processDetails": "Detalles del proceso",
+    "processStep": "{count} paso",
+    "processSteps": "{count} pasos",
+    "processToolCall": "{count} llamada a herramienta",
+    "processToolCalls": "{count} llamadas a herramientas",
+    "scrollToBottom": "Desplazarse al último mensaje",
+    "turnFiles": "Archivos modificados en este turno ({count}):"
+  },
   "onboarding": {
     "openProject": "Abre un proyecto para comenzar a chatear.",
     "configureKey": "Configura una clave API o proveedor para comenzar a chatear."
@@ -420,7 +421,7 @@
     "refreshSessions": "Actualizar sesiones",
     "settings": "Ajustes",
     "updateAvailable": "Actualización disponible",
-    "extensionUpdates": "Extensiones",
+    "extensionUpdates": "Actualizar ext.",
     "extensionUpdatesAvailable": "Actualizaciones de extensiones disponibles",
     "extensionOpenInSettings": "Abrir actualizaciones de extensiones en configuración",
     "update": "Actualizar",

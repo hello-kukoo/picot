@@ -112,19 +112,6 @@
     "collapseAllTools": "折叠所有工具",
     "collapseAllToolsDesc": "折叠所有工具卡片"
   },
-  "messages": {
-    "attachedImage": "附加图片",
-    "copyMessage": "复制消息",
-    "thinking": "思考中",
-    "copy": "复制",
-    "copied": "已复制！",
-    "scrollToBottom": "滚动到最新消息",
-    "processDetails": "过程详情",
-    "processStep": "{count} 步",
-    "processSteps": "{count} 步",
-    "processToolCall": "{count} 次工具调用",
-    "processToolCalls": "{count} 次工具调用"
-  },
   "tools": {
     "copyOutput": "复制输出",
     "openInPreview": "在预览中打开",
@@ -377,6 +364,20 @@
     "modelsMustBeObject": "models.json 必须是 JSON 对象。",
     "providersMustBeObject": "'providers' 必须是对象。"
   },
+  "messages": {
+    "attachedImage": "附加图片",
+    "copyMessage": "复制消息",
+    "thinking": "思考中",
+    "copy": "复制",
+    "copied": "已复制！",
+    "scrollToBottom": "滚动到最新消息",
+    "processDetails": "过程详情",
+    "processStep": "{count} 步",
+    "processSteps": "{count} 步",
+    "processToolCall": "{count} 次工具调用",
+    "processToolCalls": "{count} 次工具调用",
+    "turnFiles": "本轮修改的文件（{count}）："
+  },
   "onboarding": {
     "openProject": "打开一个项目以开始对话。",
     "configureKey": "配置 API 密钥或提供者以开始对话。"
@@ -420,7 +421,7 @@
     "refreshSessions": "刷新会话",
     "settings": "设置",
     "updateAvailable": "有可用更新",
-    "extensionUpdates": "扩展",
+    "extensionUpdates": "更新扩展",
     "extensionUpdatesAvailable": "扩展有可用更新",
     "extensionOpenInSettings": "在设置中打开扩展更新",
     "update": "更新",
