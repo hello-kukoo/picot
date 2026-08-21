@@ -19,7 +19,7 @@ import { setupComposerCommandMenu } from "./composer-command-menu.js";
 import { setupComposerImageAttachments } from "./composer-image-attachments.js";
 import { EphemeralChatView } from "./ephemeral-chat-view.js";
 import { setupExtensionUpdateIndicator } from "./extension-update-indicator.js";
-import { createFilePreviewFollow } from "./file-preview-follow.js";
+import { createFilePreviewFollow, isWriteTool, pathFromToolArgs } from "./file-preview-follow.js";
 import { FilePreviewPanel } from "./file-preview-panel.js";
 import { GitClient } from "./git-client.js";
 import { GitPanel } from "./git-panel.js";
@@ -46,6 +46,7 @@ import {
   getWorkspacePathForPort,
   isExpectedMirrorSession,
   shouldSuppressFileBrowserLoad,
+  shouldSuppressFileBrowserRefresh,
 } from "./session/routing.js";
 import { anchorHistoryToBottom } from "./session/scroll-anchor.js";
 import { setupSessionInfo } from "./session/session-info.js";
@@ -110,6 +111,7 @@ import {
   TerminalTab,
 } from "./terminal-tab.js";
 import { applyTheme, getCurrentTheme, themes } from "./themes.js";
+import { renderTurnFileChips } from "./turn-file-chips.js";
 import { setupAtFileMention } from "./ui/at-file-mention.js";
 import { DialogHandler } from "./ui/dialogs.js";
 import { setupMessagesInsets } from "./ui/layout-insets.js";
@@ -1163,12 +1165,59 @@ const filePreviewPanel = new FilePreviewPanel({
 });
 // Follow the agent's write-tool calls so the preview panel hot-reloads the
 // file on disk (HTML iframes pick up edits without manual reopening).
+// A burst of write tools (multi-file apply_patch, several writes in one
+// turn) coalesces into one sidebar listing reload; only refresh a listing
+// that is already rendered so a never-opened browser is not force-loaded.
+let fileBrowserWorkspacePath = null;
+let fileBrowserWorkspacePort = null;
+let fileBrowserRefreshTimer = null;
+
+function cancelFileBrowserRefresh() {
+  if (fileBrowserRefreshTimer) {
+    clearTimeout(fileBrowserRefreshTimer);
+    fileBrowserRefreshTimer = null;
+  }
+}
+
+function scheduleFileBrowserRefresh() {
+  if (!fileBrowser.currentPath) return;
+  if (
+    shouldSuppressFileBrowserRefresh({
+      pendingWorkspace: pendingFileBrowserWorkspace,
+      currentWorkspacePath: getCurrentWorkspacePath(),
+      fileBrowserWorkspacePath,
+      currentPort: getCurrentPort(),
+      fileBrowserWorkspacePort,
+    })
+  ) {
+    return;
+  }
+  cancelFileBrowserRefresh();
+  fileBrowserRefreshTimer = setTimeout(() => {
+    fileBrowserRefreshTimer = null;
+    if (!fileBrowser.currentPath) return;
+    if (
+      shouldSuppressFileBrowserRefresh({
+        pendingWorkspace: pendingFileBrowserWorkspace,
+        currentWorkspacePath: getCurrentWorkspacePath(),
+        fileBrowserWorkspacePath,
+        currentPort: getCurrentPort(),
+        fileBrowserWorkspacePort,
+      })
+    ) {
+      return;
+    }
+    fileBrowser.refresh().catch(() => {});
+  }, 500);
+}
 const filePreviewFollow = createFilePreviewFollow({
   panel: filePreviewPanel,
   getWorkspacePath: async () => getCurrentWorkspacePath() || "",
+  onWriteApplied: (rawPath) => {
+    scheduleFileBrowserRefresh();
+    state.addTurnWrite(rawPath);
+  },
 });
-let fileBrowserWorkspacePath = null;
-let fileBrowserWorkspacePort = null;
 
 // ── Ephemeral chats (Side Chat + Quick Chat) + window close coordination ─────
 function confirmEphemeralDiscard(_risks, _reason) {
@@ -2236,6 +2285,13 @@ messagesContainer.addEventListener("previewfile", (event) => {
   const path = event.detail?.path;
   if (path) void filePreviewFollow.openPath(path).catch(() => {});
 });
+// Turn file chips live in the transcript too; clicking one opens the file.
+messagesContainer.addEventListener("click", (event) => {
+  const chip = event.target.closest(".turn-file-chip");
+  if (!chip?.dataset.path) return;
+  event.stopPropagation();
+  void filePreviewFollow.openPath(chip.dataset.path).catch(() => {});
+});
 messagesContainer.addEventListener("messagefork", async (e) => {
   const { entryId } = e.detail || {};
   if (!entryId) return;
@@ -2836,6 +2892,21 @@ function handleAgentEnd(event = null) {
   // handleAgentSettled covers the reconnect fallback when agent_end is
   // never re-delivered.
   collapseCompletedTurn();
+  appendTurnFileChips();
+}
+
+let lastTurnAssistantElement = null;
+function appendTurnFileChips() {
+  const writes = state.settleTurnWrites();
+  if (!writes.length) {
+    lastTurnAssistantElement = null;
+    return;
+  }
+  const host = lastTurnAssistantElement?.isConnected ? lastTurnAssistantElement : null;
+  lastTurnAssistantElement = null;
+  if (!host) return;
+  const row = renderTurnFileChips(writes);
+  if (row) host.insertAdjacentElement("afterend", row);
 }
 
 let currentStreamingThinking = "";
@@ -2965,6 +3036,10 @@ function handleMessageEnd(message, eventSessionFile = null) {
       usage,
       currentStreamingThinking,
     );
+    // Remember the turn's latest assistant element; agent_end settles the
+    // turn's writes and renders the chips row under it (a turn may contain
+    // several assistant messages — only the last one gets the row).
+    lastTurnAssistantElement = currentStreamingElement;
     currentStreamingElement = null;
     currentStreamingThinking = "";
 
@@ -3032,7 +3107,9 @@ function handleToolExecutionEnd(event) {
 
   toolCardRenderer.finalizeToolCard(toolCallId, result, isError);
   // Follow the agent's writes so the live preview (e.g. HTML iframes)
-  // reflects disk changes without manual reopening.
+  // reflects disk changes without manual reopening. The callback records
+  // successful in-workspace writes for the turn-end file chips row (it
+  // already gates on success + workspace containment).
   void filePreviewFollow.onToolEnd(event).catch(() => {});
   // rpiv-todo emits `todo` tool results whose `details` carry the reducer
   // snapshot. Mirror the latest snapshot onto the floating panel.
@@ -4083,8 +4160,23 @@ async function applySessionUiProfile(sessionFile) {
   // global config or another session.
   restoreSessionUiState(sessionFile);
   const generation = uiSessionGeneration;
+  const reported = {
+    modelId: currentModelId,
+    thinkingLevel: currentThinkingLevel || "off",
+  };
   const profile = await sessionUiState.loadProfile();
-  if (!profile || generation !== uiSessionGeneration) return;
+  if (generation !== uiSessionGeneration) return;
+  if (!profile) {
+    // Snapshot-on-first-see: pi restores sessions that never had an explicit
+    // model/thinking change from the GLOBAL defaults, and pi's setModel /
+    // setThinkingLevel also rewrite those defaults. So changing model/thinking
+    // in session A silently drifts the defaults that a never-customized
+    // session B restores from. Snapshotting every viewed session's reported
+    // state pins it: the next restore replays this profile instead of
+    // inheriting whatever default session A last wrote.
+    snapshotReportedProfile(reported);
+    return;
+  }
   const model = availableModels.find(
     (entry) => entry.provider === profile.provider && entry.id === profile.modelId,
   );
@@ -4096,11 +4188,20 @@ async function applySessionUiProfile(sessionFile) {
       `${profile.provider}/${profile.modelId}`,
     );
   }
-  const modelResult = await rpcCommand(
-    { type: "set_model", provider: profile.provider, modelId: profile.modelId },
-    null,
-    true,
-  );
+  // Short-circuit when the restored state already matches the profile: pi
+  // restored this session's own settings (or the snapshot equals them), so
+  // replaying set_model/set_thinking_level would only rewrite pi's GLOBAL
+  // defaults with this session's values for no user-visible gain.
+  const modelAlreadyMatches = reported.modelId === profile.modelId;
+  const thinkingAlreadyMatches = reported.thinkingLevel === profile.thinkingLevel;
+  if (modelAlreadyMatches && thinkingAlreadyMatches) return;
+  const modelResult = modelAlreadyMatches
+    ? { success: true, data: null }
+    : await rpcCommand(
+        { type: "set_model", provider: profile.provider, modelId: profile.modelId },
+        null,
+        true,
+      );
   // The user may have switched sessions while set_model was in flight. If so,
   // abandon this restore so it cannot overwrite the now-active session's UI.
   if (generation !== uiSessionGeneration) return;
@@ -4117,7 +4218,7 @@ async function applySessionUiProfile(sessionFile) {
       updateTokenUsage();
     }
   }
-  if (profile.thinkingLevel) {
+  if (profile.thinkingLevel && !thinkingAlreadyMatches) {
     const thinkingResult = await rpcCommand(
       { type: "set_thinking_level", level: profile.thinkingLevel },
       null,
@@ -4128,7 +4229,24 @@ async function applySessionUiProfile(sessionFile) {
       currentThinkingLevel = thinkingResult.data?.level || profile.thinkingLevel;
       updateThinkingBtn();
     }
+    // Re-pinning after a successful replay keeps the profile's updated_at
+    // fresh and captures any clamping the runtime applied, so the next
+    // restore replays exactly what this session last showed.
+    if (generation === uiSessionGeneration) saveCurrentSessionProfile();
   }
+}
+
+function snapshotReportedProfile(reported) {
+  // Only pin when the model registry can resolve a provider for the reported
+  // id; a cold-start race (mirror_sync before /api/models) simply skips this
+  // snapshot and retries on the next sync.
+  const model = availableModels.find((entry) => entry.id === reported.modelId);
+  if (!model?.provider || !model.id) return;
+  void sessionUiState.saveProfile({
+    provider: model.provider,
+    modelId: model.id,
+    thinkingLevel: reported.thinkingLevel,
+  });
 }
 
 async function resetUiForNewSession() {
@@ -4139,6 +4257,8 @@ async function resetUiForNewSession() {
     null;
   state.reset();
   clearConversationRenderers();
+  filePreviewFollow.clear();
+  cancelFileBrowserRefresh();
   renderWorkspaceWelcome();
   sidebar.clearActive();
   resolveAndApplyFocus();
@@ -4337,6 +4457,7 @@ async function handleSessionSelectImpl(session, project) {
   // Pending write-tool paths belong to the previous session's run; don't
   // let a stale toolCallId surface another session's file.
   filePreviewFollow.clear();
+  cancelFileBrowserRefresh();
   // An explicit session selection supersedes any pending deferred switch.
   // Leaving it set would (a) suppress all live rendering for the newly
   // selected session via the `pendingSessionSwitchPath` guard in
@@ -4620,6 +4741,7 @@ async function switchSession(sessionFile, session = null, project = null) {
     // call below will rehydrate from the new session's history if applicable.
     todoMirrorPanel.clear();
     filePreviewFollow.clear();
+    cancelFileBrowserRefresh();
 
     if (sessionFile && session) {
       messageRenderer.renderSystemMessage(t("status.loadingSession"));
@@ -4971,6 +5093,29 @@ function splitFinalAssistantBlocks(content) {
  * targetContainer they land inside the turn's "Process details" group body
  * instead of the main messages flow. Returns the number of cards created.
  */
+function historyTurnWrites(messages, start, end, toolResults) {
+  // Mirror the live path: successful write-tool paths for the turn, in
+  // first-write order, deduplicated. Tool args carry raw paths (often
+  // workspace-relative); chips route through openPath which resolves them
+  // the same way the live onWriteApplied path does.
+  const writes = [];
+  const seen = new Set();
+  for (let i = start; i < end; i++) {
+    const msg = messages[i];
+    if (msg?.role !== "assistant" || !Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (block?.type !== "toolCall" || !isWriteTool(block.name)) continue;
+      const result = toolResults.get(block.id);
+      if (result?.isError) continue;
+      const path = pathFromToolArgs(block.arguments ?? {});
+      if (!path || seen.has(path)) continue;
+      seen.add(path);
+      writes.push({ filePath: path });
+    }
+  }
+  return writes;
+}
+
 function renderHistoryToolCallBlocks(blocks, toolResults, targetContainer) {
   let count = 0;
   for (const block of blocks) {
@@ -5101,12 +5246,19 @@ function renderSessionHistory(entries, { searchQuery = "" } = {}) {
           );
         }
         if (answerBlocks.length > 0) {
-          messageRenderer.renderAssistantMessage(
+          const finalEl = messageRenderer.renderAssistantMessage(
             { content: answerBlocks, usage: msg.usage, timestamp: msg.timestamp },
             false,
             true,
           );
           assistantCount++;
+          // Rebuild the turn's written-file chips from history so returning to
+          // a session shows the same affordance the live turn had.
+          if (finalEl) {
+            const writes = historyTurnWrites(messages, bodyStart, end, toolResults);
+            const row = renderTurnFileChips(writes);
+            if (row) finalEl.insertAdjacentElement("afterend", row);
+          }
         }
         if (msg.usage?.input) {
           lastInputTokens = msg.usage.input + (msg.usage.cacheRead || 0);

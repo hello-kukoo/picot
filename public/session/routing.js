@@ -1,3 +1,6 @@
+// ABOUTME: Pure helpers for session-port routing, mirror-sync scoping, and workspace transitions.
+// ABOUTME: Gating predicates determine when cross-workspace file loads and UI updates must be deferred.
+
 export function findPortForSession(instances, sessionFile, fallbackPort) {
   const match = Array.isArray(instances)
     ? instances.find((instance) => instance?.sessionFile === sessionFile)
@@ -98,4 +101,37 @@ export function confirmDeferredFileBrowserWorkspace(pendingWorkspace, sessionFil
  */
 export function shouldSuppressFileBrowserLoad(pendingWorkspace) {
   return pendingWorkspace != null;
+}
+
+/**
+ * Whether a debounced or background file browser refresh should be suppressed.
+ * Refreshing with an absolute path during a cross-workspace switch or port
+ * transition causes 403 outsideWorkspace against the wrong server. Suppress if:
+ * 1. A cross-workspace switch is pending (pendingWorkspace is active)
+ * 2. Current workspace path does not match the loaded file browser workspace
+ * 3. Current port does not match the loaded file browser port
+ */
+export function shouldSuppressFileBrowserRefresh({
+  pendingWorkspace,
+  currentWorkspacePath,
+  fileBrowserWorkspacePath,
+  currentPort,
+  fileBrowserWorkspacePort,
+} = {}) {
+  if (shouldSuppressFileBrowserLoad(pendingWorkspace)) return true;
+  const currentNormalized =
+    typeof currentWorkspacePath === "string" ? currentWorkspacePath.trim() : "";
+  const loadedNormalized =
+    typeof fileBrowserWorkspacePath === "string" ? fileBrowserWorkspacePath.trim() : "";
+  if (loadedNormalized && currentNormalized && loadedNormalized !== currentNormalized) {
+    return true;
+  }
+  if (
+    fileBrowserWorkspacePort != null &&
+    currentPort != null &&
+    fileBrowserWorkspacePort !== currentPort
+  ) {
+    return true;
+  }
+  return false;
 }

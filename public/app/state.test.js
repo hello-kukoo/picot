@@ -147,6 +147,8 @@ test("reset clears all state and notifies once", () => {
   sm.addToolExecution("t", { toolName: "T", args: {} });
   sm.setStreaming(true);
   sm.setStreamingMessage({ content: "..." });
+  sm.addTurnWrite("a.txt");
+  sm.addTurnWrite("b.txt");
 
   sm.reset();
 
@@ -154,8 +156,36 @@ test("reset clears all state and notifies once", () => {
   expect(sm.toolExecutions.size).toBe(0);
   expect(sm.isStreaming).toBe(false);
   expect(sm.currentStreamingMessage).toBe(null);
+  expect(sm.turnWrites).toEqual([]);
   // addMessage + addTool + setStreaming + setStreamingMessage + reset
   expect(notified).toBe(5);
+});
+
+test("addTurnWrite dedupes by filePath and appends to turnWrites", () => {
+  const sm = new StateManager();
+  sm.addTurnWrite("a.txt");
+  sm.addTurnWrite("a.txt");
+  sm.addTurnWrite("b.txt");
+  expect(sm.turnWrites.map((e) => e.filePath)).toEqual(["a.txt", "b.txt"]);
+});
+
+test("addTurnWrite ignores empty and whitespace file paths", () => {
+  const sm = new StateManager();
+  sm.addTurnWrite("");
+  sm.addTurnWrite("   ");
+  expect(sm.turnWrites).toEqual([]);
+});
+
+test("settleTurnWrites returns copy and clears turnWrites", () => {
+  const sm = new StateManager();
+  sm.addTurnWrite("a.txt");
+  sm.addTurnWrite("b.txt");
+  const writes = sm.settleTurnWrites();
+  expect(writes.map((e) => e.filePath)).toEqual(["a.txt", "b.txt"]);
+  expect(sm.turnWrites).toEqual([]);
+  // Returned array must not alias internal state.
+  writes.push({ toolCallId: null, filePath: "leak.txt" });
+  expect(sm.turnWrites).toEqual([]);
 });
 
 test("notifyListeners invokes every registered listener", () => {

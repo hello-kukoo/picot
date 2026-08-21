@@ -1,3 +1,6 @@
+// ABOUTME: Unit tests for session-port routing, mirror-sync scoping, and workspace transitions.
+// ABOUTME: Verifies deferral and suppression logic during cross-workspace session switches.
+
 import { describe, expect, test } from "vitest";
 import * as sessionRouting from "./routing.js";
 
@@ -169,4 +172,71 @@ test("does not suppress file browser loads without a pending switch", () => {
     "/work/current",
   );
   expect(sessionRouting.shouldSuppressFileBrowserLoad(sameWorkspace)).toBe(false);
+});
+
+describe("shouldSuppressFileBrowserRefresh", () => {
+  test("suppresses refresh while a cross-workspace switch is pending", () => {
+    const pending = sessionRouting.deferFileBrowserWorkspace(
+      "/history/new.jsonl",
+      "/work/new",
+      "/work/old",
+    );
+    expect(
+      sessionRouting.shouldSuppressFileBrowserRefresh({
+        pendingWorkspace: pending,
+        currentWorkspacePath: "/work/new",
+        fileBrowserWorkspacePath: "/work/old",
+        currentPort: 47821,
+        fileBrowserWorkspacePort: 47821,
+      }),
+    ).toBe(true);
+  });
+
+  test("suppresses refresh when current workspace path diverges from loaded file browser path", () => {
+    expect(
+      sessionRouting.shouldSuppressFileBrowserRefresh({
+        pendingWorkspace: null,
+        currentWorkspacePath: "/work/new",
+        fileBrowserWorkspacePath: "/work/old",
+        currentPort: 47821,
+        fileBrowserWorkspacePort: 47821,
+      }),
+    ).toBe(true);
+  });
+
+  test("suppresses refresh when current port diverges from loaded file browser port", () => {
+    expect(
+      sessionRouting.shouldSuppressFileBrowserRefresh({
+        pendingWorkspace: null,
+        currentWorkspacePath: "/work/same",
+        fileBrowserWorkspacePath: "/work/same",
+        currentPort: 47822,
+        fileBrowserWorkspacePort: 47821,
+      }),
+    ).toBe(true);
+  });
+
+  test("allows refresh when workspaces and ports match with no pending switch", () => {
+    expect(
+      sessionRouting.shouldSuppressFileBrowserRefresh({
+        pendingWorkspace: null,
+        currentWorkspacePath: "/work/same",
+        fileBrowserWorkspacePath: "/work/same",
+        currentPort: 47821,
+        fileBrowserWorkspacePort: 47821,
+      }),
+    ).toBe(false);
+  });
+
+  test("allows refresh when paths or ports are uninitialized / null", () => {
+    expect(
+      sessionRouting.shouldSuppressFileBrowserRefresh({
+        pendingWorkspace: null,
+        currentWorkspacePath: "/work/same",
+        fileBrowserWorkspacePath: null,
+        currentPort: 47821,
+        fileBrowserWorkspacePort: null,
+      }),
+    ).toBe(false);
+  });
 });

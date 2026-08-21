@@ -9,6 +9,10 @@ export class StateManager {
     this.isStreaming = false;
     this.currentStreamingMessage = null;
     this.listeners = new Set();
+    // Files successfully written by the in-flight agent turn, in first-write
+    // order. Settled into the final assistant message at agent_end and used
+    // to render the per-turn file chips row.
+    this.turnWrites = [];
   }
 
   addListener(callback) {
@@ -53,6 +57,19 @@ export class StateManager {
     this.notifyListeners();
   }
 
+  addTurnWrite(filePath) {
+    const normalized = String(filePath || "").trim();
+    if (!normalized) return;
+    if (this.turnWrites.some((entry) => entry.filePath === normalized)) return;
+    this.turnWrites.push({ toolCallId: null, filePath: normalized });
+  }
+
+  settleTurnWrites() {
+    const writes = this.turnWrites.slice();
+    this.turnWrites = [];
+    return writes;
+  }
+
   addToolExecution(toolCallId, data) {
     this.toolExecutions.set(toolCallId, {
       toolCallId,
@@ -87,6 +104,7 @@ export class StateManager {
     this.toolExecutions.clear();
     this.isStreaming = false;
     this.currentStreamingMessage = null;
+    this.turnWrites = [];
     this.notifyListeners();
   }
 }
