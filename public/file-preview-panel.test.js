@@ -321,6 +321,29 @@ describe("FilePreviewPanel", () => {
     p.destroy();
   });
 
+  test("revealWrite silently reloads an existing clean tab without stealing focus", async () => {
+    const p = createPanel();
+    await p.openFile("/test/workspace/README.md");
+    // User looks at another file while the agent updates README.md.
+    await p.openFile("/test/workspace/other.md");
+    const activeId = p.state.getActiveTab().id;
+    const contentCallsBefore = global.fetch.mock.calls.filter(([url]) =>
+      String(url).startsWith("/api/files/content"),
+    ).length;
+
+    await p.revealWrite("/test/workspace/README.md");
+
+    // No duplicate tab and no focus steal: the active tab stays untouched.
+    expect(p.state.getTabs()).toHaveLength(2);
+    expect(p.state.getActiveTab().id).toBe(activeId);
+    // The silent reload re-fetched the file content from disk.
+    const contentCallsAfter = global.fetch.mock.calls.filter(([url]) =>
+      String(url).startsWith("/api/files/content"),
+    ).length;
+    expect(contentCallsAfter).toBeGreaterThan(contentCallsBefore);
+    p.destroy();
+  });
+
   test("opens html tabs with the editor toolbar open by default", async () => {
     const p = createPanel();
     const tab = await p.openFile("/test/workspace/index.html");

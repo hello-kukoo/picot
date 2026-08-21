@@ -207,10 +207,21 @@ export class FilePreviewPanel {
     const normalizedPath = normalizeLocalPath(filePath);
     if (!normalizedPath) return null;
     const existing = this.state.getTabs().find((tab) => tab.filePath === normalizedPath);
-    if (existing?.dirty) return this.openFile(normalizedPath);
-    const tab = await this.openFile(normalizedPath);
-    if (existing) await this._reloadTab(existing.id, { skipConfirmation: true });
-    return tab;
+    if (!existing) {
+      // New file: the turn-end chips row under the assistant message is the
+      // entry point; writes never force the preview panel open.
+      return null;
+    }
+    if (existing.dirty) {
+      // The user is editing this file; focus it so the concurrent agent write
+      // is noticed, but never overwrite unsaved edits.
+      return this.openFile(normalizedPath);
+    }
+    // Existing clean tab: silently reload from disk (hot-refresh an HTML
+    // iframe, refresh text) without forcing the panel open or stealing the
+    // active tab.
+    await this._reloadTab(existing.id, { skipConfirmation: true });
+    return this.state.getTab(existing.id);
   }
 
   async closePanel() {

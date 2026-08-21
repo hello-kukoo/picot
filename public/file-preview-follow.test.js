@@ -113,4 +113,43 @@ describe("createFilePreviewFollow", () => {
     await follow.openPath("/ws/readme.md");
     expect(opened).toEqual(["/ws/readme.md"]);
   });
+
+  test("notifies onWriteApplied with the raw and preview paths", async () => {
+    const applied = [];
+    const follow = createFilePreviewFollow({
+      panel: { revealWrite: async (path) => ({ filePath: path }) },
+      getWorkspacePath: async () => "/ws",
+      onWriteApplied: (raw, previewPath) => applied.push([raw, previewPath]),
+    });
+    follow.onToolStart({ toolCallId: "t1", toolName: "write", args: { path: "/ws/new.js" } });
+    await follow.onToolEnd({ toolCallId: "t1" });
+    expect(applied).toEqual([["/ws/new.js", "/ws/new.js"]]);
+  });
+
+  test("notifies onWriteApplied even without a panel", async () => {
+    const applied = [];
+    const follow = createFilePreviewFollow({
+      getWorkspacePath: async () => "/ws",
+      onWriteApplied: (raw, previewPath) => applied.push([raw, previewPath]),
+    });
+    follow.onToolStart({ toolCallId: "t1", toolName: "edit", args: { file_path: "src/a.ts" } });
+    await follow.onToolEnd({ toolCallId: "t1" });
+    expect(applied).toEqual([["src/a.ts", "/ws/src/a.ts"]]);
+  });
+
+  test("does not notify for failed or out-of-workspace writes", async () => {
+    const applied = [];
+    const follow = createFilePreviewFollow({
+      panel: { revealWrite: async (path) => ({ filePath: path }) },
+      getWorkspacePath: async () => "/ws",
+      onWriteApplied: (raw, previewPath) => applied.push([raw, previewPath]),
+    });
+    follow.onToolStart({ toolCallId: "t1", toolName: "write", args: { path: "/ws/a.js" } });
+    await follow.onToolEnd({ toolCallId: "t1", isError: true });
+    follow.onToolStart({ toolCallId: "t2", toolName: "write", args: { path: "/elsewhere/a.js" } });
+    await follow.onToolEnd({ toolCallId: "t2" });
+    follow.onToolStart({ toolCallId: "t3", toolName: "read", args: { path: "/ws/b.js" } });
+    await follow.onToolEnd({ toolCallId: "t3" });
+    expect(applied).toEqual([]);
+  });
 });
