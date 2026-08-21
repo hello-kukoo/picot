@@ -892,8 +892,15 @@ design spec 要列出可见/省略字段、图标、分隔线和截断，测试�
    渲染为沙箱 iframe（`sandbox="allow-scripts allow-forms"`，无 `allow-same-origin`，
    `referrerpolicy=no-referrer`），脚本运行在不透明 origin，无法接触 Picot WebView；
    edit 模式用 CodeMirror 编辑源码。`file-preview-follow.js` 跟随 write 类工具的
-   成功结果，通过 `panel.revealWrite()` 重载干净 tab（脏 tab 只聚焦不覆盖），
-   使 live iframe 预览自动反映磁盘变化；工具卡 args preview 的文件路径渲染为
+   成功结果，但写入从不强制撑开 preview 面板：已有干净 tab 仅静默重载（iframe 热刷新、
+   不偷焦点），脏 tab 只聚焦不覆盖，新文件不自动打开。同一次回调
+   `onWriteApplied(raw, previewPath)` 供 app 层消费——仅在写入成功且路径可归入当前
+   工作区时触发，当前用于防抖刷新文件浏览器侧栏（仅刷新已渲染的列表；跨工作区/
+   端口漂移时由 `session/routing.js::shouldSuppressFileBrowserRefresh` 抑制，调度与
+   触发双重点检查）与记录回合写入清单。回合写入清单在 `agent_end` 结算，渲染为最终
+   assistant 消息下方的文件 chips 行（`turn-file-chips.js`，点击经 `openPath` 打开
+   预览）；历史回放时从 messages 的 toolCall blocks + toolResults 重建同一 chips 行。
+   工具卡 args preview 的文件路径渲染为
    `.tool-file-ref` 按钮，经冒泡的 `previewfile` 事件走同一 follow 模块打开预览。
    可编辑 Markdown / 文本 / HTML 首次打开时显示 editor toolbar；Wrap 偏好首次默认为开启，
    但显式保存的用户选择优先。toolbar 下方只显示当前文件相对 canonical workspace root 的路径，

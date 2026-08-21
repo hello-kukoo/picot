@@ -18,28 +18,6 @@ Picot ships a known-good build of the `pi` runtime **inside the .app bundle**, s
 
 You **do not** need to install the `pi` CLI separately — Picot bundles its own pi runtime.
 
-### macOS unsigned release notice
-
-Picot currently ships macOS builds without Apple Developer ID signing/notarization. Expected Gatekeeper behavior:
-
-`"Picot" cannot be opened because the developer cannot be verified.`
-
-**To allow it:**
-
-1. Drag `Picot.app` into `/Applications`
-2. Right-click → **Open**
-3. If blocked: **System Settings → Privacy & Security → Open Anyway**
-
-<p align="center">
-  <img width="420" alt="macOS Gatekeeper warning" src="https://github.com/user-attachments/assets/02e9cb30-9314-4c47-bc61-87d9f37b6848" />
-</p>
-
-Then click **Done**:
-
-<p align="center">
-  <img width="960" alt="Allow app in macOS security settings" src="https://github.com/user-attachments/assets/42ada9ae-b43d-47f1-bf38-ea38c34beb4f" />
-</p>
-
 ---
 
 ## What it does
