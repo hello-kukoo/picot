@@ -30,6 +30,7 @@ describe("isLoopbackOnlyApiRequest", () => {
   it.each([
     ["POST", "/api/rpc"],
     ["PUT", "/api/files/content"],
+    ["POST", "/api/paste-offload"],
     ["POST", "/api/open"],
     ["POST", "/api/sessions/delete-batch"],
     ["POST", "/api/sessions/rename"],

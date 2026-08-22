@@ -89,6 +89,7 @@ import {
 } from "./oauth-login-operations.ts";
 import { getOpenCommand, resolveHomePath } from "./open-path.ts";
 import { buildPackageSkillInventory } from "./package-skill-inventory.ts";
+import { writePasteOffloadFile } from "./paste-offload.ts";
 import { isPathWithinRoot } from "./path-safety.ts";
 import {
   buildTelegramDmConfig,
@@ -3515,6 +3516,30 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
+    if (urlPath === "/api/paste-offload" && req.method === "POST") {
+      try {
+        const body = await readBoundedJsonBody(req, 4 * 1024 * 1024);
+        const content = (body as { content?: unknown })?.content;
+        if (typeof content !== "string") {
+          sendJsonError(res, 400, "content is required");
+          return;
+        }
+        const currentCtx = globalState.getLatestCtx?.() ?? latestCtx;
+        const workspaceRoot = currentCtx?.cwd;
+        if (!workspaceRoot) {
+          sendJsonError(res, 503, "No active workspace", "workspaceUnavailable");
+          return;
+        }
+        const result = writePasteOffloadFile(workspaceRoot, content);
+        sendJsonOk(res, { path: result.relativePath });
+      } catch (error) {
+        const status = error instanceof BoundedBodyError ? 413 : 400;
+        res.writeHead(status, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, status, error: errMessage(error) }));
+      }
+      return;
+    }
+
     if (urlPath === "/api/skill-install-scan" && req.method === "POST") {
       try {
         authorizeSkillInstallInternalRequest(
@@ -6114,7 +6139,21 @@ export default function (pi: ExtensionAPI) {
           });
         }
       } else {
-        bodyText = await req.text();
+        const maxBodyBytes = url.pathname === "/api/paste-offload" ? 4 * 1024 * 1024 : null;
+        if (maxBodyBytes !== null) {
+          try {
+            const body = await readBoundedJsonBody(req, maxBodyBytes);
+            bodyText = JSON.stringify(body);
+          } catch (error) {
+            const status = error instanceof BoundedBodyError ? 413 : 400;
+            return new Response(JSON.stringify({ ok: false, status, error: errMessage(error) }), {
+              status,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+        } else {
+          bodyText = await req.text();
+        }
       }
     }
 

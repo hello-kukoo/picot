@@ -110,7 +110,11 @@
     "expandAllTools": "展开所有工具",
     "expandAllToolsDesc": "展开所有工具卡片",
     "collapseAllTools": "折叠所有工具",
-    "collapseAllToolsDesc": "折叠所有工具卡片"
+    "collapseAllToolsDesc": "折叠所有工具卡片",
+    "pasteDetected": "已粘贴文本（{size}）",
+    "pasteAsFile": "作为文件附加",
+    "keepInline": "保持内联",
+    "pasteOffloadFailed": "无法保存粘贴的文本"
   },
   "tools": {
     "copyOutput": "复制输出",

@@ -4,6 +4,7 @@
 const LOOPBACK_ONLY_ROUTES = new Set([
   "POST /api/rpc",
   "PUT /api/files/content",
+  "POST /api/paste-offload",
   "POST /api/open",
   "POST /api/sessions/delete-batch",
   "POST /api/sessions/rename",

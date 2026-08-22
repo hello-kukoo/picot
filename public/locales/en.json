@@ -110,7 +110,11 @@
     "expandAllTools": "Expand All Tools",
     "expandAllToolsDesc": "Expand all tool cards",
     "collapseAllTools": "Collapse All Tools",
-    "collapseAllToolsDesc": "Collapse all tool cards"
+    "collapseAllToolsDesc": "Collapse all tool cards",
+    "pasteDetected": "Pasted text ({size})",
+    "pasteAsFile": "Attach as file",
+    "keepInline": "Keep inline",
+    "pasteOffloadFailed": "Could not save pasted text"
   },
   "tools": {
     "copyOutput": "Copy output",

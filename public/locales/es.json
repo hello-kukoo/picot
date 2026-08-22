@@ -110,7 +110,11 @@
     "expandAllTools": "Expandir todas las herramientas",
     "expandAllToolsDesc": "Expandir todas las tarjetas de herramientas",
     "collapseAllTools": "Colapsar todas las herramientas",
-    "collapseAllToolsDesc": "Colapsar todas las tarjetas de herramientas"
+    "collapseAllToolsDesc": "Colapsar todas las tarjetas de herramientas",
+    "pasteDetected": "Texto pegado ({size})",
+    "pasteAsFile": "Adjuntar como archivo",
+    "keepInline": "Mantener en línea",
+    "pasteOffloadFailed": "No se pudo guardar el texto pegado"
   },
   "tools": {
     "copyOutput": "Copiar salida",

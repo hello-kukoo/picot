@@ -4,6 +4,7 @@
 import { setupVoiceInput } from "./app/voice-input.js";
 import { setupComposerCommandMenu } from "./composer-command-menu.js";
 import { setupComposerImageAttachments } from "./composer-image-attachments.js";
+import { setupComposerPasteOffload } from "./composer-paste-offload.js";
 import { onLocaleChange, t } from "./i18n.js";
 import { createIcon } from "./icons.js";
 import { processImageFile, processImagePayload } from "./image-attachments.js";
@@ -180,6 +181,24 @@ export class EphemeralChatView {
 
     this._destroyVoice = setupVoiceInput({ micBtn: this._micBtn, messageInput: this._textarea });
 
+    this._pasteOffload = setupComposerPasteOffload({
+      textarea: this._textarea,
+      container: this._composer,
+      document: doc,
+      offload: async (content) => {
+        const response = await fetch("/api/paste-offload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content }),
+        });
+        const result = await response.json().catch(() => null);
+        if (!response.ok)
+          throw new Error(result?.error || `Paste offload failed: ${response.status}`);
+        return result?.path;
+      },
+      t,
+    });
+
     // Image attachments: attach button, native picker, paste/drop, previews.
     // Spec §Frontend Module Boundaries: any reused setup helper must return
     // an explicit cleanup function for the owning view.
@@ -296,6 +315,7 @@ export class EphemeralChatView {
     this.toolCardRenderer?.destroy();
     this.dialogHandler?.destroy();
     this._destroyVoice?.();
+    this._pasteOffload?.destroy();
     this._imageAttachments?.destroy();
     this._root.remove();
   }
@@ -303,7 +323,7 @@ export class EphemeralChatView {
   // ── Internals ───────────────────────────────────────────────────────────────
 
   _submit() {
-    if (this.destroyed || this._interactionLocked) return;
+    if (this.destroyed || this._interactionLocked || this._pasteOffload?.isBusy()) return;
     if (this.runtime.isStreaming) {
       this.runtime.abort();
       return;

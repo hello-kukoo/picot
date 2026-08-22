@@ -208,8 +208,10 @@ HTTP+WS server。该 server 是**进程作用域**的 —— 它在 `new_session
   自动补全，仅 loopback、且仅由窗口主会话 Pi 提供服务），加 `POST /api/rpc` 透传。
   `public/` 下的静态资源在 `/` 下分发。网络策略集中在
   `extensions/request-access.ts`，文件系统 containment 集中在
-  `extensions/path-safety.ts`；系统默认打开器在 `extensions/open-path.ts`
-  中按平台选择 `open` / `explorer.exe` / `xdg-open`，不经过 shell。
+  `extensions/path-safety.ts`；新增大段粘贴转存通过 loopback-only 的
+  `POST /api/paste-offload` 完成，服务端从当前 Pi context 派生 workspace，
+  写入 workspace 内 `.pi/tmp/` 并创建目录级自忽略文件；系统默认打开器在
+  `extensions/open-path.ts` 中按平台选择 `open` / `explorer.exe` / `xdg-open`，不经过 shell。
 - **WebSocket** 在 `/ws` —— 命令分发器。每个连接的客户端发 JSON 命令
   （`send_user_message`、`abort`、`set_model`、`set_thinking_level`、
   `switch_session`、`new_session`、`fork`、`list_models`、`list_auth`、
@@ -316,6 +318,12 @@ level 是 Picot 的 display profile，不改变 Pi 的全局 defaults；由 nati
 owner 的当前 workspace port 与 broker session route 派生实际 session path，并拒绝
 remote、错误 owner、过期 route 和浏览器提交的任意路径。authoritative mirror_sync
 到达后恢复 profile；新建且尚未有 session file 的任务继续使用 Pi 当前默认值。
+
+大段粘贴转存只发生在新消息发送前：主聊天、Side Chat 与 Quick Chat 的 composer
+显示确认 chip，用户确认后才把当前粘贴范围替换为 `@.pi/tmp/paste-*.txt`；
+写入失败或选择保持内联时，原文不变。历史 session 不做追溯转存或 JSONL 改写，
+其中的长 user message 只走前端视觉折叠。`.pi/tmp/.gitignore` 使用 Pi 同款
+`*` / `!.gitignore` 目录级自忽略约定。
 
 #### 三页签 Skills 资源边界
 

@@ -17,6 +17,7 @@ import { setupVoiceInput } from "./app/voice-input.js";
 import { resolveWebSocketUrl, WebSocketClient } from "./app/websocket-client.js";
 import { setupComposerCommandMenu } from "./composer-command-menu.js";
 import { setupComposerImageAttachments } from "./composer-image-attachments.js";
+import { setupComposerPasteOffload } from "./composer-paste-offload.js";
 import { EphemeralChatView } from "./ephemeral-chat-view.js";
 import { setupExtensionUpdateIndicator } from "./extension-update-indicator.js";
 import { createFilePreviewFollow, isWriteTool, pathFromToolArgs } from "./file-preview-follow.js";
@@ -3221,6 +3222,21 @@ const composerCard = document.getElementById("composer-card");
 // Uses the shared helper so the main chat and ephemeral chats stay in lockstep.
 // The file-tree drag handler (text/plain path mention) stays inline because it
 // is main-chat-only behavior; only the image portion delegates to the helper.
+const mainPasteOffload = setupComposerPasteOffload({
+  textarea: messageInput,
+  container: composerCard,
+  offload: async (content) => {
+    const response = await fetch("/api/paste-offload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(result?.error || `Paste offload failed: ${response.status}`);
+    return result?.path;
+  },
+  t,
+});
 const mainImageAttachments = setupComposerImageAttachments({
   document,
   composerCard,
@@ -3289,6 +3305,7 @@ function refreshSidebarAfterUserPrompt() {
 }
 
 function sendMessage() {
+  if (mainPasteOffload.isBusy()) return;
   if (!currentOnboardingState().canQuery) return;
 
   const message = messageInput.value.trim();

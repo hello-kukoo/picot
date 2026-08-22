@@ -110,7 +110,11 @@
     "expandAllTools": "すべてのツールを展開",
     "expandAllToolsDesc": "すべてのツールカードを展開する",
     "collapseAllTools": "すべてのツールを折りたたむ",
-    "collapseAllToolsDesc": "すべてのツールカードを折りたたむ"
+    "collapseAllToolsDesc": "すべてのツールカードを折りたたむ",
+    "pasteDetected": "貼り付けたテキスト（{size}）",
+    "pasteAsFile": "ファイルとして添付",
+    "keepInline": "インラインを維持",
+    "pasteOffloadFailed": "貼り付けたテキストを保存できませんでした"
   },
   "tools": {
     "copyOutput": "出力をコピー",
