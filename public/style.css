@@ -3803,6 +3803,48 @@ body {
   font-style: italic;
 }
 
+.message.user .message-content.user-message-collapsible {
+  position: relative;
+  max-height: calc(1.6em * 6 + var(--space-2) * 2);
+  overflow: hidden;
+}
+
+.message.user .message-content.user-message-collapsible.expanded {
+  max-height: none;
+  overflow: visible;
+}
+
+.message.user .message-content.user-message-collapsible:not(.expanded)::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2.5em;
+  background: linear-gradient(transparent, var(--user-bubble));
+  content: "";
+  pointer-events: none;
+}
+
+/* Expand/collapse toggle lives inside the toolbar row, before the timestamp.
+   Shares the .message-time visual language (size + dim colour); brightens
+   on hover like the copy button. */
+.message-user-collapse-toggle {
+  padding: var(--space-0-5) var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.message-user-collapse-toggle:hover,
+.message-user-collapse-toggle:focus-visible {
+  color: var(--text-primary);
+}
+
 /* Assistant — clean, no container */
 .message.assistant .message-content {
   background: none;
@@ -5596,38 +5638,13 @@ body.hide-thinking .thinking-block {
 
 /* Copy message button (below message) */
 
-/* Per-message action toolbar. Visibility is per-role: the user toolbar is
-   hover/focus-gated, the assistant toolbar is always visible. */
+/* Per-message action toolbar. Always visible for both roles — expand,
+   timestamp and copy stay on screen without a hover reveal. */
 .message-actions {
   display: flex;
   align-items: center;
   gap: var(--space-1-5);
   padding: var(--space-0-5) var(--space-1);
-  transition: opacity 0.15s var(--ease);
-}
-
-/* User toolbar: hidden by default. Visibility is JS-driven via a `.visible`
-   class (see _setupUserToolbarHover), because a long user message fills the
-   row width and a CSS :hover on the block never ends. :focus-within still
-   reveals it for keyboard users. */
-.message.user .message-actions {
-  opacity: 0;
-}
-
-.message.user .message-actions.visible,
-.message.user:focus-within .message-actions {
-  opacity: 1;
-}
-
-/* Assistant toolbar: always visible. */
-.message.assistant .message-actions {
-  opacity: 1;
-}
-
-@media (hover: none) {
-  .message.user .message-actions {
-    opacity: 1;
-  }
 }
 
 /* Timestamp + cost share one styling: same font size, colour, tabular numerals. */

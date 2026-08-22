@@ -8,6 +8,17 @@ import { onLocaleChange, t } from "../i18n.js";
 import { createIcon, setButtonIcon } from "../icons.js";
 import { renderMarkdown, renderStreamingMarkdown, renderUserMarkdown } from "./markdown.js";
 
+export const USER_MESSAGE_COLLAPSE_CHAR_THRESHOLD = 400;
+export const USER_MESSAGE_COLLAPSE_NEWLINE_THRESHOLD = 8;
+
+export function shouldCollapseUserMessage(text) {
+  if (typeof text !== "string" || text.length === 0) return false;
+  return (
+    text.length >= USER_MESSAGE_COLLAPSE_CHAR_THRESHOLD ||
+    (text.match(/\n/g)?.length ?? 0) >= USER_MESSAGE_COLLAPSE_NEWLINE_THRESHOLD
+  );
+}
+
 /**
  * Format a message timestamp for a chat log.
  *
@@ -77,6 +88,12 @@ export class MessageRenderer {
       });
       this.container.querySelectorAll(".thinking-label-text").forEach((el) => {
         el.textContent = t("messages.thinking");
+      });
+      this.container.querySelectorAll(".message-user-collapse-toggle").forEach((button) => {
+        button.textContent =
+          button.getAttribute("aria-expanded") === "true"
+            ? t("messages.collapse")
+            : t("messages.expand");
       });
       if (this.container.querySelector(".welcome")) {
         this.renderWelcome(this.lastWelcomeOptions || {});
@@ -203,14 +220,15 @@ export class MessageRenderer {
     }
     this._appendMarkup(content, renderUserMarkdown(message.content));
     div.appendChild(content);
+    const expandToggle = this._createUserCollapseToggle(content, message.content);
     const actions = this._createActionsBar({
       order: "user",
       timestamp: message.timestamp,
       copyable: Boolean((content.textContent || "").trim()),
+      expandToggle,
     });
     if (actions) {
       div.appendChild(actions);
-      this._setupUserToolbarHover(content, actions);
     }
     this.container.appendChild(div);
     this._setupCodeCopyButtons(div);
@@ -486,15 +504,22 @@ export class MessageRenderer {
 
   /**
    * Build the .message-actions toolbar row. `order` selects the slot layout:
-   *   - "user":      time, copy
+   *   - "user":      [expand], time, copy
    *   - "assistant": copy, time, usage (usage only when cost > 0)
-   * The time span is omitted when `formatMessageTime(timestamp)` returns "".
-   * The copy button is omitted when there is no copyable text (e.g. an
-   * image-only user message). The toolbar row itself is always returned
-   * (never null) so future actions still have a slot — per the design spec
-   * every rendered user message keeps its toolbar.
+   * The user slot order prepends the long-message expand toggle when one is
+   * supplied. The time span is omitted when `formatMessageTime(timestamp)`
+   * returns "". The copy button is omitted when there is no copyable text
+   * (e.g. an image-only user message). The toolbar row itself is always
+   * returned (never null) so future actions still have a slot — per the
+   * design spec every rendered user message keeps its toolbar.
    */
-  _createActionsBar({ order, timestamp = null, usage = null, copyable = true }) {
+  _createActionsBar({
+    order,
+    timestamp = null,
+    usage = null,
+    copyable = true,
+    expandToggle = null,
+  }) {
     const actions = document.createElement("div");
     actions.className = "message-actions";
     const timeLabel = formatMessageTime(timestamp);
@@ -508,6 +533,7 @@ export class MessageRenderer {
     };
     const copyBtn = copyable ? this._createCopyButton() : null;
     if (order === "user") {
+      if (expandToggle) actions.appendChild(expandToggle);
       if (timeLabel) actions.appendChild(timeSpan());
       if (copyBtn) actions.appendChild(copyBtn);
     } else {
@@ -524,35 +550,26 @@ export class MessageRenderer {
   }
 
   /**
-   * Show/hide the user message toolbar on hover. The toolbar visibility is
-   * JS-driven (not pure CSS :hover) because a long user message fills the
-   * row width, so `:hover` on the message block never actually ends when the
-   * pointer moves to the empty side — the toolbar would never hide. Here we
-   * scope the hover to the bubble (.message-content) and the toolbar itself,
-   * with a tiny grace timer so moving between the two does not flicker.
-   * `:focus-within` still reveals the toolbar via CSS for keyboard users.
+   * Create the expand/collapse toggle for a collapsible long user message,
+   * or return null when the message is short enough to stay inline. The
+   * caller places the toggle inside the .message-actions toolbar, before
+   * the timestamp; click handling toggles `.expanded` on the content.
    */
-  _setupUserToolbarHover(contentEl, actionsEl) {
-    if (!contentEl || !actionsEl) return;
-    let hideTimer = 0;
-    const show = () => {
-      if (hideTimer) {
-        clearTimeout(hideTimer);
-        hideTimer = 0;
-      }
-      actionsEl.classList.add("visible");
-    };
-    const hideSoon = () => {
-      if (hideTimer) clearTimeout(hideTimer);
-      hideTimer = setTimeout(() => {
-        hideTimer = 0;
-        actionsEl.classList.remove("visible");
-      }, 80);
-    };
-    for (const el of [contentEl, actionsEl]) {
-      el.addEventListener("mouseenter", show);
-      el.addEventListener("mouseleave", hideSoon);
-    }
+  _createUserCollapseToggle(contentEl, rawContent) {
+    if (!shouldCollapseUserMessage(rawContent)) return null;
+
+    contentEl.classList.add("user-message-collapsible");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "message-user-collapse-toggle";
+    button.textContent = t("messages.expand");
+    button.setAttribute("aria-expanded", "false");
+    button.addEventListener("click", () => {
+      const expanded = contentEl.classList.toggle("expanded");
+      button.setAttribute("aria-expanded", String(expanded));
+      button.textContent = expanded ? t("messages.collapse") : t("messages.expand");
+    });
+    return button;
   }
 
   _createCopyButton() {

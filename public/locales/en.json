@@ -380,7 +380,9 @@
     "processSteps": "{count} steps",
     "processToolCall": "{count} tool call",
     "processToolCalls": "{count} tool calls",
-    "turnFiles": "Files changed this turn ({count}):"
+    "turnFiles": "Files changed this turn ({count}):",
+    "expand": "Expand",
+    "collapse": "Collapse"
   },
   "onboarding": {
     "openProject": "Open a project to start chatting.",

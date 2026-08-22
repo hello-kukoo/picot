@@ -380,7 +380,9 @@
     "processToolCall": "{count} llamada a herramienta",
     "processToolCalls": "{count} llamadas a herramientas",
     "scrollToBottom": "Desplazarse al último mensaje",
-    "turnFiles": "Archivos modificados en este turno ({count}):"
+    "turnFiles": "Archivos modificados en este turno ({count}):",
+    "expand": "Expandir",
+    "collapse": "Contraer"
   },
   "onboarding": {
     "openProject": "Abre un proyecto para comenzar a chatear.",

@@ -380,7 +380,9 @@
     "processToolCall": "{count} ツール呼び出し",
     "processToolCalls": "{count} ツール呼び出し",
     "scrollToBottom": "最新のメッセージまでスクロール",
-    "turnFiles": "このターンで変更されたファイル（{count}）："
+    "turnFiles": "このターンで変更されたファイル（{count}）：",
+    "expand": "展開",
+    "collapse": "折りたたむ"
   },
   "onboarding": {
     "openProject": "チャットを始めるためにプロジェクトを開いてください。",

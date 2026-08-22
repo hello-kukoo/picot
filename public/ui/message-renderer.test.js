@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n, setLocale } from "../i18n.js";
-import { formatMessageTime, MessageRenderer } from "./message-renderer.js";
+import {
+  formatMessageTime,
+  MessageRenderer,
+  shouldCollapseUserMessage,
+} from "./message-renderer.js";
 
 const enMessages = {
   messages: {
@@ -9,6 +13,8 @@ const enMessages = {
     attachedImage: "Attached image",
     copy: "Copy",
     copied: "Copied!",
+    expand: "Expand",
+    collapse: "Collapse",
   },
   app: {
     welcome: "Welcome to Picot",
@@ -24,6 +30,8 @@ const zhMessages = {
     attachedImage: "附件图片",
     copy: "复制",
     copied: "已复制！",
+    expand: "展开",
+    collapse: "收起",
   },
   app: {
     welcome: "欢迎使用 Picot",
@@ -150,6 +158,69 @@ describe("MessageRenderer streaming markdown preview", () => {
     expect(el.querySelector("img").getAttribute("src")).toBeNull();
     expect(el.querySelector("img").getAttribute("onerror")).toBeNull();
     expect(el.querySelector("a").getAttribute("href")).toBeNull();
+  });
+
+  it("does not collapse short user messages", () => {
+    expect(shouldCollapseUserMessage("short message")).toBe(false);
+    const el = renderer.renderUserMessage({ content: "short message" }, true);
+
+    expect(el.querySelector(".message-user-collapse-toggle")).toBeNull();
+    expect(
+      el.querySelector(".message-content").classList.contains("user-message-collapsible"),
+    ).toBe(false);
+  });
+
+  it("collapses long user messages in live and history rendering", () => {
+    const content = "a".repeat(400);
+
+    expect(shouldCollapseUserMessage(content)).toBe(true);
+    const live = renderer.renderUserMessage({ content });
+    const history = renderer.renderUserMessage({ content }, true);
+
+    for (const el of [live, history]) {
+      const messageContent = el.querySelector(".message-content");
+      const toggle = el.querySelector(".message-user-collapse-toggle");
+      expect(messageContent.classList.contains("user-message-collapsible")).toBe(true);
+      expect(messageContent.classList.contains("expanded")).toBe(false);
+      expect(toggle.textContent).toBe("Expand");
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(messageContent.textContent).toContain(content);
+      // The toggle lives in the toolbar row, before the timestamp.
+      const actions = el.querySelector(".message-actions");
+      expect(toggle.closest(".message-actions")).toBe(actions);
+      expect(actions.children[0]).toBe(toggle);
+    }
+  });
+
+  it("collapses messages with eight or more line breaks regardless of character count", () => {
+    const content = Array.from({ length: 9 }, (_, index) => `line ${index}`).join("\n");
+
+    expect(shouldCollapseUserMessage(content)).toBe(true);
+    const el = renderer.renderUserMessage({ content });
+
+    expect(el.querySelector(".message-user-collapse-toggle")).not.toBeNull();
+  });
+
+  it("expands and collapses a long user message accessibly", () => {
+    const el = renderer.renderUserMessage({ content: "a".repeat(400) });
+    const content = el.querySelector(".message-content");
+    const toggle = el.querySelector(".message-user-collapse-toggle");
+
+    toggle.click();
+    expect(content.classList.contains("expanded")).toBe(true);
+    expect(toggle.textContent).toBe("Collapse");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+    toggle.click();
+    expect(content.classList.contains("expanded")).toBe(false);
+    expect(toggle.textContent).toBe("Expand");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("does not collapse a short file reference message", () => {
+    const el = renderer.renderUserMessage({ content: "@.pi/tmp/paste-20260821-143210.txt" }, true);
+
+    expect(el.querySelector(".message-user-collapse-toggle")).toBeNull();
   });
 
   it("highlights keyword matches across rendered messages", () => {
@@ -324,7 +395,7 @@ describe("MessageRenderer action toolbar", () => {
 
     const actions = el.querySelector(".message-actions");
     expect(actions).not.toBeNull();
-    // Slot order for user: time, then copy.
+    // Slot order for user without a collapse toggle: time, then copy.
     const slots = actions.children;
     expect(slots[0].classList.contains("message-time")).toBe(true);
     expect(slots[0].textContent).toBe("14:32");
@@ -332,6 +403,16 @@ describe("MessageRenderer action toolbar", () => {
     expect(slots[1].type).toBe("button");
     // Full timestamp exposed via title.
     expect(slots[0].title).toContain("14:32:07");
+  });
+
+  it("renderUserMessage prepends the expand toggle before time when collapsible", () => {
+    const ts = new Date().setHours(14, 32, 7, 0);
+    const el = renderer.renderUserMessage({ content: "a".repeat(400), timestamp: ts });
+
+    const slots = el.querySelector(".message-actions").children;
+    expect(slots[0].classList.contains("message-user-collapse-toggle")).toBe(true);
+    expect(slots[1].classList.contains("message-time")).toBe(true);
+    expect(slots[2].classList.contains("message-copy-btn")).toBe(true);
   });
 
   it("omits the time span when no timestamp is provided", () => {
