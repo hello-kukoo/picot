@@ -12,30 +12,46 @@ APP_NAME="Picot"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 if [ -t 1 ]; then
-  BOLD="\033[1m"; GREEN="\033[1;32m"; YELLOW="\033[1;33m"
-  RED="\033[1;31m"; CYAN="\033[1;36m"; RESET="\033[0m"
+  BOLD="\033[1m"
+  GREEN="\033[1;32m"
+  YELLOW="\033[1;33m"
+  RED="\033[1;31m"
+  CYAN="\033[1;36m"
+  RESET="\033[0m"
 else
-  BOLD=""; GREEN=""; YELLOW=""; RED=""; CYAN=""; RESET=""
+  BOLD=""
+  GREEN=""
+  YELLOW=""
+  RED=""
+  CYAN=""
+  RESET=""
 fi
 
-info()    { printf "  ${CYAN}•${RESET} %s\n" "$*"; }
+info() { printf "  ${CYAN}•${RESET} %s\n" "$*"; }
 success() { printf "  ${GREEN}✓${RESET} %s\n" "$*"; }
-warn()    { printf "  ${YELLOW}⚠${RESET} %s\n" "$*"; }
-error()   { printf "  ${RED}✗${RESET} %s\n" "$*" >&2; }
-header()  { printf "\n${BOLD}%s${RESET}\n" "$*"; }
+warn() { printf "  ${YELLOW}⚠${RESET} %s\n" "$*"; }
+error() { printf "  ${RED}✗${RESET} %s\n" "$*" >&2; }
+header() { printf "\n${BOLD}%s${RESET}\n" "$*"; }
 
-die() { error "$*"; exit 1; }
+die() {
+  error "$*"
+  exit 1
+}
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 PINNED_VERSION=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --version|-v) PINNED_VERSION="$2"; shift 2 ;;
-    --help|-h)
-      echo "Usage: install.sh [--version <tag>]"
-      echo "  --version  Install a specific release tag (e.g. v0.3.0). Defaults to latest."
-      exit 0 ;;
-    *) die "Unknown option: $1" ;;
+  --version | -v)
+    PINNED_VERSION="$2"
+    shift 2
+    ;;
+  --help | -h)
+    echo "Usage: install.sh [--version <tag>]"
+    echo "  --version  Install a specific release tag (e.g. v0.3.0). Defaults to latest."
+    exit 0
+    ;;
+  *) die "Unknown option: $1" ;;
   esac
 done
 
@@ -44,20 +60,41 @@ need_cmd() { command -v "$1" &>/dev/null || die "Required command not found: $1"
 need_cmd curl
 need_cmd uname
 
+# Ubuntu's snap curl is AppArmor-confined: it has a private /tmp, and the home
+# interface denies top-level hidden directories (so ~/.cache is not writable).
+# Prefer the native binary when both are present; otherwise stage downloads
+# under a visible $HOME path.
+is_snap_path() {
+  case "$1" in
+  /snap/*) return 0 ;;
+  esac
+  case "$(readlink -f "$1" 2>/dev/null || true)" in
+  /snap/*) return 0 ;;
+  esac
+  return 1
+}
+
+CURL_BIN="$(command -v curl)"
+if is_snap_path "$CURL_BIN" && [ -x /usr/bin/curl ] && ! is_snap_path /usr/bin/curl; then
+  CURL_BIN="/usr/bin/curl"
+fi
+
+curl_get() { "$CURL_BIN" "$@"; }
+
 # ── Detect OS & arch ──────────────────────────────────────────────────────────
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
 case "$OS" in
-  Darwin) PLATFORM="macos" ;;
-  Linux)  PLATFORM="linux" ;;
-  *)      die "Unsupported operating system: $OS. Use install.ps1 for Windows." ;;
+Darwin) PLATFORM="macos" ;;
+Linux) PLATFORM="linux" ;;
+*) die "Unsupported operating system: $OS. Use install.ps1 for Windows." ;;
 esac
 
 case "$ARCH" in
-  x86_64|amd64)     ARCH_NORM="x86_64" ;;
-  arm64|aarch64)    ARCH_NORM="arm64"  ;;
-  *)                die "Unsupported architecture: $ARCH" ;;
+x86_64 | amd64) ARCH_NORM="x86_64" ;;
+arm64 | aarch64) ARCH_NORM="arm64" ;;
+*) die "Unsupported architecture: $ARCH" ;;
 esac
 
 # ── Detect Linux package manager ──────────────────────────────────────────────
@@ -80,12 +117,19 @@ fi
 
 # ── Resolve version ───────────────────────────────────────────────────────────
 header "🎯  ${APP_NAME} Installer"
+if is_snap_path "$(command -v curl)"; then
+  if [ "$CURL_BIN" = "/usr/bin/curl" ]; then
+    warn "Snap curl cannot write to /tmp or ~/.cache. Using /usr/bin/curl instead."
+  else
+    warn "Snap curl cannot write to /tmp or ~/.cache. Staging the download under ~/picot-install."
+  fi
+fi
 if [ -n "$PINNED_VERSION" ]; then
   VERSION="$PINNED_VERSION"
   info "Using pinned version: ${VERSION}"
 else
   info "Fetching latest release from GitHub..."
-  VERSION="$(curl -fsSL "${GITHUB_API}/latest" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
+  VERSION="$(curl_get -fsSL "${GITHUB_API}/latest" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
   [ -n "$VERSION" ] || die "Failed to fetch latest release version."
   info "Latest version: ${VERSION}"
 fi
@@ -95,35 +139,44 @@ VER="${VERSION#v}"
 
 # ── Build download URL ────────────────────────────────────────────────────────
 case "$PLATFORM" in
-  macos)
+macos)
+  case "$ARCH_NORM" in
+  arm64) FILENAME="${APP_NAME}_${VER}_aarch64.dmg" ;;
+  x86_64) FILENAME="${APP_NAME}_${VER}_x64.dmg" ;;
+  esac
+  ;;
+linux)
+  case "$PKG_MGR" in
+  apt | dpkg)
     case "$ARCH_NORM" in
-      arm64)  FILENAME="${APP_NAME}_${VER}_aarch64.dmg" ;;
-      x86_64) FILENAME="${APP_NAME}_${VER}_x64.dmg"     ;;
+    x86_64) FILENAME="${APP_NAME}_${VER}_amd64.deb" ;;
+    arm64) FILENAME="${APP_NAME}_${VER}_arm64.deb" ;;
     esac
     ;;
-  linux)
-    case "$PKG_MGR" in
-      apt|dpkg)
-        case "$ARCH_NORM" in
-          x86_64) FILENAME="${APP_NAME}_${VER}_amd64.deb"  ;;
-          arm64)  FILENAME="${APP_NAME}_${VER}_arm64.deb"  ;;
-        esac
-        ;;
-      dnf|yum|rpm)
-        case "$ARCH_NORM" in
-          x86_64) FILENAME="${APP_NAME}-${VER}-1.x86_64.rpm"  ;;
-          arm64)  FILENAME="${APP_NAME}-${VER}-1.aarch64.rpm" ;;
-        esac
-        ;;
+  dnf | yum | rpm)
+    case "$ARCH_NORM" in
+    x86_64) FILENAME="${APP_NAME}-${VER}-1.x86_64.rpm" ;;
+    arm64) FILENAME="${APP_NAME}-${VER}-1.aarch64.rpm" ;;
     esac
     ;;
+  esac
+  ;;
 esac
 
 DOWNLOAD_URL="${GITHUB_DL}/${VERSION}/${FILENAME}"
 
 # ── Download ──────────────────────────────────────────────────────────────────
-TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
+if is_snap_path "$CURL_BIN"; then
+  # Snap's home interface allows non-hidden $HOME paths only. Host mkdir of
+  # ~/.cache succeeds, but snap curl still cannot create the file there.
+  STAGING="${HOME}/picot-install"
+  mkdir -p "$STAGING"
+  TMPDIR="$(mktemp -d "${STAGING}/tmp.XXXXXX")"
+  trap 'rm -rf "$TMPDIR"; rmdir "$STAGING" 2>/dev/null || true' EXIT
+else
+  TMPDIR="$(mktemp -d)"
+  trap 'rm -rf "$TMPDIR"' EXIT
+fi
 
 DEST="${TMPDIR}/${FILENAME}"
 
@@ -131,7 +184,10 @@ header "⬇️   Downloading"
 info "URL: ${DOWNLOAD_URL}"
 info "File: ${FILENAME}"
 
-if ! curl -fL --progress-bar -o "$DEST" "$DOWNLOAD_URL"; then
+if ! curl_get -fL --progress-bar -o "$DEST" "$DOWNLOAD_URL"; then
+  if is_snap_path "$CURL_BIN"; then
+    die "Download failed. Ubuntu snap curl cannot write this file. Install native curl (\`sudo apt install curl\`) and retry, or download ${FILENAME} from ${DOWNLOAD_URL}."
+  fi
   die "Download failed. Check your internet connection or try --version with a valid tag."
 fi
 success "Downloaded ${FILENAME}"
@@ -140,72 +196,72 @@ success "Downloaded ${FILENAME}"
 header "📦  Installing"
 
 case "$PLATFORM" in
-  macos)
-    MOUNTPOINT="$(mktemp -d)"
-    info "Mounting disk image..."
-    hdiutil attach -quiet -nobrowse -mountpoint "$MOUNTPOINT" "$DEST"
+macos)
+  MOUNTPOINT="$(mktemp -d)"
+  info "Mounting disk image..."
+  hdiutil attach -quiet -nobrowse -mountpoint "$MOUNTPOINT" "$DEST"
 
-    APP_SRC="$(find "$MOUNTPOINT" -maxdepth 1 -name "*.app" | head -1)"
-    [ -n "$APP_SRC" ] || die "No .app found in DMG."
+  APP_SRC="$(find "$MOUNTPOINT" -maxdepth 1 -name "*.app" | head -1)"
+  [ -n "$APP_SRC" ] || die "No .app found in DMG."
 
-    APP_DEST="/Applications/${APP_NAME}.app"
+  APP_DEST="/Applications/${APP_NAME}.app"
 
-    if [ -d "$APP_DEST" ]; then
-      warn "Removing existing installation at ${APP_DEST}..."
-      rm -rf "$APP_DEST"
-    fi
+  if [ -d "$APP_DEST" ]; then
+    warn "Removing existing installation at ${APP_DEST}..."
+    rm -rf "$APP_DEST"
+  fi
 
-    info "Copying ${APP_NAME}.app to /Applications..."
-    cp -R "$APP_SRC" "$APP_DEST"
+  info "Copying ${APP_NAME}.app to /Applications..."
+  cp -R "$APP_SRC" "$APP_DEST"
 
-    hdiutil detach -quiet "$MOUNTPOINT" || true
-    rm -rf "$MOUNTPOINT"
+  hdiutil detach -quiet "$MOUNTPOINT" || true
+  rm -rf "$MOUNTPOINT"
 
-    # Remove the quarantine bit so Gatekeeper does not block the first launch.
-    # Picot uses ad-hoc signing (not Apple-notarized). Files downloaded via
-    # curl still receive the com.apple.quarantine xattr from macOS, which
-    # causes the "app can't be opened" / Privacy & Security prompt on first
-    # launch. Stripping it here means the app opens directly without any
-    # manual "Open Anyway" step in System Settings.
-    info "Removing macOS quarantine attribute..."
-    xattr -dr com.apple.quarantine "$APP_DEST" 2>/dev/null || true
+  # Remove the quarantine bit so Gatekeeper does not block the first launch.
+  # Picot uses ad-hoc signing (not Apple-notarized). Files downloaded via
+  # curl still receive the com.apple.quarantine xattr from macOS, which
+  # causes the "app can't be opened" / Privacy & Security prompt on first
+  # launch. Stripping it here means the app opens directly without any
+  # manual "Open Anyway" step in System Settings.
+  info "Removing macOS quarantine attribute..."
+  xattr -dr com.apple.quarantine "$APP_DEST" 2>/dev/null || true
 
-    success "Installed ${APP_NAME}.app to /Applications"
+  success "Installed ${APP_NAME}.app to /Applications"
+  ;;
+
+linux)
+  case "$PKG_MGR" in
+  apt)
+    info "Installing with apt..."
+    sudo apt-get install -y "$DEST"
     ;;
-
-  linux)
-    case "$PKG_MGR" in
-      apt)
-        info "Installing with apt..."
-        sudo apt-get install -y "$DEST"
-        ;;
-      dpkg)
-        info "Installing with dpkg..."
-        sudo dpkg -i "$DEST"
-        ;;
-      dnf)
-        info "Installing with dnf..."
-        sudo dnf install -y "$DEST"
-        ;;
-      yum)
-        info "Installing with yum..."
-        sudo yum localinstall -y "$DEST"
-        ;;
-      rpm)
-        info "Installing with rpm..."
-        sudo rpm -U --force "$DEST"
-        ;;
-    esac
-    success "Installed ${APP_NAME}"
+  dpkg)
+    info "Installing with dpkg..."
+    sudo dpkg -i "$DEST"
     ;;
+  dnf)
+    info "Installing with dnf..."
+    sudo dnf install -y "$DEST"
+    ;;
+  yum)
+    info "Installing with yum..."
+    sudo yum localinstall -y "$DEST"
+    ;;
+  rpm)
+    info "Installing with rpm..."
+    sudo rpm -U --force "$DEST"
+    ;;
+  esac
+  success "Installed ${APP_NAME}"
+  ;;
 esac
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 printf "\n${GREEN}${BOLD}✓ ${APP_NAME} ${VERSION} installed successfully!${RESET}\n\n"
 
 case "$PLATFORM" in
-  macos) info "Launch it from /Applications/${APP_NAME}.app or Spotlight." ;;
-  linux) info "Launch it by running: picot  (or search in your app menu)" ;;
+macos) info "Launch it from /Applications/${APP_NAME}.app or Spotlight." ;;
+linux) info "Launch it by running: picot  (or search in your app menu)" ;;
 esac
 
 printf "\n"

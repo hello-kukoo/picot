@@ -1345,8 +1345,18 @@ fn path_arg(bytes: &[u8]) -> OsString {
     }
 }
 
+const GIT_NOT_FOUND: &str = "git_not_found";
+
+fn git_spawn_error(error: &std::io::Error) -> String {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        GIT_NOT_FOUND.to_string()
+    } else {
+        error.to_string()
+    }
+}
+
 fn run_git(mut command: Command, deadline: Duration) -> Result<(Vec<u8>, Vec<u8>, bool), String> {
-    let mut child = command.spawn().map_err(|e| e.to_string())?;
+    let mut child = command.spawn().map_err(|error| git_spawn_error(&error))?;
     let stdout = child.stdout.take().ok_or("git stdout unavailable")?;
     let stderr = child.stderr.take().ok_or("git stderr unavailable")?;
     let out_thread = thread::spawn(move || read_limited(stdout, MAX_STDOUT_BYTES));
@@ -1466,6 +1476,19 @@ fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn maps_missing_git_to_stable_error_code() {
+        let error = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert_eq!(git_spawn_error(&error), GIT_NOT_FOUND);
+    }
+
+    #[test]
+    fn preserves_non_missing_git_spawn_errors() {
+        let error = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert_eq!(git_spawn_error(&error), error.to_string());
+        assert_ne!(git_spawn_error(&error), GIT_NOT_FOUND);
+    }
+
     #[test]
     fn parses_paths_and_renames() {
         let p = parse_porcelain_v2_z(

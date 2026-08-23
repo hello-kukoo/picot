@@ -38,6 +38,43 @@ describe("workspace info", () => {
     );
     expect(parseRepositoryName("git@github.com:owner/repo.git", "/work/repo")).toBe("owner/repo");
   });
+  it("returns an explicit unavailable result when git cannot be spawned", async () => {
+    const error = Object.assign(new Error("git not found"), { code: "ENOENT" });
+    const runGit = async () => {
+      throw error;
+    };
+
+    await expect(inspectWorkspaceGit("/work/repo", { runGit })).resolves.toEqual({
+      isGit: false,
+      gitAvailable: false,
+      errorCode: "git_not_found",
+    });
+  });
+
+  it("classifies ENOENT from a later Git metadata command as unavailable", async () => {
+    const error = Object.assign(new Error("git disappeared"), { code: "ENOENT" });
+    const runGit = async (args: string[]) => {
+      if (args.includes("show-toplevel")) return { stdout: "/work/repo\n" };
+      throw error;
+    };
+
+    await expect(inspectWorkspaceGit("/work/repo", { runGit })).resolves.toEqual({
+      isGit: false,
+      gitAvailable: false,
+      errorCode: "git_not_found",
+    });
+  });
+
+  it("keeps non-ENOENT Git failures as ordinary non-repository results", async () => {
+    const runGit = async () => {
+      throw new Error("permission denied");
+    };
+
+    await expect(inspectWorkspaceGit("/work/repo", { runGit })).resolves.toEqual({
+      isGit: false,
+    });
+  });
+
   it("returns bounded structured Git data from injected runner", async () => {
     const runGit = async (args: string[]) => {
       const command = args.join(" ");

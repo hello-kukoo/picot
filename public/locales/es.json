@@ -72,6 +72,7 @@
     "hookChangedTree": "Un hook de pre-commit modificó el contenido confirmado; el commit se creó pero puede diferir de la instantánea preparada.",
     "noStatus": "No se cargó el estado de Git",
     "notGitRepo": "Este espacio de trabajo no es un repositorio Git",
+    "unavailable": "Git no está instalado o no está disponible",
     "noUpstream": "No hay upstream configurado",
     "outcomeUnknown": "No se pudo determinar el resultado del commit. Verifica el estado del repositorio antes de reintentar.",
     "panel": "Git",

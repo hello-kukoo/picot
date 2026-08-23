@@ -18,6 +18,7 @@ setMessages({
     refresh: "Refresh",
     noStatus: "No Git status loaded",
     notGitRepo: "This workspace is not a Git repository",
+    unavailable: "Git is not installed or available",
     stage: "Stage",
     unstage: "Unstage",
     discard: "Discard",
@@ -78,6 +79,42 @@ describe("GitPanel", () => {
     panel.setSnapshot({ entries: [{ entryKind: "ordinary", xy: ".M", displayPath: "app.js" }] });
     expect(panel.container.textContent).toContain("app.js");
     expect(panel.container.textContent).not.toContain("This workspace is not a Git repository");
+  });
+
+  it("renders a distinct unavailable state when Git cannot be spawned", () => {
+    const panel = new GitPanel({
+      container: document.querySelector("#panel"),
+      client: { command: vi.fn() },
+    });
+
+    panel.setGitUnavailable(true);
+
+    expect(panel.container.textContent).toContain("Git is not installed or available");
+    expect(panel.container.textContent).not.toContain("not a Git repository");
+    expect(panel.gitUnavailable).toBe(true);
+    expect(panel.notGitRepo).toBe(false);
+
+    panel.setSnapshot({ entries: [] });
+    expect(panel.gitUnavailable).toBe(false);
+    expect(panel.container.textContent).not.toContain("Git is not installed or available");
+  });
+
+  it("does not leak prior snapshot entries after setGitUnavailable", () => {
+    const panel = new GitPanel({
+      container: document.querySelector("#panel"),
+      client: { command: vi.fn() },
+    });
+
+    panel.setSnapshot({
+      entries: [{ entryKind: "ordinary", xy: ".M", displayPath: "stale.js" }],
+    });
+    expect(panel.container.textContent).toContain("stale.js");
+
+    panel.setGitUnavailable(true);
+
+    expect(panel.container.textContent).toContain("Git is not installed or available");
+    expect(panel.container.textContent).not.toContain("stale.js");
+    expect(panel.container.querySelectorAll(".git-entry")).toHaveLength(0);
   });
 
   it("only treats the most recent status probe failure as not-a-repository", () => {

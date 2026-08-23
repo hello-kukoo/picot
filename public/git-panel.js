@@ -17,6 +17,7 @@ export class GitPanel {
     this.fileList = fileList;
     this.snapshot = null;
     this.notGitRepo = false;
+    this.gitUnavailable = false;
     this.pendingStatusRequestId = null;
     this.folded = new Set();
     this.selected = new Set();
@@ -32,6 +33,7 @@ export class GitPanel {
   setSnapshot(snapshot) {
     this.snapshot = snapshot;
     this.notGitRepo = false;
+    this.gitUnavailable = false;
     this.pendingStatusRequestId = null;
     const valid = new Set(
       (snapshot?.entries || []).flatMap((entry) =>
@@ -53,6 +55,13 @@ export class GitPanel {
   }
   setNotGitRepo(value = true) {
     this.notGitRepo = value;
+    if (value) this.gitUnavailable = false;
+    this.pendingStatusRequestId = null;
+    this.render();
+  }
+  setGitUnavailable(value = true) {
+    this.gitUnavailable = value;
+    if (value) this.notGitRepo = false;
     this.pendingStatusRequestId = null;
     this.render();
   }
@@ -314,9 +323,9 @@ export class GitPanel {
     const scrollTop = this.container.scrollTop;
     this.container.replaceChildren();
     const snapshot = this.snapshot;
-    if (this.notGitRepo) {
+    if (this.gitUnavailable || this.notGitRepo) {
       const empty = document.createElement("p");
-      empty.textContent = t("git.notGitRepo");
+      empty.textContent = t(this.gitUnavailable ? "git.unavailable" : "git.notGitRepo");
       this.container.append(empty);
       return;
     }

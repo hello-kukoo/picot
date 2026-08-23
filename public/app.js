@@ -1548,6 +1548,7 @@ wsClient.addEventListener("ownerBootstrap", async (event) => {
     gitPanel.commitMessage = "";
     gitPanel.pendingConfirmationToken = null;
     gitPanel.notGitRepo = false;
+    gitPanel.gitUnavailable = false;
     if (!gitPanelElement.classList.contains("hidden")) void gitPanel.refresh();
     if (terminalPanel.toggleEl) terminalClient.requestList();
   }
@@ -1642,16 +1643,18 @@ wsClient.addEventListener("gitCommandFailed", (event) => {
   // panel would otherwise sit on the generic "no status loaded" message.
   // Surface the real reason instead — but only for the current status probe,
   // never for stale or concurrent non-status failures.
-  if (
-    gitPanel.isStatusFailure(event.detail?.requestId) &&
-    typeof event.detail?.error === "string" &&
-    event.detail.error.includes("not a git repository")
-  ) {
-    gitPanel.setNotGitRepo(true);
-    // The workspace is not a Git repository — remove the Git entry entirely
-    // (and bounce out of the Git tab when it was active) instead of keeping a
-    // dead panel that only renders the not-a-repository notice.
-    syncGitTabVisibility(false);
+  if (gitPanel.isStatusFailure(event.detail?.requestId)) {
+    const error = typeof event.detail?.error === "string" ? event.detail.error : "";
+    if (error === "git_not_found") {
+      gitPanel.setGitUnavailable(true);
+      syncGitTabVisibility(false);
+    } else if (error.includes("not a git repository")) {
+      gitPanel.setNotGitRepo(true);
+      // The workspace is not a Git repository — remove the Git entry entirely
+      // (and bounce out of the Git tab when it was active) instead of keeping a
+      // dead panel that only renders the not-a-repository notice.
+      syncGitTabVisibility(false);
+    }
   }
 });
 wsClient.addEventListener("ephemeralEvent", (event) => {
@@ -1771,6 +1774,7 @@ function setFileSidebarTab(tab) {
     // never shows old data while waiting for a fresh status response.
     gitPanel.snapshot = null;
     gitPanel.notGitRepo = false;
+    gitPanel.gitUnavailable = false;
     gitPanel.render();
     void gitPanel.refresh();
   }
@@ -4740,6 +4744,7 @@ async function handleSessionSelectImpl(session, project) {
     // Clear stale Git panel state so old workspace files never leak in.
     gitPanel.snapshot = null;
     gitPanel.notGitRepo = false;
+    gitPanel.gitUnavailable = false;
     gitPanel.selected = new Set();
     gitPanel.commitMessage = "";
     gitPanel.pendingConfirmationToken = null;
@@ -5138,6 +5143,7 @@ function handleMirrorSync(data) {
     // refreshFileBrowserForWorkspace above.
     gitPanel.snapshot = null;
     gitPanel.notGitRepo = false;
+    gitPanel.gitUnavailable = false;
     gitPanel.selected = new Set();
     gitPanel.commitMessage = "";
     gitPanel.pendingConfirmationToken = null;

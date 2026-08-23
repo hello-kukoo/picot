@@ -12,6 +12,8 @@ export type WorkspaceProjectRef = { dirName: string; path: string };
 export type RunningInstanceRef = { cwd: string; startedAt?: string };
 export type WorkspaceGitInfo = {
   isGit: boolean;
+  gitAvailable?: boolean;
+  errorCode?: "git_not_found";
   repository?: string;
   kind?: "repository" | "worktree";
   branch?: string | null;
@@ -110,6 +112,11 @@ async function runDefault(
 ) {
   return execFileAsync("git", args, options) as Promise<{ stdout: string }>;
 }
+
+function isGitNotFoundError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
+}
+
 export async function inspectWorkspaceGit(
   cwd: string,
   options: { signal?: AbortSignal; runGit?: GitCommandRunner; timeoutMs?: number } = {},
@@ -128,7 +135,10 @@ export async function inspectWorkspaceGit(
     let root: string;
     try {
       root = await command(["rev-parse", "--show-toplevel"]);
-    } catch {
+    } catch (error) {
+      if (isGitNotFoundError(error)) {
+        return { isGit: false, gitAvailable: false, errorCode: "git_not_found" };
+      }
       return { isGit: false };
     }
     const gitDir = normalizePath(await command(["rev-parse", "--git-dir"]));
@@ -136,7 +146,8 @@ export async function inspectWorkspaceGit(
     let branch: string | null = null;
     try {
       branch = await command(["symbolic-ref", "--quiet", "--short", "HEAD"]);
-    } catch {
+    } catch (error) {
+      if (isGitNotFoundError(error)) throw error;
       // Detached HEAD (or unborn branch): branch stays null and detachedAt
       // resolves below instead.
       branch = null;
@@ -145,7 +156,8 @@ export async function inspectWorkspaceGit(
     if (!branch) {
       try {
         detachedAt = await command(["rev-parse", "--short", "HEAD"]);
-      } catch {
+      } catch (error) {
+        if (isGitNotFoundError(error)) throw error;
         // HEAD unresolvable (e.g. empty repository): leave detachedAt null.
         detachedAt = null;
       }
@@ -156,17 +168,22 @@ export async function inspectWorkspaceGit(
       const selected = names.includes("origin") ? "origin" : names[0];
       if (selected)
         repository = parseRepositoryName(await command(["remote", "get-url", selected]), root);
-    } catch {
+    } catch (error) {
+      if (isGitNotFoundError(error)) throw error;
       repository = basename(root);
     }
     return {
       isGit: true,
+      gitAvailable: true,
       repository: repository || basename(root),
       kind: gitDir && commonDir && gitDir !== commonDir ? "worktree" : "repository",
       branch,
       detachedAt,
     };
-  } catch (_error) {
+  } catch (error) {
+    if (isGitNotFoundError(error)) {
+      return { isGit: false, gitAvailable: false, errorCode: "git_not_found" };
+    }
     if (controller.signal.aborted) throw new Error("workspace_metadata_aborted");
     throw new Error("workspace_metadata_failed");
   } finally {
