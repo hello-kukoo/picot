@@ -1,16 +1,20 @@
 #!/usr/bin/env node
 /**
- * Builds browser-only ESM vendor bundles for CodeMirror and PDF.js.
+ * Builds browser-only vendor bundles for CodeMirror, PDF.js, xterm, and Chart.js.
  *
- * Source modules import @codemirror/* and pdfjs-dist directly from node_modules
- * (resolved by Vitest). At browser runtime, index.html contains an import map
- * that redirects those specifiers to the same-origin generated files under
- * public/vendor/.
+ * Source modules import @codemirror/*, pdfjs-dist, @xterm/*, and chart.js
+ * directly from node_modules (resolved by Vitest). At browser runtime,
+ * index.html contains an import map that redirects those specifiers to the
+ * same-origin generated files under public/vendor/, so every bundle is ESM
+ * except chart.js: cost.html loads it as a classic <script> with no import
+ * map, so that bundle is an IIFE assigning globalThis.Chart instead.
  *
  * Outputs:
  *   public/vendor/codemirror.js     — all CodeMirror runtime exports used by the app
  *   public/vendor/pdf.js            — PDF.js facade (getDocument, GlobalWorkerOptions)
  *   public/vendor/pdf.worker.js     — PDF.js worker
+ *   public/vendor/xterm.js          — xterm.js terminal runtime
+ *   public/vendor/chart.js          — Chart.js as an IIFE exposing globalThis.Chart
  */
 
 const path = require("node:path");
@@ -52,6 +56,14 @@ const entries = [
     ...common,
     entryPoints: [path.join(ROOT, "public", "terminal-vendor-entry.js")],
     outfile: path.join(OUT_DIR, "xterm.js"),
+  },
+  {
+    ...common,
+    entryPoints: [path.join(ROOT, "public", "chart-vendor-entry.js")],
+    outfile: path.join(OUT_DIR, "chart.js"),
+    // cost.html loads this bundle via a classic <script> tag with no import
+    // map, so it must stay IIFE and assign globalThis.Chart on load.
+    format: "iife",
   },
 ];
 
