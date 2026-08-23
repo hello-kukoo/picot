@@ -3,6 +3,7 @@
 import { expect, test } from "vitest";
 import {
   basenameLocalPath,
+  displayLocalPath,
   normalizeLocalPath,
   parentLocalPath,
   relativeLocalPath,
@@ -18,6 +19,12 @@ test("normalizes UNC paths without losing the share root", () => {
   expect(normalizeLocalPath("\\\\server\\share\\repo\\src\\..\\")).toBe("//server/share/repo");
   expect(parentLocalPath("\\\\server\\share\\repo")).toBe("//server/share");
   expect(basenameLocalPath("\\\\server\\share\\repo\\file.ts")).toBe("file.ts");
+});
+
+test("formats relative paths with a leading slash for sidebar display", () => {
+  expect(displayLocalPath("Users/Lin/project")).toBe("/Users/Lin/project");
+  expect(displayLocalPath("/Users/Lin/project")).toBe("/Users/Lin/project");
+  expect(displayLocalPath("C:/Users/Lin/project")).toBe("C:/Users/Lin/project");
 });
 
 test("keeps POSIX root semantics", () => {

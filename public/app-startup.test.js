@@ -98,23 +98,35 @@ test("initializes the application without reporting existing i18n keys as missin
   expect(document.getElementById("settings-panel").classList.contains("hidden")).toBe(false);
 });
 
-test("switches the open file sidebar between Files and Git tabs", async () => {
+test("switches the shared right sidebar between Info, Files, and Git tabs", async () => {
   await import("./app.js?git-sidebar-tabs");
 
+  const infoTab = document.getElementById("file-sidebar-info-tab");
   const filesTab = document.getElementById("file-sidebar-files-tab");
   const gitTab = document.getElementById("file-sidebar-git-tab");
+  const infoPanel = document.getElementById("info-panel");
   const fileList = document.getElementById("file-list");
   const gitPanel = document.getElementById("git-panel");
 
+  expect(infoTab).not.toBeNull();
   expect(filesTab).not.toBeNull();
   expect(gitTab).not.toBeNull();
+  expect(infoPanel).not.toBeNull();
+  expect(infoTab.compareDocumentPosition(filesTab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(filesTab.compareDocumentPosition(gitTab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(filesTab.getAttribute("aria-selected")).toBe("true");
+
+  infoTab.click();
+  expect(infoTab.getAttribute("aria-selected")).toBe("true");
+  expect(infoPanel.classList.contains("hidden")).toBe(false);
+  expect(filesTab.classList.contains("hidden")).toBe(false);
 
   gitTab.click();
   expect(gitTab.getAttribute("aria-selected")).toBe("true");
   expect(fileList.classList.contains("hidden")).toBe(true);
   expect(gitPanel.classList.contains("hidden")).toBe(false);
   expect(gitPanel.textContent).toContain("No Git status loaded");
+  expect(infoPanel.classList.contains("hidden")).toBe(true);
 
   filesTab.click();
   expect(fileList.classList.contains("hidden")).toBe(false);

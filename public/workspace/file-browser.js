@@ -4,7 +4,7 @@
 
 import { createFileTypeIcon } from "../file-type-icons.js";
 import { onLocaleChange, t } from "../i18n.js";
-import { normalizeLocalPath, parentLocalPath } from "./path-utils.js";
+import { displayLocalPath, normalizeLocalPath, parentLocalPath } from "./path-utils.js";
 
 function formatSize(bytes) {
   if (bytes == null) return "";
@@ -50,7 +50,7 @@ export class FileBrowser {
     this.loadSequence++;
     this.currentPath = null;
     this.fileStatus = null;
-    this.pathEl.textContent = normalized;
+    this.pathEl.textContent = displayLocalPath(normalized);
     this.pathEl.title = normalized;
     this.container.textContent = "";
   }
@@ -81,7 +81,7 @@ export class FileBrowser {
         this.workspaceRoot = data.path;
       }
       this.currentPath = data.path;
-      this.pathEl.textContent = data.path;
+      this.pathEl.textContent = displayLocalPath(data.path);
       this.pathEl.title = data.path;
       this.render(data.items);
     } catch (error) {

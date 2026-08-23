@@ -1,0 +1,612 @@
+<!-- ABOUTME: Self-contained visual prototype for Picot's planned Info right-side panel. -->
+<!-- ABOUTME: Demonstrates fixed workspace actions, active-path navigation, and inactive-branch resume behavior. -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Picot Info panel prototype</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #171717;
+        --surface: #202020;
+        --surface-hover: #2a2a2a;
+        --border: #363636;
+        --text: #e8e8e8;
+        --muted: #9a9a9a;
+        --inactive: #6e6e6e;
+        --accent: #81b2ff;
+        --accent-soft: #233653;
+        --line: #525252;
+        --green: #82c995;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-width: 880px;
+        min-height: 680px;
+        background: #101010;
+        color: var(--text);
+        font:
+          13px/1.4 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+      }
+      button {
+        font: inherit;
+      }
+      .app {
+        display: grid;
+        grid-template-columns: 210px 1fr 300px;
+        height: 100vh;
+      }
+      .sessions,
+      .chat {
+        border-right: 1px solid var(--border);
+      }
+      .sessions {
+        padding: 16px 12px;
+        background: #151515;
+        color: var(--muted);
+      }
+      .sessions h2,
+      .panel-title {
+        margin: 0;
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .session {
+        padding: 10px;
+        margin-top: 10px;
+        border-radius: 6px;
+      }
+      .session.current {
+        background: var(--accent-soft);
+        color: var(--text);
+      }
+      .session small {
+        display: block;
+        margin-top: 3px;
+        color: var(--muted);
+      }
+      .chat {
+        overflow: auto;
+        background: var(--bg);
+      }
+      .chat-header {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        padding: 14px 24px;
+        background: rgba(23, 23, 23, 0.94);
+        border-bottom: 1px solid var(--border);
+        color: var(--muted);
+      }
+      .transcript {
+        max-width: 760px;
+        padding: 30px 34px 130px;
+        margin: auto;
+      }
+      .message {
+        margin: 0 0 24px;
+      }
+      .message-label {
+        margin-bottom: 6px;
+        font-size: 11px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      .bubble {
+        padding: 12px 14px;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+      }
+      .user .bubble {
+        width: fit-content;
+        max-width: 82%;
+        margin-left: auto;
+        background: #27354d;
+        border-color: #3a5278;
+      }
+      .assistant .bubble {
+        background: #1f1f1f;
+      }
+      .composer {
+        position: fixed;
+        right: 324px;
+        bottom: 18px;
+        left: 234px;
+        max-width: 760px;
+        margin: auto;
+        padding: 12px;
+        color: var(--muted);
+        background: #242424;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+      }
+
+      .info-panel {
+        display: flex;
+        min-height: 0;
+        flex-direction: column;
+        background: var(--surface);
+      }
+      .info-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 14px 10px;
+        border-bottom: 1px solid var(--border);
+      }
+      .workspace {
+        flex: 0 0 auto;
+        padding: 12px 14px 14px;
+        border-bottom: 1px solid var(--border);
+      }
+      .workspace-path {
+        overflow: hidden;
+        margin: 7px 0 10px;
+        color: var(--muted);
+        font:
+          12px/1.3 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .actions {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .workspace-link,
+      .resume,
+      .tree-row {
+        border: 0;
+        border-radius: 5px;
+        background: transparent;
+        color: var(--text);
+        text-align: left;
+      }
+      .workspace-link {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        padding: 6px 7px;
+        color: var(--text);
+        cursor: pointer;
+        text-decoration: none;
+      }
+      .workspace-link:hover,
+      .tree-row.active:hover,
+      .resume:hover {
+        background: var(--surface-hover);
+      }
+      .workspace-icon {
+        display: grid;
+        width: 16px;
+        height: 16px;
+        flex: 0 0 16px;
+        place-items: center;
+      }
+      .workspace-icon img {
+        display: block;
+        max-width: 16px;
+        max-height: 16px;
+        object-fit: contain;
+      }
+      .workspace-icon svg {
+        width: 15px;
+        height: 15px;
+        stroke: var(--muted);
+        stroke-width: 1.8;
+        fill: none;
+      }
+
+      .history {
+        display: flex;
+        min-height: 0;
+        flex: 1;
+        flex-direction: column;
+      }
+      .history-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 14px 8px;
+      }
+      .status {
+        color: var(--green);
+        font-size: 11px;
+      }
+      .tree-scroll {
+        overflow-y: auto;
+        padding: 0 8px 16px 10px;
+      }
+      .tree-row {
+        display: flex;
+        width: 100%;
+        min-height: 30px;
+        align-items: center;
+        gap: 7px;
+        padding: 5px 5px;
+        cursor: pointer;
+      }
+      .tree-row.active {
+        cursor: pointer;
+      }
+      .tree-row.inactive {
+        color: var(--inactive);
+        cursor: default;
+      }
+      .tree-row.current {
+        color: var(--text);
+        background: var(--accent-soft);
+      }
+      .glyph {
+        width: 13px;
+        color: var(--muted);
+        text-align: center;
+      }
+      .role {
+        width: 12px;
+        color: var(--accent);
+        font-size: 12px;
+        text-align: center;
+      }
+      .inactive .role {
+        color: var(--inactive);
+      }
+      .preview {
+        overflow: hidden;
+        flex: 1;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .meta {
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .connector {
+        height: 5px;
+        margin-left: 12px;
+        border-left: 1px solid var(--line);
+      }
+      .indent-1 {
+        padding-left: 18px;
+      }
+      .indent-2 {
+        padding-left: 36px;
+      }
+      .branch {
+        margin: 2px 0 2px 12px;
+        border-left: 1px solid var(--line);
+      }
+      .branch.inactive {
+        border-left-color: #444;
+      }
+      .branch-head {
+        display: flex;
+        width: 100%;
+        align-items: center;
+        gap: 7px;
+        padding: 5px 5px;
+        border: 0;
+        border-radius: 5px;
+        background: transparent;
+        color: var(--inactive);
+        cursor: pointer;
+        text-align: left;
+        font-size: 11px;
+      }
+      .branch-head:hover {
+        background: var(--surface-hover);
+      }
+      .tree-row .resume {
+        flex: 0 0 auto;
+      }
+      .resume {
+        padding: 4px 6px;
+        color: var(--accent);
+        cursor: pointer;
+        font-size: 11px;
+      }
+      .help {
+        padding: 9px 10px;
+        margin: 8px 4px;
+        color: var(--muted);
+        background: #1a1a1a;
+        border-radius: 6px;
+        font-size: 11px;
+      }
+      .hidden {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <aside class="sessions">
+        <h2>Sessions</h2>
+        <div class="session current">
+          Auth design <small>Current session · 12m ago</small>
+        </div>
+        <div class="session">Sidebar redesign <small>Yesterday</small></div>
+      </aside>
+
+      <section class="chat" id="chat" aria-label="Active branch transcript">
+        <div class="chat-header" id="chat-header">
+          Active branch · JWT implementation
+        </div>
+        <div class="transcript" id="transcript">
+          <article class="message user" id="msg-question">
+            <div class="message-label">You</div>
+            <div class="bubble">Should we use JWT or cookies?</div>
+          </article>
+          <article class="message assistant" id="msg-recommendation">
+            <div class="message-label">Picot</div>
+            <div class="bubble">
+              JWT fits this API boundary. Use short-lived access tokens and
+              rotating refresh tokens.
+            </div>
+          </article>
+          <article class="message user" id="msg-jwt">
+            <div class="message-label">You</div>
+            <div class="bubble">
+              Implement JWT with rotating refresh tokens.
+            </div>
+          </article>
+          <article class="message assistant" id="msg-jwt-result">
+            <div class="message-label">Picot</div>
+            <div class="bubble">
+              Implementation plan: token issuer, refresh endpoint, revocation
+              store, integration tests.
+            </div>
+          </article>
+          <article class="message user" id="msg-jwt-test">
+            <div class="message-label">You</div>
+            <div class="bubble">Add expiry tests.</div>
+          </article>
+          <article class="message assistant" id="msg-jwt-leaf">
+            <div class="message-label">Picot</div>
+            <div class="bubble">Expiry tests added. Current active leaf.</div>
+          </article>
+        </div>
+        <div class="composer">Message active JWT branch…</div>
+      </section>
+
+      <aside class="info-panel" aria-label="Info">
+        <header class="info-header">
+          <h1 class="panel-title">Info</h1>
+          <span class="meta">Current session</span>
+        </header>
+        <section class="workspace" aria-labelledby="workspace-heading">
+          <h2 class="panel-title" id="workspace-heading">Workspace</h2>
+          <div class="workspace-path" title="/Users/linyong/src/auth-service">
+            /Users/linyong/src/auth-service
+          </div>
+          <nav class="actions" aria-label="Workspace actions">
+            <a class="workspace-link" href="#copy-path"
+              ><span class="workspace-icon" aria-hidden="true"
+                ><svg viewBox="0 0 24 24">
+                  <rect x="9" y="9" width="11" height="11" rx="2"></rect>
+                  <path
+                    d="M16 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"
+                  ></path></svg></span
+              >Copy path</a
+            >
+            <a class="workspace-link" href="#open-vscode"
+              ><span class="workspace-icon" aria-hidden="true"
+                ><img src="../../../public/icons/app-vscode.png" alt="" /></span
+              >Open in VS Code</a
+            >
+            <a class="workspace-link" href="#open-zed"
+              ><span class="workspace-icon" aria-hidden="true"
+                ><img src="../../../public/icons/app-zed.png" alt="" /></span
+              >Open in Zed</a
+            >
+            <a class="workspace-link" href="#open-terminal"
+              ><span class="workspace-icon" aria-hidden="true"
+                ><img
+                  src="../../../public/icons/app-terminal.svg"
+                  alt="" /></span
+              >Open in Terminal</a
+            >
+          </nav>
+        </section>
+
+        <section class="history" aria-labelledby="history-heading">
+          <div class="history-heading">
+            <h2 class="panel-title" id="history-heading">Session history</h2>
+            <span class="status">● Active path</span>
+          </div>
+          <div class="tree-scroll">
+            <button
+              class="tree-row active"
+              type="button"
+              data-target="msg-question"
+            >
+              <span class="role">●</span
+              ><span class="preview">Should we use JWT or cookies?</span>
+            </button>
+            <div class="connector"></div>
+            <button
+              class="tree-row active indent-1"
+              type="button"
+              data-target="msg-recommendation"
+            >
+              <span class="role">✦</span
+              ><span class="preview">JWT fits this API boundary…</span>
+            </button>
+            <div class="branch" id="jwt-branch">
+              <button
+                class="branch-head hidden"
+                type="button"
+                id="jwt-toggle"
+                aria-expanded="true"
+              >
+                <span class="glyph" id="jwt-caret">▾</span
+                ><span>JWT branch · 4 turns</span>
+              </button>
+              <div id="jwt-rows">
+                <button
+                  class="tree-row active indent-1"
+                  type="button"
+                  data-target="msg-jwt"
+                >
+                  <span class="glyph">├</span><span class="role">●</span
+                  ><span class="preview"
+                    >Implement JWT with rotating refresh tokens.</span
+                  >
+                </button>
+                <div class="connector" style="margin-left: 30px"></div>
+                <button
+                  class="tree-row active indent-2"
+                  type="button"
+                  data-target="msg-jwt-result"
+                >
+                  <span class="role">✦</span
+                  ><span class="preview"
+                    >Implementation plan: token issuer…</span
+                  >
+                </button>
+                <div class="connector" style="margin-left: 48px"></div>
+                <button
+                  class="tree-row active indent-2"
+                  type="button"
+                  data-target="msg-jwt-test"
+                >
+                  <span class="role">●</span
+                  ><span class="preview">Add expiry tests.</span>
+                </button>
+                <div class="connector" style="margin-left: 48px"></div>
+                <div
+                  class="tree-row active current indent-2"
+                  data-target="msg-jwt-leaf"
+                  id="jwt-leaf"
+                >
+                  <span class="role">✦</span
+                  ><span class="preview">Expiry tests added.</span
+                  ><span class="meta">now</span
+                  ><button class="resume hidden" type="button" id="resume-jwt">
+                    Resume branch
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="branch inactive" id="cookie-branch">
+              <button
+                class="branch-head"
+                type="button"
+                id="cookie-toggle"
+                aria-expanded="false"
+              >
+                <span class="glyph" id="cookie-caret">▸</span
+                ><span>Alternative branch · 4 turns</span>
+              </button>
+              <div id="cookie-rows" class="hidden">
+                <div class="tree-row inactive indent-1">
+                  <span class="glyph">└</span><span class="role">●</span
+                  ><span class="preview"
+                    >Implement cookie sessions instead.</span
+                  >
+                </div>
+                <div class="tree-row inactive indent-2">
+                  <span class="role">✦</span
+                  ><span class="preview">Cookie session plan…</span>
+                </div>
+                <div class="tree-row inactive indent-2">
+                  <span class="role">●</span
+                  ><span class="preview">Add CSRF protection.</span>
+                </div>
+                <div class="tree-row inactive indent-2" id="cookie-leaf">
+                  <span class="role">✦</span
+                  ><span class="preview">CSRF test coverage complete.</span
+                  ><button class="resume" type="button" id="resume-cookie">
+                    Resume branch
+                  </button>
+                </div>
+              </div>
+            </div>
+            <p class="help">
+              Active-path nodes scroll chat. Inactive branches stay gray; resume
+              branch before navigating them.
+            </p>
+          </div>
+        </section>
+      </aside>
+    </main>
+    <script>
+      document.querySelectorAll("[data-target]").forEach((node) => {
+        node.addEventListener("click", (event) => {
+          if (event.target.closest(".resume")) return;
+          if (node.classList.contains("inactive")) return;
+          document
+            .getElementById(node.dataset.target)
+            ?.scrollIntoView({ behavior: "smooth", block: "center" });
+        });
+      });
+
+      const chatHeader = document.getElementById("chat-header");
+      const branches = {
+        jwt: {
+          root: document.getElementById("jwt-branch"),
+          rows: document.getElementById("jwt-rows"),
+          toggle: document.getElementById("jwt-toggle"),
+          caret: document.getElementById("jwt-caret"),
+          resume: document.getElementById("resume-jwt"),
+          leaf: document.getElementById("jwt-leaf"),
+        },
+        cookie: {
+          root: document.getElementById("cookie-branch"),
+          rows: document.getElementById("cookie-rows"),
+          toggle: document.getElementById("cookie-toggle"),
+          caret: document.getElementById("cookie-caret"),
+          resume: document.getElementById("resume-cookie"),
+          leaf: document.getElementById("cookie-leaf"),
+        },
+      };
+
+      function setBranchState(branch, active) {
+        branch.root.classList.toggle("inactive", !active);
+        branch.rows.classList.toggle("hidden", !active);
+        branch.toggle.classList.toggle("hidden", active);
+        branch.caret.textContent = active ? "▾" : "▸";
+        branch.toggle.setAttribute("aria-expanded", String(active));
+        branch.resume.classList.toggle("hidden", active);
+        branch.rows.querySelectorAll(".tree-row").forEach((row) => {
+          row.classList.toggle("inactive", !active);
+          row.classList.toggle("active", active);
+        });
+        branch.leaf.classList.toggle("current", active);
+      }
+
+      for (const branch of Object.values(branches)) {
+        branch.toggle.addEventListener("click", () => {
+          const collapsed = branch.rows.classList.toggle("hidden");
+          branch.caret.textContent = collapsed ? "▸" : "▾";
+          branch.toggle.setAttribute("aria-expanded", String(!collapsed));
+        });
+        branch.resume.addEventListener("click", () => {
+          for (const other of Object.values(branches)) {
+            setBranchState(other, other === branch);
+          }
+          chatHeader.textContent =
+            branch === branches.cookie
+              ? "Active branch · Cookie sessions"
+              : "Active branch · JWT implementation";
+        });
+      }
+    </script>
+  </body>
+</html>

@@ -56,6 +56,7 @@
     <link rel="stylesheet" href="ui/process-details.css" />
     <link rel="stylesheet" href="ui/image-lightbox.css" />
     <link rel="stylesheet" href="session/session-info.css" />
+    <link rel="stylesheet" href="info-panel.css" />
     <link rel="stylesheet" href="settings/settings-config.css" />
     <link rel="stylesheet" href="vendor/xterm.css" />
     <script>
@@ -813,14 +814,35 @@
               >
                 <button
                   type="button"
+                  class="file-sidebar-tab"
+                  id="file-sidebar-info-tab"
+                  role="tab"
+                  aria-selected="false"
+                  aria-controls="info-panel"
+                  aria-label="Info"
+                  data-i18n-aria-label="infoPanel.title"
+                >
+                  <span class="file-sidebar-tab-icon" aria-hidden="true"></span>
+                  <span
+                    class="file-sidebar-tab-label"
+                    data-i18n="infoPanel.title"
+                    >Info</span
+                  >
+                </button>
+                <button
+                  type="button"
                   class="file-sidebar-tab active"
                   id="file-sidebar-files-tab"
                   role="tab"
                   aria-selected="true"
                   aria-controls="file-list"
-                  data-i18n="files.title"
+                  aria-label="Files"
+                  data-i18n-aria-label="files.title"
                 >
-                  Files
+                  <span class="file-sidebar-tab-icon" aria-hidden="true"></span>
+                  <span class="file-sidebar-tab-label" data-i18n="files.title"
+                    >Files</span
+                  >
                 </button>
                 <button
                   type="button"
@@ -829,9 +851,13 @@
                   role="tab"
                   aria-selected="false"
                   aria-controls="git-panel"
-                  data-i18n="git.panel"
+                  aria-label="Git"
+                  data-i18n-aria-label="git.panel"
                 >
-                  Git
+                  <span class="file-sidebar-tab-icon" aria-hidden="true"></span>
+                  <span class="file-sidebar-tab-label" data-i18n="git.panel"
+                    >Git</span
+                  >
                 </button>
               </div>
               <button
@@ -865,6 +891,15 @@
               <button
                 type="button"
                 class="icon-btn file-sidebar-action hidden"
+                id="info-panel-refresh"
+                title="Refresh session history"
+                aria-label="Refresh session history"
+                data-i18n-title="infoPanel.refresh"
+                data-i18n-aria-label="infoPanel.refresh"
+              ></button>
+              <button
+                type="button"
+                class="icon-btn file-sidebar-action hidden"
                 id="git-panel-refresh"
                 title="Refresh Git status"
                 aria-label="Refresh Git status"
@@ -894,6 +929,11 @@
               class="file-sidebar-path"
               id="file-sidebar-path"
               title=""
+            ></div>
+            <div
+              class="info-panel hidden"
+              id="info-panel"
+              role="tabpanel"
             ></div>
             <div class="file-list" id="file-list"></div>
             <div class="git-panel hidden" id="git-panel" role="tabpanel"></div>

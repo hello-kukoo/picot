@@ -16,12 +16,14 @@ function folderNameOf(project) {
   return segments[segments.length - 1] || path;
 }
 
-function createIconRow(rowClass, iconClass, valueClass) {
+function createIconRow(rowClass, iconClass, valueClass, iconName = null) {
   const row = document.createElement("div");
   row.className = `wqi-row ${rowClass}`;
   const icon = document.createElement("span");
   icon.className = iconClass;
   icon.setAttribute("aria-hidden", "true");
+  const glyph = iconName ? createIcon(iconName, { size: 22 }) : null;
+  if (glyph) icon.append(glyph);
   const value = document.createElement("span");
   value.className = `wqi-row-value ${valueClass}`;
   row.append(icon, value);
@@ -175,7 +177,7 @@ export class WorkspaceFocusSidebar {
     if (info.repository) {
       const gitRegion = document.createElement("div");
       gitRegion.className = "wqi-git-region";
-      const repoRow = createIconRow("wqi-repo-row", "wqi-repo-icon", "wqi-repo");
+      const repoRow = createIconRow("wqi-repo-row", "wqi-repo-icon", "wqi-repo", "git-info");
       repoRow.value.textContent = info.repository;
       gitRegion.appendChild(repoRow.row);
       content.appendChild(gitRegion);

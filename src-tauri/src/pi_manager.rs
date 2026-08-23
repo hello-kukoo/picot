@@ -539,46 +539,12 @@ impl PiManager {
         session_path: Option<&str>,
     ) -> Result<NativeLaunchSpec, String> {
         let binary = self.resolve_bundled_pi()?;
-        let mut candidates = Vec::new();
-        if let Some(resources) = self.static_dir.parent() {
-            candidates.push(resources.join("extensions").join("picot-bridge.mjs"));
-        }
-        if cfg!(debug_assertions) {
-            candidates.push(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("..")
-                    .join("extensions")
-                    .join("dist")
-                    .join("picot-bridge.mjs"),
-            );
-            candidates.push(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("..")
-                    .join("extensions")
-                    .join("picot-bridge.ts"),
-            );
-        }
-        let bridge = candidates
-            .iter()
-            .find(|candidate| candidate.is_file())
-            .cloned()
-            .ok_or_else(|| {
-                format!(
-                    "Could not find picot-bridge extension. Tried:\n{}",
-                    candidates
-                        .iter()
-                        .map(|path| format!("  - {}", path.display()))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                )
-            })?;
+        let bridge = self.resolve_picot_bridge_extension_path()?;
         Ok(NativeLaunchSpec {
             binary,
             cwd: PathBuf::from(cwd),
             session_path: session_path.map(PathBuf::from),
-            extensions: vec![PathBuf::from(sanitize_extension_path_for_pi(
-                &strip_verbatim_prefix(&bridge.to_string_lossy()),
-            ))],
+            extensions: vec![PathBuf::from(bridge)],
             pi_version: locked_pi_version().to_owned(),
             path_env: build_augmented_path(),
         })
@@ -772,6 +738,83 @@ impl PiManager {
         None
     }
 
+    /// Locate the picot-bridge extension, shared by every spawn path that
+    /// needs the `/picot-navigate-tree` command (session-tree Resume/Edit).
+    ///
+    /// Candidate order (first existing file wins):
+    /// 1. Bundled `extensions/picot-bridge.mjs` next to `static_dir` (what
+    ///    shipped installs and `tauri dev`'s resource copy provide).
+    /// 2. *Debug builds only:* repo `extensions/dist/picot-bridge.mjs`, then
+    ///    the live `extensions/picot-bridge.ts` source.
+    ///
+    /// Returns `Err` with the full candidate list so callers decide policy:
+    /// `native_launch_spec` treats a missing bridge as a hard error, while the
+    /// desktop spawn only warns (see `append_picot_bridge_extension`).
+    fn resolve_picot_bridge_extension_path(&self) -> Result<String, String> {
+        let mut candidates = Vec::new();
+        if let Some(resources) = self.static_dir.parent() {
+            candidates.push(resources.join("extensions").join("picot-bridge.mjs"));
+        }
+        if cfg!(debug_assertions) {
+            candidates.push(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("..")
+                    .join("extensions")
+                    .join("dist")
+                    .join("picot-bridge.mjs"),
+            );
+            candidates.push(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("..")
+                    .join("extensions")
+                    .join("picot-bridge.ts"),
+            );
+        }
+        candidates
+            .iter()
+            .find(|candidate| candidate.is_file())
+            .map(|bridge| {
+                sanitize_extension_path_for_pi(&strip_verbatim_prefix(&bridge.to_string_lossy()))
+            })
+            .ok_or_else(|| {
+                format!(
+                    "Could not find picot-bridge extension. Tried:\n{}",
+                    candidates
+                        .iter()
+                        .map(|path| format!("  - {}", path.display()))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )
+            })
+    }
+
+    /// Append `--extension <picot-bridge>` to desktop pi spawn args.
+    ///
+    /// picot-bridge registers `/picot-navigate-tree`, which the Info panel's
+    /// Resume and the user-message Edit actions dispatch to, so every desktop
+    /// Pi needs it — not just super-agent workspaces. A missing bridge stays
+    /// non-fatal (mirrors the optional pi-chat handling): only session-tree
+    /// navigation degrades to an unknown-command error while the rest of pi
+    /// keeps working.
+    fn append_picot_bridge_extension(&self, args: &mut Vec<String>) {
+        match self.resolve_picot_bridge_extension_path() {
+            Ok(bridge_path) => {
+                log::info!(
+                    "[pi-desktop] picot-bridge extension resolved: {}",
+                    bridge_path
+                );
+                args.push("--extension".to_string());
+                args.push(bridge_path);
+            }
+            Err(error) => {
+                log::warn!(
+                    "[pi-desktop] picot-bridge extension not found; session-tree navigation will be unavailable: {}",
+                    error
+                );
+            }
+        }
+    }
+
     pub fn spawn_with_spec(&self, spec: &PiSpawnSpec) -> Result<SpawnedPi, String> {
         let result = self.spawn_with_spec_inner(spec);
         self.reserved_ports.lock().unwrap().remove(&spec.port);
@@ -818,6 +861,12 @@ impl PiManager {
                 log::debug!("[pi-desktop] pi-chat extension not found; skipping");
             }
         }
+
+        // Session-tree navigation (Info panel Resume/Edit) dispatches
+        // /picot-navigate-tree, registered only by picot-bridge. Load it for
+        // every desktop spawn — without it those actions fail as an unknown
+        // command in production Pi.
+        self.append_picot_bridge_extension(&mut args);
         log::info!(
             "[pi-desktop] spawning pi: bin={} args={:?} cwd={} port={} static_dir={}",
             pi_bin_str,
@@ -2251,6 +2300,63 @@ No packages installed.";
     #[test]
     fn build_pi_args_rejects_no_session_with_explicit_session_path() {
         assert!(build_pi_args("/ext/server.mjs", &spec(true, false, Some("/s.jsonl"))).is_err());
+    }
+
+    #[test]
+    fn desktop_spawn_args_append_picot_bridge_after_embedded_server() {
+        // The bundled-resources layout: <resources>/extensions/picot-bridge.mjs
+        // sits next to <resources>/public (static_dir).
+        let temp = tempfile::tempdir().expect("create resources root");
+        let extensions_dir = temp.path().join("extensions");
+        std::fs::create_dir_all(&extensions_dir).expect("create extensions dir");
+        let bridge_file = extensions_dir.join("picot-bridge.mjs");
+        std::fs::write(&bridge_file, "// bridge").expect("write bridge file");
+        let manager = PiManager::new(temp.path().join("public"));
+
+        let mut args = build_pi_args("/ext/server.mjs", &spec(false, false, None)).unwrap();
+        manager.append_picot_bridge_extension(&mut args);
+
+        // Both extensions ride along as separate --extension flags: pi loads
+        // each, so /api (embedded-server) and /picot-navigate-tree
+        // (picot-bridge) coexist on the same process.
+        let expected_bridge = bridge_file.to_string_lossy().to_string();
+        assert_eq!(
+            args,
+            vec![
+                "--extension".to_string(),
+                "/ext/server.mjs".to_string(),
+                "--mode".to_string(),
+                "rpc".to_string(),
+                "--extension".to_string(),
+                strip_verbatim_prefix(&expected_bridge),
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_picot_bridge_extension_path_lists_candidates_when_missing() {
+        // A static_dir whose sibling extensions/ dir has no bridge. Debug
+        // builds fall back to repo-relative candidates, so this asserts on
+        // the error shape only when the repo candidates are absent; otherwise
+        // it just proves the bundled candidate is consulted first.
+        let temp = tempfile::tempdir().expect("create resources root");
+        let manager = PiManager::new(temp.path().join("public"));
+        let resolved = manager.resolve_picot_bridge_extension_path();
+        if cfg!(debug_assertions) {
+            // The repo always ships extensions/picot-bridge.ts, so debug
+            // builds resolve through the fallback candidates.
+            assert!(resolved.is_ok());
+        } else {
+            let error = resolved.expect_err("release build must fail without a bridge");
+            assert!(error.contains("picot-bridge"));
+            assert!(error.contains(
+                temp.path()
+                    .join("extensions")
+                    .join("picot-bridge.mjs")
+                    .to_string_lossy()
+                    .as_ref()
+            ));
+        }
     }
 
     #[test]

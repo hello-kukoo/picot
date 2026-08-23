@@ -66,7 +66,7 @@ This phase delivers:
 | Touch devices | User toolbar always visible under `@media (hover: none)` (assistant already is). |
 | Toolbar visibility during assistant streaming | Hidden until finalize. |
 | Settings toggle | None. Timestamps show whenever available. |
-| User toolbar layout | `{timestamp} {copy}` — right-aligned (user block is right-aligned). |
+| User toolbar layout | `{timestamp} {copy}` — right-aligned (user block is right-aligned). Phase-1 layout; superseded 2026-08-21 by `{expand} {fork} {edit} {copy} {time}`. |
 | Assistant toolbar layout | `{copy} {timestamp} {usage}` — left-aligned. `usage` (cost) moves into the toolbar (today it is a separate inline span). |
 | Timestamp hover affordance | `title` attribute with the full `YYYY-MM-DD HH:MM:SS` for exact reference. |
 | Error / welcome rows | No toolbar. |
@@ -226,6 +226,12 @@ without layout work.
 | --- | --- |
 | User | `time`, `copy`, *(future: fork, delete)* |
 | Assistant | `copy`, `time`, `usage`, *(future: delete)* |
+
+> **2026-08-21 更新**：user 顺序已被
+> [`2026-08-21-info-panel-design.md`](2026-08-21-info-panel-design.md) 取代为
+> `expand/collapse → fork → edit → copy → time`（`time` 移至末位，`fork` / `edit` 插在
+> `copy` 之前）。下方的追加式扩展 contract（真实 button、aria-label、keyboard focus、
+> per-role 可见性）对新增动作仍然有效。
 
 **Contract for adding an action:**
 

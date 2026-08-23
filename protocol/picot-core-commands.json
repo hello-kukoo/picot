@@ -33,6 +33,7 @@
     "set_skill_enabled": "desktopOwnerOnly",
     "list_package_skill_inventory": "desktopOwnerOnly",
     "get_fork_messages": "deniedSessionLifecycle",
+    "get_session_tree": "deniedSessionLifecycle",
     "list_model_catalog": "allowed",
     "set_model_visibility": "allowed",
     "check_model_health": "allowed",

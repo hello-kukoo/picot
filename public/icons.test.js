@@ -55,6 +55,21 @@ test("refresh keeps the approved sidebar arc geometry without spinning", () => {
   expect(icon?.classList.contains("spinning")).toBe(false);
 });
 
+test("git-info matches shared Git repository indicator geometry", () => {
+  const icon = createIcon("git-info");
+  expect(icon?.querySelector('line[x1="6"][y1="3"][x2="6"][y2="15"]')).not.toBeNull();
+  expect(icon?.querySelector('circle[cx="18"][cy="6"]')).not.toBeNull();
+  expect(icon?.querySelector('circle[cx="6"][cy="18"]')).not.toBeNull();
+  expect(icon?.querySelector('path[d="M18 9a9 9 0 0 1-9 9"]')).not.toBeNull();
+});
+
+test("circle-info matches the Session Info toolbar geometry", () => {
+  const icon = createIcon("circle-info");
+  expect(icon?.querySelector("circle")?.getAttribute("r")).toBe("10");
+  expect(icon?.querySelector('path[d="M12 16v-4"]')).not.toBeNull();
+  expect(icon?.querySelector('path[d="M12 8h.01"]')).not.toBeNull();
+});
+
 test("sidebar and File panel icons match the Lucide v1 geometry", () => {
   expect(createIcon("folder-plus")?.querySelector("path")?.getAttribute("d")).toBe("M12 10v6");
   expect(createIcon("message-circle")?.querySelectorAll("path").length).toBe(1);

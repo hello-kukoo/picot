@@ -470,6 +470,7 @@ describe("Git metadata", () => {
       expect(document.querySelector(".wqi-repo").textContent).toBe("owner/repo");
     });
     expect(document.querySelector(".wqi-repo-icon")).not.toBeNull();
+    expect(document.querySelector(".wqi-repo-icon svg")).not.toBeNull();
     expect(document.querySelector(".wqi-type")).toBeNull();
     expect(document.querySelector(".wqi-branch")).toBeNull();
     expect(document.querySelector(".wqi-git-region").hidden).toBe(false);

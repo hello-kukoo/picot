@@ -1,6 +1,7 @@
 // ABOUTME: Workspace quick-info controller — hover/focus card with folder name, total session count,
 // ABOUTME: full path, on-demand Git metadata, Pin/Unpin control, 30s cache, and inert-text safety.
 import { onLocaleChange, t } from "./i18n.js";
+import { createIcon } from "./icons.js";
 
 // ── Timing & sizing constants ────────────────────────────────────────
 
@@ -270,7 +271,7 @@ export class WorkspaceQuickInfo {
     this._gitLoadingEl.hidden = true;
     this._gitLoadingEl.setAttribute("aria-live", "polite");
 
-    const repoRow = this._createIconRow("wqi-repo-row", "wqi-repo-icon", "wqi-repo");
+    const repoRow = this._createIconRow("wqi-repo-row", "wqi-repo-icon", "wqi-repo", "git-info");
     repoRow.row.hidden = true;
     this._repoEl = repoRow.value;
 
@@ -289,12 +290,14 @@ export class WorkspaceQuickInfo {
     this._container?.appendChild(card);
   }
 
-  _createIconRow(rowClass, iconClass, valueClass) {
+  _createIconRow(rowClass, iconClass, valueClass, iconName = null) {
     const row = document.createElement("div");
     row.className = `wqi-row ${rowClass}`;
     const icon = document.createElement("span");
     icon.className = iconClass;
     icon.setAttribute("aria-hidden", "true");
+    const glyph = iconName ? createIcon(iconName, { size: 22 }) : null;
+    if (glyph) icon.append(glyph);
     const value = document.createElement("span");
     value.className = `wqi-row-value ${valueClass}`;
     row.append(icon, value);

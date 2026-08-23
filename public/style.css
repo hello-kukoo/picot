@@ -1440,14 +1440,16 @@ body {
   overflow: hidden;
 }
 
-.header-open-app-logo-img {
+.header-open-app-logo-img,
+.open-app-logo-img {
   width: 100%;
   height: 100%;
   object-fit: contain;
   display: block;
 }
 
-.header-open-app-logo-text {
+.header-open-app-logo-text,
+.open-app-logo-text {
   line-height: 1;
 }
 
@@ -1592,18 +1594,10 @@ body {
   -webkit-app-region: no-drag;
 }
 
-.git-branch-indicator::before {
-  content: "";
-  width: 11px;
-  height: 11px;
-  flex-shrink: 0;
-  background-color: currentColor;
-  -webkit-mask:
-    no-repeat center / contain
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='6' y1='3' x2='6' y2='15'/%3E%3Ccircle cx='18' cy='6' r='3'/%3E%3Ccircle cx='6' cy='18' r='3'/%3E%3Cpath d='M18 9a9 9 0 0 1-9 9'/%3E%3C/svg%3E");
-  mask:
-    no-repeat center / contain
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='6' y1='3' x2='6' y2='15'/%3E%3Ccircle cx='18' cy='6' r='3'/%3E%3Ccircle cx='6' cy='18' r='3'/%3E%3Cpath d='M18 9a9 9 0 0 1-9 9'/%3E%3C/svg%3E");
+.git-branch-indicator > svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
 }
 
 .git-branch-indicator.hidden {
@@ -3654,7 +3648,9 @@ body {
   overscroll-behavior: contain;
   padding-top: var(--messages-top-inset);
   padding-bottom: var(--messages-bottom-inset);
-  padding-left: max(var(--space-6), calc((100% - 960px) / 2));
+  /* The conversation rail hugs the chat's LEFT edge (Info panel design):
+     reserve its width so ticks never overlap message text or focus rings. */
+  padding-left: max(var(--space-12), calc((100% - 960px) / 2));
   padding-right: max(var(--space-6), calc((100% - 960px) / 2));
   display: flex;
   flex-direction: column;
@@ -5410,19 +5406,24 @@ body.hide-thinking .thinking-block {
   border-radius: var(--radius-md);
 }
 
-/* ── Rail — no background, just floating ticks on the right edge ── */
+/* ── Rail — no background, just floating ticks on the left edge ── */
 .conv-nav {
   position: absolute;
-  right: 16px;
+  left: 16px;
   top: 50%;
   transform: translateY(-50%);
   z-index: 30;
   display: flex;
   flex-direction: column;
-  align-items: flex-end; /* ticks grow leftward */
+  align-items: flex-start; /* ticks grow rightward from the left edge */
   gap: var(--space-1);
-  padding: var(--space-2) 0;
-  /* No pill, no border, no backdrop — transparent rail */
+  padding: var(--space-2) var(--space-1-5);
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  /* Whole-rail hover surface (Info panel design): one rounded highlight for
+     the entire hit area — never a per-tick background. Border and padding are
+     constant so the surface's appearance never shifts tick layout. */
+  background: transparent;
   max-height: min(
     560px,
     calc(100% - var(--messages-top-inset) - var(--messages-bottom-inset) - 24px)
@@ -5431,10 +5432,20 @@ body.hide-thinking .thinking-block {
   animation: convNavIn 0.3s var(--spring);
   transition:
     opacity 0.2s var(--ease),
-    transform 0.2s var(--ease);
+    transform 0.2s var(--ease),
+    background 0.2s var(--ease),
+    border-color 0.2s var(--ease);
 }
 
-/* Hide conv-nav when window is too narrow — needs room to the right of messages */
+.conv-nav:hover {
+  background: var(--sidebar-bg-mobile);
+  border-color: var(--border);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* Hide conv-nav when window is too narrow — the rail needs room beside the messages */
 @media (max-width: 900px) {
   .conv-nav {
     display: none !important;
@@ -5445,13 +5456,13 @@ body.hide-thinking .thinking-block {
   display: flex !important;
   opacity: 0;
   pointer-events: none;
-  transform: translateY(-50%) translateX(8px);
+  transform: translateY(-50%) translateX(-8px);
 }
 
 @keyframes convNavIn {
   from {
     opacity: 0;
-    transform: translateY(-50%) translateX(10px);
+    transform: translateY(-50%) translateX(-10px);
   }
   to {
     opacity: 1;
@@ -5464,10 +5475,10 @@ body.hide-thinking .thinking-block {
 .conv-nav-track {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: flex-start;
   gap: var(--space-1);
   overflow: visible;
-  margin-right: 2px;
+  margin-left: 2px;
 }
 
 /* Individual tick — button is the (large) hit target; ::after is the visual line */
@@ -5476,7 +5487,7 @@ body.hide-thinking .thinking-block {
   height: 14px; /* tall hit target, well beyond the thin visual line */
   display: flex;
   align-items: center;
-  justify-content: flex-end; /* bar hugs the right/rail edge */
+  justify-content: flex-start; /* bar hugs the left/rail edge */
   background: transparent;
   border: none;
   padding: 0;
@@ -5487,11 +5498,11 @@ body.hide-thinking .thinking-block {
 .conv-nav-dot::after {
   content: "";
   height: 2px;
-  width: var(--nav-w, 10px);
+  width: var(--nav-w, 7px);
   border-radius: var(--radius-pill);
-  background: var(--border-hover);
+  background: var(--nav-color, var(--accent));
   opacity: 0.6;
-  transform-origin: right center;
+  transform-origin: left center;
   transition:
     width 0.22s var(--ease),
     background 0.2s var(--ease),
@@ -5506,14 +5517,14 @@ body.hide-thinking .thinking-block {
 .conv-nav-dot.active::after {
   background: linear-gradient(
     90deg,
-    color-mix(in srgb, var(--accent) 28%, var(--border-hover)),
-    var(--accent)
+    var(--nav-color, var(--accent)),
+    color-mix(in srgb, var(--nav-color, var(--accent)) 28%, var(--border-hover))
   );
   opacity: 1;
-  box-shadow: 2px 0 6px var(--accent-glow);
+  box-shadow: -2px 0 6px var(--accent-glow);
 }
 
-/* Tooltip — floated to the left of the rail */
+/* Tooltip — floated to the right of the (left-side) rail */
 .conv-nav-tooltip {
   position: fixed;
   width: 260px;
@@ -5529,7 +5540,7 @@ body.hide-thinking .thinking-block {
   display: flex;
   flex-direction: column;
   gap: var(--space-1-5);
-  transform-origin: right center;
+  transform-origin: left center;
   /* animated via JS class swap */
 }
 
@@ -5545,7 +5556,7 @@ body.hide-thinking .thinking-block {
 @keyframes convTooltipIn {
   from {
     opacity: 0;
-    transform: translateX(8px) scale(0.96);
+    transform: translateX(-8px) scale(0.96);
   }
   to {
     opacity: 1;
@@ -5583,7 +5594,7 @@ body.hide-thinking .thinking-block {
 .conv-nav-new-badge {
   position: fixed;
   bottom: calc(var(--messages-bottom-inset, 128px) + 12px);
-  right: 48px;
+  left: 48px;
   font-size: var(--font-size-sm);
   color: white;
   background: var(--accent);
@@ -5729,6 +5740,38 @@ body.hide-thinking .thinking-block {
   display: none;
 }
 
+/* Edit button — same quiet affordance family as fork (user messages). */
+.message-edit-btn {
+  opacity: 0.45;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: var(--space-0-5) var(--space-1);
+  font-size: var(--font-size-sm);
+  transition:
+    background 0.15s var(--ease),
+    color 0.15s var(--ease);
+  white-space: nowrap;
+}
+
+.message-edit-btn:hover {
+  opacity: 1;
+  color: var(--text-primary);
+}
+
+.message-edit-btn:active {
+  transform: scale(0.9);
+}
+
+.message-edit-btn:disabled {
+  cursor: wait;
+}
+
+.super-agent-active .message-edit-btn {
+  display: none;
+}
+
 /* Error / system messages */
 .error-message {
   background: rgba(248, 113, 113, 0.06);
@@ -5770,6 +5813,11 @@ body.hide-thinking .thinking-block {
   gap: var(--space-1);
 }
 .file-sidebar-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1-5);
+  min-width: 30px;
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
@@ -5777,6 +5825,25 @@ body.hide-thinking .thinking-block {
   cursor: pointer;
   font: inherit;
   padding: var(--space-1) var(--space-2);
+}
+.file-sidebar-tab-label {
+  display: none;
+}
+.file-sidebar-tab.active .file-sidebar-tab-label {
+  display: inline;
+}
+.file-sidebar-tab-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  align-items: center;
+  justify-content: center;
+}
+.file-sidebar-tab-icon svg {
+  display: block;
+  width: 14px;
+  height: 14px;
 }
 .file-sidebar-tab.active {
   border-bottom-color: var(--accent, currentColor);
@@ -8176,7 +8243,6 @@ body.file-preview-resizing {
 .wqi-folder-icon,
 .wqi-count-icon,
 .wqi-path-icon,
-.wqi-repo-icon,
 .wqi-pin-icon {
   display: inline-block;
   flex: 0 0 auto;
@@ -8203,8 +8269,19 @@ body.file-preview-resizing {
 }
 
 .wqi-repo-icon {
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill='none' stroke='black' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.8' d='M7 3v12m0-12a3 3 0 1 0 0 6a3 3 0 0 0 0-6m0 12a3 3 0 1 0 0 6a3 3 0 0 0 0-6m0-6h7a3 3 0 1 0 3 3V9'/%3E%3C/svg%3E");
-  mask-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill='none' stroke='black' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.8' d='M7 3v12m0-12a3 3 0 1 0 0 6a3 3 0 0 0 0-6m0 12a3 3 0 1 0 0 6a3 3 0 0 0 0-6m0-6h7a3 3 0 1 0 3 3V9'/%3E%3C/svg%3E");
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+
+.wqi-repo-icon svg {
+  display: block;
+  width: 22px;
+  height: 22px;
 }
 
 .wqi-folder-name,

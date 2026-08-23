@@ -2052,6 +2052,7 @@ export default function (pi: ExtensionAPI) {
     "compaction_end",
     "auto_retry_start",
     "auto_retry_end",
+    "session_tree",
     "extension_error",
     "model_select",
     "thinking_level_select",
@@ -2093,28 +2094,56 @@ export default function (pi: ExtensionAPI) {
             if (result && typeof result.summary === "string") e.summary = result.summary;
           }
         }
-        const eventPayload = { type: eventType, ...(event as Record<string, unknown>) };
-        if (ephemeralState) {
-          if (ctx) {
-            ephemeralState.setContextState({
-              model: ctx.model,
-              thinkingLevel: currentPi()?.getThinkingLevel() ?? undefined,
-              thinkingLevels: getAvailableThinkingLevelsForModel(ctx.model),
-              contextUsage: ctx.getContextUsage(),
+        const forwardEvent = () => {
+          const eventPayload = { type: eventType, ...(event as Record<string, unknown>) };
+          if (ephemeralState) {
+            if (ctx) {
+              ephemeralState.setContextState({
+                model: ctx.model,
+                thinkingLevel: currentPi()?.getThinkingLevel() ?? undefined,
+                thinkingLevels: getAvailableThinkingLevelsForModel(ctx.model),
+                contextUsage: ctx.getContextUsage(),
+              });
+            }
+            const { runtimeSequence } = ephemeralState.applyEvent(eventPayload);
+            broadcast({
+              type: "event",
+              instanceId: EPHEMERAL_ENV?.instanceId,
+              generation: EPHEMERAL_ENV?.generation,
+              runtimeSequence,
+              event: eventPayload,
             });
+          } else {
+            // Forward event to all connected browser clients.
+            broadcast({ type: "event", event: eventPayload });
           }
-          const { runtimeSequence } = ephemeralState.applyEvent(eventPayload);
-          broadcast({
-            type: "event",
-            instanceId: EPHEMERAL_ENV?.instanceId,
-            generation: EPHEMERAL_ENV?.generation,
-            runtimeSequence,
-            event: eventPayload,
-          });
-        } else {
-          // Forward event to all connected browser clients.
-          broadcast({ type: "event", event: eventPayload });
+        };
+
+        // Pi invokes extension handlers before SessionManager.appendMessage.
+        // Capture the parent now, then defer until appendMessage has run and
+        // resolve this exact message among that parent's children. Reading the
+        // current leaf would race subsequent message_end events and could tag
+        // this event with a later message's id.
+        if (eventType === "message_end" && ctx) {
+          const msg = (event as { message?: { role?: string } } | undefined)?.message;
+          if (msg?.role === "user" || msg?.role === "assistant" || msg?.role === "toolResult") {
+            const parentId = ctx.sessionManager.getLeafId();
+            setTimeout(() => {
+              try {
+                const entry = ctx.sessionManager
+                  .getChildren(parentId)
+                  .find((candidate) => candidate.type === "message" && candidate.message === msg);
+                if (entry) (event as Record<string, unknown>).entryId = entry.id;
+              } catch {
+                // Stale ctx during session replacement — skip enrichment.
+              }
+              forwardEvent();
+            }, 0);
+            return;
+          }
         }
+
+        forwardEvent();
       },
     );
   }
@@ -2245,6 +2274,12 @@ export default function (pi: ExtensionAPI) {
     // Get session entries for message history
     const entries = ctx.sessionManager.getEntries();
 
+    // `leafId` is the authoritative active-branch tip. The WebView uses it to
+    // render only the root→leaf ancestor path in the main chat and to mark
+    // the current leaf in the Info panel's session tree. Never derived on the
+    // client — Pi owns it.
+    const leafId = ctx.sessionManager.getLeafId();
+
     // Get model info
     const model = ctx.model;
     const api = currentPi();
@@ -2259,6 +2294,7 @@ export default function (pi: ExtensionAPI) {
     return {
       type: "mirror_sync",
       entries,
+      leafId: leafId ?? null,
       model,
       thinkingLevel,
       thinkingLevels,
@@ -2564,6 +2600,31 @@ export default function (pi: ExtensionAPI) {
             }))
             .filter((m: { entryId: string }) => m.entryId);
           sendTo(ws, success("get_fork_messages", { messages: forkMessages }));
+          break;
+        }
+
+        // ─── Session tree ───
+        // Light authoritative tree read for the Info panel: full entry list +
+        // active leaf, without the model/context payload of mirror_sync. The
+        // frontend refreshes this after each turn so the tree stays current
+        // without re-rendering the chat transcript.
+        case "get_session_tree": {
+          if (!ctx) {
+            sendTo(ws, error("get_session_tree", "No context available"));
+            break;
+          }
+          try {
+            sendTo(
+              ws,
+              success("get_session_tree", {
+                entries: ctx.sessionManager.getEntries(),
+                leafId: ctx.sessionManager.getLeafId() ?? null,
+                sessionFile: ctx.sessionManager.getSessionFile() || "",
+              }),
+            );
+          } catch {
+            sendTo(ws, error("get_session_tree", "Session context is stale"));
+          }
           break;
         }
 

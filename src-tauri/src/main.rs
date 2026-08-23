@@ -185,6 +185,42 @@ fn fork_session_core(
     result
 }
 
+/// Build the slash-command message that drives in-place tree navigation.
+/// pi's stdin RPC has no native `navigate_tree` command; the picot-bridge
+/// extension registers `/picot-navigate-tree`, whose handler runs with pi's
+/// command context and calls `ctx.navigateTree` (the same primitive the TUI
+/// `/tree` selector uses). RPC `prompt` dispatches extension commands, so we
+/// send the navigation request as a prompt. `summarize: false` keeps the GUI
+/// path deterministic (no hidden LLM branch-summary call; pi's own summary
+/// flow stays available when invoked from pi itself).
+fn navigate_tree_message(entry_id: &str, summarize: bool) -> String {
+    let args = serde_json::json!({ "targetId": entry_id, "summarize": summarize });
+    format!("/picot-navigate-tree {args}")
+}
+
+/// Navigate the active session's tree in place (Info panel "Resume branch"
+/// and user-message "Edit"). Unlike fork, no new session file is created:
+/// pi moves the active leaf, updates its in-memory agent context, and emits
+/// `session_tree { newLeafId, oldLeafId }`, which embedded-server forwards to
+/// the WebView. The prompt response only acknowledges dispatch; errors from
+/// the command surface later as `extension_error` events.
+fn navigate_tree_core(
+    port: u16,
+    entry_id: &str,
+    summarize: bool,
+    manager: &PiManager,
+    broker: &BrokerWs,
+) -> Result<(), String> {
+    let result = manager.send_rpc(
+        port,
+        serde_json::json!({ "type": "prompt", "message": navigate_tree_message(entry_id, summarize) }),
+    );
+    if result.is_ok() {
+        broker.set_active_port(port);
+    }
+    result
+}
+
 /// Open a workspace directory by spawning a separate pi process.
 /// When `open_window` is true (default) a new OS window is opened for the new pi.
 /// When false, the pi process is spawned headlessly and the caller is expected to
@@ -914,7 +950,10 @@ fn list_session_files(root: &PathBuf) -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{image_mime_from_path, resolve_static_dir, side_chat_startup_rpc_commands};
+    use super::{
+        image_mime_from_path, navigate_tree_message, resolve_static_dir,
+        side_chat_startup_rpc_commands,
+    };
     use serde_json::json;
     use std::fs;
     use std::path::PathBuf;
@@ -926,6 +965,34 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("pi-studio-{label}-{suffix}"))
+    }
+
+    #[test]
+    fn navigate_tree_message_builds_dispatchable_slash_command() {
+        // The bridge command JSON-parses its argument string, so the payload
+        // must stay a single compact JSON object after the command name.
+        let msg = navigate_tree_message("entry-1", false);
+        assert_eq!(
+            msg,
+            "/picot-navigate-tree {\"summarize\":false,\"targetId\":\"entry-1\"}"
+        );
+        let args = msg
+            .strip_prefix("/picot-navigate-tree ")
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .expect("args must parse as JSON");
+        assert_eq!(args["targetId"], json!("entry-1"));
+        assert_eq!(args["summarize"], json!(false));
+    }
+
+    #[test]
+    fn navigate_tree_message_escapes_entry_ids() {
+        let msg = navigate_tree_message("a\"b {c}", true);
+        let args = msg
+            .strip_prefix("/picot-navigate-tree ")
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .expect("escaped id must still parse as JSON");
+        assert_eq!(args["targetId"], json!("a\"b {c}"));
+        assert_eq!(args["summarize"], json!(true));
     }
 
     #[test]
@@ -1527,6 +1594,13 @@ fn install_control_handler(
                         let entry_id = arg_str("entryId").ok_or("entryId is required")?;
                         let port = resolve_control_port(arg_u16("port"), &broker)?;
                         fork_session_core(port, &entry_id, &manager, &broker)?;
+                        Ok(Value::Null)
+                    }
+                    "navigate_tree" => {
+                        let entry_id = arg_str("entryId").ok_or("entryId is required")?;
+                        let summarize = arg_bool("summarize").unwrap_or(false);
+                        let port = resolve_control_port(arg_u16("port"), &broker)?;
+                        navigate_tree_core(port, &entry_id, summarize, &manager, &broker)?;
                         Ok(Value::Null)
                     }
                     "stop_instance" => {

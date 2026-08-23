@@ -53,6 +53,32 @@ describe("WsTransport", () => {
     expect(ws.sendControl).toHaveBeenCalledWith("fork", { entryId: "entry-123", port: 47822 }, {});
   });
 
+  test("navigateTree sends a navigate_tree control command with summarize flag", async () => {
+    const ws = fakeWsClient();
+    const transport = new WsTransport(ws, {});
+
+    await transport.navigateTree("leaf-9", { summarize: false, port: 47822 });
+
+    expect(ws.sendControl).toHaveBeenCalledWith(
+      "navigate_tree",
+      { entryId: "leaf-9", summarize: false, port: 47822 },
+      {},
+    );
+  });
+
+  test("navigateTree defaults summarize to false and port to null", async () => {
+    const ws = fakeWsClient();
+    const transport = new WsTransport(ws, {});
+
+    await transport.navigateTree("leaf-9");
+
+    expect(ws.sendControl).toHaveBeenCalledWith(
+      "navigate_tree",
+      { entryId: "leaf-9", summarize: false, port: null },
+      {},
+    );
+  });
+
   test("session UI profile methods use native host control commands", async () => {
     const ws = fakeWsClient();
     const transport = new WsTransport(ws, {});

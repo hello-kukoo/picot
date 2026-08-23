@@ -23,6 +23,27 @@
     "quickChat": "クイックチャット",
     "newSideChat": "新しいサイドチャット"
   },
+  "infoPanel": {
+    "title": "情報",
+    "workspace": "ワークスペース",
+    "copyPath": "パスをコピー",
+    "copied": "コピーしました",
+    "sessionHistory": "セッション履歴",
+    "activePath": "アクティブな分岐",
+    "branch": "分岐",
+    "turns": "{count} ターン",
+    "resumeBranch": "分岐を再開",
+    "refresh": "セッション履歴を更新",
+    "resumeStreamingBlocked": "現在の応答が完了するまでお待ちください",
+    "actionWhileStreaming": "現在の応答が完了するまでお待ちください",
+    "actionDesktopOnly": "この操作にはデスクトップアプリが必要です",
+    "statusError": "エラー",
+    "statusAborted": "中止しました",
+    "imageMessage": "画像",
+    "empty": "メッセージはまだありません",
+    "roleUser": "あなた",
+    "roleAssistant": "アシスタント"
+  },
   "git": {
     "currentBranch": "現在のGitブランチ",
     "branchName": "ブランチ：{name}",
@@ -366,7 +387,12 @@
     "modelsMustBeObject": "models.jsonはJSONオブジェクトである必要があります。",
     "providersMustBeObject": "'providers'はオブジェクトである必要があります。",
     "compactionFailed": "コンテキスト圧縮に失敗しました。",
-    "compactionFailedDetail": "コンテキスト圧縮に失敗しました：{error}"
+    "compactionFailedDetail": "コンテキスト圧縮に失敗しました：{error}",
+    "wsNotConnected": "WebSocket が接続されていません",
+    "requestTimeout": "リクエストがタイムアウトしました",
+    "requestFailed": "リクエストに失敗しました",
+    "treeNavigateFailed": "分岐の切り替えに失敗しました:{error}",
+    "forkFailed": "フォークに失敗しました:{error}"
   },
   "messages": {
     "attachedImage": "添付画像",
@@ -382,7 +408,9 @@
     "scrollToBottom": "最新のメッセージまでスクロール",
     "turnFiles": "このターンで変更されたファイル（{count}）：",
     "expand": "展開",
-    "collapse": "折りたたむ"
+    "collapse": "折りたたむ",
+    "forkSession": "セッションをフォーク",
+    "editMessage": "メッセージを編集"
   },
   "onboarding": {
     "openProject": "チャットを始めるためにプロジェクトを開いてください。",

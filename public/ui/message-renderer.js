@@ -62,8 +62,17 @@ function fullTimestampTitle(timestampMs) {
 }
 
 export class MessageRenderer {
-  constructor(container) {
+  /**
+   * @param {Element} container
+   * @param {{ sessionTreeActions?: boolean }} [options] `sessionTreeActions`
+   *   enables the Fork/Edit user-message buttons. Only the persisted main
+   *   chat (app.js) wires the `messagefork`/`messageedit` transport handlers,
+   *   so ephemeral surfaces (Quick/Side Chat) and the native runtime keep the
+   *   default `false` and render no inert controls.
+   */
+  constructor(container, { sessionTreeActions = false } = {}) {
     this.container = container;
+    this.sessionTreeActions = sessionTreeActions;
     this.isNearBottom = true;
     this.lastWelcomeOptions = null;
     this._destroyed = false;
@@ -226,6 +235,7 @@ export class MessageRenderer {
       timestamp: message.timestamp,
       copyable: Boolean((content.textContent || "").trim()),
       expandToggle,
+      actionText: typeof message.content === "string" ? message.content : "",
     });
     if (actions) {
       div.appendChild(actions);
@@ -519,6 +529,7 @@ export class MessageRenderer {
     usage = null,
     copyable = true,
     expandToggle = null,
+    actionText = "",
   }) {
     const actions = document.createElement("div");
     actions.className = "message-actions";
@@ -533,9 +544,19 @@ export class MessageRenderer {
     };
     const copyBtn = copyable ? this._createCopyButton() : null;
     if (order === "user") {
+      // Fixed user order (2026-08-21 design): Expand → Fork → Edit → Copy →
+      // Timestamp. Expand/Collapse only exists for collapsed long prompts;
+      // Fork/Edit always sit directly after it and never reorder. Fork/Edit
+      // are session-tree actions gated to persisted sessions — ephemeral
+      // chats have no tree to navigate, so the slots vanish there and Copy
+      // shifts forward.
       if (expandToggle) actions.appendChild(expandToggle);
-      if (timeLabel) actions.appendChild(timeSpan());
+      if (this.sessionTreeActions) {
+        actions.appendChild(this._createUserActionButton("fork", actionText));
+        actions.appendChild(this._createUserActionButton("edit", actionText));
+      }
       if (copyBtn) actions.appendChild(copyBtn);
+      if (timeLabel) actions.appendChild(timeSpan());
     } else {
       if (copyBtn) actions.appendChild(copyBtn);
       if (timeLabel) actions.appendChild(timeSpan());
@@ -568,6 +589,37 @@ export class MessageRenderer {
       const expanded = contentEl.classList.toggle("expanded");
       button.setAttribute("aria-expanded", String(expanded));
       button.textContent = expanded ? t("messages.collapse") : t("messages.expand");
+    });
+    return button;
+  }
+
+  /**
+   * Fork / Edit action for user messages (Pi-native /fork and /tree-select
+   * entry points). The buttons dispatch bubbling `messagefork` /
+   * `messageedit` CustomEvents carrying the Pi entry id (resolved from the
+   * nearest [data-entry-id] anchor at click time) and the original prompt
+   * text. App.js owns the transport calls; the renderer stays presentational.
+   */
+  _createUserActionButton(kind, actionText) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `message-action message-${kind}-btn`;
+    button.setAttribute(
+      "aria-label",
+      t(kind === "fork" ? "messages.forkSession" : "messages.editMessage"),
+    );
+    button.title = t(kind === "fork" ? "messages.forkSession" : "messages.editMessage");
+    const icon = createIcon(kind === "fork" ? "git-branch" : "pencil", { size: 12 });
+    if (icon) button.appendChild(icon);
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const entryId = button.closest("[data-entry-id]")?.dataset.entryId || null;
+      button.dispatchEvent(
+        new CustomEvent(kind === "fork" ? "messagefork" : "messageedit", {
+          bubbles: true,
+          detail: { entryId, text: actionText },
+        }),
+      );
     });
     return button;
   }

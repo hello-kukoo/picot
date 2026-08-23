@@ -386,33 +386,94 @@ describe("MessageRenderer action toolbar", () => {
 
   beforeEach(() => {
     container = document.createElement("div");
-    renderer = new MessageRenderer(container);
+    // The main persisted chat enables session-tree actions; the ephemeral
+    // default (no options) is covered by the dedicated tests below.
+    renderer = new MessageRenderer(container, { sessionTreeActions: true });
   });
 
-  it("renderUserMessage builds a {time, copy} actions row", () => {
+  it("renderUserMessage builds a {fork, edit, copy, time} actions row", () => {
     const ts = new Date().setHours(14, 32, 7, 0);
     const el = renderer.renderUserMessage({ content: "hi", timestamp: ts });
 
     const actions = el.querySelector(".message-actions");
     expect(actions).not.toBeNull();
-    // Slot order for user without a collapse toggle: time, then copy.
+    // Slot order (2026-08-21 design): fork → edit → copy → time.
     const slots = actions.children;
-    expect(slots[0].classList.contains("message-time")).toBe(true);
-    expect(slots[0].textContent).toBe("14:32");
-    expect(slots[1].classList.contains("message-copy-btn")).toBe(true);
-    expect(slots[1].type).toBe("button");
+    expect(slots[0].classList.contains("message-fork-btn")).toBe(true);
+    expect(slots[1].classList.contains("message-edit-btn")).toBe(true);
+    expect(slots[2].classList.contains("message-copy-btn")).toBe(true);
+    expect(slots[3].classList.contains("message-time")).toBe(true);
+    expect(slots[3].textContent).toBe("14:32");
+    expect(slots[2].type).toBe("button");
     // Full timestamp exposed via title.
-    expect(slots[0].title).toContain("14:32:07");
+    expect(slots[3].title).toContain("14:32:07");
   });
 
-  it("renderUserMessage prepends the expand toggle before time when collapsible", () => {
+  it("renderUserMessage prepends the expand toggle before fork/edit when collapsible", () => {
     const ts = new Date().setHours(14, 32, 7, 0);
     const el = renderer.renderUserMessage({ content: "a".repeat(400), timestamp: ts });
 
     const slots = el.querySelector(".message-actions").children;
+    // Expand → Fork → Edit → Copy → Timestamp (expand only when collapsed).
     expect(slots[0].classList.contains("message-user-collapse-toggle")).toBe(true);
-    expect(slots[1].classList.contains("message-time")).toBe(true);
-    expect(slots[2].classList.contains("message-copy-btn")).toBe(true);
+    expect(slots[1].classList.contains("message-fork-btn")).toBe(true);
+    expect(slots[2].classList.contains("message-edit-btn")).toBe(true);
+    expect(slots[3].classList.contains("message-copy-btn")).toBe(true);
+    expect(slots[4].classList.contains("message-time")).toBe(true);
+  });
+
+  it("fork button dispatches messagefork with the entry id and prompt text", () => {
+    const el = renderer.renderUserMessage({ content: "fork me" });
+    el.dataset.entryId = "entry-7";
+    const events = [];
+    el.addEventListener("messagefork", (e) => events.push(e.detail));
+
+    el.querySelector(".message-fork-btn").click();
+
+    expect(events).toEqual([{ entryId: "entry-7", text: "fork me" }]);
+  });
+
+  it("edit button dispatches messageedit and resolves the anchor at click time", () => {
+    const el = renderer.renderUserMessage({ content: "edit me" });
+    const events = [];
+    el.addEventListener("messageedit", (e) => events.push(e.detail));
+
+    // No anchor yet → null entry id; once Pi's id lands the click resolves it.
+    el.querySelector(".message-edit-btn").click();
+    el.dataset.entryId = "entry-9";
+    el.querySelector(".message-edit-btn").click();
+
+    expect(events).toEqual([
+      { entryId: null, text: "edit me" },
+      { entryId: "entry-9", text: "edit me" },
+    ]);
+  });
+
+  it("omits fork/edit buttons by default for ephemeral surfaces (Quick/Side Chat)", () => {
+    // No options → sessionTreeActions defaults to false. Ephemeral chats have
+    // no app.js transport handlers and no session tree, so the controls must
+    // not render (surface-agnostic actions stay).
+    const ephemeral = new MessageRenderer(container);
+    const ts = new Date().setHours(14, 32, 7, 0);
+    const el = ephemeral.renderUserMessage({ content: "hi", timestamp: ts });
+
+    const actions = el.querySelector(".message-actions");
+    expect(actions).not.toBeNull();
+    expect(actions.querySelector(".message-fork-btn")).toBeNull();
+    expect(actions.querySelector(".message-edit-btn")).toBeNull();
+    // Copy and time survive — they work everywhere.
+    expect(actions.querySelector(".message-copy-btn")).not.toBeNull();
+    expect(actions.querySelector(".message-time")).not.toBeNull();
+  });
+
+  it("omits fork/edit for collapsible ephemeral messages but keeps the expand toggle", () => {
+    const ephemeral = new MessageRenderer(container);
+    const el = ephemeral.renderUserMessage({ content: "a".repeat(400) });
+
+    const slots = el.querySelector(".message-actions").children;
+    expect(slots.length).toBe(2); // expand toggle + copy only
+    expect(slots[0].classList.contains("message-user-collapse-toggle")).toBe(true);
+    expect(slots[1].classList.contains("message-copy-btn")).toBe(true);
   });
 
   it("omits the time span when no timestamp is provided", () => {

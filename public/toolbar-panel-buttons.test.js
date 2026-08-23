@@ -53,6 +53,7 @@ test("File panel actions share the same scoped button treatment", () => {
     "file-sidebar-up",
     "file-sidebar-refresh",
     "file-sidebar-toggle-hidden",
+    "info-panel-refresh",
     "git-panel-refresh",
     "file-sidebar-finder",
     "file-sidebar-close",
@@ -65,12 +66,35 @@ test("File panel actions share the same scoped button treatment", () => {
   expect(appJs).toContain('[fileSidebarUp, "arrow-up", 16]');
   expect(appJs).toContain('[fileSidebarRefresh, "refresh-cw", 16]');
   expect(appJs).toContain('[fileSidebarToggleHidden, "eye", 16]');
+  expect(appJs).toContain('[infoPanelRefresh, "refresh-cw", 16]');
   expect(appJs).toContain('[gitPanelRefresh, "refresh-cw", 16]');
-  expect(appJs).toContain('fileSidebarRefresh.classList.toggle("hidden", showGit)');
-  expect(appJs).toContain('fileSidebarToggleHidden.classList.toggle("hidden", showGit)');
+  expect(appJs).toContain('fileSidebarRefresh.classList.toggle("hidden", showInfo || showGit)');
+  expect(appJs).toContain(
+    'fileSidebarToggleHidden.classList.toggle("hidden", showInfo || showGit)',
+  );
+  expect(appJs).toContain('infoPanelRefresh.classList.toggle("hidden", !showInfo)');
   expect(appJs).toContain('gitPanelRefresh.classList.toggle("hidden", !showGit)');
   expect(styleCss).toContain(".file-sidebar-header .file-sidebar-action");
   expect(styleCss).toContain(".file-sidebar-header .file-sidebar-action svg");
+});
+
+test("sidebar tabs expose icons and keep labels in accessible markup", () => {
+  const tabs = [
+    ["#file-sidebar-info-tab", "infoPanel.title"],
+    ["#file-sidebar-files-tab", "files.title"],
+    ["#file-sidebar-git-tab", "git.panel"],
+  ];
+  for (const [selector, key] of tabs) {
+    const tab = document.querySelector(selector);
+    expect(tab?.querySelector(".file-sidebar-tab-icon")).not.toBeNull();
+    expect(tab?.querySelector(".file-sidebar-tab-label")?.dataset.i18n).toBe(key);
+    expect(tab?.getAttribute("aria-label")).not.toBeNull();
+  }
+  expect(appJs).toContain('[fileSidebarInfoTab, "circle-info"]');
+  expect(appJs).toContain('[fileSidebarFilesTab, "folder"]');
+  expect(appJs).toContain('[fileSidebarGitTab, "git-info"]');
+  expect(styleCss).toContain(".file-sidebar-tab.active .file-sidebar-tab-label");
+  expect(styleCss).toContain(".file-sidebar-tab-label {\n  display: none;");
 });
 
 test("declares File and Git header controls with the expected initial state", () => {
@@ -78,6 +102,7 @@ test("declares File and Git header controls with the expected initial state", ()
   expect(document.querySelector("#file-sidebar-toggle-hidden")?.getAttribute("aria-pressed")).toBe(
     "false",
   );
+  expect(document.querySelector("#info-panel-refresh")).not.toBeNull();
   expect(document.querySelector("#git-panel-refresh")).not.toBeNull();
   expect(document.querySelector("#git-panel-refresh")?.classList.contains("hidden")).toBe(true);
 });

@@ -34,6 +34,7 @@ import {
 } from "./i18n.js";
 import { createIcon, replaceButtonGlyph, setButtonIcon } from "./icons.js";
 import { processImageFile, processImagePayload } from "./image-attachments.js";
+import { InfoPanel } from "./info-panel.js";
 import { selectModel } from "./models/selection.js";
 import { renderPackageInstallFailure } from "./packages/install-status.js";
 import { QuickChatDialog } from "./quick-chat-dialog.js";
@@ -142,6 +143,10 @@ import {
   readCachedSidebarProjects,
   snapshotNavState,
 } from "./workspace/nav-state-cache.js";
+import {
+  createWorkspaceActionsController,
+  populateAppLogo as sharedPopulateAppLogo,
+} from "./workspace-actions.js";
 
 // Initialize locale messages before constructing components that call t().
 const savedTheme = getCurrentTheme();
@@ -569,7 +574,9 @@ const nativeAvailable = () => !mobileClientMode && transport.capabilities.native
 const canUseSessionControl = () => transport.capabilities.native;
 const state = new StateManager();
 const messagesElement = document.getElementById("messages");
-const messageRenderer = new MessageRenderer(messagesElement);
+// sessionTreeActions: the main chat is the only persisted-session surface;
+// its Fork/Edit buttons dispatch to app.js's transport handlers below.
+const messageRenderer = new MessageRenderer(messagesElement, { sessionTreeActions: true });
 const toolCardRenderer = new ToolCardRenderer(messagesElement, { enableFileRefs: true });
 initImageLightbox(messagesElement);
 const dialogHandler = new DialogHandler({
@@ -617,8 +624,10 @@ const sidebar = new SessionSidebar(
 // Header session-info popover: file path from the active session mirror.
 // Getter is lazy so late-arriving state (first session file, reconnect)
 // is reflected on every open.
+const sessionInfoToggle = document.getElementById("session-info-toggle");
+replaceButtonGlyph(sessionInfoToggle, "circle-info", { size: 16 });
 const sessionInfo = setupSessionInfo({
-  toggle: document.getElementById("session-info-toggle"),
+  toggle: sessionInfoToggle,
   panel: document.getElementById("session-info-panel"),
   fileValue: document.getElementById("session-info-file"),
   getFilePath: () => mirrorActiveSessionFile || sidebar.activeSessionFile || "",
@@ -950,6 +959,17 @@ let deferredMirrorSync = null;
 // selected session, otherwise it clobbers the restored history (and its
 // multi-turn navigator) with stale entries.
 let pendingMirrorSessionFile = null;
+// A fork's composer prefill, deferred until the post-fork mirror_sync has
+// rebound activeUiSessionFile to the forked session file. Applying it right
+// after the fork ack would be wiped by that snapshot's restoreSessionUiState
+// (the new file's saved draft is empty), and persisting then would write the
+// text into the pre-fork session's draft. previousSessionFile guards against
+// consuming the prefill on an unrelated same-session snapshot.
+let pendingPostSyncComposer = null;
+// Set when a live Info-tree append failed (no cache / unknown parent /
+// recalibration due); agent_end then falls back to a full get_session_tree
+// sync instead of one per turn unconditionally.
+let infoTreeDirty = false;
 let lastRenderedWelcomeWorkspacePath = null;
 // Maps port -> sessionFile for each pi process we're tracking
 const portSessionMap = new Map();
@@ -988,6 +1008,10 @@ const gitBranchEl = document.createElement("div");
 gitBranchEl.id = "git-branch-indicator";
 gitBranchEl.className = "pill git-branch-indicator hidden";
 gitBranchEl.title = t("git.currentBranch");
+const gitBranchIcon = createIcon("git-info", { size: 14 });
+if (gitBranchIcon) gitBranchEl.append(gitBranchIcon);
+const gitBranchLabel = document.createElement("span");
+gitBranchEl.append(gitBranchLabel);
 document
   .querySelector(".header-right")
   ?.insertBefore(gitBranchEl, document.querySelector("#context-viz"));
@@ -996,11 +1020,11 @@ function updateGitBranchIndicator(branch = "") {
   const name = typeof branch === "string" ? branch.trim() : "";
   if (!name) {
     gitBranchEl.classList.add("hidden");
-    gitBranchEl.textContent = "";
+    gitBranchLabel.textContent = "";
     return;
   }
   gitBranchEl.classList.remove("hidden");
-  gitBranchEl.textContent = name;
+  gitBranchLabel.textContent = name;
   gitBranchEl.title = t("git.branchName", { name });
 }
 
@@ -1091,6 +1115,7 @@ const fileSidebarClose = document.getElementById("file-sidebar-close");
 const fileSidebarUp = document.getElementById("file-sidebar-up");
 const fileSidebarRefresh = document.getElementById("file-sidebar-refresh");
 const fileSidebarToggleHidden = document.getElementById("file-sidebar-toggle-hidden");
+const infoPanelRefresh = document.getElementById("info-panel-refresh");
 const gitPanelRefresh = document.getElementById("git-panel-refresh");
 const fileSidebarFinder = document.getElementById("file-sidebar-finder");
 for (const [button, iconName, size] of [
@@ -1098,6 +1123,7 @@ for (const [button, iconName, size] of [
   [fileSidebarUp, "arrow-up", 16],
   [fileSidebarRefresh, "refresh-cw", 16],
   [fileSidebarToggleHidden, "eye", 16],
+  [infoPanelRefresh, "refresh-cw", 16],
   [gitPanelRefresh, "refresh-cw", 16],
   [fileSidebarFinder, "folder-open", 16],
   [document.getElementById("lan-qr-modal-close"), "x", 14],
@@ -1105,8 +1131,18 @@ for (const [button, iconName, size] of [
 ]) {
   if (button) setButtonIcon(button, iconName, { size });
 }
+const fileSidebarInfoTab = document.getElementById("file-sidebar-info-tab");
 const fileSidebarFilesTab = document.getElementById("file-sidebar-files-tab");
 const fileSidebarGitTab = document.getElementById("file-sidebar-git-tab");
+for (const [tab, iconName] of [
+  [fileSidebarInfoTab, "circle-info"],
+  [fileSidebarFilesTab, "folder"],
+  [fileSidebarGitTab, "git-info"],
+]) {
+  const iconHost = tab?.querySelector(".file-sidebar-tab-icon");
+  const icon = createIcon(iconName, { size: 14 });
+  if (iconHost && icon) iconHost.replaceChildren(icon);
+}
 const fileList = document.getElementById("file-list");
 const fileSidebarPath = document.getElementById("file-sidebar-path");
 const gitPanelElement = document.getElementById("git-panel");
@@ -1691,6 +1727,7 @@ fileSidebarRefresh?.addEventListener("click", () => void fileBrowser.refresh());
 fileSidebarToggleHidden?.addEventListener("click", () => {
   void fileBrowser.setShowHidden(!fileBrowser.showHidden);
 });
+infoPanelRefresh?.addEventListener("click", () => void refreshInfoTree({ force: true }));
 gitPanelRefresh?.addEventListener("click", () => void gitPanel.refresh());
 
 fileSidebarToggle.addEventListener("click", () => {
@@ -1705,19 +1742,29 @@ fileSidebarToggle.addEventListener("click", () => {
 const FILE_SIDEBAR_TAB_STORAGE_KEY = "pi-studio-file-sidebar-tab";
 
 function setFileSidebarTab(tab) {
+  const showInfo = tab === "info";
   const showGit = tab === "git";
-  fileSidebarFilesTab.classList.toggle("active", !showGit);
-  fileSidebarFilesTab.setAttribute("aria-selected", String(!showGit));
+  fileSidebarInfoTab.classList.toggle("active", showInfo);
+  fileSidebarInfoTab.setAttribute("aria-selected", String(showInfo));
+  fileSidebarFilesTab.classList.toggle("active", !showInfo && !showGit);
+  fileSidebarFilesTab.setAttribute("aria-selected", String(!showInfo && !showGit));
   fileSidebarGitTab.classList.toggle("active", showGit);
   fileSidebarGitTab.setAttribute("aria-selected", String(showGit));
-  fileSidebarPath.classList.toggle("hidden", showGit);
-  fileList.classList.toggle("hidden", showGit);
+  infoPanelEl.classList.toggle("hidden", !showInfo);
+  fileSidebarPath.classList.toggle("hidden", showInfo || showGit);
+  fileList.classList.toggle("hidden", showInfo || showGit);
   gitPanelElement.classList.toggle("hidden", !showGit);
-  fileSidebarUp.classList.toggle("hidden", showGit);
-  fileSidebarRefresh.classList.toggle("hidden", showGit);
-  fileSidebarToggleHidden.classList.toggle("hidden", showGit);
+  fileSidebarUp.classList.toggle("hidden", showInfo || showGit);
+  fileSidebarRefresh.classList.toggle("hidden", showInfo || showGit);
+  fileSidebarToggleHidden.classList.toggle("hidden", showInfo || showGit);
+  infoPanelRefresh.classList.toggle("hidden", !showInfo);
   gitPanelRefresh.classList.toggle("hidden", !showGit);
-  document.getElementById("file-sidebar-finder").classList.toggle("hidden", showGit);
+  document.getElementById("file-sidebar-finder").classList.toggle("hidden", showInfo || showGit);
+  if (showInfo) {
+    infoPanel.updateWorkspace(getCurrentWorkspacePath());
+    void refreshInfoTree();
+    infoPanel.scrollToSelectedEntry();
+  }
   localStorage.setItem(FILE_SIDEBAR_TAB_STORAGE_KEY, tab);
   if (showGit) {
     // Clear any stale snapshot from a previous workspace so the panel
@@ -1790,7 +1837,8 @@ function openFileSidebarTab(tab) {
 }
 
 function flashSidebarTab(tab) {
-  const el = tab === "git" ? fileSidebarGitTab : fileSidebarFilesTab;
+  const el =
+    tab === "info" ? fileSidebarInfoTab : tab === "git" ? fileSidebarGitTab : fileSidebarFilesTab;
   if (!el) return;
   el.classList.remove("flash-highlight");
   // Reflow restarts the animation so repeated clicks re-flash.
@@ -1802,6 +1850,7 @@ function flashSidebarTab(tab) {
 workspaceIndicatorEl.addEventListener("click", () => openFileSidebarTab("files"));
 gitBranchEl.addEventListener("click", () => openFileSidebarTab("git"));
 
+fileSidebarInfoTab.addEventListener("click", () => setFileSidebarTab("info"));
 fileSidebarFilesTab.addEventListener("click", () => setFileSidebarTab("files"));
 fileSidebarGitTab.addEventListener("click", () => setFileSidebarTab("git"));
 
@@ -1830,70 +1879,34 @@ document.getElementById("file-sidebar-finder").addEventListener("click", () => {
 // "Open workspace in app" header control (VS Code / Cursor / Terminal / …)
 // Mirrors the Codex-style split button in the chat header.
 // ═══════════════════════════════════════
-const HEADER_OPEN_APP_STORAGE_KEY = "pi-studio-open-app";
-const HEADER_OPEN_APP_MONOGRAMS = {
-  vscode: "VS",
-  cursor: "C",
-  webstorm: "WS",
-  zed: "Z",
-  terminal: "T",
-  ghostty: "G",
-  finder: "F",
-};
-const HEADER_OPEN_APP_ICONS = {
-  vscode: "icons/app-vscode.png",
-  cursor: "icons/app-cursor.svg",
-  webstorm: "icons/app-webstorm.svg",
-  zed: "icons/app-zed.png",
-  terminal: "icons/app-terminal.svg",
-  ghostty: "icons/app-ghostty.png",
-  finder: "icons/app-finder.png",
-};
+// Shared controller for every "open workspace in app" surface: the header
+// split-button AND the Info panel's Workspace rows. Per the Info panel design
+// invariant, app list loading, icon/monogram fallback, selection persistence,
+// and the launch call live in ONE place (workspace-actions.js). Header keeps
+// only its own chrome: button refresh + the dropdown menu.
+let infoPanel = null; // assigned below; callbacks here may fire first
+const workspaceActions = createWorkspaceActionsController({
+  transport,
+  isNativeAvailable: () => nativeAvailable(),
+  getWorkspacePath: getCurrentWorkspacePath,
+  storageKey: "pi-studio-open-app",
+  onSelectionChange: () => refreshHeaderOpenAppButton(),
+  onAppsLoaded: () => {
+    refreshHeaderOpenAppButton();
+    infoPanel?.refreshApps();
+  },
+});
 const headerOpenApp = {
   el: document.getElementById("header-open-app"),
   btn: document.getElementById("header-open-app-btn"),
   logo: document.getElementById("header-open-app-logo"),
   toggle: document.getElementById("header-open-app-toggle"),
   menu: document.getElementById("header-open-app-menu"),
-  apps: [],
-  selectedId: localStorage.getItem(HEADER_OPEN_APP_STORAGE_KEY) || null,
 };
 setButtonIcon(headerOpenApp.toggle, "chevron-down", { size: 10 });
 
 function getSelectedOpenApp() {
-  return (
-    headerOpenApp.apps.find((a) => a.id === headerOpenApp.selectedId) ||
-    headerOpenApp.apps[0] ||
-    null
-  );
-}
-
-function openAppMonogram(app) {
-  if (!app?.id) return "•";
-  return HEADER_OPEN_APP_MONOGRAMS[app.id] || app.label?.slice(0, 1).toUpperCase() || "•";
-}
-
-function openAppIconPath(app) {
-  if (!app?.id) return "";
-  return HEADER_OPEN_APP_ICONS[app.id] || "";
-}
-
-function populateOpenAppLogo(container, app) {
-  if (!container) return;
-  container.replaceChildren();
-  const icon = openAppIconPath(app);
-  if (icon) {
-    const image = document.createElement("img");
-    image.src = icon;
-    image.alt = "";
-    image.className = "header-open-app-logo-img";
-    container.appendChild(image);
-    return;
-  }
-  const monogram = document.createElement("span");
-  monogram.className = "header-open-app-logo-text";
-  monogram.textContent = openAppMonogram(app);
-  container.appendChild(monogram);
+  return workspaceActions.getSelectedApp();
 }
 
 function refreshHeaderOpenAppButton() {
@@ -1901,12 +1914,12 @@ function refreshHeaderOpenAppButton() {
   const hasNative = nativeAvailable();
   const path = getCurrentWorkspacePath();
   const selected = getSelectedOpenApp();
-  if (!hasNative || !selected || !path || headerOpenApp.apps.length === 0) {
+  if (!hasNative || !selected || !path || workspaceActions.apps.length === 0) {
     headerOpenApp.el.classList.add("hidden");
     return;
   }
   headerOpenApp.el.classList.remove("hidden");
-  populateOpenAppLogo(headerOpenApp.logo, selected);
+  sharedPopulateAppLogo(headerOpenApp.logo, selected);
   headerOpenApp.btn.title = t("nav.openWorkspaceInNamedApp", { path, app: selected.label });
   headerOpenApp.btn.setAttribute(
     "aria-label",
@@ -1915,20 +1928,8 @@ function refreshHeaderOpenAppButton() {
 }
 
 async function openWorkspaceInApp(app) {
-  const target = app || getSelectedOpenApp();
-  const path = getCurrentWorkspacePath();
-  if (!nativeAvailable() || !target || !path) return;
-  headerOpenApp.selectedId = target.id;
-  localStorage.setItem(HEADER_OPEN_APP_STORAGE_KEY, target.id);
-  refreshHeaderOpenAppButton();
-  try {
-    await transport.openInApp(path, {
-      appName: target.appName ?? null,
-      command: target.command ?? null,
-    });
-  } catch (err) {
-    console.error("[Header] Failed to open workspace in app:", err);
-  }
+  // The shared controller owns selection persistence and the transport call.
+  await workspaceActions.openWorkspaceInApp(app);
 }
 
 function closeHeaderOpenAppMenu() {
@@ -1942,17 +1943,17 @@ function toggleHeaderOpenAppMenu() {
     return;
   }
   headerOpenApp.menu.replaceChildren();
-  for (const app of headerOpenApp.apps) {
+  for (const app of workspaceActions.apps) {
     const row = document.createElement("button");
     row.type = "button";
     row.className = "header-open-app-menu-item";
-    if (app.id === headerOpenApp.selectedId) row.classList.add("active");
+    if (app.id === workspaceActions.selectedId) row.classList.add("active");
     row.title = t("nav.openInApp", { app: app.label });
     row.setAttribute("aria-label", t("nav.openInApp", { app: app.label }));
     const logo = document.createElement("span");
     logo.className = "header-open-app-logo";
     logo.setAttribute("aria-hidden", "true");
-    populateOpenAppLogo(logo, app);
+    sharedPopulateAppLogo(logo, app);
     const label = document.createElement("span");
     label.textContent = app.label;
     row.append(logo, label);
@@ -1967,17 +1968,9 @@ function toggleHeaderOpenAppMenu() {
 }
 
 async function loadHeaderOpenApps() {
-  if (!nativeAvailable()) return;
-  try {
-    const apps = await transport.listInstalledApps();
-    headerOpenApp.apps = Array.isArray(apps) ? apps : [];
-    if (!headerOpenApp.apps.some((a) => a.id === headerOpenApp.selectedId)) {
-      headerOpenApp.selectedId = headerOpenApp.apps[0]?.id || null;
-    }
-    refreshHeaderOpenAppButton();
-  } catch (err) {
-    console.error("[Header] Failed to load installed apps:", err);
-  }
+  // The shared controller loads, validates selection, and notifies listeners
+  // (header refresh + Info panel row refresh).
+  await workspaceActions.loadApps();
 }
 
 if (headerOpenApp.btn) {
@@ -1995,6 +1988,104 @@ if (headerOpenApp.toggle) {
 document.addEventListener("click", () => closeHeaderOpenAppMenu());
 void loadHeaderOpenApps();
 
+// ═════════════════════════════════════
+// Info panel (right column): workspace actions + Pi session tree
+// ═════════════════════════════════════
+
+const infoPanelEl = document.getElementById("info-panel");
+
+/** Correlated request/response over the shared WS command channel. */
+function wsRequest(command, timeoutMs = 15000) {
+  return new Promise((resolve, reject) => {
+    const requestId = wsClient.send(command);
+    if (!requestId) {
+      reject(new Error(t("errors.wsNotConnected")));
+      return;
+    }
+    const timer = setTimeout(() => {
+      wsClient.removeEventListener("commandResponse", onResp);
+      reject(new Error(t("errors.requestTimeout")));
+    }, timeoutMs);
+    const onResp = (e) => {
+      if (e.detail?.id !== requestId) return;
+      clearTimeout(timer);
+      wsClient.removeEventListener("commandResponse", onResp);
+      if (e.detail.success === false) {
+        reject(new Error(e.detail.error || t("errors.requestFailed")));
+      } else {
+        resolve(e.detail.data);
+      }
+    };
+    wsClient.addEventListener("commandResponse", onResp);
+  });
+}
+
+/** Authoritative light tree refresh (entries + leafId only, no chat re-render). */
+async function refreshInfoTree({ force = false } = {}) {
+  if (!infoPanel || !infoPanelEl || infoPanelEl.classList.contains("hidden")) return;
+  if (wsClient.ws?.readyState !== 1) return;
+  if (!force && !infoTreeDirty && infoPanel.entries) {
+    // Cache is clean (hidden-tab mirror_sync skipped the rebuild; live
+    // appends kept it current): re-render locally, no round trip. A local
+    // re-render is not a sync — the staleness clock keeps running.
+    infoPanel.rerenderTree();
+    return;
+  }
+  // Snapshot the cache generation: an entry appended while this request is
+  // in flight was persisted after the server read the tree — applying the
+  // response would drop that row and chain the next append off a stale
+  // leaf. Detect the race, discard the stale response, stay dirty.
+  const generation = infoPanel.generation;
+  try {
+    const data = await wsRequest({ type: "get_session_tree" });
+    if (infoPanel.generation !== generation) {
+      infoTreeDirty = true;
+      return;
+    }
+    infoPanel.updateTree({ entries: data?.entries, leafId: data?.leafId });
+    infoTreeDirty = false;
+  } catch (err) {
+    // Non-fatal: the tree retries on the next session_tree event / sync.
+    console.warn("[InfoPanel] tree refresh failed:", err);
+  }
+}
+
+/** Resume an inactive branch: explicit Pi-native leaf switch, never a scroll. */
+async function handleResumeBranch(entryId) {
+  if (state.isStreaming) {
+    messageRenderer.renderError(t("infoPanel.actionWhileStreaming"));
+    return;
+  }
+  if (!canUseSessionControl()) {
+    messageRenderer.renderError(t("infoPanel.actionDesktopOnly"));
+    return;
+  }
+  try {
+    await transport.navigateTree(entryId, { port: getActivePort() });
+    // Pi emits session_tree; the event handler re-syncs chat + tree. Per the
+    // design, resuming clears the composer (the old branch's draft belongs
+    // to the old branch). The clear is programmatic (no input event), so
+    // persist it or the pending session_tree snapshot's draft restore would
+    // resurrect the stale draft.
+    messageInput.value = "";
+    messageInput.style.height = "auto";
+    persistComposerDraft();
+  } catch (err) {
+    messageRenderer.renderError(t("errors.treeNavigateFailed", { error: err }));
+  }
+}
+
+if (infoPanelEl) {
+  infoPanel = new InfoPanel({
+    panel: infoPanelEl,
+    actions: workspaceActions,
+    t,
+    onNavigateLeaf: (entryId) => void handleResumeBranch(entryId),
+    onSelectEntry: (entryId) => selectInfoEntry(entryId),
+    isStreaming: () => state.isStreaming,
+  });
+}
+
 // Restore file sidebar state
 const fileSidebarIsOpen = localStorage.getItem("pi-studio-file-sidebar") === "open";
 fileSidebarToggle.setAttribute("aria-pressed", String(fileSidebarIsOpen));
@@ -2002,7 +2093,13 @@ if (fileSidebarIsOpen) {
   fileSidebar.classList.remove("collapsed");
   // Restore the previously selected sidebar tab (Files or Git) so a reopen
   // after close returns to the view the user left on. Defaults to Files.
-  setFileSidebarTab(localStorage.getItem(FILE_SIDEBAR_TAB_STORAGE_KEY) === "git" ? "git" : "files");
+  setFileSidebarTab(
+    localStorage.getItem(FILE_SIDEBAR_TAB_STORAGE_KEY) === "git"
+      ? "git"
+      : localStorage.getItem(FILE_SIDEBAR_TAB_STORAGE_KEY) === "info"
+        ? "info"
+        : "files",
+  );
   if (!gitPanelElement.classList.contains("hidden")) {
     // setFileSidebarTab already requests Git status when the Git tab is
     // restored; for Files, refresh the browser as before.
@@ -2094,6 +2191,11 @@ function flashJumpHighlight(target) {
   });
 }
 
+function selectInfoEntry(entryId, { scroll = false } = {}) {
+  infoPanel?.selectEntry(entryId);
+  if (scroll) infoPanel?.scrollToSelectedEntry();
+}
+
 function jumpToConversation(turn, idx) {
   // Lock active index immediately so dot highlights right away, even before
   // the smooth scroll settles (or if the scroll ends up being a no-op).
@@ -2118,6 +2220,8 @@ function jumpToConversation(turn, idx) {
   const maxScrollTop = messagesContainer.scrollHeight - messagesContainer.clientHeight;
   const targetScrollTop = Math.max(0, Math.min(messagesContainer.scrollTop + delta, maxScrollTop));
   messagesContainer.scrollTo({ top: targetScrollTop, behavior: "smooth" });
+  const entryId = turn.user?.dataset.entryId;
+  if (entryId) selectInfoEntry(entryId, { scroll: true });
   flashJumpHighlight(turn.user);
   rebuildNavDots();
 }
@@ -2153,9 +2257,9 @@ let _navHoverIdx = -1;
 
 // Minimum height (px) the nav needs to be useful:
 const CONV_NAV_MAX_HEIGHT = 560;
-const CONV_NAV_BASE_WIDTH = 10;
-const CONV_NAV_HOVER_PEAK_WIDTH = 16;
-const CONV_NAV_HOVER_SIGMA = 3.2;
+const CONV_NAV_BASE_WIDTH = 7;
+const CONV_NAV_HOVER_PEAK_WIDTH = 22;
+const CONV_NAV_HOVER_SIGMA = 2.4;
 
 function rebuildNavDots() {
   const turns = getConversations();
@@ -2204,13 +2308,14 @@ function rebuildNavDots() {
                 Math.exp(-(dist * dist) / (2 * CONV_NAV_HOVER_SIGMA * CONV_NAV_HOVER_SIGMA)),
           );
     dot.style.setProperty("--nav-w", `${w}px`);
+    dot.style.setProperty("--nav-color", "var(--accent)");
   });
 
   // Scale the track down if all dots would exceed the max height.
   const naturalHeight = convNavTrack.scrollHeight;
   const scale = naturalHeight > CONV_NAV_MAX_HEIGHT ? CONV_NAV_MAX_HEIGHT / naturalHeight : 1;
   convNavTrack.style.transform = scale < 1 ? `scale(${scale})` : "";
-  convNavTrack.style.transformOrigin = scale < 1 ? "top right" : "";
+  convNavTrack.style.transformOrigin = scale < 1 ? "top left" : "";
   // Keep the nav's layout height in sync with the scaled visual size.
   convNavEl.style.height = scale < 1 ? `${naturalHeight * scale}px` : "";
 }
@@ -2236,9 +2341,9 @@ function showNavTooltip(dotEl, turn) {
     Math.min(dotRect.top + dotRect.height / 2 - tipHeight / 2, window.innerHeight - tipHeight - 8),
   );
   convNavTooltip.style.top = `${top}px`;
-  // Anchor the tooltip to the left of the dot (which sits on the right rail),
-  // following the dot so side-chat/file-browser panels never displace or cover it.
-  convNavTooltip.style.left = `${Math.max(8, dotRect.left - tipWidth - 8)}px`;
+  // Anchor the tooltip to the right of the dot (the rail sits on the chat's
+  // left edge), following the dot so panels never displace or cover it.
+  convNavTooltip.style.left = `${Math.min(dotRect.right + 8, window.innerWidth - tipWidth - 8)}px`;
 
   // Trigger slide-in animation on every fresh hover
   convNavTooltip.classList.remove("animating");
@@ -2294,14 +2399,14 @@ messagesContainer.addEventListener("click", (event) => {
   void filePreviewFollow.openPath(chip.dataset.path).catch(() => {});
 });
 messagesContainer.addEventListener("messagefork", async (e) => {
-  const { entryId } = e.detail || {};
+  const { entryId, text } = e.detail || {};
   if (!entryId) return;
   if (state.isStreaming) {
-    messageRenderer.renderError("Cannot fork while a response is streaming.");
+    messageRenderer.renderError(t("infoPanel.actionWhileStreaming"));
     return;
   }
   if (!canUseSessionControl()) {
-    messageRenderer.renderError("Fork requires the desktop app.");
+    messageRenderer.renderError(t("infoPanel.actionDesktopOnly"));
     return;
   }
   const btn = e.target.closest(".message-fork-btn");
@@ -2316,13 +2421,58 @@ messagesContainer.addEventListener("messagefork", async (e) => {
     // sidebar so the new forked session file appears in the list.
     await transport.fork(entryId, getActivePort());
     refreshSidebarAfterUserPrompt();
+    // Design: after a fork the composer is prefilled with the forked user
+    // message's text, awaiting edits — never auto-sent. Deferred to the
+    // post-fork mirror_sync because the snapshot restores the new file's
+    // (empty) draft after this ack, which would wipe an immediate prefill.
+    if (typeof text === "string" && text) {
+      pendingPostSyncComposer = { text, previousSessionFile: activeUiSessionFile };
+      messageInput.focus();
+    }
   } catch (err) {
-    messageRenderer.renderError(`Fork failed: ${err}`);
+    messageRenderer.renderError(t("errors.forkFailed", { error: err }));
   } finally {
     if (btn) {
       btn.disabled = false;
       btn.classList.remove("forking");
     }
+  }
+});
+
+// Edit-and-branch: pi's native /tree select on a user message — the leaf
+// moves to that entry's parent and the original prompt lands in the composer;
+// only the user's submit creates the sibling branch.
+messagesContainer.addEventListener("messageedit", async (e) => {
+  const { entryId, text } = e.detail || {};
+  if (!entryId) return;
+  if (state.isStreaming) {
+    messageRenderer.renderError(t("infoPanel.actionWhileStreaming"));
+    return;
+  }
+  if (!canUseSessionControl()) {
+    messageRenderer.renderError(t("infoPanel.actionDesktopOnly"));
+    return;
+  }
+  const btn = e.target.closest(".message-edit-btn");
+  if (btn) btn.disabled = true;
+  try {
+    // Dispatches /picot-navigate-tree → pi ctx.navigateTree(userEntry):
+    // leaf = the user entry's parent, editorText = the original prompt. The
+    // resulting session_tree event re-syncs chat + tree; the old branch's
+    // descendants become the Info tree's inactive branch.
+    await transport.navigateTree(entryId, { port: getActivePort() });
+    if (typeof text === "string") {
+      messageInput.value = text;
+      messageInput.style.height = "auto";
+      messageInput.focus();
+      // Programmatic .value assignment fires no input event, so persist the
+      // prefill now: the pending session_tree snapshot's restoreSessionUiState
+      // reloads this session's saved draft and would otherwise wipe it.
+      persistComposerDraft();
+    }
+  } catch (err) {
+    messageRenderer.renderError(t("errors.treeNavigateFailed", { error: err }));
+    if (btn) btn.disabled = false;
   }
 });
 
@@ -2460,6 +2610,10 @@ function handleRPCEvent(event) {
       if (pendingNewSessionRefresh) {
         refreshSidebarForNewSession(event).catch(() => {});
       }
+      // Turn boundary: live appends already grew the tree incrementally; only
+      // a full get_session_tree sync runs when an append failed (dirty) —
+      // skips the ~MB-per-turn payload on long sessions.
+      void refreshInfoTree();
       break;
     case "agent_settled":
       handleAgentSettled();
@@ -2479,7 +2633,7 @@ function handleRPCEvent(event) {
       handleMessageUpdate(event);
       break;
     case "message_end":
-      handleMessageEnd(event.message, eventSessionFile);
+      handleMessageEnd(event.message, eventSessionFile, event.entryId);
       if (pendingNewSessionRefresh) {
         refreshSidebarForNewSession(event).catch(() => {});
       }
@@ -2516,6 +2670,12 @@ function handleRPCEvent(event) {
       break;
     case "session_name":
       handleSessionNameEvent(event);
+      break;
+    case "session_tree":
+      // Pi moved the active leaf natively (Info panel Resume / message Edit).
+      // Re-sync from the authoritative snapshot: chat re-renders the new
+      // active path and the Info tree flips active/inactive state.
+      wsClient.send({ type: "mirror_sync_request" });
       break;
   }
 }
@@ -3009,7 +3169,33 @@ function handleMessageUpdate(event) {
   }
 }
 
-function handleMessageEnd(message, eventSessionFile = null) {
+function handleMessageEnd(message, eventSessionFile = null, entryId = null) {
+  if (message?.role === "user" && entryId) {
+    // Pi persisted the user entry (embedded-server enriches message_end with
+    // the leaf id). Tag the live-rendered element so Info-tree scroll and
+    // Fork/Edit work immediately, before the next full snapshot.
+    const untagged = messagesContainer.querySelector(".message.user:not([data-entry-id])");
+    if (untagged) untagged.dataset.entryId = entryId;
+  }
+  // Live-turn incremental Info-tree update: rebuild the entry from the
+  // enriched entryId and append into the panel's cached snapshot. toolResult
+  // entries append too — they stay invisible but keep the parent chain intact
+  // for the next assistant entry. Append failures (no cache, unknown parent,
+  // recalibration due) set the dirty flag; agent_end's full refresh covers
+  // them.
+  if (
+    entryId &&
+    (message?.role === "user" || message?.role === "assistant" || message?.role === "toolResult")
+  ) {
+    const appended = infoPanel?.appendLiveEntry({
+      type: "message",
+      id: entryId,
+      parentId: infoPanel?.leafId,
+      timestamp: new Date().toISOString(),
+      message,
+    });
+    if (appended === false) infoTreeDirty = true;
+  }
   if (message?.role === "assistant" && message?.stopReason === "error") {
     const provider = message?.provider ? String(message.provider) : "unknown";
     const model = message?.model ? String(message.model) : "unknown";
@@ -3041,6 +3227,7 @@ function handleMessageEnd(message, eventSessionFile = null) {
     // turn's writes and renders the chips row under it (a turn may contain
     // several assistant messages — only the last one gets the row).
     lastTurnAssistantElement = currentStreamingElement;
+    if (entryId) lastTurnAssistantElement.dataset.entryId = entryId;
     currentStreamingElement = null;
     currentStreamingThinking = "";
 
@@ -4888,6 +5075,20 @@ function handleMirrorSync(data) {
     return;
   }
 
+  // Consume a fork's deferred composer prefill. setSidebarActive above has
+  // already rebound activeUiSessionFile and restored the saved draft, so this
+  // is the first point where applying the prefill cannot be wiped — and
+  // persistComposerDraft then saves it under the forked session file.
+  if (
+    pendingPostSyncComposer &&
+    activeUiSessionFile !== pendingPostSyncComposer.previousSessionFile
+  ) {
+    const prefill = pendingPostSyncComposer;
+    pendingPostSyncComposer = null;
+    setComposerDraft(prefill.text);
+    persistComposerDraft();
+  }
+
   if (
     pendingMirrorSessionFile &&
     isExpectedMirrorSession(pendingMirrorSessionFile, data.sessionFile)
@@ -4913,6 +5114,7 @@ function handleMirrorSync(data) {
     foregroundWorkspacePath = syncWorkspacePath;
     updateWorkspaceIndicator(syncWorkspacePath);
     updateSuperAgentActiveStateFromWorkspace();
+    infoPanel?.updateWorkspace(syncWorkspacePath);
   }
   if (pendingWorkspace) {
     pendingFileBrowserWorkspace = null;
@@ -5018,9 +5220,19 @@ function handleMirrorSync(data) {
   }
 
   if (data.entries && data.entries.length > 0) {
-    renderSessionHistory(data.entries, { searchQuery: sidebar.searchQuery });
+    renderSessionHistory(data.entries, { searchQuery: sidebar.searchQuery, leafId: data.leafId });
   } else {
     renderWorkspaceWelcome();
+  }
+  // The Info tree consumes the same authoritative snapshot (entries + active
+  // leaf) the transcript just rendered from. While the Info tab is hidden,
+  // skip the model+DOM rebuild: mark dirty instead, and the tab switch's
+  // refreshInfoTree pulls a fresh full snapshot (never a stale cache).
+  if (infoPanel && infoPanelEl && !infoPanelEl.classList.contains("hidden")) {
+    infoPanel.updateTree({ entries: data.entries || [], leafId: data.leafId ?? null });
+    infoTreeDirty = false;
+  } else {
+    infoTreeDirty = true;
   }
 
   updateTokenUsage();
@@ -5149,22 +5361,44 @@ function renderHistoryToolCallBlocks(blocks, toolResults, targetContainer) {
   return count;
 }
 
-function renderSessionHistory(entries, { searchQuery = "" } = {}) {
+function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {}) {
   console.log(`[History] Rendering ${entries.length} entries`);
   let userCount = 0,
     assistantCount = 0,
     toolCardCount = 0,
     toolResultCount = 0;
 
+  // Active-branch filter (Info panel design): when Pi reported the active
+  // leaf, the main chat renders ONLY the root→leaf ancestor path — sibling
+  // branches live in the Info tree, never inline. Without a leafId (session
+  // file previews) the previous render-all behavior applies. The ancestor
+  // chain walks Pi's own parentId links; nothing is derived client-side.
+  if (typeof leafId === "string" && leafId) {
+    const byId = new Map();
+    for (const entry of entries) {
+      if (entry?.id) byId.set(entry.id, entry);
+    }
+    const activeIds = new Set();
+    let cursor = byId.get(leafId);
+    while (cursor && !activeIds.has(cursor.id)) {
+      activeIds.add(cursor.id);
+      cursor = typeof cursor.parentId === "string" ? byId.get(cursor.parentId) : undefined;
+    }
+    entries = entries.filter((entry) => activeIds.has(entry?.id));
+  }
+
   // Flatten entries to bare messages; pre-index tool results by toolCallId so
   // tool cards can attach their result during rendering regardless of order.
+  // Keep each message's Pi entry id alongside for Info-tree scroll anchors.
   const messages = [];
+  const messageEntryIds = [];
   const toolResults = new Map();
   for (const entry of entries) {
     if (entry?.type !== "message") continue;
     const msg = entry.message;
     if (!msg) continue;
     messages.push(msg);
+    messageEntryIds.push(typeof entry.id === "string" ? entry.id : null);
     if (msg.role === "toolResult") toolResults.set(msg.toolCallId, msg);
   }
 
@@ -5181,7 +5415,7 @@ function renderSessionHistory(entries, { searchQuery = "" } = {}) {
   }
   turns.push([turnStart, messages.length]);
 
-  const renderUserFromMsg = (msg) => {
+  const renderUserFromMsg = (msg, entryId = null) => {
     const content =
       typeof msg.content === "string"
         ? msg.content
@@ -5199,12 +5433,14 @@ function renderSessionHistory(entries, { searchQuery = "" } = {}) {
       : [];
     if (content || images.length > 0) {
       userCount++;
-      renderNavigableUserMessage({
+      const el = renderNavigableUserMessage({
         content: content || "",
         images: images.length > 0 ? images : undefined,
         isHistory: true,
         timestamp: msg.timestamp,
       });
+      // Pi entry anchor: the Info tree scrolls the chat to these.
+      if (el && entryId) el.dataset.entryId = entryId;
     }
   };
 
@@ -5212,7 +5448,7 @@ function renderSessionHistory(entries, { searchQuery = "" } = {}) {
     const anchor = messages[start];
     let bodyStart = start;
     if (anchor?.role === "user") {
-      renderUserFromMsg(anchor);
+      renderUserFromMsg(anchor, messageEntryIds[start]);
       bodyStart = start + 1;
     }
 
@@ -5269,9 +5505,12 @@ function renderSessionHistory(entries, { searchQuery = "" } = {}) {
             true,
           );
           assistantCount++;
-          // Rebuild the turn's written-file chips from history so returning to
-          // a session shows the same affordance the live turn had.
           if (finalEl) {
+            // Pi entry anchor for the turn's final answer (Info tree target).
+            const answerEntryId = messageEntryIds[i];
+            if (answerEntryId) finalEl.dataset.entryId = answerEntryId;
+            // Rebuild the turn's written-file chips from history so returning to
+            // a session shows the same affordance the live turn had.
             const writes = historyTurnWrites(messages, bodyStart, end, toolResults);
             const row = renderTurnFileChips(writes);
             if (row) finalEl.insertAdjacentElement("afterend", row);

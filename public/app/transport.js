@@ -89,6 +89,15 @@ export class WsTransport {
     return this._control("fork", { entryId, port: port ?? null });
   }
 
+  // Navigate the active session's tree in place (Info panel "Resume branch" /
+  // user-message "Edit"). No new session file: pi moves the active leaf via its
+  // own navigateTree primitive (dispatched through the picot-bridge extension
+  // command) and emits `session_tree`, which embedded-server forwards as a WS
+  // event; the UI then re-syncs from the authoritative snapshot.
+  navigateTree(entryId, { summarize = false, port = null } = {}) {
+    return this._control("navigate_tree", { entryId, summarize, port });
+  }
+
   stopInstance(port) {
     return this._control("stop_instance", { port: port ?? null });
   }

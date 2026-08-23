@@ -23,6 +23,27 @@
     "quickChat": "快速聊天",
     "newSideChat": "打开侧边聊天"
   },
+  "infoPanel": {
+    "title": "信息",
+    "workspace": "工作区",
+    "copyPath": "复制路径",
+    "copied": "已复制",
+    "sessionHistory": "会话历史",
+    "activePath": "当前分支",
+    "branch": "分支",
+    "turns": "{count} 轮",
+    "resumeBranch": "恢复分支",
+    "refresh": "刷新会话历史",
+    "resumeStreamingBlocked": "请等待当前回复完成",
+    "actionWhileStreaming": "请等待当前回复完成",
+    "actionDesktopOnly": "此操作需要桌面版应用",
+    "statusError": "出错",
+    "statusAborted": "已中止",
+    "imageMessage": "图片",
+    "empty": "暂无消息",
+    "roleUser": "你",
+    "roleAssistant": "助手"
+  },
   "git": {
     "currentBranch": "当前 Git 分支",
     "branchName": "分支：{name}",
@@ -366,7 +387,12 @@
     "abortedByUser": "已被用户中止",
     "invalidJson": "无效的 JSON：{detail}",
     "modelsMustBeObject": "models.json 必须是 JSON 对象。",
-    "providersMustBeObject": "'providers' 必须是对象。"
+    "providersMustBeObject": "'providers' 必须是对象。",
+    "wsNotConnected": "WebSocket 未连接",
+    "requestTimeout": "请求超时",
+    "requestFailed": "请求失败",
+    "treeNavigateFailed": "分支切换失败:{error}",
+    "forkFailed": "复制会话失败:{error}"
   },
   "messages": {
     "attachedImage": "附加图片",
@@ -382,7 +408,9 @@
     "processToolCalls": "{count} 次工具调用",
     "turnFiles": "本轮修改的文件（{count}）：",
     "expand": "展开",
-    "collapse": "收起"
+    "collapse": "收起",
+    "forkSession": "复制会话",
+    "editMessage": "编辑消息"
   },
   "onboarding": {
     "openProject": "打开一个项目以开始对话。",

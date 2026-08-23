@@ -1,11 +1,22 @@
 // ABOUTME: Provides Lucide (ISC) SVG action icons for Picot controls.
-// ABOUTME: Path data synced from lucide v1.31.0; keeps icon DOM creation safe,
+// ABOUTME: Path data synced from lucide v1.33.0; keeps icon DOM creation safe,
 // ABOUTME: same-origin, and independent of user content. `text-collapse` is a
 // ABOUTME: Picot-custom icon (no Lucide equivalent).
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 const ICONS = {
+  "circle-info": [
+    ["circle", { cx: "12", cy: "12", r: "10" }],
+    ["path", { d: "M12 16v-4" }],
+    ["path", { d: "M12 8h.01" }],
+  ],
+  "git-info": [
+    ["line", { x1: "6", y1: "3", x2: "6", y2: "15" }],
+    ["circle", { cx: "18", cy: "6", r: "3" }],
+    ["circle", { cx: "6", cy: "18", r: "3" }],
+    ["path", { d: "M18 9a9 9 0 0 1-9 9" }],
+  ],
   eye: [
     [
       "path",

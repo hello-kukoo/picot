@@ -23,6 +23,27 @@
     "quickChat": "Quick Chat",
     "newSideChat": "Open Side Chat"
   },
+  "infoPanel": {
+    "title": "Info",
+    "workspace": "Workspace",
+    "copyPath": "Copy path",
+    "copied": "Copied",
+    "sessionHistory": "Session history",
+    "activePath": "Active path",
+    "branch": "Branch",
+    "turns": "{count} turns",
+    "resumeBranch": "Resume branch",
+    "refresh": "Refresh session history",
+    "resumeStreamingBlocked": "Wait for the current response to finish",
+    "actionWhileStreaming": "Wait for the current response to finish",
+    "actionDesktopOnly": "This action requires the desktop app",
+    "statusError": "Error",
+    "statusAborted": "Aborted",
+    "imageMessage": "Image",
+    "empty": "No messages yet",
+    "roleUser": "You",
+    "roleAssistant": "Assistant"
+  },
   "git": {
     "currentBranch": "Current git branch",
     "branchName": "Branch: {name}",
@@ -366,7 +387,12 @@
     "abortedByUser": "Aborted by user",
     "invalidJson": "Invalid JSON: {detail}",
     "modelsMustBeObject": "models.json must be a JSON object.",
-    "providersMustBeObject": "'providers' must be an object."
+    "providersMustBeObject": "'providers' must be an object.",
+    "wsNotConnected": "WebSocket is not connected",
+    "requestTimeout": "Request timed out",
+    "requestFailed": "Request failed",
+    "treeNavigateFailed": "Branch switch failed: {error}",
+    "forkFailed": "Fork failed: {error}"
   },
   "messages": {
     "attachedImage": "Attached image",
@@ -382,7 +408,9 @@
     "processToolCalls": "{count} tool calls",
     "turnFiles": "Files changed this turn ({count}):",
     "expand": "Expand",
-    "collapse": "Collapse"
+    "collapse": "Collapse",
+    "forkSession": "Fork session",
+    "editMessage": "Edit message"
   },
   "onboarding": {
     "openProject": "Open a project to start chatting.",

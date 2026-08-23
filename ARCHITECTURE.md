@@ -214,9 +214,13 @@ HTTP+WS server。该 server 是**进程作用域**的 —— 它在 `new_session
   `extensions/open-path.ts` 中按平台选择 `open` / `explorer.exe` / `xdg-open`，不经过 shell。
 - **WebSocket** 在 `/ws` —— 命令分发器。每个连接的客户端发 JSON 命令
   （`send_user_message`、`abort`、`set_model`、`set_thinking_level`、
-  `switch_session`、`new_session`、`fork`、`list_models`、`list_auth`、
-  `get_auth`、`export_html`、`git_branch`），并接收 pi session 事件的
-  广播。
+  `switch_session`、`new_session`、`fork`、`get_session_tree`、`list_models`、
+  `list_auth`、`get_auth`、`export_html`、`git_branch`），并接收 pi session 事件的
+  广播。Info panel 相关契约：`mirror_sync` 快照携带 Pi 的 `leafId`；
+  `get_session_tree` 是轻量权威树读（entries + leafId，不重绘聊天）；
+  `message_end` 广播被 enriched 为携带刚持久化 entry 的 `entryId`（取
+  sessionManager 当前 leaf），供主聊天 DOM 锚点使用；`session_tree` 事件
+  （Resume/Edit 触发）转发到 WebView 后由前端发起 mirror_sync。
 
 WebView 还有第二条 HTTP 路径：`http://localhost:47821/...`，用于直接
 REST 查询。broker WebSocket 是**唯一**承载实时 session 事件和路由变更
@@ -387,8 +391,20 @@ Settings → Skills 固定为 **Discovered / Install / Packages**。每个页签
 `websocket-client.js`、`session-routing.js`。新增 transport 层的
 消息类型时碰它们。Git panel 使用独立的 `git-client.js` 和 native broker
 消息；不要把 Git 请求改成 `/api/*` 路由。
-- **聊天渲染** —— `message-renderer.js`、`tool-card.js`、`markdown.js`、
-  `public/vendor/remend.js`（第三方流式 markdown 修复）。
+- **聊天渲染** —— `message-renderer.js`（user toolbar 固定顺序
+  Expand → Fork → Edit → Copy → Timestamp；Fork/Edit 派发 `messagefork` /
+  `messageedit` 事件，transport 调用由 `app.js` 拥有）、`tool-card.js`、
+  `markdown.js`、`public/vendor/remend.js`（第三方流式 markdown 修复）。
+- **Info panel（右栏）** —— `info-panel.js` + `info-panel.css` +
+  `session-tree.js`。Session history 树是 Pi 原生 session tree（`id`/
+  `parentId` + `leafId`）的纯投影：Pi 拥有树与 active leaf，前端只渲染；
+  点击 active 节点仅滚动主聊天，不动 leaf/composer；inactive 分支折叠，
+  仅全叶可 Resume（经 `transport.navigateTree` → Rust broker → stdin
+  `prompt /picot-navigate-tree` → pi `ctx.navigateTree`，事件
+  `session_tree` 回流后以 mirror_sync 全量重绘）。Workspace 区与 header
+  下拉共用唯一 action 源 `workspace-actions.js`（apps 加载、图标/
+  monogram fallback、选择持久化、clipboard 只在此实现一次）。主聊天仅渲染
+  root→leaf 的 ancestor path（`mirror_sync.leafId` 缺失时回退旧全量渲染）。
 - **侧栏 / 文件工作区** —— `sidebar/index.js`、`recent-sessions.js`、
   `pinned-items.js`（跨端口 Pin cookie）、`workspace-projects.js`
   （history/live workspace 合并）、`workspace-quick-info.js`
@@ -552,6 +568,14 @@ WebView 直接对 `localhost:47821` 开第二条 HTTP 连接。
 pi 子进程的 stdin。实际使用中它专供那些**必须改变 broker 路由**的
 Tauri command handler（`new_session_core`、`switch_session_core`、
 `stop_instance_core` 以及专用的 `spawn_session_process_core`）。
+
+`fork_session_core` 同走此路径（pi 原生 stdin `fork` 命令）；
+`navigate_tree_core` 是唯一例外形态：pi stdin 协议没有 navigate_tree
+命令，它以 `prompt` 派发 `/picot-navigate-tree`（`extensions/picot-bridge.ts`
+注册的扩展命令，handler 拿到 pi command ctx 并调用 `ctx.navigateTree`
+——与 TUI `/tree` 同一原语）。pi 随后发出 `session_tree` 事件，
+embedded-server 转发给 WebView，前端用 mirror_sync 全量重绘。分支切换不建新
+session 文件、不变端口。
 
 `pi --mode rpc` 的 stdio 协议由 pi 自己消费；**embedded extension
 并不通过这条路径被调用**。extension 在进程启动时由 `--extension` 触发

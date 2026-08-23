@@ -23,6 +23,27 @@
     "quickChat": "Chat rápido",
     "newSideChat": "Nuevo chat lateral"
   },
+  "infoPanel": {
+    "title": "Información",
+    "workspace": "Espacio de trabajo",
+    "copyPath": "Copiar ruta",
+    "copied": "Copiado",
+    "sessionHistory": "Historial de sesión",
+    "activePath": "Rama activa",
+    "branch": "Rama",
+    "turns": "{count} turnos",
+    "resumeBranch": "Retomar rama",
+    "refresh": "Actualizar historial de sesión",
+    "resumeStreamingBlocked": "Espera a que termine la respuesta actual",
+    "actionWhileStreaming": "Espera a que termine la respuesta actual",
+    "actionDesktopOnly": "Esta acción requiere la aplicación de escritorio",
+    "statusError": "Error",
+    "statusAborted": "Cancelado",
+    "imageMessage": "Imagen",
+    "empty": "Aún no hay mensajes",
+    "roleUser": "Tú",
+    "roleAssistant": "Asistente"
+  },
   "git": {
     "currentBranch": "Rama git actual",
     "branchName": "Rama: {name}",
@@ -366,7 +387,12 @@
     "modelsMustBeObject": "models.json debe ser un objeto JSON.",
     "providersMustBeObject": "'providers' debe ser un objeto.",
     "compactionFailed": "La compactación del contexto falló.",
-    "compactionFailedDetail": "La compactación del contexto falló: {error}"
+    "compactionFailedDetail": "La compactación del contexto falló: {error}",
+    "wsNotConnected": "WebSocket no está conectado",
+    "requestTimeout": "La solicitud expiró",
+    "requestFailed": "La solicitud falló",
+    "treeNavigateFailed": "Error al cambiar de rama: {error}",
+    "forkFailed": "Error al bifurcar: {error}"
   },
   "messages": {
     "attachedImage": "Imagen adjunta",
@@ -382,7 +408,9 @@
     "scrollToBottom": "Desplazarse al último mensaje",
     "turnFiles": "Archivos modificados en este turno ({count}):",
     "expand": "Expandir",
-    "collapse": "Contraer"
+    "collapse": "Contraer",
+    "forkSession": "Bifurcar sesión",
+    "editMessage": "Editar mensaje"
   },
   "onboarding": {
     "openProject": "Abre un proyecto para comenzar a chatear.",

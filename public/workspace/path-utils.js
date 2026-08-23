@@ -43,6 +43,15 @@ export function normalizeLocalPath(value) {
   return joinRoot(root, parts);
 }
 
+/** Format a local path for sidebar display without changing its filesystem meaning. */
+export function displayLocalPath(value) {
+  const normalized = normalizeLocalPath(value);
+  if (!normalized || normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) {
+    return normalized;
+  }
+  return `/${normalized}`;
+}
+
 /**
  * Return a workspace-relative path only when both normalized paths share the
  * same canonical root and the file is contained by that root.

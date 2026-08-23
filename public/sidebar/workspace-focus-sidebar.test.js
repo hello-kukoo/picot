@@ -120,6 +120,7 @@ describe("WorkspaceFocusSidebar", () => {
     const gitRegion = card.querySelector(".wqi-git-region");
     expect(gitRegion).toBeTruthy();
     expect(gitRegion.querySelector(".wqi-repo-row")).toBeTruthy();
+    expect(gitRegion.querySelector(".wqi-repo-icon svg")).toBeTruthy();
     expect(gitRegion.querySelector(".wqi-repo").textContent).toBe("origin/repo");
   });
 
