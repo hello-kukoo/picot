@@ -35,7 +35,6 @@
 
 .queued-msg-label {
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   flex-shrink: 0;
@@ -44,7 +43,6 @@
 .queued-msg-cancel {
   background: none;
   border: none;
-  color: var(--text-dim);
   cursor: pointer;
   padding: var(--space-0-5) var(--space-1);
   font-size: var(--font-size-md);

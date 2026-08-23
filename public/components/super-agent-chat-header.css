@@ -28,12 +28,10 @@
 .sa-service-pill:disabled {
   opacity: 0.45;
   cursor: not-allowed;
-  color: var(--text-dim);
 }
 
 .sa-service-pill:disabled:hover {
   background: var(--bg-glass);
-  color: var(--text-dim);
 }
 
 .sa-service-dot {
@@ -44,7 +42,7 @@
 }
 
 .sa-service-pill:not(.connected) .sa-service-dot {
-  background: var(--text-dim);
+  background: var(--text-secondary);
   opacity: 0.55;
 }
 
@@ -60,7 +58,6 @@
   height: 28px;
   border: none;
   background: none;
-  color: var(--text-dim);
   cursor: pointer;
   border-radius: var(--radius-sm);
   padding: 0;

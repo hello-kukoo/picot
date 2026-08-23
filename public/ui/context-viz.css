@@ -122,7 +122,6 @@
 
 .context-legend-value {
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
 }
 
 .context-viz-footer {
@@ -132,5 +131,4 @@
   display: flex;
   justify-content: space-between;
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
 }

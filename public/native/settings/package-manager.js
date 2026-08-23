@@ -54,7 +54,7 @@ function shortenPath(path) {
 function statusColor(status) {
   if (status === "loaded") return "var(--accent)";
   if (status === "installed") return "#f59e0b";
-  if (status === "disabled") return "var(--text-dim)";
+  if (status === "disabled") return "var(--text-secondary)";
   return "#ef4444";
 }
 

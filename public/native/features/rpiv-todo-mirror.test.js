@@ -75,6 +75,23 @@ describe("rpiv todo mirror", () => {
     expect(element.textContent).not.toContain("Deleted");
   });
 
+  it("reports whether anything is mirrored, so /todos is never a silent no-op", () => {
+    document.body.innerHTML = '<div class="input-area"><form></form></div>';
+    const panel = new RpivTodoMirrorPanel({ container: document.querySelector(".input-area") });
+
+    expect(panel.hasVisibleTasks).toBe(false);
+
+    panel.applyToolResult({
+      details: { tasks: [{ id: 1, subject: "Gone", status: "deleted" }], nextId: 2 },
+    });
+    expect(panel.hasVisibleTasks).toBe(false);
+
+    panel.applyToolResult({
+      details: { tasks: [{ id: 1, subject: "Build panel", status: "pending" }], nextId: 2 },
+    });
+    expect(panel.hasVisibleTasks).toBe(true);
+  });
+
   it("renders hover-expandable collapsed markup", () => {
     document.body.innerHTML = '<div class="input-area"><form></form></div>';
     const panel = new RpivTodoMirrorPanel({ container: document.querySelector(".input-area") });

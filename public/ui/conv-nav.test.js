@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConvNav } from "./conv-nav.js";
 
 function setupDom() {
@@ -30,21 +30,49 @@ function setupDom() {
   return { messages, header, badge: document.getElementById("scroll-bottom-badge") };
 }
 
-function appendTurn(messages, userTop, assistantTop) {
+function appendTurn(
+  messages,
+  userTop,
+  assistantTop,
+  { userText = "User", assistantText = "Assistant" } = {},
+) {
   const user = document.createElement("div");
   user.className = "message user";
-  user.innerHTML = '<div class="message-content">User</div>';
+  user.innerHTML = `<div class="message-content">${userText}</div>`;
   user.getBoundingClientRect = () => ({ top: userTop });
 
   const assistant = document.createElement("div");
   assistant.className = "message assistant";
-  assistant.innerHTML = '<div class="message-content">Assistant</div>';
+  assistant.innerHTML = `<div class="message-content">${assistantText}</div>`;
   assistant.getBoundingClientRect = () => ({ top: assistantTop });
 
   messages.append(user, assistant);
 }
 
+function layoutDots(track) {
+  [...track.children].forEach((dot, i) => {
+    const top = 100 + i * 24;
+    dot.getBoundingClientRect = () => ({
+      top,
+      bottom: top + 8,
+      height: 8,
+      left: 200,
+      right: 228,
+      width: 28,
+    });
+  });
+}
+
+function hoverTrack(track, clientY) {
+  track.dispatchEvent(new MouseEvent("mouseenter", { clientY, bubbles: false }));
+  track.dispatchEvent(new MouseEvent("mousemove", { clientY, bubbles: true }));
+}
+
 describe("ConvNav", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("rewires dot clicks after messages are re-rendered with the same turn count", () => {
     const { messages, header, badge } = setupDom();
     const nav = new ConvNav({ messagesEl: messages, headerEl: header, badgeEl: badge });
@@ -61,6 +89,60 @@ describe("ConvNav", () => {
     document.querySelectorAll(".conv-nav-dot")[1].click();
 
     expect(messages.scrollTop).toBe(520);
+    nav.destroy();
+  });
+
+  it("keeps the tooltip visible while the pointer moves across the track", () => {
+    const { messages, header, badge } = setupDom();
+    const nav = new ConvNav({ messagesEl: messages, headerEl: header, badgeEl: badge });
+
+    appendTurn(messages, 120, 180, { userText: "First prompt" });
+    appendTurn(messages, 220, 280, { userText: "Second prompt" });
+    nav.mount();
+
+    const track = document.getElementById("conv-nav-track");
+    const tooltip = document.getElementById("conv-nav-tooltip");
+    layoutDots(track);
+
+    hoverTrack(track, 104);
+    expect(tooltip.classList.contains("hidden")).toBe(false);
+    expect(document.getElementById("conv-nav-tooltip-q").textContent).toContain("First prompt");
+
+    tooltip.classList.remove("animating");
+    track.dispatchEvent(new MouseEvent("mousemove", { clientY: 112, bubbles: true }));
+    track.dispatchEvent(new MouseEvent("mousemove", { clientY: 128, bubbles: true }));
+
+    expect(tooltip.classList.contains("hidden")).toBe(false);
+    expect(tooltip.classList.contains("animating")).toBe(false);
+    expect(document.getElementById("conv-nav-tooltip-q").textContent).toContain("Second prompt");
+
+    nav.destroy();
+  });
+
+  it("hides the tooltip only after the pointer leaves the track", () => {
+    vi.useFakeTimers();
+    const { messages, header, badge } = setupDom();
+    const nav = new ConvNav({ messagesEl: messages, headerEl: header, badgeEl: badge });
+
+    appendTurn(messages, 120, 180, { userText: "First prompt" });
+    appendTurn(messages, 220, 280, { userText: "Second prompt" });
+    nav.mount();
+
+    const track = document.getElementById("conv-nav-track");
+    const tooltip = document.getElementById("conv-nav-tooltip");
+    layoutDots(track);
+
+    hoverTrack(track, 104);
+    expect(tooltip.classList.contains("hidden")).toBe(false);
+
+    track.dispatchEvent(
+      new MouseEvent("mouseleave", { clientY: 104, bubbles: false, relatedTarget: document.body }),
+    );
+    expect(tooltip.classList.contains("hidden")).toBe(false);
+
+    vi.advanceTimersByTime(120);
+    expect(tooltip.classList.contains("hidden")).toBe(true);
+
     nav.destroy();
   });
 });

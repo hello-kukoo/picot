@@ -21,7 +21,6 @@
 .session-loading {
   padding: var(--space-8) var(--space-3);
   text-align: center;
-  color: var(--text-dim);
   font-size: var(--font-size-sm);
 }
 
@@ -103,8 +102,8 @@
 .project-header {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-1-5) var(--space-1-5);
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-1-5);
   margin-top: 8px;
   font-size: var(--font-size-md);
   color: var(--accent-text);
@@ -156,7 +155,6 @@
 
 .project-count {
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
   line-height: 21px;
 }
 
@@ -180,7 +178,6 @@
   background: none;
   border: none;
   border-radius: var(--radius-xs);
-  color: var(--text-dim);
   cursor: pointer;
   opacity: 1;
   line-height: 0;
@@ -212,7 +209,6 @@
   background: none;
   border: none;
   border-radius: var(--radius-xs);
-  color: var(--text-dim);
   cursor: pointer;
   line-height: 0;
   flex-shrink: 0;
@@ -321,7 +317,6 @@
 .project-sessions-toggle {
   border: none;
   background: transparent;
-  color: var(--text-dim);
   padding: var(--space-0-5) 0;
   font-size: var(--font-size-sm);
   line-height: 1.4;
@@ -411,7 +406,6 @@
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--text-dim);
   cursor: pointer;
   align-items: center;
   justify-content: center;
@@ -509,10 +503,6 @@
   color: var(--accent);
 }
 
-.archived-header {
-  color: var(--text-dim);
-}
-
 .fav-star {
   font-size: var(--font-size-sm);
 }
@@ -530,7 +520,6 @@
 
 .search-snippet {
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
   line-height: 1.4;
   margin-top: 2px;
   overflow: hidden;
@@ -602,7 +591,6 @@
 
 .session-meta {
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
   margin-top: 3px;
   line-height: 1.25;
 }
@@ -654,7 +642,6 @@
   display: inline-flex;
   align-items: center;
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
 }
 
 .session-pin-icon {

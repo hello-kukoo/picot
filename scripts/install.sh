@@ -44,6 +44,27 @@ need_cmd() { command -v "$1" &>/dev/null || die "Required command not found: $1"
 need_cmd curl
 need_cmd uname
 
+# Ubuntu's snap curl is AppArmor-confined: it has a private /tmp, and the home
+# interface denies top-level hidden directories (so ~/.cache is not writable).
+# Prefer the native binary when both are present; otherwise stage downloads
+# under a visible $HOME path.
+is_snap_path() {
+  case "$1" in
+    /snap/*) return 0 ;;
+  esac
+  case "$(readlink -f "$1" 2>/dev/null || true)" in
+    /snap/*) return 0 ;;
+  esac
+  return 1
+}
+
+CURL_BIN="$(command -v curl)"
+if is_snap_path "$CURL_BIN" && [ -x /usr/bin/curl ] && ! is_snap_path /usr/bin/curl; then
+  CURL_BIN="/usr/bin/curl"
+fi
+
+curl_get() { "$CURL_BIN" "$@"; }
+
 # ── Detect OS & arch ──────────────────────────────────────────────────────────
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -80,12 +101,19 @@ fi
 
 # ── Resolve version ───────────────────────────────────────────────────────────
 header "🎯  ${APP_NAME} Installer"
+if is_snap_path "$(command -v curl)"; then
+  if [ "$CURL_BIN" = "/usr/bin/curl" ]; then
+    warn "Snap curl cannot write to /tmp or ~/.cache. Using /usr/bin/curl instead."
+  else
+    warn "Snap curl cannot write to /tmp or ~/.cache. Staging the download under ~/picot-install."
+  fi
+fi
 if [ -n "$PINNED_VERSION" ]; then
   VERSION="$PINNED_VERSION"
   info "Using pinned version: ${VERSION}"
 else
   info "Fetching latest release from GitHub..."
-  VERSION="$(curl -fsSL "${GITHUB_API}/latest" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
+  VERSION="$(curl_get -fsSL "${GITHUB_API}/latest" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
   [ -n "$VERSION" ] || die "Failed to fetch latest release version."
   info "Latest version: ${VERSION}"
 fi
@@ -122,8 +150,17 @@ esac
 DOWNLOAD_URL="${GITHUB_DL}/${VERSION}/${FILENAME}"
 
 # ── Download ──────────────────────────────────────────────────────────────────
-TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
+if is_snap_path "$CURL_BIN"; then
+  # Snap's home interface allows non-hidden $HOME paths only. Host mkdir of
+  # ~/.cache succeeds, but snap curl still cannot create the file there.
+  STAGING="${HOME}/picot-install"
+  mkdir -p "$STAGING"
+  TMPDIR="$(mktemp -d "${STAGING}/tmp.XXXXXX")"
+  trap 'rm -rf "$TMPDIR"; rmdir "$STAGING" 2>/dev/null || true' EXIT
+else
+  TMPDIR="$(mktemp -d)"
+  trap 'rm -rf "$TMPDIR"' EXIT
+fi
 
 DEST="${TMPDIR}/${FILENAME}"
 
@@ -131,7 +168,10 @@ header "⬇️   Downloading"
 info "URL: ${DOWNLOAD_URL}"
 info "File: ${FILENAME}"
 
-if ! curl -fL --progress-bar -o "$DEST" "$DOWNLOAD_URL"; then
+if ! curl_get -fL --progress-bar -o "$DEST" "$DOWNLOAD_URL"; then
+  if is_snap_path "$CURL_BIN"; then
+    die "Download failed. Ubuntu snap curl cannot write this file. Install native curl (\`sudo apt install curl\`) and retry, or download ${FILENAME} from ${DOWNLOAD_URL}."
+  fi
   die "Download failed. Check your internet connection or try --version with a valid tag."
 fi
 success "Downloaded ${FILENAME}"

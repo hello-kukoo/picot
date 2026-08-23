@@ -31,11 +31,44 @@ function scopeLabel(scope) {
   return "Personal";
 }
 
+/**
+ * Where a command comes from: the providing package when pi reports one
+ * (`npm:pi-web-access` → `pi-web-access`), otherwise the scope it was loaded
+ * from (Personal/Project/Temporary) or Picot for built-ins.
+ */
+export function originLabel(command) {
+  if (command?.type === "builtin") return "Picot";
+  const source = command?.sourceInfo?.source;
+  if (typeof source === "string") {
+    if (source.startsWith("npm:")) return source.slice(4);
+    if (source === "inline") return "Inline";
+  }
+  return scopeLabel(command?.sourceInfo?.scope ?? command?.scope);
+}
+
+/** Command groups rendered in the menu, in display order. */
+const MENU_GROUPS = ["skill", "extension"];
+
+function commandGroup(command) {
+  if (command.type === "skill" || command.source === "skill") return "skill";
+  if (command.type === "extension" || command.source === "extension") return "extension";
+  if (command.type === "prompt" || command.source === "prompt") return "prompt";
+  if (command.type === "builtin") return "builtin";
+  return "other";
+}
+
 function typeLabel(command) {
-  if (command.type === "skill" || command.source === "skill") return "Skill";
-  if (command.type === "prompt" || command.source === "prompt") return "Prompt";
-  if (command.type === "builtin") return "Picot";
+  const group = commandGroup(command);
+  if (group === "skill") return "Skill";
+  if (group === "extension") return "Extension";
+  if (group === "prompt") return "Prompt";
+  if (group === "builtin") return "Picot";
   return "Command";
+}
+
+function groupLabel(group) {
+  if (group === "extension") return t("migrated.index.text.extensions");
+  return t("migrated.index.text.skills");
 }
 
 function cubeIcon() {
@@ -46,15 +79,31 @@ function cubeIcon() {
     </svg>`;
 }
 
-function isSkillCommand(command) {
-  return command.type === "skill" || command.source === "skill";
+function puzzleIcon() {
+  return `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M10.2 3.4a1.8 1.8 0 0 1 3.6 0V5h2.9c.6 0 1 .5 1 1v2.9h1.6a1.8 1.8 0 0 1 0 3.6h-1.6V17c0 .6-.4 1-1 1h-2.9v-1.6a1.8 1.8 0 0 0-3.6 0V18H7.3c-.6 0-1-.4-1-1v-2.9H4.7a1.8 1.8 0 0 1 0-3.6h1.6V7.6c0-.6.4-1 1-1h2.9V3.4Z" />
+    </svg>`;
+}
+
+function commandIcon(command) {
+  return commandGroup(command) === "extension" ? puzzleIcon() : cubeIcon();
+}
+
+function isMenuCommand(command) {
+  return MENU_GROUPS.includes(commandGroup(command));
 }
 
 function normalizeCommands(commands) {
   return Array.from(commands ?? [])
-    .filter(isSkillCommand)
-    .map((command) => ({ ...command, command: commandInvocation(command) }))
-    .filter((command) => command.command && command.capabilityState !== "disabled");
+    .filter(isMenuCommand)
+    .map((command) => ({
+      ...command,
+      command: commandInvocation(command),
+      group: commandGroup(command),
+    }))
+    .filter((command) => command.command && command.capabilityState !== "disabled")
+    .sort((a, b) => MENU_GROUPS.indexOf(a.group) - MENU_GROUPS.indexOf(b.group));
 }
 
 export function setupComposerSlashMenu({ input, container, commandButton = null, getCommands }) {
@@ -68,7 +117,7 @@ export function setupComposerSlashMenu({ input, container, commandButton = null,
   container.setAttribute("role", "listbox");
   container.setAttribute(
     "aria-label",
-    t("migrated.native.composer.composerSlashMenu.ariaLabel.skillSlashCommands"),
+    t("migrated.native.composer.composerSlashMenu.ariaLabel.slashCommands"),
   );
   input.setAttribute("aria-autocomplete", "list");
   input.setAttribute("aria-controls", container.id);
@@ -131,6 +180,7 @@ export function setupComposerSlashMenu({ input, container, commandButton = null,
       command.description,
       titleCaseCommandName(command.name),
       typeLabel(command),
+      originLabel(command),
     ]
       .filter(Boolean)
       .some((value) => String(value).toLowerCase().includes(query));
@@ -149,20 +199,29 @@ export function setupComposerSlashMenu({ input, container, commandButton = null,
     selectedIndex = Math.min(selectedIndex, Math.max(matches.length - 1, 0));
 
     container.innerHTML = "";
-    const heading = document.createElement("div");
-    heading.className = "skill-slash-heading";
-    heading.textContent = t("migrated.index.text.skills");
-    container.appendChild(heading);
 
     if (matches.length === 0) {
+      const heading = document.createElement("div");
+      heading.className = "skill-slash-heading";
+      heading.textContent = t("migrated.index.text.skills");
+      container.appendChild(heading);
       const empty = document.createElement("div");
       empty.className = "skill-slash-empty";
       empty.textContent = t(
-        "migrated.native.composer.composerSlashMenu.textcontent.noMatchingSkills",
+        "migrated.native.composer.composerSlashMenu.textcontent.noMatchingCommands",
       );
       container.appendChild(empty);
     } else {
+      let renderedGroup = null;
       matches.forEach((command, index) => {
+        if (command.group !== renderedGroup) {
+          renderedGroup = command.group;
+          const heading = document.createElement("div");
+          heading.className = "skill-slash-heading";
+          heading.setAttribute("role", "presentation");
+          heading.textContent = groupLabel(renderedGroup);
+          container.appendChild(heading);
+        }
         const option = document.createElement("button");
         option.type = "button";
         option.id = `skill-slash-option-${index}`;
@@ -171,14 +230,16 @@ export function setupComposerSlashMenu({ input, container, commandButton = null,
         option.setAttribute("role", "option");
         option.setAttribute("aria-selected", String(index === selectedIndex));
         option.innerHTML = `
-          <span class="skill-slash-icon">${cubeIcon()}</span>
+          <span class="skill-slash-icon">${commandIcon(command)}</span>
           <span class="skill-slash-name"></span>
           <span class="skill-slash-description"></span>
           <span class="skill-slash-scope"></span>`;
         option.querySelector(".skill-slash-name").textContent = titleCaseCommandName(command.name);
         option.querySelector(".skill-slash-description").textContent =
           command.description || typeLabel(command);
-        option.querySelector(".skill-slash-scope").textContent = scopeLabel(command.scope);
+        const origin = option.querySelector(".skill-slash-scope");
+        origin.textContent = originLabel(command);
+        origin.title = command.sourceInfo?.path || command.path || origin.textContent;
         option.addEventListener("mouseenter", () => {
           selectedIndex = index;
           updateSelection();

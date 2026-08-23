@@ -46,7 +46,6 @@
 
 .at-file-mention-description {
   overflow: hidden;
-  color: var(--text-dim);
   font-size: var(--font-size-md);
   text-overflow: ellipsis;
   white-space: nowrap;

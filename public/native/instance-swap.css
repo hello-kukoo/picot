@@ -139,7 +139,6 @@ html.swapping-instance-pending body .instance-swap-overlay {
 
 .super-agent-status-text {
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

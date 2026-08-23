@@ -8,9 +8,18 @@ function makeFetchMock(handlers = {}) {
         complete: "complete",
         error: "error",
         copyOutput: "Copy output",
+        openInPreview: "Open in preview",
       },
     },
-    zh: { tools: { streaming: "执行中", complete: "完成", error: "错误", copyOutput: "复制输出" } },
+    zh: {
+      tools: {
+        streaming: "执行中",
+        complete: "完成",
+        error: "错误",
+        copyOutput: "复制输出",
+        openInPreview: "在预览中打开",
+      },
+    },
   };
   return vi.fn(async (url) => {
     const u = String(url);
@@ -200,5 +209,52 @@ describe("ToolCardRenderer teardown", () => {
         callback();
       });
     }).not.toThrow();
+  });
+});
+
+describe("ToolCardRenderer file references", () => {
+  it("turns a path argument into a preview button that emits previewfile", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    const { initI18n } = await importFreshI18n();
+    await initI18n();
+    const { ToolCardRenderer } = await import("./ui/tool-card.js");
+
+    const container = document.createElement("div");
+    const seen = [];
+    container.addEventListener("previewfile", (event) => seen.push(event.detail.path));
+    const renderer = new ToolCardRenderer(container);
+    renderer.createToolCard({
+      toolCallId: "write-1",
+      toolName: "write",
+      status: "complete",
+      args: { path: "docs/index.html" },
+    });
+
+    const ref = container.querySelector(".tool-file-ref");
+    expect(ref).not.toBeNull();
+    expect(ref.dataset.path).toBe("docs/index.html");
+    expect(ref.getAttribute("aria-label")).toContain("docs/index.html");
+    ref.click();
+    expect(seen).toEqual(["docs/index.html"]);
+    expect(container.querySelector(".tool-card-body")?.classList.contains("expanded")).toBe(false);
+  });
+
+  it("keeps non-path previews as plain text", async () => {
+    vi.stubGlobal("fetch", makeFetchMock());
+    const { initI18n } = await importFreshI18n();
+    await initI18n();
+    const { ToolCardRenderer } = await import("./ui/tool-card.js");
+
+    const container = document.createElement("div");
+    const renderer = new ToolCardRenderer(container);
+    renderer.createToolCard({
+      toolCallId: "bash-1",
+      toolName: "bash",
+      status: "complete",
+      args: { command: "ls -la" },
+    });
+
+    expect(container.querySelector(".tool-file-ref")).toBeNull();
+    expect(container.querySelector(".tool-args-preview")?.textContent).toBe("ls -la");
   });
 });

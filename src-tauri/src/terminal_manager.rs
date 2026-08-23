@@ -15,8 +15,8 @@ use serde_json::{json, Value};
 
 use crate::terminal_output::{TerminalLimits, TerminalOutputStore};
 use crate::terminal_profiles::{
-    resolve_macos_default, resolve_windows_profile, ProfileError, ResolvedShell, ShellProbe,
-    ShellProfileId, SystemShellProbe,
+    fallback_windows_shell_after_spawn_failure, resolve_macos_default, resolve_windows_profile,
+    windows_shell_env, ProfileError, ResolvedShell, ShellProbe, ShellProfileId, SystemShellProbe,
 };
 use crate::terminal_registry::{
     err_str, CloseLease, TerminalDescriptor, TerminalError, TerminalKey, TerminalRegistry,
@@ -233,7 +233,7 @@ impl TerminalManager {
             }
         };
 
-        let spawned = match self.spawn_pty(&shell, workspace_root) {
+        let spawned = match self.spawn_pty_for_profile(profile_id, &shell, workspace_root) {
             Ok(s) => s,
             Err(reason) => {
                 let _ = self.inner.registry.mark_failed(
@@ -495,7 +495,7 @@ impl TerminalManager {
 
         self.replace_generation(&terminal_id, generation);
         let spawned = self
-            .spawn_pty(&shell, workspace_root)
+            .spawn_pty_for_profile(&profile_id, &shell, workspace_root)
             .inspect_err(|reason| {
                 let _ = self.inner.registry.mark_failed(
                     &key,
@@ -581,6 +581,28 @@ impl TerminalManager {
         resolved.map_err(|ProfileError::ProfileUnavailable { guidance, .. }| guidance)
     }
 
+    fn spawn_pty_for_profile(
+        &self,
+        profile_id: &str,
+        shell: &ResolvedShell,
+        workspace_root: &Path,
+    ) -> Result<Spawned, String> {
+        match self.spawn_pty(shell, workspace_root) {
+            Ok(spawned) => Ok(spawned),
+            Err(reason) => {
+                let Some(fallback) = fallback_windows_shell_after_spawn_failure(
+                    profile_id,
+                    shell,
+                    self.inner.probe.as_ref(),
+                ) else {
+                    return Err(reason);
+                };
+                self.spawn_pty(&fallback, workspace_root)
+                    .map_err(|_| reason)
+            }
+        }
+    }
+
     fn spawn_pty(&self, shell: &ResolvedShell, workspace_root: &Path) -> Result<Spawned, String> {
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -598,10 +620,16 @@ impl TerminalManager {
         cmd.cwd(workspace_root);
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
+        for (key, value) in windows_shell_env(&shell.program) {
+            cmd.env(key, value);
+        }
         let child = pair
             .slave
             .spawn_command(cmd)
             .map_err(|e| format!("pty spawn failed: {e}"))?;
+        // ConPTY on Windows needs the slave handle closed after spawn so the
+        // child attaches to a real console. Harmless on Unix.
+        drop(pair.slave);
         let reader = pair
             .master
             .try_clone_reader()

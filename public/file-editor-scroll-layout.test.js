@@ -30,7 +30,6 @@ describe("file editor scroll layout", () => {
   test("themes CodeMirror line numbers with Picot color tokens", () => {
     const gutters = ruleBody(".file-code-editor .cm-gutters");
     expect(gutters).toContain("background: var(--bg-solid)");
-    expect(gutters).toContain("color: var(--text-dim)");
     expect(gutters).toContain("border-right: 1px solid var(--border)");
 
     const activeGutter = ruleBody(".file-code-editor .cm-activeLineGutter");

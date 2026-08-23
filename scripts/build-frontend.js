@@ -11,6 +11,8 @@
  *   public/vendor/codemirror.js     — all CodeMirror runtime exports used by the app
  *   public/vendor/pdf.js            — PDF.js facade (getDocument, GlobalWorkerOptions)
  *   public/vendor/pdf.worker.js     — PDF.js worker
+ *   public/vendor/xterm.js          — xterm constructors on globalThis.PicotXterm
+ *   public/vendor/chart.js          — Chart.js constructor on globalThis.Chart
  *   public/vendor/tauri-notification.js — Tauri notification browser facade
  */
 
@@ -50,9 +52,19 @@ const entries = [
     outfile: path.join(OUT_DIR, "pdf.worker.js"),
   },
   {
+    // Classic <script> tags share the global scope. ESM output would leak
+    // top-level `var` bindings (xterm/Chart.js both declare helpers that
+    // collide with browser APIs such as getComputedStyle) and recurse.
     ...common,
+    format: "iife",
     entryPoints: [path.join(ROOT, "public", "terminal-vendor-entry.js")],
     outfile: path.join(OUT_DIR, "xterm.js"),
+  },
+  {
+    ...common,
+    format: "iife",
+    entryPoints: [path.join(ROOT, "public", "chart-vendor-entry.js")],
+    outfile: path.join(OUT_DIR, "chart.js"),
   },
   {
     ...common,

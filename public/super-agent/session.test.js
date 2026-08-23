@@ -4,7 +4,9 @@ import {
   getRunningSuperAgentPorts,
   getSuperAgentProject,
   isSuperAgentProjectPath,
+  isSuperAgentSessionSummary,
   normalizeSuperAgentSession,
+  resolveSuperAgentActiveSession,
 } from "./session.js";
 
 describe("super agent session helpers", () => {
@@ -66,6 +68,42 @@ describe("super agent session helpers", () => {
 
   it("recognizes the conventional super agent path before home resolution completes", () => {
     expect(isSuperAgentProjectPath("/Users/me/.pi/agent/super-agent", "")).toBe(true);
+  });
+
+  it("recognizes Windows Git-style Agent Inbox paths", () => {
+    expect(isSuperAgentProjectPath(String.raw`C:\Users\me\.pi\agent\super-agent`)).toBe(true);
+    expect(isSuperAgentProjectPath(String.raw`C:\Users\me\project`)).toBe(false);
+  });
+
+  it("treats listed sessions with the inbox project path as Agent Inbox", () => {
+    expect(
+      isSuperAgentSessionSummary({
+        id: "sa",
+        projectPath: "/Users/me/.pi/agent/super-agent",
+      }),
+    ).toBe(true);
+    expect(isSuperAgentSessionSummary({ id: "project", projectPath: "/Users/me/project" })).toBe(
+      false,
+    );
+  });
+
+  it("activates Agent Inbox chrome for a temporary runtime in the inbox workspace", () => {
+    const inbox = {
+      id: "saved-inbox",
+      projectPath: "/Users/me/.pi/agent/super-agent",
+      isCurrentWorkspace: true,
+    };
+    expect(resolveSuperAgentActiveSession([inbox], "temporary-abc")).toEqual(inbox);
+    expect(
+      resolveSuperAgentActiveSession(
+        [
+          { ...inbox, isCurrentWorkspace: false },
+          { id: "project", projectPath: "/ws" },
+        ],
+        "temporary-abc",
+      ),
+    ).toBeNull();
+    expect(resolveSuperAgentActiveSession([inbox], "saved-inbox")).toEqual(inbox);
   });
 
   it("does not create a pinned entry when there is no session yet", () => {

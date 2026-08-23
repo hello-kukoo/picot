@@ -39,6 +39,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::image::Image;
+#[cfg(target_os = "macos")]
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
@@ -49,6 +50,7 @@ type NativePiManagerState = NativePiManager;
 #[allow(dead_code)]
 type SkillSourceRegistryState = Arc<SkillSourceRegistry>;
 
+#[cfg(target_os = "macos")]
 const MENU_NEW_SESSION_ID: &str = "picot-new-session";
 const BETA_UPDATE_ENDPOINT: &str =
     "https://github.com/shixin-guo/picot/releases/download/beta/latest.json";
@@ -432,6 +434,7 @@ fn open_native_workspace_window(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn open_fresh_session_for_focused_workspace(app: &AppHandle) -> Result<(), String> {
     // Resolve the *actual* workspace window that currently has OS focus. Passing
     // this real window (instead of None) to `open_fresh_session_at_path`
@@ -475,6 +478,10 @@ fn open_fresh_session_for_focused_workspace(app: &AppHandle) -> Result<(), Strin
     open_fresh_session_at_path(app, Some(&focused_window), &cwd)
 }
 
+// Native menus belong in the macOS system menu bar. On Windows/Linux, Tauri
+// draws the same items inside the window as File/Edit/Window/Help, which we
+// do not want. New Session (Ctrl+N) is handled in the frontend.
+#[cfg(target_os = "macos")]
 fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let new_session = MenuItem::with_id(
         app,
@@ -491,8 +498,6 @@ fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &new_session,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::close_window(app, None)?,
-            #[cfg(not(target_os = "macos"))]
-            &PredefinedMenuItem::quit(app, None)?,
         ],
     )?;
     let edit = Submenu::with_items(
@@ -521,35 +526,28 @@ fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         ],
     )?;
     let help = Submenu::with_items(app, "Help", true, &[])?;
-    #[cfg(target_os = "macos")]
-    {
-        let app_menu = Submenu::with_items(
-            app,
-            app.package_info().name.clone(),
-            true,
-            &[
-                &PredefinedMenuItem::about(app, None, None)?,
-                &PredefinedMenuItem::separator(app)?,
-                &PredefinedMenuItem::services(app, None)?,
-                &PredefinedMenuItem::separator(app)?,
-                &PredefinedMenuItem::hide(app, None)?,
-                &PredefinedMenuItem::hide_others(app, None)?,
-                &PredefinedMenuItem::separator(app)?,
-                &PredefinedMenuItem::quit(app, None)?,
-            ],
-        )?;
-        let view = Submenu::with_items(
-            app,
-            "View",
-            true,
-            &[&PredefinedMenuItem::fullscreen(app, None)?],
-        )?;
-        Menu::with_items(app, &[&app_menu, &file, &edit, &view, &window, &help])
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Menu::with_items(app, &[&file, &edit, &window, &help])
-    }
+    let app_menu = Submenu::with_items(
+        app,
+        app.package_info().name.clone(),
+        true,
+        &[
+            &PredefinedMenuItem::about(app, None, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, None)?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::quit(app, None)?,
+        ],
+    )?;
+    let view = Submenu::with_items(
+        app,
+        "View",
+        true,
+        &[&PredefinedMenuItem::fullscreen(app, None)?],
+    )?;
+    Menu::with_items(app, &[&app_menu, &file, &edit, &view, &window, &help])
 }
 
 fn open_bootstrap_window(app: &AppHandle, startup_error: &str) -> Result<(), String> {
@@ -625,8 +623,17 @@ fn agent_inbox_path() -> Result<PathBuf, String> {
         .ok_or_else(|| "Cannot resolve home directory for Agent Inbox".to_string())
 }
 
+/// Encode a cwd the same way pi does for `~/.pi/agent/sessions/<dir>/`.
+/// Leading `/` or `\` is stripped, then `/`, `\`, and `:` become `-`, so a
+/// Windows path like `C:\Users\me\.pi\agent\super-agent` becomes
+/// `--C--Users-me-.pi-agent-super-agent--` instead of a name containing `:`.
 fn session_dir_name(cwd: &Path) -> String {
-    format!("--{}--", cwd.to_string_lossy().replace(['/', '\\'], "-"))
+    let raw = cwd.to_string_lossy();
+    let stripped = raw
+        .strip_prefix('/')
+        .or_else(|| raw.strip_prefix('\\'))
+        .unwrap_or(raw.as_ref());
+    format!("--{}--", stripped.replace(['/', '\\', ':'], "-"))
 }
 
 fn now_unix_millis() -> u128 {
@@ -866,20 +873,19 @@ fn main() {
         eprintln!("[picot] failed to sync login-shell environment: {error}");
     }
 
-    tauri::Builder::default()
-        .menu(build_app_menu)
-        .on_menu_event(|app, event| {
-            if event.id().as_ref() == MENU_NEW_SESSION_ID {
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(error) = open_fresh_session_for_focused_workspace(&app) {
-                        log::error!(
-                            "[picot-native] failed to open new session from menu: {error}"
-                        );
-                    }
-                });
-            }
-        })
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(build_app_menu).on_menu_event(|app, event| {
+        if event.id().as_ref() == MENU_NEW_SESSION_ID {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = open_fresh_session_for_focused_workspace(&app) {
+                    log::error!("[picot-native] failed to open new session from menu: {error}");
+                }
+            });
+        }
+    });
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
@@ -983,9 +989,9 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_static_dir, select_fresh_startup_target};
+    use super::{resolve_static_dir, select_fresh_startup_target, session_dir_name};
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_temp_dir(label: &str) -> PathBuf {
@@ -1016,6 +1022,22 @@ mod tests {
 
         assert_eq!(resolved, fs::canonicalize(&workspace_public).unwrap());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn session_dir_name_matches_pi_encoding_on_unix_and_windows_paths() {
+        assert_eq!(
+            session_dir_name(Path::new("/Users/me/.pi/agent/super-agent")),
+            "--Users-me-.pi-agent-super-agent--"
+        );
+        assert_eq!(
+            session_dir_name(Path::new(r"C:\Users\me\.pi\agent\super-agent")),
+            "--C--Users-me-.pi-agent-super-agent--"
+        );
+        assert!(
+            !session_dir_name(Path::new(r"C:\Users\me\.pi\agent\super-agent")).contains(':'),
+            "Windows session folders cannot contain a drive colon"
+        );
     }
 
     #[test]

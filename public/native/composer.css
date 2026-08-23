@@ -154,7 +154,6 @@
 .composer-toolbar .model-dropdown-btn {
   background: transparent;
   border-color: transparent;
-  color: var(--text-dim);
   height: var(--control-height-sm);
   padding: 0 var(--space-2);
 }
@@ -205,7 +204,6 @@
   border-radius: var(--radius-md);
   background: transparent;
   border: none;
-  color: var(--text-dim);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -247,7 +245,6 @@
   border-radius: 50%;
   background: transparent;
   border: none;
-  color: var(--text-dim);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -270,9 +267,6 @@
 #message-input:disabled {
   opacity: 1;
   cursor: not-allowed;
-}
-#message-input::placeholder {
-  color: var(--text-dim);
 }
 
 .composer-card.onboarding-disabled {

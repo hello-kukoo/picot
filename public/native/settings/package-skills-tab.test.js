@@ -106,7 +106,8 @@ describe("setupPackageSkillsTab — loading & first activation", () => {
     );
     const tab = setupPackageSkillsTab({ container, rpcCommand });
     const activating = tab.activate();
-    expect(container.querySelector(".skills-loading")).toBeTruthy();
+    expect(container.querySelector(".skills-loading.ui-loading")).toBeTruthy();
+    expect(container.textContent).toContain("settings.packageSkills.loading");
     resolveRpc();
     await activating;
   });

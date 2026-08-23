@@ -7,10 +7,36 @@ const catalog = buildCommandCatalog({
     { name: "review", description: "Review", source: "extension", path: "/global/review.ts" },
     { name: "fix", description: "Fix", source: "prompt", location: "project" },
     { name: "skill:test", description: "Test", source: "skill", location: "global" },
+    {
+      name: "skill:project-probe",
+      description: "Project skill",
+      source: "skill",
+      sourceInfo: {
+        source: "auto",
+        scope: "project",
+        path: "/tmp/workspace/.pi/skills/project-probe/SKILL.md",
+      },
+    },
+    {
+      name: "skill:user-probe",
+      description: "User skill",
+      source: "skill",
+      sourceInfo: {
+        source: "auto",
+        scope: "user",
+        path: "/tmp/home/.pi/agent/skills/user-probe/SKILL.md",
+      },
+    },
     { name: "todos", description: "Show todos", source: "extension", location: "global" },
     {
       name: "picot-config",
       description: "Picot Settings → Configuration data plane",
+      source: "extension",
+      location: "global",
+    },
+    {
+      name: "llama",
+      description: "Manage llama.cpp router models",
       source: "extension",
       location: "global",
     },
@@ -22,10 +48,21 @@ describe("slash commands", () => {
     expect(catalog.get("settings")).toMatchObject({ type: "builtin", scope: "picot" });
     expect(catalog.get("review")).toMatchObject({ type: "extension", scope: "global" });
     expect(catalog.get("fix")).toMatchObject({ type: "prompt", scope: "project" });
+    expect(catalog.get("skill:project-probe")).toMatchObject({
+      type: "skill",
+      scope: "project",
+      sourceInfo: { source: "auto", scope: "project" },
+    });
+    expect(catalog.get("skill:user-probe")).toMatchObject({
+      type: "skill",
+      scope: "user",
+      sourceInfo: { source: "auto", scope: "user" },
+    });
   });
 
   it("hides internal native commands from the user-facing catalog", () => {
     expect(catalog.has("picot-config")).toBe(false);
+    expect(catalog.has("llama")).toBe(false);
   });
 
   it("treats // as a literal slash and unknown slash commands as normal messages", () => {

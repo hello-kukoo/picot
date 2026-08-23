@@ -1,4 +1,5 @@
 import { t } from "../../i18n.js";
+import { createLoadingPlaceholder } from "../../ui/loading-placeholder.js";
 
 const SEARCH_DEBOUNCE_MS = 300;
 const MAX_TITLE_RESULTS = 12;
@@ -189,12 +190,12 @@ export function setupSessionSearchDialog({
     );
 
     if (loadingMessages) {
-      const loading = document.createElement("div");
-      loading.className = "session-search-empty";
-      loading.textContent = t(
-        "migrated.native.session.sessionSearchDialog.textcontent.searchingMessages",
+      list.appendChild(
+        createLoadingPlaceholder({
+          className: "session-search-empty",
+          label: t("migrated.native.session.sessionSearchDialog.textcontent.searchingMessages"),
+        }),
       );
-      list.appendChild(loading);
     } else if (list.children.length === 0) {
       const empty = document.createElement("div");
       empty.className = "session-search-empty";

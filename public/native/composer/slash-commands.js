@@ -1,15 +1,25 @@
-const HIDDEN_NATIVE_COMMANDS = new Set(["picot-config"]);
+// `llama` only works in pi's TUI mode; over RPC it just warns and does nothing.
+// `picot-config` and `picot-custom-ui` are internal data planes the WebView
+// drives itself, not commands a user would type.
+const HIDDEN_NATIVE_COMMANDS = new Set(["picot-config", "picot-custom-ui", "llama"]);
+
+function commandPath(command) {
+  return command.sourceInfo?.path ?? command.path;
+}
+
+function inferCommandScope(command) {
+  if (command.location) return command.location;
+  if (command.sourceInfo?.scope) return command.sourceInfo.scope;
+  const path = commandPath(command);
+  if (typeof path === "string" && path.includes("/.pi/agent/")) return "global";
+  return "global";
+}
 
 function normalizeNativeCommand(command) {
-  const scope =
-    command.location ??
-    (typeof command.path === "string" && command.path.includes("/.pi/agent/")
-      ? "global"
-      : "global");
   return {
     ...command,
     type: command.source ?? "extension",
-    scope,
+    scope: inferCommandScope(command),
     capabilityState: command.capabilityState ?? "enabled",
   };
 }

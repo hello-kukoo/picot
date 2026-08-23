@@ -4,7 +4,10 @@ import { initI18n, onLocaleChange, t } from "../i18n.js";
 import { reconcileSnapshotTarget } from "../session/bootstrap-target.js";
 import { SessionUiStateStore } from "../session-ui-state.js";
 import { dispatchSuperAgentTaskNative } from "../super-agent/native-dispatch.js";
-import { isSuperAgentProjectPath } from "../super-agent/session.js";
+import {
+  isSuperAgentSessionSummary,
+  resolveSuperAgentActiveSession,
+} from "../super-agent/session.js";
 import { isSuperAgentEnabled } from "../super-agent/settings.js";
 import { selectSuperAgentStartupAction } from "../super-agent/startup-flow.js";
 import { buildTaskComposerPrompt, markTaskChildSessionBound } from "../super-agent/task-state.js";
@@ -29,10 +32,13 @@ import { setupComposerSubmitHandling } from "./composer/composer-submit.js";
 import { renderQueuedMessages } from "./composer/queued-messages.js";
 import { buildCommandCatalog, resolveComposerInput } from "./composer/slash-commands.js";
 import { setupCommandPalette } from "./extensions/command-palette.js";
+import { CustomUiPanel } from "./extensions/custom-ui-panel.js";
 import { showNativeDialog } from "./extensions/dialog.js";
 import { ExtensionUiHost } from "./extensions/extension-ui-host.js";
+import { ExtensionWidgets } from "./extensions/extension-widgets.js";
 import { showInlineExtensionPrompt } from "./extensions/inline-extension-prompt.js";
 import { setupAppUpdater } from "./features/app-updater.js";
+import { createFilePreviewFollow } from "./features/file-preview-follow.js";
 import { setupGitPanel } from "./features/git-panel-integration.js";
 import { refreshLanQrButton, setupLanQr } from "./features/lan-qr.js";
 import { resolveRemoteAuth } from "./features/remote-auth.js";
@@ -68,7 +74,7 @@ import { setupAppKeyboardShortcuts } from "./utils/keyboard-shortcuts.js";
 import { randomId } from "./utils/random-id.js";
 import { appRoutePath, parseAppRoute, replaceTemporarySessionRoute } from "./utils/router.js";
 import { findLatestAssistantUsage, setupContextUsage } from "./workspace/context-usage.js";
-import { toggleExclusiveSidePanel } from "./workspace/exclusive-side-panel.js";
+import { toggleExclusiveSideView } from "./workspace/exclusive-side-panel.js";
 import { NativeFileBrowser } from "./workspace/file-browser.js";
 import { setupHeaderOpenApp } from "./workspace/header-open-app.js";
 import { setupProjectHeader } from "./workspace/project-header.js";
@@ -315,9 +321,29 @@ const config = new ConfigGateway({
   waitUntilReady: () => (configGatewayTargetReady ? Promise.resolve() : configGatewayReady),
 });
 window.__picotConfigCall = (op, params, options) => config.call(op, params, options);
+const customUiPanel = new CustomUiPanel({
+  runtime,
+  getTarget: () => target,
+  onError: showError,
+});
+const extensionWidgets = new ExtensionWidgets({
+  aboveEditor: document.getElementById("extension-widgets-above"),
+  belowEditor: document.getElementById("extension-widgets-below"),
+});
 const contextUsage = setupContextUsage();
 const compactContextButton = document.getElementById("compact-context-btn");
 const filePreviewPanel = setupFilePreviewPanel();
+const filePreviewFollow = createFilePreviewFollow({
+  panel: filePreviewPanel,
+  getWorkspacePath: async () => {
+    try {
+      const response = await data.workspaceInfo(target.workspaceId);
+      return response?.info?.path ?? "";
+    } catch {
+      return "";
+    }
+  },
+});
 const gitPanel = setupGitPanel({
   runtime,
   getTarget: () => target,
@@ -333,15 +359,28 @@ const gitPanel = setupGitPanel({
 let fileBrowser = null;
 
 /**
- * Expand the file sidebar, switch to the Files tab, and (when newly opened)
- * load the workspace root. Wired to #file-sidebar-toggle and Cmd/Ctrl+B.
+ * Header Files / Git own one view each. Opening the active view closes the
+ * panel; opening the other view switches content without an in-panel tab bar.
  */
-function openFilesPanel() {
+function openWorkspacePanel(view) {
   const sidebar = document.getElementById("file-sidebar");
-  if (!sidebar) return;
-  const opened = toggleExclusiveSidePanel(sidebar, [document.getElementById("diff-sidebar")]);
-  gitPanel?.setTab("files");
+  const result = toggleExclusiveSideView(sidebar, {
+    otherPanels: [document.getElementById("diff-sidebar")],
+    currentView: gitPanel?.getTab?.() ?? "files",
+    nextView: view,
+  });
+  if (!result.open) return false;
+  gitPanel?.setTab(view);
+  return true;
+}
+
+function openFilesPanel() {
+  const opened = openWorkspacePanel("files");
   if (opened && fileBrowser?.currentPath === null) fileBrowser.load().catch(showError);
+}
+
+function openGitPanel() {
+  openWorkspacePanel("git");
 }
 
 const sessionCostEl = document.getElementById("session-cost");
@@ -459,10 +498,15 @@ const extensionUi = new ExtensionUiHost({
       // Configuration data-plane responses arrive as notify events; swallow
       // them so they don't render as chat messages.
       if (config.consumeNotify(request)) return;
+      // Custom extension UI panels (ctx.ui.custom) are bridged over notify too;
+      // they render as an overlay rather than a transcript entry.
+      if (customUiPanel.consumeNotify(request)) return;
       // rpiv-todo's /todos command emits a centered notify transcript. Picot
       // already mirrors the same state natively, so expand the panel instead
-      // of rendering a duplicate system message.
-      if (isRpivTodoCommandNotify(request.message)) {
+      // of rendering a duplicate system message. When nothing is mirrored (the
+      // panel stays hidden, e.g. "No todos yet"), fall through and render the
+      // message so /todos is never a silent no-op.
+      if (isRpivTodoCommandNotify(request.message) && todoMirrorPanel.hasVisibleTasks) {
         todoMirrorPanel.expand();
         return;
       }
@@ -481,6 +525,9 @@ const extensionUi = new ExtensionUiHost({
       // rpiv-todo owns the tool/reducer; Picot renders a native mirror from
       // the persisted todo tool-result snapshots instead of the TUI widget.
       if (isRpivTodoWidgetRequest(request)) return;
+      // Everything else falls back to the generic renderer, so an extension
+      // that publishes a status panel is not silently dropped.
+      extensionWidgets.apply(request);
     },
   },
 });
@@ -699,6 +746,10 @@ setupComposerSubmitHandling({
   },
 });
 abortButton?.addEventListener("click", abortCurrentRun);
+messagesElement.addEventListener("previewfile", (event) => {
+  const path = event.detail?.path;
+  if (path) void filePreviewFollow.openPath(path).catch(showError);
+});
 messagesElement.addEventListener("messagefork", async (event) => {
   const { entryId } = event.detail;
   try {
@@ -725,11 +776,13 @@ document.getElementById("refresh-sessions-btn")?.addEventListener("click", (e) =
   sidebar?.load().catch(showError);
 });
 window.addEventListener("picot-super-agent-autostart-changed", (event) => {
-  if (event.detail?.enabled) ensureSuperAgentStartupSession().catch(showError);
-  else {
-    setAgentInboxNavSession(null);
-    sidebar?.render();
+  if (event.detail?.enabled) {
+    sidebar?.syncAgentInboxNav();
+    ensureSuperAgentStartupSession().catch(showError);
+    return;
   }
+  setAgentInboxNavSession(null);
+  updateSuperAgentActiveState(null);
 });
 setupFileBrowser();
 const imageAttachments = setupComposerImageAttachments({
@@ -1231,7 +1284,7 @@ function subscribeToLiveSessions(sessions) {
       adapter.subscribeTarget(liveTarget);
     }
   }
-  updateSuperAgentActiveState((sessions ?? []).find((session) => session.id === target.sessionId));
+  updateSuperAgentActiveState(resolveSuperAgentActiveSession(sessions, target.sessionId));
   handleSuperAgentStartupSessions(sessions).catch(showError);
 }
 
@@ -1278,10 +1331,6 @@ document.getElementById("sidebar-agent-inbox-btn")?.addEventListener("click", ()
 document.addEventListener("sa-open-agent-inbox", (event) => {
   openAgentInboxNav({ openRuntimePanel: event.detail?.openRuntimePanel === true });
 });
-
-function isSuperAgentSessionSummary(session) {
-  return session?.kind === "super-agent" || isSuperAgentProjectPath(session?.projectPath);
-}
 
 function insertTaskPrompt(task) {
   if (!task) return;
@@ -1606,13 +1655,7 @@ function setupFileBrowser() {
 
   const diffSidebar = document.getElementById("diff-sidebar");
   const diffToggle = document.getElementById("diff-sidebar-toggle");
-  diffToggle?.addEventListener("click", () => {
-    // Header Git button: open the File/Git sidebar and switch to the Git tab,
-    // instead of the legacy diff-sidebar panel.
-    const fileSidebarEl = document.getElementById("file-sidebar");
-    const opened = toggleExclusiveSidePanel(fileSidebarEl, [diffSidebar]);
-    if (opened) gitPanel?.setTab("git");
-  });
+  diffToggle?.addEventListener("click", openGitPanel);
   document.getElementById("diff-sidebar-close")?.addEventListener("click", () => {
     diffSidebar.classList.add("collapsed");
   });
@@ -1724,6 +1767,7 @@ async function handleRuntimeEvent(event) {
       break;
     case "tool_execution_start":
       toolRenderer.createToolCard({ ...event, status: "pending" });
+      filePreviewFollow.onToolStart(event);
       break;
     case "tool_execution_update":
       toolRenderer.updateToolCard({
@@ -1736,6 +1780,7 @@ async function handleRuntimeEvent(event) {
       toolRenderer.finalizeToolCard(event.toolCallId, event.result, event.isError);
       if (event.toolName === "todo" && !event.isError)
         todoMirrorPanel.applyToolResult(event.result);
+      void filePreviewFollow.onToolEnd(event).catch(showError);
       break;
     case "extension_ui_request":
       await extensionUi.handle(target, event);
@@ -1795,6 +1840,11 @@ async function adoptTarget(nextTarget, { updateRoute = true } = {}) {
   snapshotInFlight = false;
   renderQueuedMessages(queuedMessages, store.queue);
   todoMirrorPanel.clear();
+  // Widgets and any open custom-UI panel belong to the session that published
+  // them; carrying them across a switch would show another session's state.
+  extensionWidgets.clear();
+  customUiPanel.close({ notifyExtension: false });
+  filePreviewFollow.clear();
   streamingElement = null;
   liveProcessGroup = null;
   adapter.subscribeTarget(target);

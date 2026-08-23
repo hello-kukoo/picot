@@ -2,6 +2,7 @@
 // ABOUTME: Shows bundled skill candidates from configured Pi packages. Switches are disabled placeholders.
 
 import { onLocaleChange, t } from "../../i18n.js";
+import { createLoadingPlaceholder } from "../../ui/loading-placeholder.js";
 
 /**
  * @typedef {Object} PackageSkillCandidate
@@ -74,7 +75,10 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
 
   function renderLoading() {
     container.replaceChildren(
-      el("div", { class: "skills-loading", text: t("settings.packageSkills.loading") }),
+      createLoadingPlaceholder({
+        className: "skills-loading",
+        label: t("settings.packageSkills.loading"),
+      }),
     );
   }
 
@@ -85,7 +89,7 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
         el("span", { text: errorMessage }),
         el("button", {
           type: "button",
-          class: "skills-rescan",
+          class: "ui-button ui-button--sm ui-button--secondary skills-rescan",
           text: t("settings.skills.rescan"),
           onClick: () => void load(scope),
         }),
@@ -311,12 +315,12 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
     fragment.appendChild(
       el("div", { class: "skills-header" }, [
         el("div", {}, [
-          el("h3", {
+          el("div", {
             class: "settings-section-title",
             text: t("settings.packageSkills.title"),
           }),
           el("p", {
-            class: "skills-intro",
+            class: "settings-help skills-intro",
             text: t("settings.packageSkills.description"),
           }),
           el("p", {
@@ -326,7 +330,7 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
         ]),
         el("button", {
           type: "button",
-          class: "skills-rescan",
+          class: "ui-button ui-button--sm ui-button--secondary skills-rescan",
           text: t("settings.skills.rescan"),
           onClick: refresh,
         }),

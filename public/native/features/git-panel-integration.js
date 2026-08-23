@@ -4,6 +4,13 @@
 import { createDiffTabId } from "../../file-preview-panel-diff.js";
 import { GitClient } from "../../git-client.js";
 import { GitPanel } from "../../git-panel.js";
+import { t } from "../../i18n.js";
+
+export function isGitUnavailableError(error) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const trimmed = message.trim();
+  return trimmed === "git_not_found" || trimmed.toLowerCase() === "program not found";
+}
 
 export function setupGitPanel({
   runtime,
@@ -13,15 +20,14 @@ export function setupGitPanel({
   filePreviewPanel,
   onError,
 } = {}) {
-  const filesTab = document.getElementById("file-sidebar-files-tab");
-  const gitTab = document.getElementById("file-sidebar-git-tab");
+  const closeBtn = document.getElementById("file-sidebar-close");
   const path = document.getElementById("file-sidebar-path");
   const up = document.getElementById("file-sidebar-up");
   const filesRefresh = document.getElementById("file-sidebar-refresh");
   const filesToggleHidden = document.getElementById("file-sidebar-toggle-hidden");
   const gitRefresh = document.getElementById("git-panel-refresh");
   const finder = document.getElementById("file-sidebar-finder");
-  if (!runtime || !container || !filesTab || !gitTab) return null;
+  if (!runtime || !container) return null;
 
   const client = new GitClient({
     send: (message) => {
@@ -38,7 +44,13 @@ export function setupGitPanel({
         .then((response) => {
           if (response) handleFrame({ ...response, requestId: message.requestId });
         })
-        .catch((error) => onError?.(error));
+        .catch((error) => {
+          if (isGitUnavailableError(error)) {
+            panel?.setSnapshot(null);
+            return;
+          }
+          onError?.(error);
+        });
     },
   });
 
@@ -67,12 +79,14 @@ export function setupGitPanel({
     } else if (normalized.type === "git_command_ack") panel.refresh();
     else if (normalized.type === "git_command_failed") {
       client.consumeWriteFailure(normalized);
-      // A status probe against a non-repository workspace fails with git's
-      // "not a git repository" error and never produces a git_status frame,
-      // so the panel would otherwise sit on the generic "no status loaded"
-      // message. Surface the real reason instead — but only for the current
-      // status probe, never for stale or concurrent non-status failures.
-      if (
+      if (isGitUnavailableError(normalized.error)) {
+        panel.setSnapshot(null);
+      } else if (
+        // A status probe against a non-repository workspace fails with git's
+        // "not a git repository" error and never produces a git_status frame,
+        // so the panel would otherwise sit on the generic "no status loaded"
+        // message. Surface the real reason instead — but only for the current
+        // status probe, never for stale or concurrent non-status failures.
         panel.isStatusFailure(normalized.requestId) &&
         typeof normalized.error === "string" &&
         normalized.error.includes("not a git repository")
@@ -98,12 +112,19 @@ export function setupGitPanel({
     },
   });
 
+  let currentTab = "files";
+
+  const applyChrome = () => {
+    const showGit = currentTab === "git";
+    if (closeBtn) {
+      closeBtn.dataset.i18nAriaLabel = showGit ? "git.closeChanges" : "files.close";
+      closeBtn.setAttribute("aria-label", t(closeBtn.dataset.i18nAriaLabel));
+    }
+  };
+
   const setTab = (tab) => {
-    const showGit = tab === "git";
-    filesTab.classList.toggle("active", !showGit);
-    filesTab.setAttribute("aria-selected", String(!showGit));
-    gitTab.classList.toggle("active", showGit);
-    gitTab.setAttribute("aria-selected", String(showGit));
+    currentTab = tab === "git" ? "git" : "files";
+    const showGit = currentTab === "git";
     container.classList.toggle("hidden", !showGit);
     fileList?.classList.toggle("hidden", showGit);
     path?.classList.toggle("hidden", showGit);
@@ -112,11 +133,10 @@ export function setupGitPanel({
     filesToggleHidden?.classList.toggle("hidden", showGit);
     gitRefresh?.classList.toggle("hidden", !showGit);
     finder?.classList.toggle("hidden", showGit);
+    applyChrome();
     if (showGit) panel.refresh();
   };
 
-  filesTab.addEventListener("click", () => setTab("files"));
-  gitTab.addEventListener("click", () => setTab("git"));
   // The Git status refresh lives in the sidebar header (shared with the Files
   // controls) instead of inside the panel toolbar.
   gitRefresh?.addEventListener("click", () => void panel.refresh());
@@ -130,6 +150,9 @@ export function setupGitPanel({
     panel,
     client,
     setTab,
+    getTab() {
+      return currentTab;
+    },
     destroy() {
       unsubscribe?.();
       panel.destroy();

@@ -20,6 +20,7 @@ import {
   normalizeSuperAgentTasks,
 } from "../super-agent/task-state.js";
 import { setupResizablePanel } from "../ui/resizable-panel.js";
+import { enhanceSelect } from "../ui/select-menu.js";
 
 class SuperAgentRuntime extends HTMLElement {
   connectedCallback() {
@@ -313,7 +314,7 @@ class SuperAgentRuntime extends HTMLElement {
     if (!list) return;
 
     if (!this._hasLoadedOnce) {
-      list.innerHTML = `<div style="padding:20px 0;text-align:center;font-size:12px;color:var(--text-dim)">${esc(t("inbox.connecting"))}</div>`;
+      list.innerHTML = `<div style="padding:20px 0;text-align:center;font-size:12px;color:var(--text-secondary)">${esc(t("inbox.connecting"))}</div>`;
       return;
     }
 
@@ -330,7 +331,7 @@ class SuperAgentRuntime extends HTMLElement {
         this._filter !== "all"
           ? t("inbox.noTasksWithStatus", { status: this._filter })
           : t("inbox.noTasks");
-      list.innerHTML = `<div style="padding:20px 0;text-align:center;font-size:12px;color:var(--text-dim)">${esc(empty)}</div>`;
+      list.innerHTML = `<div style="padding:20px 0;text-align:center;font-size:12px;color:var(--text-secondary)">${esc(empty)}</div>`;
       return;
     }
 
@@ -512,7 +513,12 @@ class SuperAgentRuntime extends HTMLElement {
     return `
       <label class="runtime-project-picker">
         <span>${esc(hint)}</span>
-        <select class="runtime-project-select" data-action="select-project" data-task-id="${escAttr(task.id)}">
+        <select
+          class="ui-select ui-select--sm runtime-project-select"
+          data-action="select-project"
+          data-task-id="${escAttr(task.id)}"
+          aria-label="${escAttr(t("inbox.chooseProject"))}"
+        >
           ${options}
         </select>
       </label>`;
@@ -530,18 +536,19 @@ class SuperAgentRuntime extends HTMLElement {
         this._renderTasks();
       };
       card.addEventListener("click", (e) => {
-        if (e.target.closest("button, input, select, textarea, a")) return;
+        if (e.target.closest("button, input, select, textarea, a, .ui-select-menu")) return;
         toggle();
       });
       card.addEventListener("keydown", (e) => {
         if (e.key !== "Enter" && e.key !== " ") return;
-        if (e.target.closest("button, input, select, textarea, a")) return;
+        if (e.target.closest("button, input, select, textarea, a, .ui-select-menu")) return;
         e.preventDefault();
         toggle();
       });
     });
 
     list.querySelectorAll("[data-action]").forEach((el) => {
+      if (el instanceof HTMLSelectElement) return;
       el.addEventListener("click", (e) => {
         e.stopPropagation();
         const { action, taskId } = el.dataset;
@@ -572,13 +579,13 @@ class SuperAgentRuntime extends HTMLElement {
             this._historyTaskIds.add(taskId);
           }
           this._renderTasks();
-        } else if (action === "select-project") {
-          this._selectProject(taskId, el.value);
         }
       });
     });
 
     list.querySelectorAll('[data-action="select-project"]').forEach((el) => {
+      if (!(el instanceof HTMLSelectElement)) return;
+      enhanceSelect(el);
       el.addEventListener("change", (e) => {
         e.stopPropagation();
         this._selectProject(el.dataset.taskId, el.value);
@@ -651,7 +658,11 @@ function escAttr(str) {
 }
 
 function isTypingTarget(target) {
-  return Boolean(target?.closest?.("input, textarea, select, [contenteditable='true']"));
+  return Boolean(
+    target?.closest?.(
+      "input, textarea, select, [contenteditable='true'], [role='combobox'], .ui-select-popover",
+    ),
+  );
 }
 
 function formatHistoryTimestamp(value) {

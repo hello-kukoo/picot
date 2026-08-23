@@ -32,10 +32,6 @@
   min-width: 0;
 }
 
-.session-info-row dt {
-  color: var(--text-dim);
-}
-
 .session-info-row dd {
   display: flex;
   align-items: flex-start;

@@ -120,7 +120,7 @@
 
 /* Session cost pill */
 .session-cost {
-  color: var(--header-pill-text, var(--text-dim));
+  color: var(--header-pill-text, var(--text-secondary));
   display: none;
   font-variant-numeric: tabular-nums;
 }
@@ -131,7 +131,7 @@
 
 /* Token usage pill */
 .token-usage {
-  color: var(--header-pill-text, var(--text-dim));
+  color: var(--header-pill-text, var(--text-secondary));
   display: none;
   transition:
     color 0.3s var(--ease),
@@ -151,7 +151,6 @@
 
 .file-sidebar-toggle__label {
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
   max-width: min(320px, 28vw);
   min-width: 0;
   overflow: hidden;
@@ -175,7 +174,6 @@
 .git-branch-toggle__label {
   font-size: var(--text-xs);
   font-family: var(--font-mono);
-  color: var(--text-dim);
   max-width: min(160px, 20vw);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -218,7 +216,6 @@
   text-align: center;
   padding: var(--space-3);
   font-size: var(--font-size-md);
-  color: var(--text-dim);
   opacity: 0.7;
 }
 
@@ -316,10 +313,6 @@
   border-color: var(--accent);
 }
 
-.model-dropdown-search::placeholder {
-  color: var(--text-dim);
-}
-
 .model-dropdown-menu.hidden {
   display: none;
 }
@@ -344,7 +337,6 @@
 
 .model-dropdown-empty {
   padding: var(--space-3);
-  color: var(--text-dim);
   font-size: var(--font-size-sm);
   line-height: var(--line-height-relaxed);
 }
@@ -370,13 +362,11 @@
 
 .model-dropdown-item-ctx {
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
   margin-left: 12px;
 }
 
 .model-dropdown-item-provider {
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
   margin-left: 4px;
 }
 
@@ -386,7 +376,6 @@
   background: var(--bg-glass);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  color: var(--text-dim);
   font-size: var(--font-size-sm);
   cursor: pointer;
   transition:
@@ -411,14 +400,13 @@
   align-items: center;
   gap: var(--space-1-5);
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
 }
 
 .status-indicator {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--text-dim);
+  background: var(--text-secondary);
   transition: background 0.4s var(--ease);
 }
 

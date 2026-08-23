@@ -15,6 +15,7 @@ import { createFileRenderer } from "./file-preview-renderers.js";
 import { FileTabState } from "./file-tab-state.js";
 import { createGitDiffRenderer } from "./git-diff-renderer.js";
 import { onLocaleChange, t } from "./i18n.js";
+import { createLoadingPlaceholder } from "./ui/loading-placeholder.js";
 import { normalizeLocalPath } from "./workspace/path-utils.js";
 
 const AUTO_SAVE_DELAY = 1500;
@@ -206,6 +207,21 @@ export class FilePreviewPanel {
     this._renderTabBar();
     await this._loadTabContent(tab);
     this.activeContent = { kind: "file", id: tab.id };
+    return tab;
+  }
+
+  /**
+   * Open a file the agent just wrote. Reloads an existing clean tab so the
+   * live preview (including HTML iframes) picks up disk changes; leaves a
+   * dirty tab alone aside from focusing it.
+   */
+  async revealWrite(filePath) {
+    const normalizedPath = normalizeLocalPath(filePath);
+    if (!normalizedPath) return null;
+    const existing = this.state.getTabs().find((tab) => tab.filePath === normalizedPath);
+    if (existing?.dirty) return this.openFile(normalizedPath);
+    const tab = await this.openFile(normalizedPath);
+    if (existing) await this._reloadTab(existing.id, { skipConfirmation: true });
     return tab;
   }
 
@@ -889,10 +905,12 @@ export class FilePreviewPanel {
     this.content.replaceChildren();
 
     if (tab.loading) {
-      const loadingEl = document.createElement("div");
-      loadingEl.className = "file-preview-loading";
-      loadingEl.textContent = t("files.preview.loading");
-      this.content.appendChild(loadingEl);
+      this.content.appendChild(
+        createLoadingPlaceholder({
+          className: "file-preview-loading",
+          label: t("files.preview.loading"),
+        }),
+      );
       this._renderToolbar();
       return;
     }
@@ -1266,7 +1284,7 @@ export class FilePreviewPanel {
       contentType !== "image" &&
       contentType !== "pdf" &&
       contentType !== "convertible" &&
-      (contentType !== "markdown" || tab.mode === "edit");
+      ((contentType !== "markdown" && contentType !== "html") || tab.mode === "edit");
 
     const hasDiff = tab
       ? this.gitDiffCache.has(tab.id) && this.gitDiffCache.get(tab.id) !== null

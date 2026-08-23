@@ -2,10 +2,12 @@ import { JSDOM } from "jsdom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   activeSlashQuery,
+  originLabel,
   setupComposerSlashMenu,
   titleCaseCommandName,
 } from "./composer-slash-menu.js";
 import { setupComposerSubmitHandling } from "./composer-submit.js";
+import { buildCommandCatalog } from "./slash-commands.js";
 
 describe("composer slash menu", () => {
   let dom;
@@ -50,7 +52,7 @@ describe("composer slash menu", () => {
     expect(activeSlashQuery(input)).toBeNull();
   });
 
-  it("only displays and inserts skill commands", async () => {
+  it("displays skill and extension commands, skills first", async () => {
     const formSubmit = vi.fn();
     input.form?.addEventListener("submit", formSubmit);
     const controller = setupComposerSlashMenu({
@@ -72,18 +74,161 @@ describe("composer slash menu", () => {
     input.setSelectionRange(input.value.length, input.value.length);
     await controller.update();
 
-    // Ensure the menu shows skill commands (heading may be i18n‑translated).
-    expect(menu.textContent.toLowerCase()).toMatch(/skill/);
-    expect(menu.querySelectorAll(".skill-slash-option")).toHaveLength(1);
-    expect(menu.textContent).toContain("Research");
+    // Ensure the menu groups both kinds (headings may be i18n‑translated).
+    const options = menu.querySelectorAll(".skill-slash-option");
+    expect(options).toHaveLength(2);
+    expect(options[0].textContent).toContain("Research");
+    expect(options[1].textContent).toContain("Review");
+    expect(menu.querySelectorAll(".skill-slash-heading")).toHaveLength(2);
+    // Builtin Picot commands stay out of the slash menu.
     expect(menu.textContent).not.toContain("Settings");
-    expect(menu.textContent).not.toContain("Review");
 
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", cancelable: true }));
 
     expect(input.value).toBe("/skill:research ");
     expect(menu.classList.contains("hidden")).toBe(true);
     expect(formSubmit).not.toHaveBeenCalled();
+  });
+
+  it("inserts an extension command when it is selected", async () => {
+    const controller = setupComposerSlashMenu({
+      input,
+      container: menu,
+      getCommands: () => [
+        { name: "skill:research", description: "Investigate", type: "skill", scope: "user" },
+        { name: "picot-help", description: "Show help", source: "extension", scope: "user" },
+      ],
+    });
+
+    input.value = "/help";
+    input.setSelectionRange(input.value.length, input.value.length);
+    await controller.update();
+
+    expect(menu.querySelectorAll(".skill-slash-option")).toHaveLength(1);
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", cancelable: true }));
+
+    expect(input.value).toBe("/picot-help ");
+  });
+
+  it("shows Personal vs Project from pi skill sourceInfo", async () => {
+    const catalog = buildCommandCatalog({
+      nativeCommands: [
+        {
+          name: "skill:research",
+          description: "Investigate primary sources",
+          source: "skill",
+          sourceInfo: {
+            source: "auto",
+            scope: "user",
+            path: "/Users/me/.pi/agent/skills/research/SKILL.md",
+          },
+        },
+        {
+          name: "skill:upgrade-embedded-pi",
+          description: "Upgrade bundled Pi",
+          source: "skill",
+          sourceInfo: {
+            source: "auto",
+            scope: "project",
+            path: "/Users/me/code/picot/.pi/skills/upgrade-embedded-pi/SKILL.md",
+          },
+        },
+      ],
+    });
+    const controller = setupComposerSlashMenu({
+      input,
+      container: menu,
+      getCommands: () => catalog.values(),
+    });
+
+    input.value = "/";
+    input.setSelectionRange(input.value.length, input.value.length);
+    await controller.update();
+
+    const byName = Object.fromEntries(
+      [...menu.querySelectorAll(".skill-slash-option")].map((option) => [
+        option.querySelector(".skill-slash-name").textContent,
+        {
+          origin: option.querySelector(".skill-slash-scope").textContent,
+          title: option.querySelector(".skill-slash-scope").title,
+        },
+      ]),
+    );
+    expect(byName.Research).toEqual({
+      origin: "Personal",
+      title: "/Users/me/.pi/agent/skills/research/SKILL.md",
+    });
+    expect(byName["Upgrade Embedded Pi"]).toEqual({
+      origin: "Project",
+      title: "/Users/me/code/picot/.pi/skills/upgrade-embedded-pi/SKILL.md",
+    });
+  });
+
+  it("labels each command with the package it comes from", () => {
+    expect(originLabel({ source: "extension", sourceInfo: { source: "npm:pi-web-access" } })).toBe(
+      "pi-web-access",
+    );
+    expect(
+      originLabel({ source: "extension", sourceInfo: { source: "inline", scope: "temporary" } }),
+    ).toBe("Inline");
+    expect(originLabel({ source: "skill", sourceInfo: { source: "auto", scope: "project" } })).toBe(
+      "Project",
+    );
+    expect(originLabel({ source: "skill", sourceInfo: { source: "auto", scope: "user" } })).toBe(
+      "Personal",
+    );
+    expect(originLabel({ type: "builtin", scope: "picot" })).toBe("Picot");
+  });
+
+  it("renders the providing package in the slash menu", async () => {
+    const controller = setupComposerSlashMenu({
+      input,
+      container: menu,
+      getCommands: () => [
+        {
+          name: "todos",
+          description: "Show all todos",
+          source: "extension",
+          sourceInfo: {
+            source: "npm:@juicesharp/rpiv-todo",
+            scope: "user",
+            path: "/Users/me/.pi/agent/npm/node_modules/@juicesharp/rpiv-todo/index.ts",
+          },
+        },
+      ],
+    });
+
+    input.value = "/todos";
+    input.setSelectionRange(input.value.length, input.value.length);
+    await controller.update();
+
+    const scope = menu.querySelector(".skill-slash-scope");
+    expect(scope.textContent).toBe("@juicesharp/rpiv-todo");
+    expect(scope.title).toContain("node_modules/@juicesharp/rpiv-todo");
+  });
+
+  it("matches commands by the package they come from", async () => {
+    const controller = setupComposerSlashMenu({
+      input,
+      container: menu,
+      getCommands: () => [
+        {
+          name: "websearch",
+          description: "Open web search curator",
+          source: "extension",
+          sourceInfo: { source: "npm:pi-web-access", scope: "user" },
+        },
+        { name: "skill:research", description: "Investigate", type: "skill", scope: "user" },
+      ],
+    });
+
+    input.value = "/web-access";
+    input.setSelectionRange(input.value.length, input.value.length);
+    await controller.update();
+
+    const options = menu.querySelectorAll(".skill-slash-option");
+    expect(options).toHaveLength(1);
+    expect(options[0].textContent).toContain("Websearch");
   });
 
   it("selects a slash command instead of submitting when submit handling was registered first", async () => {

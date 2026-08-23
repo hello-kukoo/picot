@@ -303,9 +303,31 @@ export class TerminalPanel {
     }
     this._renderTabBar();
     this._updateToggleAffordance();
+    const failed = this.tabs.find((tab) => tab.status === "failed" && tab.failReason);
+    if (failed) {
+      this.showStartError(failed.failReason);
+    } else {
+      this.clearStartError();
+    }
     if (this.tabs.length === 0 && this.expanded) {
       this.collapse();
     }
+  }
+
+  /** Surface a host-side start failure inside the open panel. */
+  showStartError(message) {
+    this.clearStartError();
+    if (!this.bodyEl || !message) return;
+    const el = document.createElement("div");
+    el.className = "terminal-start-error";
+    el.dataset.terminalStartError = "";
+    el.setAttribute("role", "alert");
+    el.textContent = message;
+    this.bodyEl.prepend(el);
+  }
+
+  clearStartError() {
+    this.bodyEl?.querySelector("[data-terminal-start-error]")?.remove();
   }
 
   /** Record background output for a tab (cleared when the user views the panel). */

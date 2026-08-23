@@ -1,5 +1,7 @@
 import { onLocaleChange, t } from "../../i18n.js";
 import { getPackageInstallFailure } from "../../packages/install-status.js";
+import { createLoadingPlaceholder } from "../../ui/loading-placeholder.js";
+import { enhanceSelect } from "../../ui/select-menu.js";
 
 // Community package browser for the Settings → Extensions tab.
 //
@@ -400,7 +402,12 @@ export function setupPackageBrowse(control, { notify } = {}) {
       return;
     }
     loading = true;
-    listEl.innerHTML = `<div class="settings-api-keys-loading pkg-browse-full-row">${escapeHtml(t("extensions.loadingPackages"))}</div>`;
+    listEl.replaceChildren(
+      createLoadingPlaceholder({
+        className: "settings-api-keys-loading pkg-browse-full-row",
+        label: t("extensions.loadingPackages"),
+      }),
+    );
     try {
       const [packages] = await Promise.all([fetchCatalog(), refreshInstalled()]);
       allPackages = packages;
@@ -443,7 +450,9 @@ export function setupPackageBrowse(control, { notify } = {}) {
   });
 
   if (sortEl) {
+    const sortMenu = enhanceSelect(sortEl);
     sortEl.value = sortMode;
+    sortMenu?.sync();
     sortEl.addEventListener("change", () => {
       sortMode = sortEl.value || "downloads";
       page = 1;

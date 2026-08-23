@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 pub const MAX_STATUS_ENTRIES: usize = 1_200;
+pub const GIT_NOT_FOUND: &str = "git_not_found";
 static NEXT_SNAPSHOT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 const SNAPSHOT_TTL: Duration = Duration::from_secs(300);
 const MAX_SNAPSHOTS_PER_OWNER: usize = 8;
@@ -1346,8 +1347,21 @@ fn path_arg(bytes: &[u8]) -> OsString {
     }
 }
 
+pub fn is_git_unavailable(error: &str) -> bool {
+    let message = error.trim();
+    message == GIT_NOT_FOUND || message.eq_ignore_ascii_case("program not found")
+}
+
+fn map_git_spawn_error(error: std::io::Error) -> String {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        GIT_NOT_FOUND.to_string()
+    } else {
+        error.to_string()
+    }
+}
+
 fn run_git(mut command: Command, deadline: Duration) -> Result<(Vec<u8>, Vec<u8>, bool), String> {
-    let mut child = command.spawn().map_err(|e| e.to_string())?;
+    let mut child = command.spawn().map_err(map_git_spawn_error)?;
     let stdout = child.stdout.take().ok_or("git stdout unavailable")?;
     let stderr = child.stderr.take().ok_or("git stderr unavailable")?;
     let out_thread = thread::spawn(move || read_limited(stdout, MAX_STDOUT_BYTES));
@@ -1485,6 +1499,18 @@ mod tests {
         let p = parse_porcelain_v2_z(b"# branch.oid (initial)\0# branch.head main\0");
         assert_eq!(p.head_state, "unborn");
         assert_eq!(p.branch.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn missing_git_spawn_is_a_stable_unavailable_error() {
+        let mapped = super::map_git_spawn_error(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "program not found",
+        ));
+        assert_eq!(mapped, super::GIT_NOT_FOUND);
+        assert!(super::is_git_unavailable(&mapped));
+        assert!(super::is_git_unavailable("program not found"));
+        assert!(!super::is_git_unavailable("not a git repository"));
     }
 
     #[test]

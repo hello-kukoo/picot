@@ -149,6 +149,7 @@
   },
   "tools": {
     "copyOutput": "出力をコピー",
+    "openInPreview": "プレビューで開く",
     "streaming": "実行中",
     "complete": "完了",
     "error": "エラー",
@@ -214,7 +215,8 @@
         "remoteImageHidden": "リモート画像は非表示です"
       },
       "conflictMessage": "{name}がディスク上で変更されました。再読み込みしますか、それともディスクバージョンを上書きしますか？",
-      "tabpanelLabel": "ファイルプレビュー"
+      "tabpanelLabel": "ファイルプレビュー",
+      "htmlLive": "HTML ライブプレビュー"
     },
     "unsaved": {
       "title": "未保存の変更",
@@ -924,10 +926,10 @@
       "composer": {
         "composerSlashMenu": {
           "textcontent": {
-            "noMatchingSkills": "一致するスキルがありません"
+            "noMatchingCommands": "一致するコマンドがありません"
           },
           "ariaLabel": {
-            "skillSlashCommands": "スキルスラッシュコマンド"
+            "slashCommands": "スラッシュコマンド"
           }
         }
       },

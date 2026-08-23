@@ -337,6 +337,53 @@ fn classify_git_status(x: char, y: char) -> (&'static str, &'static str) {
     }
 }
 
+/// Git is optional. Spawn failures (missing binary, stripped GUI PATH) must
+/// not become host I/O errors — Picot should keep running without git.
+fn git_output(mut command: Command) -> Option<std::process::Output> {
+    command.output().ok()
+}
+
+fn git_command_at(root: &Path) -> Command {
+    let mut command = Command::new("git");
+    command
+        .current_dir(root)
+        .env("LC_ALL", "C")
+        .env("GIT_OPTIONAL_LOCKS", "0");
+    command
+}
+
+fn git_at(root: &Path, args: &[&str]) -> Option<std::process::Output> {
+    let mut command = git_command_at(root);
+    command.args(args);
+    git_output(command)
+}
+
+fn empty_git_status() -> GitStatusResult {
+    GitStatusResult {
+        is_git_repository: false,
+        files: vec![],
+    }
+}
+
+fn empty_git_stat() -> GitStatResult {
+    GitStatResult {
+        is_git_repository: false,
+        files_changed: 0,
+        insertions: 0,
+        deletions: 0,
+    }
+}
+
+fn empty_workspace_git(path: String) -> WorkspaceInfo {
+    WorkspaceInfo {
+        path,
+        git_branch: None,
+        is_git: false,
+        repository: String::new(),
+        branch: String::new(),
+    }
+}
+
 impl HostDataPlane {
     pub fn new(workspace_roots: HashMap<String, PathBuf>) -> Result<Self, HostDataError> {
         let mut canonical = HashMap::new();
@@ -650,18 +697,14 @@ impl HostDataPlane {
 
     pub fn git_status(&self, workspace_id: &str) -> Result<GitStatusResult, HostDataError> {
         let root = self.workspace_root(workspace_id)?;
-        let output = Command::new("git")
-            .args(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
-            .current_dir(&root)
-            .env("LC_ALL", "C")
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .output()
-            .map_err(|error| HostDataError::Io(error.to_string()))?;
+        let Some(output) = git_at(
+            &root,
+            &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        ) else {
+            return Ok(empty_git_status());
+        };
         if !output.status.success() {
-            return Ok(GitStatusResult {
-                is_git_repository: false,
-                files: vec![],
-            });
+            return Ok(empty_git_status());
         }
         let text = String::from_utf8_lossy(&output.stdout);
         let records: Vec<&str> = text.split('\0').collect();
@@ -722,9 +765,10 @@ impl HostDataPlane {
                 patch: None,
             });
         };
-        let output = if file.status == "untracked" {
+        let mut command = git_command_at(&root);
+        if file.status == "untracked" {
             let absolute = safe_join(&root, relative_path)?;
-            Command::new("git")
+            command
                 .args([
                     "diff",
                     "--no-color",
@@ -732,12 +776,8 @@ impl HostDataPlane {
                     "--no-index",
                     "/dev/null",
                 ])
-                .arg(absolute)
-                .current_dir(&root)
-                .env("LC_ALL", "C")
-                .output()
+                .arg(absolute);
         } else {
-            let mut command = Command::new("git");
             command.args([
                 "diff",
                 "--no-color",
@@ -749,13 +789,15 @@ impl HostDataPlane {
             if let Some(original) = &file.original_path {
                 command.arg(original);
             }
-            command
-                .arg(relative_path)
-                .current_dir(&root)
-                .env("LC_ALL", "C")
-                .output()
+            command.arg(relative_path);
         }
-        .map_err(|error| HostDataError::Io(error.to_string()))?;
+        let Some(output) = git_output(command) else {
+            return Ok(GitDiffResult {
+                supported: false,
+                status: None,
+                patch: None,
+            });
+        };
         // git diff --no-index reports differences with exit status 1.
         if !output.status.success() && output.status.code() != Some(1) {
             return Ok(GitDiffResult {
@@ -776,27 +818,17 @@ impl HostDataPlane {
     pub fn git_stat(&self, workspace_id: &str) -> Result<GitStatResult, HostDataError> {
         let root = self.workspace_root(workspace_id)?;
         // Check if this is a git repo first
-        let check = Command::new("git")
-            .args(["rev-parse", "--is-inside-work-tree"])
-            .current_dir(&root)
-            .output()
-            .map_err(|e| HostDataError::Io(e.to_string()))?;
+        let Some(check) = git_at(&root, &["rev-parse", "--is-inside-work-tree"]) else {
+            return Ok(empty_git_stat());
+        };
         if !check.status.success() {
-            return Ok(GitStatResult {
-                is_git_repository: false,
-                files_changed: 0,
-                insertions: 0,
-                deletions: 0,
-            });
+            return Ok(empty_git_stat());
         }
         // git diff --shortstat HEAD gives: " N files changed, X insertions(+), Y deletions(-)"
         // If HEAD doesn't exist (initial commit), fall back to diffing against empty tree
-        let output = Command::new("git")
-            .args(["diff", "--shortstat", "HEAD"])
-            .current_dir(&root)
-            .env("LC_ALL", "C")
-            .output()
-            .map_err(|e| HostDataError::Io(e.to_string()))?;
+        let Some(output) = git_at(&root, &["diff", "--shortstat", "HEAD"]) else {
+            return Ok(empty_git_stat());
+        };
         let line = String::from_utf8_lossy(&output.stdout);
         let line = line.trim();
         // Parse: "3 files changed, 10 insertions(+), 2 deletions(-)"
@@ -889,27 +921,16 @@ impl HostDataPlane {
 
     fn workspace_info_from_root(root: &std::path::Path) -> Result<WorkspaceInfo, HostDataError> {
         let path = root.to_string_lossy().into_owned();
-        let check = Command::new("git")
-            .args(["rev-parse", "--is-inside-work-tree"])
-            .current_dir(root)
-            .output()
-            .map_err(|e| HostDataError::Io(e.to_string()))?;
+        let Some(check) = git_at(root, &["rev-parse", "--is-inside-work-tree"]) else {
+            return Ok(empty_workspace_git(path));
+        };
         if !check.status.success() {
-            return Ok(WorkspaceInfo {
-                path,
-                git_branch: None,
-                is_git: false,
-                repository: String::new(),
-                branch: String::new(),
-            });
+            return Ok(empty_workspace_git(path));
         }
         // Repository name = top-level directory name of the worktree root.
-        let toplevel = Command::new("git")
-            .args(["rev-parse", "--show-toplevel"])
-            .current_dir(root)
-            .env("LC_ALL", "C")
-            .output()
-            .map_err(|e| HostDataError::Io(e.to_string()))?;
+        let Some(toplevel) = git_at(root, &["rev-parse", "--show-toplevel"]) else {
+            return Ok(empty_workspace_git(path));
+        };
         let repo_path = String::from_utf8_lossy(&toplevel.stdout).trim().to_string();
         let repository = std::path::Path::new(&repo_path)
             .file_name()
@@ -917,12 +938,7 @@ impl HostDataPlane {
             .unwrap_or("")
             .to_string();
         // Branch name (None in detached HEAD for git_branch, empty string for branch).
-        let branch_out = Command::new("git")
-            .args(["rev-parse", "--abbrev-ref", "HEAD"])
-            .current_dir(root)
-            .env("LC_ALL", "C")
-            .output()
-            .ok()
+        let branch_out = git_at(root, &["rev-parse", "--abbrev-ref", "HEAD"])
             .filter(|o| o.status.success())
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .map(|s| s.trim().to_owned())
@@ -2191,12 +2207,59 @@ fn text_mime_type(ext: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{FileKind, HostDataError, HostDataPlane};
+    use super::{git_output, FileKind, HostDataError, HostDataPlane};
     use serde_json::json;
     use std::collections::HashMap;
     use std::fs;
     use std::io::Write;
+    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn isolated_workspace(label: &str) -> (std::path::PathBuf, HostDataPlane, std::path::PathBuf) {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-{label}-{nonce}"));
+        let workspace = temp.join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        let data =
+            HostDataPlane::new(HashMap::from([("workspace-a".into(), workspace.clone())])).unwrap();
+        (temp, data, workspace)
+    }
+
+    #[test]
+    fn missing_git_binary_is_treated_as_unavailable() {
+        let mut command = Command::new("picot-missing-git-binary-for-tests");
+        command.arg("--version");
+        assert!(git_output(command).is_none());
+    }
+
+    #[test]
+    fn workspace_info_without_git_metadata_still_returns_the_path() {
+        let (temp, data, workspace) = isolated_workspace("git-optional-info");
+        let info = data.workspace_info("workspace-a").unwrap();
+        assert_eq!(
+            info.path,
+            workspace.canonicalize().unwrap().to_string_lossy()
+        );
+        assert!(!info.is_git);
+        assert!(info.git_branch.is_none());
+        assert!(info.repository.is_empty());
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn git_status_and_stat_without_a_repository_are_empty_not_errors() {
+        let (temp, data, _) = isolated_workspace("git-optional-status");
+        let status = data.git_status("workspace-a").unwrap();
+        assert!(!status.is_git_repository);
+        assert!(status.files.is_empty());
+        let stat = data.git_stat("workspace-a").unwrap();
+        assert!(!stat.is_git_repository);
+        assert_eq!(stat.files_changed, 0);
+        fs::remove_dir_all(temp).unwrap();
+    }
 
     #[test]
     fn lists_registered_workspace_files_and_rejects_escape_paths() {

@@ -23,6 +23,7 @@ beforeEach(async () => {
               copyFailed: "Copy failed",
               loadError: "Failed to load file",
               loading: "Loading…",
+              htmlLive: "Live HTML preview",
               readOnly: "Read-only",
               saveError: "Failed to save file",
               saved: "Saved",
@@ -206,6 +207,38 @@ describe("FilePreviewPanel", () => {
     const p = createPanel();
     await p.openFile("/test/workspace/README.md");
     expect(p.state.getActiveTab()?.mode).toBe("preview");
+    p.destroy();
+  });
+
+  test("opens HTML files in live preview mode by default", async () => {
+    const p = createPanel();
+    await p.openFile("/test/workspace/index.html");
+    expect(p.state.getActiveTab()?.mode).toBe("preview");
+    expect(content.querySelector("iframe.file-html-frame")).not.toBeNull();
+    p.destroy();
+  });
+
+  test("revealWrite reloads a clean tab and leaves a dirty tab unsaved", async () => {
+    let contents = ["<p>one</p>", "<p>two</p>"];
+    const p = createPanel({
+      fileApi: {
+        readFileContent: async () => ({
+          ok: true,
+          json: async () => ({ content: contents.shift() ?? "<p>two</p>", mtimeMs: 1 }),
+        }),
+      },
+    });
+    await p.openFile("index.html");
+    expect(p.state.getActiveTab()?.content).toBe("<p>one</p>");
+    await p.revealWrite("index.html");
+    expect(p.state.getActiveTab()?.content).toBe("<p>two</p>");
+    expect(p.state.getActiveTab()?.dirty).toBe(false);
+
+    p.state.updateTab(p.state.getActiveTab().id, { dirty: true, content: "<p>local</p>" });
+    contents = ["<p>disk</p>"];
+    await p.revealWrite("index.html");
+    expect(p.state.getActiveTab()?.content).toBe("<p>local</p>");
+    expect(p.state.getActiveTab()?.dirty).toBe(true);
     p.destroy();
   });
 

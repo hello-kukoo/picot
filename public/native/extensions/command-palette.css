@@ -36,7 +36,6 @@
 .command-palette-header {
   padding: var(--space-3) var(--space-4) var(--space-2);
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   border-bottom: 1px solid var(--border);
@@ -101,6 +100,5 @@
 
 .command-desc {
   margin-top: 1px;
-  color: var(--text-dim);
   font-size: var(--font-size-sm);
 }

@@ -78,7 +78,7 @@
 
   --text-primary: rgba(255, 255, 255, 0.88);
   --text-secondary: rgba(255, 255, 255, 0.5);
-  --text-dim: rgba(255, 255, 255, 0.3);
+  --text-placeholder: rgba(255, 255, 255, 0.3);
   --text-ghost: rgba(255, 255, 255, 0.1);
 
   --accent: #a0a0a0;
@@ -127,7 +127,7 @@
 
   --text-primary: rgba(255, 255, 255, 0.85);
   --text-secondary: rgba(255, 255, 255, 0.45);
-  --text-dim: rgba(255, 255, 255, 0.32);
+  --text-placeholder: rgba(255, 255, 255, 0.32);
   --text-ghost: rgba(255, 255, 255, 0.08);
 
   --accent: #6a7a88;
@@ -176,7 +176,7 @@
 
   --text-primary: rgba(255, 255, 255, 0.9);
   --text-secondary: rgba(255, 255, 255, 0.55);
-  --text-dim: rgba(255, 255, 255, 0.35);
+  --text-placeholder: rgba(255, 255, 255, 0.35);
   --text-ghost: rgba(255, 255, 255, 0.12);
 
   --accent: #7a8ab0;
@@ -227,7 +227,7 @@
 
   --text-primary: rgba(0, 0, 0, 0.88);
   --text-secondary: rgba(0, 0, 0, 0.55);
-  --text-dim: rgba(0, 0, 0, 0.35);
+  --text-placeholder: rgba(0, 0, 0, 0.35);
   --text-ghost: rgba(0, 0, 0, 0.12);
 
   --accent: #0580c4;
@@ -274,7 +274,7 @@
 
   --text-primary: rgba(0, 0, 0, 0.92);
   --text-secondary: rgba(0, 0, 0, 0.62);
-  --text-dim: rgba(0, 0, 0, 0.38);
+  --text-placeholder: rgba(0, 0, 0, 0.38);
   --text-ghost: rgba(0, 0, 0, 0.14);
 
   --accent: #b06a48;
@@ -321,7 +321,7 @@
 
   --text-primary: rgba(0, 0, 0, 0.9);
   --text-secondary: rgba(0, 0, 0, 0.58);
-  --text-dim: rgba(0, 0, 0, 0.35);
+  --text-placeholder: rgba(0, 0, 0, 0.35);
   --text-ghost: rgba(0, 0, 0, 0.12);
 
   --accent: #6a7d5a;

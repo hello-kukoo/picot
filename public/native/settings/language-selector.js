@@ -1,8 +1,10 @@
 import { getLanguagePreference, LANGUAGES, onLocaleChange, setLocale, t } from "../../i18n.js";
+import { enhanceSelect } from "../../ui/select-menu.js";
 
 export function setupLanguageSelector({ onChange } = {}) {
   const select = document.getElementById("settings-language-select");
   if (!select) return null;
+  const menu = enhanceSelect(select);
 
   function render() {
     const current = getLanguagePreference();
@@ -31,5 +33,11 @@ export function setupLanguageSelector({ onChange } = {}) {
   render();
   const unsubscribe = onLocaleChange(render);
 
-  return { render, destroy: unsubscribe };
+  return {
+    render,
+    destroy() {
+      unsubscribe();
+      menu?.destroy();
+    },
+  };
 }

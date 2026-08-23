@@ -6,6 +6,7 @@
  */
 import { createFileTypeIcon } from "../../file-type-icons.js";
 import { t } from "../../i18n.js";
+import { createLoadingPlaceholder } from "../../ui/loading-placeholder.js";
 
 export class NativeFileBrowser {
   #container;
@@ -303,7 +304,10 @@ function formatSize(bytes) {
 }
 
 function loadingRow() {
-  return messageRow("Loading…");
+  return createLoadingPlaceholder({
+    className: "file-loading",
+    label: t("files.loading"),
+  });
 }
 
 function messageRow(text) {

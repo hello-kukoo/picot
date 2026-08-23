@@ -2,6 +2,7 @@
 // ABOUTME: Selects, scans, confirms, and installs sourceId-bound skill candidates only.
 
 import { onLocaleChange, t } from "../../i18n.js";
+import { createLoadingPlaceholder } from "../../ui/loading-placeholder.js";
 import { manageModalDialog } from "./skills-modal.js";
 
 function el(tag, props = {}, children = []) {
@@ -225,12 +226,18 @@ export function setupSkillsInstallTab({
     const content = [
       el("div", { class: "skills-header" }, [
         el("div", {}, [
-          el("h3", { class: "settings-section-title", text: t("settings.installSkills.title") }),
-          el("p", { class: "skills-intro", text: t("settings.installSkills.description") }),
+          el("div", {
+            class: "settings-section-title",
+            text: t("settings.installSkills.title"),
+          }),
+          el("p", {
+            class: "settings-help skills-intro",
+            text: t("settings.installSkills.description"),
+          }),
         ]),
         el("button", {
           type: "button",
-          class: "skills-rescan skills-install-choose",
+          class: "ui-button ui-button--sm ui-button--secondary skills-rescan skills-install-choose",
           text: t("settings.installSkills.chooseFolder"),
           disabled: phase === "scanning" || phase === "installing" ? "disabled" : undefined,
           onClick: () => void chooseSource(),
@@ -239,7 +246,10 @@ export function setupSkillsInstallTab({
     ];
     if (phase === "scanning")
       content.push(
-        el("div", { class: "skills-install-loading", text: t("settings.installSkills.scanning") }),
+        createLoadingPlaceholder({
+          className: "skills-install-loading",
+          label: t("settings.installSkills.scanning"),
+        }),
       );
     if (phase === "error")
       content.push(
@@ -295,13 +305,13 @@ export function setupSkillsInstallTab({
               }),
               el("button", {
                 type: "button",
-                class: "skills-install-confirm",
+                class: "ui-button ui-button--sm ui-button--primary skills-install-confirm",
                 text: t("settings.installSkills.confirm"),
                 onClick: () => void install(),
               }),
               el("button", {
                 type: "button",
-                class: "skills-install-cancel",
+                class: "ui-button ui-button--sm ui-button--secondary skills-install-cancel",
                 text: t("settings.installSkills.cancel"),
                 onClick: cancelConfirmation,
               }),
@@ -312,7 +322,7 @@ export function setupSkillsInstallTab({
         content.push(
           el("button", {
             type: "button",
-            class: "skills-install-review",
+            class: "ui-button ui-button--sm ui-button--primary skills-install-review",
             text:
               phase === "installing"
                 ? t("settings.installSkills.installing")

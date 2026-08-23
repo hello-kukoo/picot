@@ -2,7 +2,7 @@
 // ABOUTME: Keeps Git status, diff, staging, commit, and AI flows off the runtime channel.
 
 use crate::git_pi_runner::GitPiRunner;
-use crate::git_service::{GitPathIdentity, GitService, MAX_STATUS_ENTRIES};
+use crate::git_service::{is_git_unavailable, GitPathIdentity, GitService, MAX_STATUS_ENTRIES};
 use crate::host_data::HostDataPlane;
 use crate::pi_launch::PiLaunchResolver;
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -33,9 +33,18 @@ pub async fn dispatch(
     let fail = |code: &'static str, message: String| Err((code, message));
 
     if frame.get("type").and_then(Value::as_str) == Some("git_ai_commit_message") {
-        let snapshot = service
-            .prepare_ai_snapshot(owner, &root, generation)
-            .map_err(|error| ("git_command_failed", error))?;
+        let snapshot = match service.prepare_ai_snapshot(owner, &root, generation) {
+            Ok(snapshot) => snapshot,
+            Err(error) if is_git_unavailable(&error) => {
+                return Ok(json!({
+                    "type": "git_ai_commit_message_failed",
+                    "requestId": request_id,
+                    "workspaceGeneration": generation,
+                    "error": error,
+                }));
+            }
+            Err(error) => return fail("git_command_failed", error),
+        };
         let binary = launch
             .bundled_pi_path()
             .map_err(|error| ("git_command_failed", error))?;
@@ -84,17 +93,21 @@ pub async fn dispatch(
         .and_then(Value::as_str)
         .unwrap_or("status");
     match command {
-        "status" => {
-            let snapshot = service
-                .status(owner, &root, generation)
-                .map_err(|error| ("git_command_failed", error))?;
-            Ok(json!({
+        "status" => match service.status(owner, &root, generation) {
+            Ok(snapshot) => Ok(json!({
                 "type": "git_status",
                 "requestId": request_id,
                 "workspaceGeneration": generation,
                 "snapshot": snapshot,
-            }))
-        }
+            })),
+            Err(error) if is_git_unavailable(&error) => Ok(json!({
+                "type": "git_status",
+                "requestId": request_id,
+                "workspaceGeneration": generation,
+                "snapshot": Value::Null,
+            })),
+            Err(error) => fail("git_command_failed", error),
+        },
         "diff" => {
             let snapshot_id = frame
                 .pointer("/command/snapshotId")

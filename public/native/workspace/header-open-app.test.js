@@ -75,4 +75,50 @@ describe("header open app", () => {
     });
     expect(localStorage.getItem("picot-open-app")).toBe("cursor");
   });
+
+  it("keeps the control usable when workspace git metadata is unavailable", async () => {
+    renderControl();
+    const onError = vi.fn();
+    setupHeaderOpenApp({
+      data: {
+        workspaceInfo: vi.fn().mockResolvedValue({
+          info: { path: "/tmp/picot", isGit: false },
+        }),
+      },
+      control: {
+        listInstalledApps: vi
+          .fn()
+          .mockResolvedValue([{ id: "vscode", label: "VS Code", appName: "Visual Studio Code" }]),
+        openInApp: vi.fn().mockResolvedValue(undefined),
+      },
+      workspaceId: "workspace-a",
+      onError,
+    });
+    await vi.waitFor(() =>
+      expect(document.getElementById("header-open-app").classList.contains("hidden")).toBe(false),
+    );
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("does not report a workspaceInfo failure as a host error", async () => {
+    renderControl();
+    const onError = vi.fn();
+    setupHeaderOpenApp({
+      data: {
+        workspaceInfo: vi.fn().mockRejectedValue(new Error("program not found")),
+      },
+      control: {
+        listInstalledApps: vi
+          .fn()
+          .mockResolvedValue([{ id: "vscode", label: "VS Code", appName: "Visual Studio Code" }]),
+        openInApp: vi.fn().mockResolvedValue(undefined),
+      },
+      workspaceId: "workspace-a",
+      onError,
+    });
+    await vi.waitFor(() =>
+      expect(document.getElementById("header-open-app").classList.contains("hidden")).toBe(true),
+    );
+    expect(onError).not.toHaveBeenCalled();
+  });
 });

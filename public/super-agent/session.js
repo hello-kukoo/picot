@@ -3,7 +3,9 @@ const SUPER_AGENT_NAME = "Agent Inbox";
 const SUPER_AGENT_PATH_SUFFIX = "/.pi/agent/super-agent";
 
 function normalizePath(value) {
-  return String(value || "").replace(/\/+$/, "");
+  return String(value || "")
+    .replace(/\\/g, "/")
+    .replace(/\/+$/, "");
 }
 
 function sessionTime(session) {
@@ -82,10 +84,39 @@ export function getRunningSuperAgentPorts({ projects, instances, superAgentPath 
   return [...ports];
 }
 
+export function isSuperAgentSessionSummary(session, superAgentPath) {
+  if (!session) return false;
+  return (
+    session.kind === SUPER_AGENT_KIND ||
+    isSuperAgentProjectPath(session.projectPath || session.cwd, superAgentPath)
+  );
+}
+
 export function isSuperAgentSession(session, project, superAgentPath) {
   return (
-    session?.kind === SUPER_AGENT_KIND ||
+    isSuperAgentSessionSummary(session, superAgentPath) ||
     project?.kind === SUPER_AGENT_KIND ||
-    isSuperAgentProjectPath(project?.path || session?.cwd, superAgentPath)
+    isSuperAgentProjectPath(project?.path, superAgentPath)
+  );
+}
+
+/**
+ * Session that should drive the Agent Inbox chrome (sidebar entry + chat
+ * header) for this window.
+ *
+ * Saved inbox sessions are matched by id. Temporary runtimes in the inbox
+ * workspace are not in the saved list, so fall back to an inbox session
+ * tagged as the current workspace — otherwise the window header stays on
+ * the regular project chrome after enable/refresh.
+ */
+export function resolveSuperAgentActiveSession(sessions = [], sessionId = "") {
+  const list = Array.isArray(sessions) ? sessions : [];
+  const current = list.find((session) => session?.id === sessionId) ?? null;
+  if (isSuperAgentSessionSummary(current)) return current;
+  if (current) return current;
+  return (
+    list.find(
+      (session) => isSuperAgentSessionSummary(session) && session.isCurrentWorkspace === true,
+    ) ?? null
   );
 }

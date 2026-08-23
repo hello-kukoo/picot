@@ -55,6 +55,7 @@ Primitives live in `public/design-system.css`:
 - `.ui-textarea`
 - `.ui-select`
 - `.ui-badge`
+- `.ui-loading`
 - `.ui-panel`
 - `.ui-card`
 - `.ui-toolbar`
@@ -76,6 +77,8 @@ Button variants are `--primary`, `--secondary`, `--ghost`, and `--danger`. Size 
 >
   …
 </button>
+
+<div class="ui-loading" role="status">Loading…</div>
 ```
 
 Keep business classes when migrating existing markup. `.ui-*` owns shared appearance; the business class owns positioning, domain state, JS hooks, and test selectors.
@@ -86,7 +89,8 @@ The design system owns hover, active, focus-visible, disabled, busy, and invalid
 
 - Use `<button type="button">` for actions.
 - Use `<a href>` for navigation.
-- Use native `<input>`, `<textarea>`, and `<select>` elements.
+- Use native `<input>` and `<textarea>` elements.
+- Keep a native `<select>` as the value source, then call `enhanceSelect()` from `public/ui/select-menu.js` so the open menu is a styled listbox. Do not leave a raw OS picker in settings UI.
 - Use `disabled`, `aria-disabled`, `aria-busy`, and `aria-invalid` rather than visual-only state classes.
 - Do not apply button styling to a `div` or `span` to simulate a control.
 

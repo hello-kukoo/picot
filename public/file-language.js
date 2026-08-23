@@ -61,6 +61,10 @@ export function classifyFilePath(filePath) {
     return { contentType: "markdown", editable: true, languageId: "markdown" };
   }
 
+  if (ext === "html" || ext === "htm") {
+    return { contentType: "html", editable: true, languageId: "html" };
+  }
+
   if (NON_PREVIEWABLE_SUFFIXES.has(ext)) {
     return { contentType: "binary", editable: false, languageId: null };
   }

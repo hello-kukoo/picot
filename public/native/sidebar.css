@@ -50,7 +50,6 @@
   border-radius: var(--radius-md);
   text-decoration: none;
   font-size: var(--font-size-md);
-  color: var(--text-dim);
   transition:
     background var(--duration) var(--ease),
     color var(--duration) var(--ease);
@@ -107,10 +106,6 @@
   background: var(--bg-glass-hover);
 }
 
-.sidebar-search-input::placeholder {
-  color: var(--text-dim);
-}
-
 .sidebar-search-clear {
   position: absolute;
   top: 50%;
@@ -122,7 +117,6 @@
   border: none;
   border-radius: var(--radius-pill);
   background: transparent;
-  color: var(--text-dim);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -152,7 +146,7 @@
 .sidebar-primary-nav {
   display: grid;
   gap: var(--space-0-5);
-  padding: var(--space-2) var(--space-3) var(--space-1);
+  padding: var(--space-2) var(--space-2) var(--space-1);
   flex-shrink: 0;
 }
 
@@ -190,7 +184,6 @@
 
 .sidebar-section-label {
   padding: var(--space-2) calc(var(--space-3) + var(--space-2)) var(--space-1);
-  color: var(--text-dim);
   font-size: var(--font-size-sm);
   font-weight: 600;
   text-transform: uppercase;
@@ -215,7 +208,7 @@
   width: auto;
   display: flex;
   align-items: center;
-  justify-content: left;
+  justify-content: flex-start;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-2);
   user-select: none;
@@ -224,6 +217,11 @@
   font-size: var(--font-size-md);
   cursor: pointer;
   border: none;
+}
+
+.sidebar-settings-btn svg {
+  display: block;
+  flex-shrink: 0;
 }
 
 .sidebar-settings-row:hover {

@@ -1,3 +1,5 @@
+import { t } from "../../i18n.js";
+import { createLoadingPlaceholder } from "../../ui/loading-placeholder.js";
 import { renderCostDashboard } from "./cost-dashboard-render.js";
 
 const FILTER_STORAGE_KEY = "pi-studio-cost-filters";
@@ -269,8 +271,16 @@ export async function loadCostDashboard(container, { data, getWorkspaceId }) {
   if (!container) return;
   let currentRange = loadSavedRange();
 
-  // Show a plain loading state first — don't render section titles until data arrives.
-  container.innerHTML = `<div class="cost-dash-page"><p class="cost-dash-empty-state">Loading usage…</p></div>`;
+  // Show a loading placeholder first — don't render section titles until data arrives.
+  const page = document.createElement("div");
+  page.className = "cost-dash-page";
+  page.append(
+    createLoadingPlaceholder({
+      className: "cost-dash-empty-state",
+      label: t("status.loading"),
+    }),
+  );
+  container.replaceChildren(page);
 
   try {
     const workspaceId = getWorkspaceId();

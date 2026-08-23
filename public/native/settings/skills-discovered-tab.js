@@ -2,6 +2,7 @@
 // ABOUTME: Owns Claude root enablement and existing skill toggle/tree behavior.
 
 import { onLocaleChange, t } from "../../i18n.js";
+import { createLoadingPlaceholder } from "../../ui/loading-placeholder.js";
 import { manageModalDialog } from "./skills-modal.js";
 
 /**
@@ -121,7 +122,10 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
 
   function renderLoading() {
     container.replaceChildren(
-      el("div", { class: "skills-loading", text: t("settings.skills.loading") }),
+      createLoadingPlaceholder({
+        className: "skills-loading",
+        label: t("settings.skills.loading"),
+      }),
     );
   }
 
@@ -132,7 +136,7 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
         el("span", { text: errorMessage }),
         el("button", {
           type: "button",
-          class: "skills-rescan",
+          class: "ui-button ui-button--sm ui-button--secondary skills-rescan",
           text: t("settings.skills.rescan"),
           onClick: () => void load(scope),
         }),
@@ -451,12 +455,12 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
     fragment.appendChild(
       el("div", { class: "skills-header" }, [
         el("div", {}, [
-          el("h3", { class: "settings-section-title", text: t("settings.skills.title") }),
-          el("p", { class: "skills-intro", text: t("settings.skills.description") }),
+          el("div", { class: "settings-section-title", text: t("settings.skills.title") }),
+          el("p", { class: "settings-help skills-intro", text: t("settings.skills.description") }),
         ]),
         el("button", {
           type: "button",
-          class: "skills-rescan",
+          class: "ui-button ui-button--sm ui-button--secondary skills-rescan",
           text: t("settings.skills.rescan"),
           onClick: rescan,
         }),

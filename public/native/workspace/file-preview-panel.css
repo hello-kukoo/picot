@@ -164,7 +164,6 @@ body.file-preview-resizing {
   height: 16px;
   border: none;
   background: none;
-  color: var(--text-dim);
   border-radius: var(--radius-xs);
   cursor: pointer;
   padding: 0;
@@ -290,7 +289,6 @@ body.file-preview-resizing {
   min-width: 72px;
   margin-left: auto;
   overflow: hidden;
-  color: var(--text-dim);
   font-size: var(--font-size-sm);
   text-align: right;
   text-overflow: ellipsis;
@@ -392,7 +390,6 @@ body.file-preview-resizing {
 
 .file-code-editor .cm-gutters {
   background: var(--bg-solid);
-  color: var(--text-dim);
   border-right: 1px solid var(--border);
 }
 
@@ -422,6 +419,23 @@ body.file-preview-resizing {
   height: 100%;
   padding: var(--space-4);
   background: var(--bg);
+}
+
+.file-html-preview {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  background: var(--bg-solid);
+}
+
+.file-html-frame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  /* design-token-ignore: live HTML preview mimics a browser canvas */
+  background: #fff;
 }
 
 .file-image-img {
@@ -485,14 +499,12 @@ body.file-preview-resizing {
 
 .file-diff-empty {
   padding: var(--space-3) var(--space-4);
-  color: var(--text-dim);
   font-size: var(--font-size-sm);
   font-family: "SF Mono", Menlo, Monaco, "Courier New", monospace;
 }
 
 .file-diff-collapse {
   padding: var(--space-0-5) var(--space-4);
-  color: var(--text-dim);
   background: var(--bg-panel);
   /* design-token-ignore: diff collapse uses a fallback monospace micro size */
   font-size: var(--font-size-xs, 11px);
@@ -524,7 +536,6 @@ body.file-preview-resizing {
   min-width: 44px;
   padding: 0 var(--space-2);
   text-align: right;
-  color: var(--text-dim);
   background: var(--bg-panel);
   border-right: 1px solid var(--border);
   /* design-token-ignore: diff gutter line numbers use a fixed monospace micro size */
@@ -547,9 +558,6 @@ body.file-preview-resizing {
 }
 .file-diff-line--removed .file-diff-sign {
   color: #f87171;
-}
-.file-diff-line:not(.file-diff-line--added):not(.file-diff-line--removed) .file-diff-sign {
-  color: var(--text-dim);
 }
 
 .file-diff-content {
@@ -602,5 +610,4 @@ body.file-preview-resizing {
 }
 .file-git-badge[data-git-status="I"] {
   background: var(--bg-glass);
-  color: var(--text-dim);
 }

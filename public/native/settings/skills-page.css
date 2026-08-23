@@ -1,6 +1,8 @@
 /* Settings → Skills inventory tree (public/native/settings/skills-page.js). */
 
-#settings-skills {
+.skills-page,
+.skills-install-page,
+.package-skills-page {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -13,7 +15,6 @@
   gap: var(--space-3);
 }
 
-.skills-intro,
 .skills-scope-meta,
 .skills-group-source,
 .skills-root-path,
@@ -22,13 +23,11 @@
 .skills-custom-rules-label,
 .skills-shadowed-note,
 .skills-ambiguous-note {
-  color: var(--text-dim);
   font-size: var(--font-size-sm);
 }
 
 .skills-intro {
   margin: 0;
-  line-height: 1.5;
 }
 
 .skills-scope-tabs {
@@ -38,6 +37,7 @@
 }
 
 .skills-scope-tab {
+  font: inherit;
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   min-height: var(--control-height-xs);
@@ -53,18 +53,12 @@
   color: var(--accent-text);
 }
 
-.skills-scope-tab small {
-  color: var(--text-dim);
-}
-
 .skills-notice,
 .skills-error,
 .skills-empty,
 .skills-loading,
 .skills-custom-rules {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2) 0;
   background: var(--bg-glass);
   color: var(--text-secondary);
   font-size: var(--font-size-md);
@@ -192,7 +186,7 @@
 }
 .skills-switch.mixed::after {
   left: 11px;
-  background: var(--text-dim);
+  background: var(--text-secondary);
 }
 .skills-switch:disabled {
   opacity: 0.5;
@@ -227,25 +221,36 @@
 .skills-group-listing > .skills-group {
   border-top: 1px solid var(--border);
 }
+
+.skills-settings > .settings-section-title {
+  margin-bottom: var(--space-3);
+}
+
 .skills-page-tabs {
   display: flex;
-  gap: 0.25rem;
-  margin-bottom: 0.75rem;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
   border-bottom: 1px solid var(--border);
 }
 
 .skills-page-tab {
+  font: inherit;
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
-  color: var(--text-dim);
   cursor: pointer;
-  padding: 0.5rem 0.75rem;
+  padding: var(--space-2) 0;
+  margin-right: var(--space-4);
+  font-size: var(--font-size-md);
 }
 
 .skills-page-tab.active {
   border-bottom-color: var(--accent);
   color: var(--text-primary);
+}
+
+.skills-rescan {
+  flex-shrink: 0;
 }
 
 .package-skills-page.hidden,
@@ -260,47 +265,46 @@
 .skills-install-result,
 .skills-install-error {
   display: flex;
-  gap: 0.75rem;
+  gap: var(--space-3);
   align-items: center;
 }
 
 .skills-install-header {
   justify-content: space-between;
-  margin-bottom: 0.75rem;
+  margin-bottom: var(--space-3);
 }
 
 .skills-install-scope {
   flex-wrap: wrap;
-  margin: 0.75rem 0;
+  margin: var(--space-3) 0;
 }
 
 .skills-install-tree {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0.5rem;
+  padding: var(--space-2);
 }
 
 .skills-install-node {
-  padding: 0.35rem;
+  padding: var(--space-1);
 }
 
 .skills-install-node-text {
   display: grid;
-  gap: 0.15rem;
+  gap: var(--space-0-5);
 }
 
 .skills-install-node-text span,
 .skills-install-untrusted {
-  color: var(--text-dim);
-  font-size: 0.85em;
+  font-size: var(--font-size-sm);
 }
 
 .skills-install-children {
-  margin-left: 1rem;
+  margin-left: var(--space-4);
 }
 
 .skills-install-confirm {
-  margin-top: 0.75rem;
+  margin-top: var(--space-3);
 }
 
 .skills-install-error {
@@ -317,7 +321,6 @@
 .package-skills-intro,
 .package-skills-bundled-note {
   margin: var(--space-1) 0 0;
-  color: var(--text-dim);
   font-size: var(--font-size-sm);
 }
 .package-skills-scope-tabs {
@@ -330,7 +333,6 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: transparent;
-  color: var(--text-dim);
   cursor: pointer;
 }
 .package-skills-scope-tab.active {
@@ -361,12 +363,11 @@
   background: transparent;
   border: none;
   cursor: pointer;
-  color: var(--text-dim);
   font-size: var(--font-size-md);
 }
 .package-skills-card-name {
   font-weight: 600;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -374,13 +375,12 @@
 .package-skills-card-meta {
   display: flex;
   gap: var(--space-2);
-  color: var(--text-dim);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
 }
 .package-skills-not-installed,
 .package-skills-diagnostic {
-  color: var(--text-warn, var(--text-dim));
-  font-size: var(--font-size-xs);
+  color: var(--text-warn, var(--text-secondary));
+  font-size: var(--font-size-sm);
 }
 .package-skills-card-listing {
   display: grid;
@@ -393,27 +393,24 @@
 }
 .package-skills-candidate-name {
   font-weight: 600;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 .package-skills-candidate-description {
-  color: var(--text-dim);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
 }
 .package-skills-candidate-relative {
-  font-size: var(--font-size-xs);
-  color: var(--text-dim);
+  font-size: var(--font-size-sm);
 }
 .package-skills-empty,
 .package-skills-loading,
 .package-skills-error {
   padding: var(--space-3);
-  color: var(--text-dim);
+  font-size: var(--font-size-md);
   text-align: center;
 }
 .package-skills-notice {
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border-warn, var(--border));
   border-radius: var(--radius-md);
-  color: var(--text-dim);
   font-size: var(--font-size-sm);
 }

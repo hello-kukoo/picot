@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n, t } from "../../i18n.js";
 import { setSuperAgentEnabled } from "../../super-agent/settings.js";
-import { formatSessionTime, SessionSidebar } from "./session-sidebar.js";
+import { formatSessionTime, SessionSidebar, workspaceFolderName } from "./session-sidebar.js";
 
 // Test file lives at public/native/session/session-sidebar.test.js.
 // i18n locale JSONs live at public/locales/en.json. Vitest's
@@ -66,6 +66,23 @@ beforeEach(async () => {
     return { ok: false, status: 404, json: async () => ({}) };
   });
   await initI18n();
+});
+
+describe("workspaceFolderName", () => {
+  it("returns a POSIX basename", () => {
+    expect(workspaceFolderName("/Users/me/Documents/test")).toBe("test");
+  });
+
+  it("returns only the folder name for Windows extended UNC paths", () => {
+    expect(workspaceFolderName(String.raw`\\?\UNC\psf\Home\Documents\test`)).toBe("test");
+    expect(workspaceFolderName(String.raw`\\?\UNC\psf\Home\Documents\New project 2`)).toBe(
+      "New project 2",
+    );
+  });
+
+  it("prefers a clean projectName over a Windows path", () => {
+    expect(workspaceFolderName(String.raw`C:\Users\me\proj`, "proj")).toBe("proj");
+  });
 });
 
 describe("formatSessionTime", () => {
@@ -239,6 +256,7 @@ describe("SessionSidebar.render", () => {
       });
 
     await sidebar.load();
+    expect(container.querySelector(".ui-loading")).not.toBeNull();
     expect(container.textContent).toContain("Loading sessions");
     expect(container.textContent).not.toContain("Failed to load sessions");
 
@@ -685,6 +703,36 @@ describe("SessionSidebar.render", () => {
     expect(container.querySelector('.session-item[data-session-id="project"]')).not.toBeNull();
   });
 
+  it("publishes Agent Inbox navigation after the setting is enabled without a new host fetch", async () => {
+    setSuperAgentEnabled(false);
+    const onAgentInboxSessionChange = vi.fn();
+    const { sidebar, container } = makeSidebar(
+      [
+        { id: "project", timestamp: "2026-06-02T00:00:00.000Z", name: "Project chat" },
+        {
+          id: "sa",
+          timestamp: "2026-06-03T00:00:00.000Z",
+          name: "Inbox",
+          projectPath: "/Users/me/.pi/agent/super-agent",
+          projectName: "super-agent",
+          isCurrentWorkspace: false,
+        },
+      ],
+      { onAgentInboxSessionChange },
+    );
+
+    await sidebar.load();
+    expect(onAgentInboxSessionChange).toHaveBeenLastCalledWith(null);
+    const projectItem = container.querySelector('.session-item[data-session-id="project"]');
+
+    setSuperAgentEnabled(true);
+    sidebar.syncAgentInboxNav();
+    expect(onAgentInboxSessionChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "sa", kind: "super-agent", name: "Agent Inbox" }),
+    );
+    expect(container.querySelector('.session-item[data-session-id="project"]')).toBe(projectItem);
+  });
+
   it("shows a delete-all button on the archived header that deletes archived sessions after confirming", async () => {
     const { sidebar, container, control } = makeSidebar([
       { id: "s-arc-1", timestamp: new Date().toISOString(), name: "Arc 1" },
@@ -864,6 +912,26 @@ describe("SessionSidebar.pinned", () => {
     ]);
     await sidebar.load();
     expect(container.querySelector(".pinned-group")).toBeNull();
+  });
+
+  it("shows only the folder name for Windows UNC pinned workspaces", async () => {
+    const winPath = String.raw`\\?\UNC\psf\Home\Documents\test`;
+    const { sidebar, container } = makeSidebar([
+      {
+        id: "s-win",
+        filePath: "/sessions/s-win.jsonl",
+        timestamp: new Date().toISOString(),
+        name: "Hello",
+        projectPath: winPath,
+        projectName: winPath,
+      },
+    ]);
+    await sidebar.load();
+    sidebar.pinnedStore.pinWorkspace(winPath, winPath);
+    await sidebar.load();
+    const nameEl = container.querySelector(".pinned-workspace-group .workspace-name");
+    expect(nameEl?.textContent).toBe("test");
+    expect(nameEl?.title).toBe(winPath);
   });
 
   it("renders a PINNED section listing pinned workspace sessions", async () => {

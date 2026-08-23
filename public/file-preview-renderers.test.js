@@ -14,7 +14,10 @@ beforeEach(async () => {
         Promise.resolve({
           app: { welcome: "Welcome" },
           messages: { copy: "Copy", copied: "Copied!" },
-          files: { loading: "Loading…" },
+          files: {
+            loading: "Loading…",
+            preview: { htmlLive: "Live HTML preview" },
+          },
         }),
     });
   await initI18n();
@@ -43,6 +46,21 @@ describe("createFileRenderer — renderer selection", () => {
     renderer.mount(container);
     expect(renderer.contentType).toBe("markdown");
     expect(container.querySelector(".file-markdown-preview")).not.toBeNull();
+    renderer.destroy();
+  });
+
+  test("HTML → sandboxed iframe preview", () => {
+    const renderer = createFileRenderer({
+      filePath: "index.html",
+      content: "<h1>Hi</h1>",
+      mode: "preview",
+    });
+    renderer.mount(container);
+    expect(renderer.contentType).toBe("html");
+    const iframe = container.querySelector("iframe");
+    expect(iframe).not.toBeNull();
+    expect(iframe.getAttribute("sandbox")).toContain("allow-scripts");
+    expect(iframe.getAttribute("sandbox")).not.toContain("allow-same-origin");
     renderer.destroy();
   });
 

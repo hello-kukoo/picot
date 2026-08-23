@@ -1,5 +1,6 @@
 import { t } from "../../i18n.js";
 import { applyTheme, getCurrentTheme, themes } from "../../themes.js";
+import { applyLoadingPlaceholder, clearLoadingPlaceholder } from "../../ui/loading-placeholder.js";
 import { loadCostDashboard } from "./cost-dashboard.js";
 import { setupLanguageSelector } from "./language-selector.js";
 import { setupModelsPage } from "./models-page.js";
@@ -232,12 +233,16 @@ export function setupSettingsPanel({
 
   async function loadPiVersion() {
     if (!piVersionValue) return;
-    piVersionValue.textContent = t("migrated.native.settings.settingsConfig.textcontent.loading");
+    applyLoadingPlaceholder(piVersionValue, {
+      label: t("migrated.native.settings.settingsConfig.textcontent.loading"),
+    });
     try {
       const response = await fetch("/health");
       const health = await response.json();
+      clearLoadingPlaceholder(piVersionValue);
       piVersionValue.textContent = health?.piVersion || "Unavailable";
     } catch {
+      clearLoadingPlaceholder(piVersionValue);
       piVersionValue.textContent = t("sidebar.unavailable");
     }
   }
@@ -246,8 +251,10 @@ export function setupSettingsPanel({
     if (!appVersionValue) return;
     try {
       const version = await globalThis.__TAURI__?.app?.getVersion?.();
+      clearLoadingPlaceholder(appVersionValue);
       appVersionValue.textContent = version ? `v${version}` : "Unavailable";
     } catch {
+      clearLoadingPlaceholder(appVersionValue);
       appVersionValue.textContent = t("sidebar.unavailable");
     }
   }

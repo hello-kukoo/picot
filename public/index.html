@@ -51,7 +51,7 @@
     <link rel="stylesheet" href="style.css" />
     <link rel="stylesheet" href="vendor/xterm.css" />
     <script src="vendor/xterm.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+    <script src="vendor/chart.js"></script>
     <script>
       // Boot-time instance-swap overlay gate kept for session route swaps.
       // Read synchronously before <body> renders so the first paint is the
@@ -285,7 +285,13 @@
           Sessions
         </div>
         <div class="session-list" id="session-list">
-          <div class="session-loading" data-i18n="sidebar.loadingSessions">
+          <div
+            class="session-loading ui-loading"
+            role="status"
+            aria-live="polite"
+            aria-busy="true"
+            data-i18n="sidebar.loadingSessions"
+          >
             Loading sessions...
           </div>
         </div>
@@ -755,6 +761,10 @@
               </button>
               <div class="mobile-model-bar" id="mobile-model-bar"></div>
               <div class="queued-messages hidden" id="queued-messages"></div>
+              <div
+                class="extension-widgets hidden"
+                id="extension-widgets-above"
+              ></div>
               <form id="chat-form">
                 <div class="composer-card" id="composer-card">
                   <div
@@ -950,6 +960,10 @@
                   </div>
                 </div>
               </form>
+              <div
+                class="extension-widgets hidden"
+                id="extension-widgets-below"
+              ></div>
             </div>
           </div>
 
@@ -1226,34 +1240,6 @@
           <!-- File Browser (right sidebar) -->
           <div class="file-sidebar app-side-panel collapsed" id="file-sidebar">
             <div class="file-sidebar-header app-side-panel-header">
-              <div
-                class="file-sidebar-tabs"
-                role="tablist"
-                aria-label="Sidebar content"
-              >
-                <button
-                  type="button"
-                  class="file-sidebar-tab active"
-                  id="file-sidebar-files-tab"
-                  role="tab"
-                  aria-selected="true"
-                  aria-controls="file-list"
-                  data-i18n="files.title"
-                >
-                  Files
-                </button>
-                <button
-                  type="button"
-                  class="file-sidebar-tab"
-                  id="file-sidebar-git-tab"
-                  role="tab"
-                  aria-selected="false"
-                  aria-controls="git-panel"
-                  data-i18n="git.panel"
-                >
-                  Git
-                </button>
-              </div>
               <button
                 class="ui-icon-button ui-icon-button--sm ui-icon-button--ghost icon-btn"
                 id="file-sidebar-up"
@@ -1405,7 +1391,7 @@
               title=""
             ></div>
             <div class="file-list" id="file-list"></div>
-            <div class="git-panel hidden" id="git-panel" role="tabpanel"></div>
+            <div class="git-panel hidden" id="git-panel"></div>
           </div>
           <div
             class="file-sidebar diff-sidebar app-side-panel collapsed"
@@ -1505,7 +1491,20 @@
           Agent Inbox
         </button>
         <button class="settings-nav-back" id="settings-close">
-          <span class="settings-nav-back-icon">‹</span>
+          <svg
+            class="settings-nav-back-icon"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <polyline points="15 6 9 12 15 18" />
+          </svg>
           <span data-i18n="settings.backToChat">Back to chat</span>
         </button>
       </aside>
@@ -1693,8 +1692,12 @@
                   >Pi version</span
                 >
                 <span
-                  class="settings-static-value"
+                  class="settings-static-value ui-loading"
                   id="setting-pi-version-value"
+                  role="status"
+                  aria-live="polite"
+                  aria-busy="true"
+                  data-i18n="migrated.native.settings.settingsConfig.textcontent.loading"
                   >Loading...</span
                 >
               </div>
@@ -1703,8 +1706,12 @@
                   >Picot version</span
                 >
                 <span
-                  class="settings-static-value"
+                  class="settings-static-value ui-loading"
                   id="setting-app-version-value"
+                  role="status"
+                  aria-live="polite"
+                  aria-busy="true"
+                  data-i18n="migrated.native.settings.settingsConfig.textcontent.loading"
                   >Loading...</span
                 >
               </div>
@@ -1867,7 +1874,7 @@
                 </label>
                 <select
                   id="pkg-browse-sort"
-                  class="pkg-browse-sort"
+                  class="ui-select ui-select--sm pkg-browse-sort"
                   aria-label="Sort packages"
                   data-i18n-aria-label="extensions.sortPackages"
                 >
@@ -1904,69 +1911,78 @@
 
         <div class="settings-tab" data-settings-panel="skills">
           <div class="settings-body">
-            <div
-              class="skills-page-tabs"
-              role="tablist"
-              aria-label="Skills sections"
-            >
-              <button
-                type="button"
-                id="skills-page-tab-discovered"
-                class="skills-page-tab active"
-                role="tab"
-                aria-selected="true"
-                aria-controls="settings-skills"
-                data-skills-page-tab="discovered"
-                data-i18n="settings.skills.discovered"
+            <div class="settings-section skills-settings">
+              <div
+                class="settings-section-title"
+                data-i18n="settings.skills.title"
               >
-                Discovered
-              </button>
-              <button
-                type="button"
-                id="skills-page-tab-install"
-                class="skills-page-tab"
-                role="tab"
-                aria-selected="false"
-                aria-controls="settings-install-skills"
-                data-skills-page-tab="install"
-                data-i18n="settings.skills.install"
+                Skills
+              </div>
+              <div
+                class="skills-page-tabs"
+                role="tablist"
+                aria-label="Skills sections"
+                data-i18n-aria-label="settings.skills.sectionsAriaLabel"
               >
-                Install
-              </button>
-              <button
-                type="button"
-                id="skills-page-tab-packages"
-                class="skills-page-tab"
-                role="tab"
-                aria-selected="false"
-                aria-controls="settings-package-skills"
-                data-skills-page-tab="packages"
-                data-i18n="settings.skills.packages"
-              >
-                Packages
-              </button>
+                <button
+                  type="button"
+                  id="skills-page-tab-discovered"
+                  class="skills-page-tab active"
+                  role="tab"
+                  aria-selected="true"
+                  aria-controls="settings-skills"
+                  data-skills-page-tab="discovered"
+                  data-i18n="settings.skills.discovered"
+                >
+                  Discovered
+                </button>
+                <button
+                  type="button"
+                  id="skills-page-tab-install"
+                  class="skills-page-tab"
+                  role="tab"
+                  aria-selected="false"
+                  aria-controls="settings-install-skills"
+                  data-skills-page-tab="install"
+                  data-i18n="settings.skills.install"
+                >
+                  Install
+                </button>
+                <button
+                  type="button"
+                  id="skills-page-tab-packages"
+                  class="skills-page-tab"
+                  role="tab"
+                  aria-selected="false"
+                  aria-controls="settings-package-skills"
+                  data-skills-page-tab="packages"
+                  data-i18n="settings.skills.packages"
+                >
+                  Packages
+                </button>
+              </div>
+              <section
+                id="settings-skills"
+                class="skills-page"
+                role="tabpanel"
+                aria-labelledby="skills-page-tab-discovered"
+                aria-live="polite"
+              ></section>
+              <section
+                id="settings-install-skills"
+                class="skills-install-page hidden"
+                role="tabpanel"
+                aria-labelledby="skills-page-tab-install"
+                aria-live="polite"
+              ></section>
+              <section
+                id="settings-package-skills"
+                class="package-skills-page hidden"
+                role="tabpanel"
+                aria-labelledby="skills-page-tab-packages"
+                aria-live="polite"
+              ></section>
             </div>
-            <section
-              id="settings-skills"
-              class="settings-section skills-page"
-              role="tabpanel"
-              aria-labelledby="skills-page-tab-discovered"
-              aria-live="polite"
-            ></section>
-            <section
-              id="settings-install-skills"
-              class="settings-section skills-install-page hidden"
-              role="tabpanel"
-              aria-labelledby="skills-page-tab-install"
-              aria-live="polite"
-            ></section>
-            <section
-              id="settings-package-skills"
-              class="settings-section package-skills-page hidden"
-              role="tabpanel"
-              aria-labelledby="skills-page-tab-packages"
-              aria-live="polite"
-            ></section>
           </div>
         </div>
 
@@ -2006,7 +2022,10 @@
               </p>
               <div class="settings-api-keys" id="settings-api-keys">
                 <div
-                  class="settings-api-keys-loading"
+                  class="settings-api-keys-loading ui-loading"
+                  role="status"
+                  aria-live="polite"
+                  aria-busy="true"
                   data-i18n="settings.loadingProviders"
                 >
                   Loading providers…
@@ -2415,8 +2434,11 @@
         </div>
         <div class="lan-qr-modal-body">
           <div
-            class="lan-qr-loading"
+            class="lan-qr-loading ui-loading"
             id="lan-qr-loading"
+            role="status"
+            aria-live="polite"
+            aria-busy="true"
             data-i18n="lanQr.generating"
           >
             Generating QR code…

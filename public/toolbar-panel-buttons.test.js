@@ -27,6 +27,17 @@ test("file sidebar toggle hosts the workspace path label", () => {
   expect(document.querySelectorAll("#workspace-indicator")).toHaveLength(1);
 });
 
+test("file sidebar header has no Files/Git text and keeps action icons", () => {
+  const header = document.querySelector("#file-sidebar .file-sidebar-header");
+  expect(header?.textContent.trim()).toBe("");
+  expect(document.querySelector("#file-sidebar-title")).toBeNull();
+  expect(document.querySelector("#file-sidebar-files-tab")).toBeNull();
+  expect(document.querySelector("#file-sidebar-git-tab")).toBeNull();
+  expect(document.querySelector("#file-sidebar-up")).not.toBeNull();
+  expect(document.querySelector("#file-sidebar-finder")).not.toBeNull();
+  expect(document.querySelector("#file-sidebar-close")).not.toBeNull();
+});
+
 test("icon-button design system defines the shared control contract", () => {
   expect(designSystemCss).toContain(".ui-icon-button");
   expect(designSystemCss).toContain("border-radius: var(--radius-md);");

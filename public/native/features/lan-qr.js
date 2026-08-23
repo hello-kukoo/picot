@@ -1,4 +1,5 @@
 import { t } from "../../i18n.js";
+import { applyLoadingPlaceholder, clearLoadingPlaceholder } from "../../ui/loading-placeholder.js";
 
 /**
  * LAN QR code modal: shows a QR code for opening Picot on a mobile device
@@ -38,7 +39,7 @@ async function openLanQrModal() {
   lanQrModal.classList.remove("hidden");
   if (lanQrLoading) {
     lanQrLoading.style.display = "";
-    lanQrLoading.textContent = t("lanQr.generating");
+    applyLoadingPlaceholder(lanQrLoading, { label: t("lanQr.generating") });
   }
   if (lanQrImage) lanQrImage.classList.add("hidden");
   if (lanQrOpenLink) lanQrOpenLink.classList.add("hidden");
@@ -59,7 +60,10 @@ async function openLanQrModal() {
     }
     if (lanQrLoading) lanQrLoading.style.display = "none";
   } catch {
-    if (lanQrLoading) lanQrLoading.textContent = t("misc.qrUnavailable");
+    if (lanQrLoading) {
+      clearLoadingPlaceholder(lanQrLoading);
+      lanQrLoading.textContent = t("misc.qrUnavailable");
+    }
   }
 }
 

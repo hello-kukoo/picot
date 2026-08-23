@@ -68,7 +68,6 @@
 .settings-extension-status {
   margin-top: 4px;
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -178,29 +177,13 @@
 }
 
 .pkg-browse-sort {
-  padding: var(--space-1-5) var(--space-2);
-  font-size: var(--font-size-sm);
-  background: var(--bg-glass);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  outline: none;
-}
-
-.pkg-browse-sort:hover {
-  border-color: var(--border-hover);
-  color: var(--text-primary);
-}
-
-.pkg-browse-sort:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow);
+  width: auto;
+  flex: 0 0 auto;
 }
 
 .pkg-browse-count {
   margin-left: auto;
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
 }
 
 .pkg-browse-badges {
@@ -223,7 +206,6 @@
 
 .pkg-browse-meta {
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
 }
 
 .pkg-browse-list.pkg-browse-list {
@@ -311,7 +293,6 @@
 
 .pkg-browse-page-ellipsis {
   padding: 0 var(--space-1);
-  color: var(--text-dim);
   font-size: var(--font-size-sm);
 }
 
@@ -421,7 +402,6 @@
 
 .pkg-manager-footer-summary {
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
 }
 
 .pkg-manager-message {
@@ -469,7 +449,6 @@
   font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0.06em;
-  color: var(--text-dim);
 }
 
 .pkg-manager-group-header:first-child {
@@ -514,14 +493,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--font-size-xs);
-  color: var(--text-dim);
 }
 
 .pkg-manager-add-btn {
   flex-shrink: 0;
   padding: var(--space-1-5) var(--space-2);
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
   background: transparent;
   border: none;
   border-top: 1px solid var(--border);
@@ -572,7 +549,6 @@
 
 .pkg-manager-status-label {
   flex: 0 0 110px;
-  color: var(--text-dim);
 }
 
 .pkg-manager-status-value {
@@ -606,7 +582,6 @@
   white-space: nowrap;
   font-family: var(--font-mono, monospace);
   font-size: var(--font-size-xs);
-  color: var(--text-dim);
 }
 
 .pkg-manager-toggle {
@@ -653,7 +628,6 @@
   padding: var(--space-0-5) var(--space-1);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--text-dim);
   background: var(--bg-glass);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
@@ -687,5 +661,4 @@
   font-size: var(--font-size-sm);
   letter-spacing: 0.06em;
   font-weight: bold;
-  color: var(--text-dim);
 }

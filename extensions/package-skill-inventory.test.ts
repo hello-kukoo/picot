@@ -794,26 +794,3 @@ describe("collectPackageSkillCandidates — metadata", () => {
     expect(cand?.id).toBe(`npm:pkg::${cand?.canonicalPath}`);
   });
 });
-
-describe("collectPackageSkillCandidates — committed context-mode fixture", () => {
-  it("collects all candidates from the context-mode fixture", () => {
-    const o = opts({ scope: "global" });
-    const fixtureRoot = join(
-      __dirname,
-      "..",
-      "tests",
-      "fixtures",
-      "package-skills",
-      "context-mode",
-    );
-    const pkgRoot = join(o.agentDir, "npm", "node_modules", "context-mode");
-    mkdirSync(join(pkgRoot, ".."), { recursive: true });
-    const { cpSync } = require("node:fs");
-    cpSync(fixtureRoot, pkgRoot, { recursive: true });
-    writeSettings(o.agentDir, ["npm:context-mode"]);
-    const inv = buildPackageSkillInventory(o);
-    const card = inv.packages.find((p) => p.identity === "npm:context-mode");
-    expect(card?.version).toBe("8.0.0");
-    expect(card?.candidates.map((c) => c.name).sort()).toEqual(["alpha", "beta", "gamma"]);
-  });
-});

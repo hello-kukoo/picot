@@ -4,40 +4,51 @@ Ideas and planned features. Nothing here is committed — just captured so it do
 
 ---
 
-## 🔨 In Progress
-
+## Shipped
 
 ### Session Name Display & Rename in Sidebar
-Implemented. Picot now uses Pi's no-argument `SessionManager.listAll()` names, preserves the existing catalog policy, exposes a loopback-only managed-session rename endpoint, and provides target-aware rename controls across sidebar row variants. See [`docs/session-naming.md`](docs/session-naming.md) for the persisted contract and validation boundaries.
+
+Picot uses Pi's no-argument `SessionManager.listAll()` names, preserves the existing catalog policy, exposes a loopback-only managed-session rename endpoint, and provides target-aware rename controls across sidebar row variants. See [`docs/superpowers/specs/2026-07-26-session-rename-design.md`](docs/superpowers/specs/2026-07-26-session-rename-design.md) for the persisted contract and validation boundaries.
+
+### File Preview Panel
+
+Context-aware split pane for files the agent and the user are working on.
+
+Shipped:
+
+- Code → syntax-highlighted CodeMirror viewer (editable text)
+- Images → preview (PNG, SVG, generated images)
+- Markdown → rendered preview and source edit
+- HTML → sandboxed live iframe preview (hot-reloads on agent writes); source edit via CodeMirror
+- PDF → PDF.js
+- Office / email → read-only MarkItDown conversion
+- Git diffs in the same panel
+- Desktop split pane (preview up to ~70% width, enlarge / collapse)
+- Mobile full-screen overlay
+- Open from the file browser, Git panel, and clickable file paths on tool cards
+- Auto-show / refresh when the agent writes or edits a file
 
 ---
 
-## 🔜 Low-Hanging Fruit
+## In Progress
+
+_(nothing queued right now)_
+
+---
+
+## Low-Hanging Fruit
 
 _(nothing queued right now — see Bigger Ideas below)_
 
 ---
 
-## 🔮 Bigger Ideas
-
-### File Preview Panel
-
-Context-aware split pane that displays files the agent is working on.
-
-- Code → syntax highlighted viewer (Monaco/CodeMirror)
-- Images → preview (PNG, SVG, generated images)
-- HTML → live iframe preview, hot reloads as agent edits
-- Markdown → rendered preview
-
-Desktop: button collapses sidebar and shrinks conversation to narrow feed, preview panel takes 60-70%. Mobile: tap a file reference to open full-screen preview.
-
-Builds on the file browser — could auto-show preview when a file gets edited.
-
-
+## Bigger Ideas
 
 ### Agent Teams (bundled)
 
 Ship a subagent/team extension as part of Picot. Spawn agent teams from the web UI, visual grouping in sidebar, team status overview, live-switch between agents. Based on Pi's subagent pattern but tightly integrated.
+
+Not the same as Agent Inbox / Super Agent, which dispatches incoming Telegram work into a pinned session.
 
 ### Session Templates
 
@@ -47,6 +58,10 @@ Start a new session pre-loaded with context for a specific project. Each with it
 
 Send the same prompt to two models side by side and compare responses. Split view with both responses streaming.
 
+---
+
+## Out of scope
+
 ### memoryd Dashboard
 
-Standalone viewer for memoryd memory files. Was previously built into Picot, stripped out to keep the core lean. The viewer code is saved at `~/Desktop/memoryd-viewer/`. Now being integrated into the native macOS memoryd menu bar app.
+Standalone viewer for memoryd memory files. Was previously built into Picot, stripped out to keep the core lean. The viewer code is saved at `~/Desktop/memoryd-viewer/`. Now being integrated into the native macOS memoryd menu bar app — not a Picot feature.

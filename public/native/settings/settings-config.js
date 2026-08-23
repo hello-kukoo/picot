@@ -3,6 +3,7 @@
 // The provider/model catalog UI lives in the sibling models-page.js (Models tab).
 
 import { onLocaleChange, t } from "../../i18n.js";
+import { applyLoadingPlaceholder, clearLoadingPlaceholder } from "../../ui/loading-placeholder.js";
 import {
   clearSettingsSaveMessage,
   setSettingsSaveButtonSaving,
@@ -66,6 +67,7 @@ export function setupSettingsConfig({ configGateway }) {
 
   function setInlineConfigPath(path, { copyable = true } = {}) {
     if (!inlineConfigPath) return;
+    clearLoadingPlaceholder(inlineConfigPath);
     inlineConfigPath.textContent = path;
     inlineConfigPath.title = path;
     if (inlineConfigPathCopy) inlineConfigPathCopy.classList.toggle("hidden", !path || !copyable);
@@ -75,9 +77,10 @@ export function setupSettingsConfig({ configGateway }) {
     if (!inlineConfigTextarea) return;
     inlineConfigError?.classList.add("hidden");
     inlineConfigTextarea.value = "";
-    setInlineConfigPath(t("migrated.native.settings.settingsConfig.textcontent.loading"), {
-      copyable: false,
+    applyLoadingPlaceholder(inlineConfigPath, {
+      label: t("migrated.native.settings.settingsConfig.textcontent.loading"),
     });
+    if (inlineConfigPathCopy) inlineConfigPathCopy.classList.add("hidden");
     try {
       const data = await call("read_agent_config");
       if (!data?.ok) throw new Error(data?.error || "Failed to load config");

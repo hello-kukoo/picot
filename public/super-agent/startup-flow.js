@@ -1,10 +1,8 @@
 import { selectSuperAgentSessionToLaunch } from "./autolaunch.js";
-import { isSuperAgentProjectPath } from "./session.js";
+import { isSuperAgentSessionSummary } from "./session.js";
 
 export function hasSuperAgentSession(sessions = []) {
-  return (sessions ?? []).some(
-    (session) => session?.kind === "super-agent" || isSuperAgentProjectPath(session?.projectPath),
-  );
+  return (sessions ?? []).some((session) => isSuperAgentSessionSummary(session));
 }
 
 export function selectSuperAgentStartupAction({

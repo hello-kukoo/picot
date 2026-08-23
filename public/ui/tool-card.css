@@ -58,11 +58,26 @@
 }
 
 .tool-args-preview {
-  color: var(--text-dim);
   font-size: var(--font-size-sm);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.tool-file-ref {
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.tool-file-ref:hover,
+.tool-file-ref:focus-visible {
+  color: var(--accent-text);
+  text-decoration: underline;
 }
 
 .tool-header-right {
@@ -81,7 +96,6 @@
   border: none;
   background: none;
   border-radius: var(--radius-xs);
-  color: var(--text-dim);
   cursor: pointer;
   opacity: 0;
   transition:
@@ -122,7 +136,6 @@
 
 .tool-status.pending {
   background: var(--bg-glass-strong);
-  color: var(--text-dim);
   border: 1px solid var(--border);
 }
 .tool-status.pending::before {

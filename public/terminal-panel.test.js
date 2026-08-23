@@ -287,3 +287,30 @@ test("keyboard resize and tab roving update the active terminal", () => {
   expect(focusTab).toHaveBeenCalledWith("t2");
   expect(preventRove).toHaveBeenCalledTimes(1);
 });
+
+test("failed tab metadata shows the host error inside the panel", () => {
+  const { panel } = mountedPanel();
+  panel.setTabs([
+    {
+      terminalId: "t-fail",
+      generation: 1,
+      label: "Terminal",
+      profileId: "default",
+      status: "failed",
+      failReason: "Git for Windows was not found.",
+    },
+  ]);
+  const errorEl = panel.bodyEl.querySelector("[data-terminal-start-error]");
+  expect(errorEl).not.toBeNull();
+  expect(errorEl.textContent).toBe("Git for Windows was not found.");
+  expect(errorEl.getAttribute("role")).toBe("alert");
+});
+
+test("running tabs clear a previous start error", () => {
+  const { panel } = mountedPanel();
+  panel.showStartError("spawn failed");
+  panel.setTabs([
+    { terminalId: "t1", generation: 1, label: "zsh", profileId: "default", status: "running" },
+  ]);
+  expect(panel.bodyEl.querySelector("[data-terminal-start-error]")).toBeNull();
+});

@@ -3,8 +3,10 @@
  *
  * Renders a vertical rail of dots — one per user/assistant turn — to the
  * right of the chat messages. Clicking a dot jumps to that conversation.
- * Hovering shows a tooltip with the first ~120 chars of the user prompt and
- * ~180 chars of the assistant reply.
+ * Hovering anywhere on the track shows a tooltip with the first ~120 chars
+ * of the user prompt and ~180 chars of the assistant reply. The tooltip
+ * stays visible for the whole time the pointer is on the track; only its
+ * position and content change as the pointer moves.
  *
  * Usage:
  *   const nav = new ConvNav({
@@ -32,6 +34,8 @@ export class ConvNav {
   #tooltipHideTimer = null;
   #navLockedIdx = -1;
   #navLockTimer = null;
+  #turns = [];
+  #hoveredIdx = -1;
 
   static #MAX_HEIGHT = 560;
 
@@ -52,8 +56,23 @@ export class ConvNav {
 
     if (this.#tooltipEl) {
       this.#tooltipEl.onmouseenter = () => clearTimeout(this.#tooltipHideTimer);
-      this.#tooltipEl.onmouseleave = () => this.#hideTooltip();
+      this.#tooltipEl.onmouseleave = (e) => {
+        if (this.#trackEl.contains(e.relatedTarget)) return;
+        this.#hideTooltip();
+      };
     }
+
+    this._onTrackPointer = (e) => this.#updateHoverFromPointer(e);
+    this._onTrackLeave = (e) => {
+      if (this.#isTooltipTarget(e.relatedTarget)) return;
+      this.#hoveredIdx = -1;
+      this.#clearWave();
+      this.#hideTooltip();
+    };
+
+    this.#trackEl.addEventListener("mouseenter", this._onTrackPointer);
+    this.#trackEl.addEventListener("mousemove", this._onTrackPointer);
+    this.#trackEl.addEventListener("mouseleave", this._onTrackLeave);
 
     this._onScroll = () => {
       const threshold = 150;
@@ -78,7 +97,12 @@ export class ConvNav {
   destroy() {
     this.#messagesEl?.removeEventListener("scroll", this._onScroll);
     window.removeEventListener("resize", this._onResize);
+    this.#trackEl?.removeEventListener("mouseenter", this._onTrackPointer);
+    this.#trackEl?.removeEventListener("mousemove", this._onTrackPointer);
+    this.#trackEl?.removeEventListener("mouseleave", this._onTrackLeave);
     this._observer?.disconnect();
+    clearTimeout(this.#tooltipHideTimer);
+    clearTimeout(this.#navLockTimer);
   }
 
   /**
@@ -130,10 +154,13 @@ export class ConvNav {
 
   #buildDots() {
     const turns = this.#getConversations();
+    this.#turns = turns;
     const hasConvs = turns.length > 1;
     this.#navEl.classList.toggle("hidden", !hasConvs);
     if (!hasConvs) {
       this.#trackEl.replaceChildren();
+      this.#hoveredIdx = -1;
+      this.#hideTooltip(true);
       return;
     }
 
@@ -153,20 +180,22 @@ export class ConvNav {
     }
 
     [...this.#trackEl.children].forEach((dot, i) => {
-      dot.onclick = () => this.#jumpTo(turns[i], i);
-      dot.onmouseenter = () => {
-        this.#applyWave(i);
-        this.#showTooltip(dot, turns[i]);
-      };
-      dot.onmouseleave = () => {
-        this.#clearWave();
-        this.#hideTooltip();
-      };
+      dot.onclick = () => this.#jumpTo(this.#turns[i], i);
       dot.classList.toggle("active", i === activeIdx);
       dot.setAttribute("aria-label", `Jump to conversation ${i + 1}`);
-      // No wave when not hovering — keep all dots at their base CSS width
-      dot.style.removeProperty("--nav-w");
+      if (this.#hoveredIdx < 0) {
+        // No wave when not hovering — keep all dots at their base CSS width
+        dot.style.removeProperty("--nav-w");
+      }
     });
+
+    if (this.#hoveredIdx >= this.#turns.length) this.#hoveredIdx = this.#turns.length - 1;
+    if (this.#hoveredIdx >= 0) {
+      this.#applyWave(this.#hoveredIdx);
+      const hoveredDot = this.#trackEl.children[this.#hoveredIdx];
+      const hoveredTurn = this.#turns[this.#hoveredIdx];
+      if (hoveredDot && hoveredTurn) this.#showTooltip(hoveredDot, hoveredTurn);
+    }
 
     // Scale down track if it exceeds the max nav height
     const naturalHeight = this.#trackEl.scrollHeight;
@@ -224,6 +253,45 @@ export class ConvNav {
     );
   }
 
+  #isTooltipTarget(node) {
+    return Boolean(this.#tooltipEl && node && this.#tooltipEl.contains(node));
+  }
+
+  #indexFromClientY(clientY) {
+    const dots = this.#trackEl.children;
+    if (!dots.length) return -1;
+    let best = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < dots.length; i++) {
+      const rect = dots[i].getBoundingClientRect();
+      const mid = rect.top + rect.height / 2;
+      const dist = Math.abs(clientY - mid);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  #updateHoverFromPointer(e) {
+    const idx = this.#indexFromClientY(e.clientY);
+    if (idx < 0) return;
+    if (
+      idx === this.#hoveredIdx &&
+      this.#tooltipEl &&
+      !this.#tooltipEl.classList.contains("hidden")
+    ) {
+      return;
+    }
+    const turn = this.#turns[idx];
+    const dot = this.#trackEl.children[idx];
+    if (!turn || !dot) return;
+    this.#hoveredIdx = idx;
+    this.#applyWave(idx);
+    this.#showTooltip(dot, turn);
+  }
+
   #showTooltip(dotEl, turn) {
     if (!this.#tooltipEl) return;
     clearTimeout(this.#tooltipHideTimer);
@@ -238,6 +306,7 @@ export class ConvNav {
     }
     if (this.#tooltipSep) this.#tooltipSep.style.display = a ? "" : "none";
 
+    const wasHidden = this.#tooltipEl.classList.contains("hidden");
     this.#tooltipEl.classList.remove("hidden");
     const dotRect = dotEl.getBoundingClientRect();
     const tipHeight = this.#tooltipEl.offsetHeight || 90;
@@ -250,6 +319,10 @@ export class ConvNav {
     );
     this.#tooltipEl.style.top = `${top}px`;
 
+    // Replay the enter animation only on first show. Updating while already
+    // visible (moving along the track) must not fade the tooltip out.
+    if (!wasHidden) return;
+
     this.#tooltipEl.classList.remove("animating");
     void this.#tooltipEl.offsetWidth; // reflow
     this.#tooltipEl.classList.add("animating");
@@ -260,8 +333,13 @@ export class ConvNav {
     );
   }
 
-  #hideTooltip() {
+  #hideTooltip(immediate = false) {
     if (!this.#tooltipEl) return;
+    clearTimeout(this.#tooltipHideTimer);
+    if (immediate) {
+      this.#tooltipEl.classList.add("hidden");
+      return;
+    }
     this.#tooltipHideTimer = setTimeout(() => this.#tooltipEl.classList.add("hidden"), 120);
   }
 }

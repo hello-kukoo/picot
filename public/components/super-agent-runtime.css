@@ -67,7 +67,6 @@ body.super-agent-active .file-sidebar {
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: transparent;
-  color: var(--text-dim);
   font-size: var(--font-size-sm);
   cursor: pointer;
   transition:
@@ -103,7 +102,7 @@ body.super-agent-active .file-sidebar {
 }
 
 .runtime-task-list::-webkit-scrollbar-thumb {
-  background: var(--text-dim);
+  background: var(--text-secondary);
   border: 3px solid transparent;
   border-radius: var(--radius-pill);
   background-clip: padding-box;
@@ -163,7 +162,7 @@ body.super-agent-active .file-sidebar {
   animation: sa-pulse 1.2s ease-in-out infinite;
 }
 .runtime-task-card.status-pending .runtime-status-dot {
-  background: var(--text-dim);
+  background: var(--text-secondary);
 }
 .runtime-task-card.status-failed .runtime-status-dot {
   background: #f87171;
@@ -186,7 +185,6 @@ body.super-agent-active .file-sidebar {
   flex-shrink: 0;
   border-right: 2px solid currentColor;
   border-bottom: 2px solid currentColor;
-  color: var(--text-dim);
   display: block;
   transform: rotate(-45deg);
   transition: transform 0.12s ease;
@@ -235,7 +233,7 @@ body.super-agent-active .file-sidebar {
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background: var(--text-dim);
+  background: var(--text-secondary);
   position: absolute;
   left: 2px;
   top: 0.7em;
@@ -248,7 +246,6 @@ body.super-agent-active .file-sidebar {
 
 .runtime-task-target {
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
 }
 
 .runtime-task-target strong {
@@ -257,7 +254,6 @@ body.super-agent-active .file-sidebar {
 
 .runtime-task-missing-target {
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
   background: var(--bg-glass-strong);
   border: 1px solid var(--border);
   border-radius: var(--radius-xs);
@@ -268,19 +264,10 @@ body.super-agent-active .file-sidebar {
   display: grid;
   gap: var(--space-1);
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
 }
 
 .runtime-project-select {
   width: 100%;
-  min-height: 28px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  background: var(--bg-elevated);
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  padding: var(--space-1) var(--space-2);
 }
 
 .runtime-task-error {
@@ -308,7 +295,6 @@ body.super-agent-active .file-sidebar {
   display: grid;
   gap: var(--space-0-5);
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
 }
 
 .runtime-task-history-item strong {

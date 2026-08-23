@@ -256,6 +256,15 @@ describe("super-agent-runtime", () => {
 
     expect(runtime.querySelector('[data-action="approve"]')).toBeNull();
     expect(runtime.querySelector(".runtime-project-select")).not.toBeNull();
+    expect(runtime.querySelector('[data-action="select-project"]')).toBeInstanceOf(
+      HTMLSelectElement,
+    );
+    expect(
+      runtime
+        .querySelector('[data-action="select-project"]')
+        .classList.contains("ui-select-native"),
+    ).toBe(true);
+    expect(runtime.querySelector(".ui-select[role='combobox']")).not.toBeNull();
     expect(runtime.textContent).toContain("Choose a project before approval");
 
     expect(call).not.toHaveBeenCalledWith("write_super_agent_tasks", expect.anything());
@@ -284,10 +293,17 @@ describe("super-agent-runtime", () => {
     await Promise.resolve();
 
     runtime.querySelector(".runtime-task-card").click();
-    runtime.querySelector(".runtime-project-select").value = "/Users/me/project-a";
-    runtime
-      .querySelector(".runtime-project-select")
-      .dispatchEvent(new Event("change", { bubbles: true }));
+    const select = runtime.querySelector('[data-action="select-project"]');
+    expect(select).toBeInstanceOf(HTMLSelectElement);
+    expect(select.classList.contains("ui-select-native")).toBe(true);
+
+    runtime.querySelector(".ui-select[role='combobox']").click();
+    const option = [...document.querySelectorAll(".ui-select-option")].find(
+      (item) => item.dataset.value === "/Users/me/project-a",
+    );
+    expect(option).toBeDefined();
+    option.click();
+    expect(select.value).toBe("/Users/me/project-a");
     runtime.querySelector('[data-action="approve"]').click();
 
     await Promise.resolve();

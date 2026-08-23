@@ -149,6 +149,7 @@
   },
   "tools": {
     "copyOutput": "Copiar salida",
+    "openInPreview": "Abrir en vista previa",
     "streaming": "ejecutando",
     "complete": "completo",
     "error": "error",
@@ -214,7 +215,8 @@
         "remoteImageHidden": "Imagen remota oculta"
       },
       "conflictMessage": "{name} fue modificado en disco. ¿Recargar o sobreescribir la versión del disco?",
-      "tabpanelLabel": "Vista previa de archivo"
+      "tabpanelLabel": "Vista previa de archivo",
+      "htmlLive": "Vista previa HTML en vivo"
     },
     "unsaved": {
       "title": "Cambios sin guardar",
@@ -924,10 +926,10 @@
       "composer": {
         "composerSlashMenu": {
           "textcontent": {
-            "noMatchingSkills": "No hay habilidades coincidentes"
+            "noMatchingCommands": "No hay comandos coincidentes"
           },
           "ariaLabel": {
-            "skillSlashCommands": "Comandos slash de habilidades"
+            "slashCommands": "Comandos slash"
           }
         }
       },

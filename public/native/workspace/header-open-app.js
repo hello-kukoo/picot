@@ -140,7 +140,7 @@ export function setupHeaderOpenApp({ data, control, workspaceId, onError } = {})
   });
   document.addEventListener("click", closeMenu);
 
-  Promise.all([data.workspaceInfo(workspaceId), control.listInstalledApps()])
+  Promise.all([data.workspaceInfo(workspaceId).catch(() => null), control.listInstalledApps()])
     .then(([workspace, apps]) => {
       state.path = workspace?.info?.path || "";
       state.apps = Array.isArray(apps) ? apps : [];

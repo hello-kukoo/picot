@@ -495,7 +495,6 @@
 .cost-dash-sessions-workspace {
   margin-top: 2px;
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -518,7 +517,6 @@
 }
 
 .cost-dash-empty-state {
-  color: var(--text-dim);
   font-size: var(--font-size-sm);
   padding: var(--space-2) 0;
 }

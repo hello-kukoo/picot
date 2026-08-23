@@ -249,7 +249,6 @@ describe("thinking effort static shell contract", () => {
       composerCss.match(/\.composer-toolbar \.thinking-tag\s*\{[^}]+\}/)?.[0] || "";
 
     expect(thinkingTagRule).toContain("border: 1px solid var(--border)");
-    expect(thinkingTagRule).toContain("color: var(--text-dim)");
     expect(thinkingTagRule).not.toContain("--thinking-accent");
     expect(composerThinkingTagRule).toContain("border-color: transparent");
   });

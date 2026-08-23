@@ -388,7 +388,7 @@ class ChatSettingsPanel extends HTMLElement {
 
   _showInfo(msg) {
     this._statusEl.textContent = msg;
-    this._statusEl.style.color = "var(--text-dim)";
+    this._statusEl.style.color = "var(--text-secondary)";
     this._statusEl.classList.remove("hidden");
   }
 

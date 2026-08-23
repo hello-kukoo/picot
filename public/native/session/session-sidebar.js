@@ -3,8 +3,17 @@ import { createIcon } from "../../icons.js";
 import { buildSidebarSection, buildSidebarWorkspaceGroup } from "../../sidebar-workspace-group.js";
 import { isSuperAgentProjectPath } from "../../super-agent/session.js";
 import { isSuperAgentEnabled } from "../../super-agent/settings.js";
+import { createLoadingPlaceholder } from "../../ui/loading-placeholder.js";
+import { basenameLocalPath } from "../../workspace/path-utils.js";
 import { randomId } from "../utils/random-id.js";
 import { createPinnedItemsStore, migrateFavourites, startPinnedItemsSync } from "./pinned-items.js";
+
+/** Sidebar label for a workspace path. Windows `\\?\UNC\...` paths have no `/`. */
+export function workspaceFolderName(path, projectName) {
+  const fromName = typeof projectName === "string" ? projectName.trim() : "";
+  if (fromName && !/[\\/]/.test(fromName)) return fromName;
+  return basenameLocalPath(path) || fromName || path || "";
+}
 
 // Rich session sidebar for the native host runtime.
 //
@@ -562,6 +571,7 @@ export class SessionSidebar {
       this.#hydrateStatuses(this.sessions, { authoritative: true });
       writeSessionCache(workspaceId, this.sessions);
       this.onSessionsLoaded?.(this.sessions);
+      this.syncAgentInboxNav();
       if (changed || (!quiet && !renderedFromCache)) this.render();
     } catch (error) {
       if (seq < this._loadCommitted) return;
@@ -570,12 +580,10 @@ export class SessionSidebar {
         console.warn("[Sidebar] Session load failed; retrying:", error);
         if (!quiet && this.sessions.length === 0) {
           this.container.replaceChildren(
-            (() => {
-              const el = document.createElement("div");
-              el.className = "session-loading";
-              el.textContent = t("sidebar.loadingSessions");
-              return el;
-            })(),
+            createLoadingPlaceholder({
+              className: "session-loading",
+              label: t("sidebar.loadingSessions"),
+            }),
           );
         }
         setTimeout(() => {
@@ -866,7 +874,20 @@ export class SessionSidebar {
     return header;
   }
 
+  /** Show or hide the Agent Inbox nav without rebuilding the session list. */
+  syncAgentInboxNav() {
+    const superAgentEnabled = isSuperAgentEnabled();
+    const superAgentSessions = this.sessions.filter((session) =>
+      isSuperAgentProjectPath(session.projectPath),
+    );
+    const agentInboxSession = superAgentEnabled
+      ? asSuperAgentSession(latestSession(superAgentSessions))
+      : null;
+    this.onAgentInboxSessionChange?.(agentInboxSession);
+  }
+
   render() {
+    this.syncAgentInboxNav();
     this.container.replaceChildren();
 
     const pinState = this.pinnedStore.getState();
@@ -879,15 +900,6 @@ export class SessionSidebar {
       this.container.appendChild(empty);
       return;
     }
-
-    const superAgentEnabled = isSuperAgentEnabled();
-    const superAgentSessions = this.sessions.filter((session) =>
-      isSuperAgentProjectPath(session.projectPath),
-    );
-    const agentInboxSession = superAgentEnabled
-      ? asSuperAgentSession(latestSession(superAgentSessions))
-      : null;
-    this.onAgentInboxSessionChange?.(agentInboxSession);
 
     // Partition sessions into archived / regular (excludes pinned).
     const pinnedWorkspacePaths = new Set(pinState.workspaces.map((w) => w.path || w.id));
@@ -1013,7 +1025,7 @@ export class SessionSidebar {
         unavailable: sessions.length === 0,
         workspace: {
           path: ws.path,
-          folderName: ws.path.split("/").filter(Boolean).pop() || ws.path,
+          folderName: workspaceFolderName(ws.path, sessions[0]?.projectName),
         },
         sessions,
       });
@@ -1034,7 +1046,7 @@ export class SessionSidebar {
           unavailable: false,
           workspace: {
             path: session.projectPath,
-            folderName: session.projectPath.split("/").filter(Boolean).pop() || session.projectPath,
+            folderName: workspaceFolderName(session.projectPath, session.projectName),
           },
           sessions: [session],
         });

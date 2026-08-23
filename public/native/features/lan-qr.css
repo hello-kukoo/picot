@@ -60,7 +60,6 @@
 
 .lan-qr-loading {
   font-size: var(--font-size-md);
-  color: var(--text-dim);
   padding: var(--space-8) 0;
 }
 
@@ -79,7 +78,6 @@
 
 .lan-qr-hint {
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
   text-align: center;
   line-height: 1.5;
 }

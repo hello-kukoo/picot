@@ -15,6 +15,14 @@ test("normalizes UNC paths without losing the share root", () => {
   expect(basenameLocalPath("\\\\server\\share\\repo\\file.ts")).toBe("file.ts");
 });
 
+test("takes the folder name from Windows extended UNC and drive paths", () => {
+  expect(basenameLocalPath(String.raw`\\?\UNC\psf\Home\Documents\test`)).toBe("test");
+  expect(basenameLocalPath(String.raw`\\?\UNC\psf\Home\Documents\New project 2`)).toBe(
+    "New project 2",
+  );
+  expect(basenameLocalPath(String.raw`\\?\C:\Users\Lin\picot`)).toBe("picot");
+});
+
 test("keeps POSIX root semantics", () => {
   expect(normalizeLocalPath("/Users//Lin/../repo/")).toBe("/Users/repo");
   expect(parentLocalPath("/")).toBe("/");

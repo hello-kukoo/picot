@@ -23,7 +23,6 @@
   line-height: 1;
   border-radius: var(--radius-md);
   background: transparent;
-  color: var(--text-dim);
   border: none;
   cursor: pointer;
   display: flex;

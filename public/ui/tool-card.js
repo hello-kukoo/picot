@@ -5,6 +5,15 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 
 import { onLocaleChange, t } from "../i18n.js";
 
+function filePathFromArgs(args) {
+  if (!args || typeof args !== "object") return "";
+  for (const key of ["path", "file_path", "filePath"]) {
+    const value = args[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
 export class ToolCardRenderer {
   constructor(container) {
     this.container = container;
@@ -17,7 +26,7 @@ export class ToolCardRenderer {
       const header = e.target.closest(".tool-card-header");
       if (!header) return;
       // Don't toggle when clicking action buttons inside the header
-      if (e.target.closest(".tool-action-btn")) return;
+      if (e.target.closest(".tool-action-btn, .tool-file-ref")) return;
       const card = header.closest(".tool-card");
       if (!card) return;
       card.querySelector(".tool-card-body")?.classList.toggle("expanded");
@@ -53,6 +62,18 @@ export class ToolCardRenderer {
 
     this.container.addEventListener("click", this._onContainerClickToggle);
     this.container.addEventListener("click", this._onContainerClickCopy);
+    this._onContainerClickFileRef = (e) => {
+      const btn = e.target.closest(".tool-file-ref");
+      if (!btn) return;
+      e.stopPropagation();
+      e.preventDefault();
+      const path = btn.dataset.path;
+      if (!path || !this.container) return;
+      this.container.dispatchEvent(
+        new CustomEvent("previewfile", { bubbles: true, detail: { path } }),
+      );
+    };
+    this.container.addEventListener("click", this._onContainerClickFileRef);
 
     // Re-localize rendered status text and copy-button labels on locale change.
     this.unsubscribeLocaleChange = onLocaleChange(() => {
@@ -64,6 +85,12 @@ export class ToolCardRenderer {
         const label = t("tools.copyOutput");
         el.title = label;
         el.setAttribute("aria-label", label);
+      }
+      for (const el of this.container.querySelectorAll(".tool-file-ref")) {
+        const label = t("tools.openInPreview");
+        el.title = label;
+        const path = el.dataset.path || el.textContent;
+        el.setAttribute("aria-label", `${label}: ${path}`);
       }
     });
   }
@@ -98,10 +125,7 @@ export class ToolCardRenderer {
     name.textContent = toolName;
     headerLeft.appendChild(name);
     if (argsPreview) {
-      const preview = document.createElement("span");
-      preview.className = "tool-args-preview";
-      preview.textContent = argsPreview;
-      headerLeft.appendChild(preview);
+      headerLeft.appendChild(this._createArgsPreview(argsPreview, args));
     }
     header.appendChild(headerLeft);
 
@@ -280,10 +304,7 @@ export class ToolCardRenderer {
 
     const preview = this.getArgsPreview(toolName, args);
     if (preview) {
-      const previewEl = document.createElement("span");
-      previewEl.className = "tool-args-preview";
-      previewEl.textContent = preview;
-      headerLeft.appendChild(previewEl);
+      headerLeft.appendChild(this._createArgsPreview(preview, args));
     }
 
     header.appendChild(headerLeft);
@@ -367,8 +388,10 @@ export class ToolCardRenderer {
   getArgsPreview(_toolName, args) {
     if (!args || Object.keys(args).length === 0) return "";
 
+    const filePath = filePathFromArgs(args);
+    if (filePath) return filePath;
+
     // Show the most relevant arg inline
-    if (args.path) return args.path;
     if (args.command) return args.command.substring(0, 80);
     if (args.query) return args.query.substring(0, 60);
     if (args.url) return args.url;
@@ -380,6 +403,25 @@ export class ToolCardRenderer {
       }
     }
     return "";
+  }
+
+  _createArgsPreview(previewText, args) {
+    const filePath = filePathFromArgs(args);
+    if (filePath) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "tool-args-preview tool-file-ref";
+      button.dataset.path = filePath;
+      button.textContent = previewText;
+      const label = t("tools.openInPreview");
+      button.title = label;
+      button.setAttribute("aria-label", `${label}: ${filePath}`);
+      return button;
+    }
+    const preview = document.createElement("span");
+    preview.className = "tool-args-preview";
+    preview.textContent = previewText;
+    return preview;
   }
 
   formatJson(obj) {
@@ -488,9 +530,11 @@ export class ToolCardRenderer {
     if (this.container) {
       this.container.removeEventListener("click", this._onContainerClickToggle);
       this.container.removeEventListener("click", this._onContainerClickCopy);
+      this.container.removeEventListener("click", this._onContainerClickFileRef);
     }
     this._onContainerClickToggle = null;
     this._onContainerClickCopy = null;
+    this._onContainerClickFileRef = null;
     this.toolCards.clear();
     this.container = null;
   }

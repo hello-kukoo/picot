@@ -74,6 +74,8 @@
   gap: var(--space-1);
   overflow: visible;
   margin-right: 2px;
+  /* The track is the hover target: gaps between ticks must still show a tooltip. */
+  pointer-events: auto;
 }
 
 /* Individual tick — button is the (large) hit target; ::after is the visual line */

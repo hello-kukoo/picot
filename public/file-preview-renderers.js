@@ -9,6 +9,7 @@
 import { createCodeEditor } from "./code-editor.js";
 import { classifyFilePath } from "./file-language.js";
 import { createPdfRenderer } from "./file-pdf-preview.js";
+import { createHtmlRenderer } from "./file-preview-html.js";
 import { attachCopyButtonDelegation, renderFileMarkdown } from "./file-preview-markdown.js";
 import { flattenDiffLines } from "./workspace/patch-utils.js";
 
@@ -49,6 +50,18 @@ export function createFileRenderer({
         content,
         mode,
         readOnly,
+        wrapLines,
+        onChange,
+        onModeChange,
+        onError,
+      });
+
+    case "html":
+      return createHtmlRenderer({
+        filePath,
+        fileName,
+        content,
+        mode,
         wrapLines,
         onChange,
         onModeChange,

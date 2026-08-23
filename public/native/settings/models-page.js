@@ -7,6 +7,12 @@
 
 import { onLocaleChange, t } from "../../i18n.js";
 import {
+  applyLoadingPlaceholder,
+  clearLoadingPlaceholder,
+  createLoadingPlaceholder,
+} from "../../ui/loading-placeholder.js";
+import { enhanceSelect } from "../../ui/select-menu.js";
+import {
   clearSettingsSaveMessage,
   setSettingsSaveButtonSaving,
   showSettingsSaveError,
@@ -68,10 +74,12 @@ export function setupModelsPage({ configGateway, onModelConfigurationChanged }) 
     const scrollContainer = options.preserveUi ? getSettingsScrollContainer() : null;
     const scrollTop = scrollContainer?.scrollTop ?? 0;
     if (!options.preserveUi) {
-      const loading = document.createElement("div");
-      loading.className = "settings-api-keys-loading";
-      loading.textContent = t("settings.loadingProviders");
-      apiKeysContainer.replaceChildren(loading);
+      apiKeysContainer.replaceChildren(
+        createLoadingPlaceholder({
+          className: "settings-api-keys-loading",
+          label: t("settings.loadingProviders"),
+        }),
+      );
     }
     let data;
     try {
@@ -895,10 +903,11 @@ export function setupModelsPage({ configGateway, onModelConfigurationChanged }) 
       inlineModelsTextarea.value = '{\n  "providers": {}\n}';
     }
     renderModelsConfigLayout();
-    if (inlineModelsPath)
-      inlineModelsPath.textContent = t(
-        "migrated.native.settings.settingsConfig.textcontent.loading",
-      );
+    if (inlineModelsPath) {
+      applyLoadingPlaceholder(inlineModelsPath, {
+        label: t("migrated.native.settings.settingsConfig.textcontent.loading"),
+      });
+    }
     try {
       const data = await call("read_models_config");
       if (!data?.ok) throw new Error(data?.error || "Failed to load models.json");
@@ -908,9 +917,15 @@ export function setupModelsPage({ configGateway, onModelConfigurationChanged }) 
         inlineModelsTextarea.value = data.data.content;
       }
       renderModelsConfigLayout();
-      if (inlineModelsPath) inlineModelsPath.textContent = data.data.path || "";
+      if (inlineModelsPath) {
+        clearLoadingPlaceholder(inlineModelsPath);
+        inlineModelsPath.textContent = data.data.path || "";
+      }
     } catch (e) {
-      if (inlineModelsPath) inlineModelsPath.textContent = "";
+      if (inlineModelsPath) {
+        clearLoadingPlaceholder(inlineModelsPath);
+        inlineModelsPath.textContent = "";
+      }
       showInlineModelsError(e.message || String(e));
     }
   }
@@ -1239,6 +1254,7 @@ export function setupModelsPage({ configGateway, onModelConfigurationChanged }) 
       provider.api = api.value;
       inlineModelsTextarea.value = JSON.stringify(config, null, 2);
     });
+    enhanceSelect(api);
     form.append(
       createModelsField("Provider name", name),
       createModelsField("Base URL", baseUrl),

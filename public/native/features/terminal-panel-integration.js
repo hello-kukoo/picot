@@ -1,7 +1,7 @@
 // ABOUTME: Wires the native Host terminal protocol to the reusable terminal UI modules.
 // ABOUTME: Keeps PTY transport and panel lifecycle out of the native app composition root.
 
-import { onLocaleChange } from "../../i18n.js";
+import { onLocaleChange, t } from "../../i18n.js";
 import { TerminalClient } from "../../terminal-client.js";
 import {
   DEFAULT_TERMINAL_FONT_SIZE,
@@ -147,7 +147,21 @@ function createPanelClient(client, getPanel) {
   };
 }
 
-function handleTerminalFrame(frame, client, panel) {
+export function formatTerminalStartError(message) {
+  if (typeof message === "string" && message.includes("Git for Windows")) {
+    return t("terminal.gitBashMissing");
+  }
+  return message || t("terminal.statusFailed");
+}
+
+export function handleTerminalFrame(frame, client, panel) {
+  if (frame?.type === "error") {
+    if (frame.error?.code === "terminal_command_failed") {
+      panel.showStartError?.(formatTerminalStartError(frame.error.message));
+      client.requestList();
+    }
+    return;
+  }
   if (frame?.type === "terminal_event") {
     const payload = frame.payload || {};
     if (payload.type === "terminal_output") {
@@ -165,13 +179,14 @@ function handleTerminalFrame(frame, client, panel) {
     client.applyListed(frame);
     panel.setTabs(
       (frame.tabs || []).map(
-        ({ terminalId, generation, label, profileId, status, historyGap }) => ({
+        ({ terminalId, generation, label, profileId, status, historyGap, failReason }) => ({
           terminalId,
           generation,
           label,
           profileId,
           status,
           historyGap,
+          failReason: failReason ? formatTerminalStartError(failReason) : undefined,
         }),
       ),
     );

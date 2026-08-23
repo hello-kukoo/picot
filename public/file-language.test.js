@@ -13,6 +13,15 @@ describe("classifyFilePath", () => {
     expect(classifyFilePath("README.md").editable).toBe(true);
   });
 
+  test("classifies HTML as an editable live-preview type", () => {
+    expect(classifyFilePath("index.html")).toEqual({
+      contentType: "html",
+      editable: true,
+      languageId: "html",
+    });
+    expect(classifyFilePath("page.htm").contentType).toBe("html");
+  });
+
   test("classifies JavaScript", () => {
     const result = classifyFilePath("main.js");
     expect(result.contentType).toBe("text");

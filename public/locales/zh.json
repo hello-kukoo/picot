@@ -149,6 +149,7 @@
   },
   "tools": {
     "copyOutput": "复制输出",
+    "openInPreview": "在预览中打开",
     "streaming": "执行中",
     "complete": "完成",
     "error": "错误",
@@ -193,6 +194,7 @@
       "conflictReload": "重新加载",
       "conflictOverwrite": "覆盖",
       "tabpanelLabel": "文件预览",
+      "htmlLive": "HTML 实时预览",
       "outsideWorkspace": "文件不在当前工作区内",
       "unsupportedBinary": "此文件无法预览。",
       "tooLarge": "此文件过大，无法预览。",
@@ -924,10 +926,10 @@
       "composer": {
         "composerSlashMenu": {
           "textcontent": {
-            "noMatchingSkills": "No matching skills"
+            "noMatchingCommands": "没有匹配的命令"
           },
           "ariaLabel": {
-            "skillSlashCommands": "Skill slash commands"
+            "slashCommands": "斜杠命令"
           }
         }
       },

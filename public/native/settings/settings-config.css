@@ -471,9 +471,6 @@
 .provider-picker-search {
   margin-bottom: var(--space-5);
 }
-.provider-picker-search::placeholder {
-  color: var(--text-dim);
-}
 .provider-picker-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

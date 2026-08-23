@@ -149,6 +149,7 @@
   },
   "tools": {
     "copyOutput": "Copy output",
+    "openInPreview": "Open in preview",
     "streaming": "streaming",
     "complete": "complete",
     "error": "error",
@@ -193,6 +194,7 @@
       "conflictReload": "Reload",
       "conflictOverwrite": "Overwrite",
       "tabpanelLabel": "File preview",
+      "htmlLive": "Live HTML preview",
       "outsideWorkspace": "File is outside the active workspace",
       "unsupportedBinary": "This file cannot be previewed.",
       "tooLarge": "This file is too large to preview.",
@@ -924,10 +926,10 @@
       "composer": {
         "composerSlashMenu": {
           "textcontent": {
-            "noMatchingSkills": "No matching skills"
+            "noMatchingCommands": "No matching commands"
           },
           "ariaLabel": {
-            "skillSlashCommands": "Skill slash commands"
+            "slashCommands": "Slash commands"
           }
         }
       },

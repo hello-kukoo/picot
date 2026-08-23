@@ -99,6 +99,11 @@ export class RpivTodoMirrorPanel {
     this.setState(EMPTY_STATE);
   }
 
+  /** True when the panel actually renders something the user can look at. */
+  get hasVisibleTasks() {
+    return this.#state.tasks.some((task) => task.status !== "deleted");
+  }
+
   expand() {
     this.#element.classList.add("is-hover-expanded");
   }

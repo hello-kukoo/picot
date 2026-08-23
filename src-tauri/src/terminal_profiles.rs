@@ -1,6 +1,6 @@
 // ABOUTME: Resolves fixed, server-defined shell profiles into an executable and
 // ABOUTME: argument array. macOS uses the user's shell with a safe system-shell
-// ABOUTME: fallback; Windows defaults to Git Bash and never silently substitutes PowerShell.
+// ABOUTME: fallback; Windows prefers Git Bash, then PowerShell, then cmd.exe.
 
 #![allow(dead_code)]
 
@@ -68,11 +68,10 @@ pub trait ShellProbe: Send + Sync {
     /// current process.
     fn is_valid_executable(&self, path: &Path) -> bool;
 
-    /// Windows-only Git Bash discovery hook. Returns the Git for Windows
+    /// Windows Git Bash discovery hook. Returns the Git for Windows
     /// installation root (the directory containing `bin/bash.exe`) when
-    /// discoverable, or `None`. The default implementation probes a small set
-    /// of standard install paths; the Windows build may extend this with a
-    /// registry lookup once a compatible registry crate is added.
+    /// discoverable, or `None`. The default implementation probes standard
+    /// install paths plus PATH entries that look like `Git\cmd` / `Git\bin`.
     fn discover_git_bash_root(&self) -> Option<PathBuf> {
         None
     }
@@ -89,7 +88,7 @@ impl ShellProbe for SystemShellProbe {
     fn discover_git_bash_root(&self) -> Option<PathBuf> {
         standard_git_bash_roots()
             .into_iter()
-            .find(|root| is_executable_real(&root.join("bin").join("bash.exe")))
+            .find(|root| is_executable_real(&git_bash_executable(root)))
     }
 }
 
@@ -113,9 +112,10 @@ fn is_executable_real(path: &Path) -> bool {
     fs::metadata(path).map(|m| m.is_file()).unwrap_or(false)
 }
 
-/// Standard Git for Windows installation roots, probed in order. The full
-/// detection also consults the registry and a discovered `git.exe`; those paths
-/// require a Windows registry crate and are added alongside the Windows build.
+/// Standard Git for Windows installation roots, probed in order. PATH entries
+/// that point at `Git\cmd` or `Git\bin` are appended so Scoop/portable installs
+/// still resolve. `C:\Windows\System32\bash.exe` (the WSL stub) is never a
+/// Git-for-Windows root because its parent is not `cmd`/`bin`.
 fn standard_git_bash_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(prog_files) = std::env::var_os("ProgramFiles") {
@@ -127,7 +127,52 @@ fn standard_git_bash_roots() -> Vec<PathBuf> {
     if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
         roots.push(PathBuf::from(&local_app_data).join("Programs").join("Git"));
     }
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.join("scoop").join("apps").join("git").join("current"));
+    }
+    roots.push(PathBuf::from(r"C:\Git"));
+    roots.extend(git_bash_roots_on_path());
     roots
+}
+
+fn git_bash_roots_on_path() -> Vec<PathBuf> {
+    let Some(path) = std::env::var_os("PATH") else {
+        return Vec::new();
+    };
+    std::env::split_paths(&path)
+        .filter_map(|dir| git_install_root_from_path_entry(&dir))
+        .collect()
+}
+
+/// Map a PATH directory to a Git for Windows root when it looks like
+/// `<root>\cmd` or `<root>\bin`. Returns `None` for unrelated dirs (including
+/// `C:\Windows\System32`, so WSL's `bash.exe` stub is never treated as Git Bash).
+fn git_install_root_from_path_entry(dir: &Path) -> Option<PathBuf> {
+    let name = path_file_name(dir)?;
+    if !name.eq_ignore_ascii_case("cmd") && !name.eq_ignore_ascii_case("bin") {
+        return None;
+    }
+    path_parent(dir)
+}
+
+fn git_bash_executable(root: &Path) -> PathBuf {
+    root.join("bin").join("bash.exe")
+}
+
+/// File name that understands both POSIX and Windows separators so profile
+/// helpers stay testable on a Unix host with `C:\...` fixtures.
+fn path_file_name(path: &Path) -> Option<&str> {
+    let raw = path.file_name().and_then(|name| name.to_str())?;
+    raw.rsplit(['/', '\\'])
+        .next()
+        .filter(|name| !name.is_empty())
+}
+
+fn path_parent(path: &Path) -> Option<PathBuf> {
+    let raw = path.to_str()?;
+    let trimmed = raw.trim_end_matches(['/', '\\']);
+    let idx = trimmed.rfind(['/', '\\'])?;
+    Some(PathBuf::from(&trimmed[..idx]))
 }
 
 /// Resolve the macOS default profile: the user's preferred `$SHELL` when it is
@@ -160,20 +205,40 @@ fn interactive_posix_shell(program: PathBuf) -> ResolvedShell {
     }
 }
 
-/// Resolve a Windows shell profile. `Default` is treated as Git Bash. Git Bash
-/// launches `bin/bash.exe --login -i` (never `git-bash.exe`, which opens a
-/// separate MinTTY window). PowerShell and Command Prompt are selectable
-/// alternatives. Missing Git Bash yields a visible failure with installation
-/// guidance rather than a silent PowerShell fallback.
+/// Resolve a Windows shell profile. Git Bash launches `bin/bash.exe --login -i`
+/// (never `git-bash.exe`, which opens a separate MinTTY window).
+///
+/// `Default` prefers Git Bash when it is discoverable, then PowerShell, then
+/// Command Prompt, so the first new-tab action opens a shell on machines that
+/// never installed Git for Windows. The explicit `git-bash` profile still fails
+/// visibly when Git Bash is missing — it does not substitute PowerShell.
 pub fn resolve_windows_profile(
     profile: ShellProfileId,
     probe: &dyn ShellProbe,
 ) -> Result<ResolvedShell, ProfileError> {
     match profile {
-        ShellProfileId::Default | ShellProfileId::GitBash => resolve_git_bash(probe),
+        ShellProfileId::Default => resolve_windows_default(probe),
+        ShellProfileId::GitBash => resolve_git_bash(probe),
         ShellProfileId::PowerShell => resolve_powershell(probe),
         ShellProfileId::CommandPrompt => resolve_command_prompt(probe),
     }
+}
+
+fn resolve_windows_default(probe: &dyn ShellProbe) -> Result<ResolvedShell, ProfileError> {
+    if let Ok(shell) = resolve_git_bash(probe) {
+        return Ok(shell);
+    }
+    if let Ok(shell) = resolve_powershell(probe) {
+        return Ok(shell);
+    }
+    if let Ok(shell) = resolve_command_prompt(probe) {
+        return Ok(shell);
+    }
+    Err(ProfileError::ProfileUnavailable {
+        profile: ShellProfileId::Default,
+        guidance: "No usable Windows shell was found (Git Bash, PowerShell, or Command Prompt)."
+            .to_string(),
+    })
 }
 
 fn resolve_git_bash(probe: &dyn ShellProbe) -> Result<ResolvedShell, ProfileError> {
@@ -182,12 +247,12 @@ fn resolve_git_bash(probe: &dyn ShellProbe) -> Result<ResolvedShell, ProfileErro
         .ok_or_else(|| ProfileError::ProfileUnavailable {
             profile: ShellProfileId::GitBash,
             guidance: "Git for Windows was not found. Install Git for Windows \
-                       (https://git-scm.com/download/win) to use the default terminal, \
+                       (https://git-scm.com/download/win) to use Git Bash, \
                        or choose PowerShell / Command Prompt."
                 .to_string(),
         })?;
     Ok(ResolvedShell {
-        program: root.join("bin").join("bash.exe"),
+        program: git_bash_executable(&root),
         args: vec!["--login".to_string(), "-i".to_string()],
     })
 }
@@ -223,6 +288,36 @@ fn resolve_command_prompt(probe: &dyn ShellProbe) -> Result<ResolvedShell, Profi
         profile: ShellProfileId::CommandPrompt,
         guidance: "Command Prompt was not found on this system.".to_string(),
     })
+}
+
+/// Extra env for a resolved Windows shell. Git Bash inside ConPTY needs
+/// `MSYS=enable_pcon` (use the host PTY instead of mintty) and
+/// `CHERE_INVOKING=1` (stay in `cwd` across `--login` instead of jumping $HOME).
+pub fn windows_shell_env(program: &Path) -> Vec<(&'static str, &'static str)> {
+    if is_windows_bash(program) {
+        vec![("CHERE_INVOKING", "1"), ("MSYS", "enable_pcon")]
+    } else {
+        Vec::new()
+    }
+}
+
+pub fn is_windows_bash(program: &Path) -> bool {
+    path_file_name(program).is_some_and(|name| name.eq_ignore_ascii_case("bash.exe"))
+}
+
+/// When the Windows `default` profile resolved to Git Bash but the PTY spawn
+/// failed, try PowerShell then Command Prompt so the panel can still open.
+pub fn fallback_windows_shell_after_spawn_failure(
+    profile_id: &str,
+    failed: &ResolvedShell,
+    probe: &dyn ShellProbe,
+) -> Option<ResolvedShell> {
+    if profile_id != "default" || !is_windows_bash(&failed.program) {
+        return None;
+    }
+    resolve_powershell(probe)
+        .ok()
+        .or_else(|| resolve_command_prompt(probe).ok())
 }
 
 #[cfg(test)]
@@ -289,7 +384,7 @@ mod tests {
     #[test]
     fn windows_git_bash_missing_is_visible_not_silent_powershell() {
         let probe = fake_fs(&[]);
-        let err = resolve_windows_profile(ShellProfileId::Default, &probe).unwrap_err();
+        let err = resolve_windows_profile(ShellProfileId::GitBash, &probe).unwrap_err();
         assert!(matches!(
             err,
             ProfileError::ProfileUnavailable {
@@ -303,6 +398,81 @@ mod tests {
                 assert!(guidance.contains("Git for Windows"));
             }
         }
+    }
+
+    #[test]
+    fn windows_default_falls_back_to_powershell_when_git_bash_missing() {
+        let probe = fake_fs(&[r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"]);
+        let shell = resolve_windows_profile(ShellProfileId::Default, &probe).unwrap();
+        assert_eq!(
+            shell.program,
+            PathBuf::from(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
+        );
+        assert_eq!(shell.args, vec!["-NoLogo".to_string()]);
+    }
+
+    #[test]
+    fn windows_default_falls_back_to_cmd_when_git_and_powershell_missing() {
+        let probe = fake_fs(&[r"C:\Windows\System32\cmd.exe"]);
+        let shell = resolve_windows_profile(ShellProfileId::Default, &probe).unwrap();
+        assert_eq!(shell.program, PathBuf::from(r"C:\Windows\System32\cmd.exe"));
+        assert!(shell.args.is_empty());
+    }
+
+    #[test]
+    fn windows_default_with_no_shell_errors_visibly() {
+        let probe = fake_fs(&[]);
+        let err = resolve_windows_profile(ShellProfileId::Default, &probe).unwrap_err();
+        match err {
+            ProfileError::ProfileUnavailable { profile, guidance } => {
+                assert_eq!(profile, ShellProfileId::Default);
+                assert!(guidance.contains("PowerShell"));
+            }
+        }
+    }
+
+    #[test]
+    fn git_path_entry_maps_cmd_and_bin_to_install_root() {
+        assert_eq!(
+            git_install_root_from_path_entry(Path::new(r"C:\Program Files\Git\cmd")),
+            Some(PathBuf::from(r"C:\Program Files\Git"))
+        );
+        assert_eq!(
+            git_install_root_from_path_entry(Path::new(r"C:\Program Files\Git\bin")),
+            Some(PathBuf::from(r"C:\Program Files\Git"))
+        );
+        assert_eq!(
+            git_install_root_from_path_entry(Path::new(r"C:\Windows\System32")),
+            None
+        );
+    }
+
+    #[test]
+    fn git_bash_conpty_env_is_set_only_for_bash_exe() {
+        assert_eq!(
+            windows_shell_env(Path::new(r"C:\Program Files\Git\bin\bash.exe")),
+            vec![("CHERE_INVOKING", "1"), ("MSYS", "enable_pcon")]
+        );
+        assert!(windows_shell_env(Path::new(
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        ))
+        .is_empty());
+    }
+
+    #[test]
+    fn default_git_bash_spawn_failure_falls_back_to_powershell() {
+        let probe = fake_fs(&[r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"]);
+        let failed = ResolvedShell {
+            program: PathBuf::from(r"C:\Program Files\Git\bin\bash.exe"),
+            args: vec!["--login".to_string(), "-i".to_string()],
+        };
+        let fallback =
+            fallback_windows_shell_after_spawn_failure("default", &failed, &probe).unwrap();
+        assert_eq!(
+            fallback.program,
+            PathBuf::from(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
+        );
+        assert!(fallback_windows_shell_after_spawn_failure("git-bash", &failed, &probe).is_none());
     }
 
     #[test]
