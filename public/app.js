@@ -105,7 +105,7 @@ import {
   TERMINAL_FONT_FAMILY,
   TERMINAL_FONT_STACK,
 } from "./terminal-font.js";
-import { TerminalPanel } from "./terminal-panel.js";
+import { formatTerminalStartError, TerminalPanel } from "./terminal-panel.js";
 import { TerminalPreferences } from "./terminal-preferences.js";
 import {
   encodeBase64 as encodeTerminalBase64,
@@ -1487,6 +1487,7 @@ wsClient.addEventListener("terminalEvent", (event) => {
         profileId: tab.profileId,
         status: tab.status,
         historyGap: tab.historyGap,
+        failReason: tab.failReason,
       })),
     );
     if (Number.isFinite(msg.panelHeightPx)) {
@@ -1501,7 +1502,17 @@ wsClient.addEventListener("terminalEvent", (event) => {
   }
 });
 wsClient.addEventListener("terminalCommandFailed", (event) => {
+  const message = event.detail?.error;
+  const commandType = terminalClient.consumeCommandType(event.detail?.requestId);
   console.warn("[terminal] command failed:", event.detail);
+  if (
+    (commandType === "terminal_create" || commandType === "terminal_restart") &&
+    typeof message === "string" &&
+    message
+  ) {
+    terminalPanel.showStartError?.(formatTerminalStartError(message));
+  }
+  terminalClient.requestList();
 });
 mountTerminalPanelIfNative();
 

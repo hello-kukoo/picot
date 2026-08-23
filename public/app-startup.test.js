@@ -205,6 +205,61 @@ test("retries Git status when workspace generation arrives after opening Git", a
   });
 });
 
+test("surfaces terminal start failures and refreshes the terminal list", async () => {
+  await import("./app.js?terminal-start-failure");
+  const socket = FakeWebSocket.instances.at(-1);
+  socket.readyState = FakeWebSocket.OPEN;
+
+  socket.onmessage({ data: JSON.stringify({ type: "capabilities", class: "native" }) });
+  socket.onmessage({
+    data: JSON.stringify({ type: "owner_bootstrap", workspaceGeneration: 7, instances: [] }),
+  });
+  document.querySelector("[data-terminal-toggle]").click();
+  const createRequest = socket.sent.find((message) => message.payload?.type === "terminal_create");
+  expect(createRequest).toBeDefined();
+  const initialListCount = socket.sent.filter(
+    (message) => message.payload?.type === "terminal_list",
+  ).length;
+
+  socket.onmessage({
+    data: JSON.stringify({
+      type: "terminal_command_failed",
+      requestId: createRequest.requestId,
+      error: "Git for Windows was not found.",
+    }),
+  });
+
+  expect(document.querySelector("[data-terminal-start-error]")?.textContent).toBe(
+    "Git for Windows was not found. Install it or choose another profile.",
+  );
+  expect(socket.sent.filter((message) => message.payload?.type === "terminal_list")).toHaveLength(
+    initialListCount + 1,
+  );
+});
+
+test("does not show an unclassified terminal command failure as a start error", async () => {
+  await import("./app.js?terminal-unrelated-failure");
+  const socket = FakeWebSocket.instances.at(-1);
+  socket.readyState = FakeWebSocket.OPEN;
+
+  socket.onmessage({ data: JSON.stringify({ type: "capabilities", class: "native" }) });
+  socket.onmessage({
+    data: JSON.stringify({ type: "owner_bootstrap", workspaceGeneration: 7, instances: [] }),
+  });
+  const before = socket.sent.length;
+  socket.onmessage({
+    data: JSON.stringify({
+      type: "terminal_command_failed",
+      requestId: "unknown-request",
+      error: "stale workspace",
+    }),
+  });
+
+  expect(document.querySelector("[data-terminal-start-error]")).toBeNull();
+  expect(socket.sent.length).toBe(before + 1);
+  expect(socket.sent.at(-1).payload).toEqual({ type: "terminal_list" });
+});
+
 test("shows the not-a-git message only for the current status probe", async () => {
   await import("./app.js?git-not-a-repo");
   const socket = FakeWebSocket.instances.at(-1);

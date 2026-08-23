@@ -3,6 +3,13 @@
 // ABOUTME: Owns no DOM; visual rendering belongs to terminal-tab.js.
 
 /**
+ * Command types whose failures the app classifies via consumeCommandType.
+ * Success responses never echo requestId, so only these start-class commands
+ * are tracked; a track-all map would grow for the workspace lifetime.
+ */
+const TRACKED_COMMAND_TYPES = new Set(["terminal_create", "terminal_restart"]);
+
+/**
  * TerminalClient owns the broker protocol surface for one owner/workspace:
  * request correlation, the workspace-generation compare token, and the
  * snapshot-before-journal replay state machine. It never touches the DOM and
@@ -23,6 +30,11 @@ export class TerminalClient {
     this.requestCounter = 0;
     /** Pending sendAndAwait matchers awaiting a synchronous response. */
     this._awaiters = [];
+    /**
+     * requestId -> payload type for tracked start-class commands only,
+     * used to classify command failures.
+     */
+    this._pendingCommands = new Map();
   }
 
   /** Update the host-owned workspace generation compare token. */
@@ -39,6 +51,7 @@ export class TerminalClient {
       entry.tab.destroy?.();
     }
     this.tabs.clear();
+    this._pendingCommands.clear();
   }
 
   /** Build a terminal_command envelope around an inner payload and send it. */
@@ -51,6 +64,9 @@ export class TerminalClient {
       workspaceGeneration: this.workspaceGeneration,
       payload,
     };
+    if (TRACKED_COMMAND_TYPES.has(payload?.type)) {
+      this._pendingCommands.set(requestId, payload.type);
+    }
     return this.send(envelope);
   }
 
@@ -74,8 +90,16 @@ export class TerminalClient {
     });
   }
 
+  /** Return and forget the payload type associated with a failed command. */
+  consumeCommandType(requestId) {
+    const type = this._pendingCommands.get(requestId) || null;
+    this._pendingCommands.delete(requestId);
+    return type;
+  }
+
   /** Resolve any sendAndAwait awaiter whose matcher accepts this response. */
   resolveResponse(msg) {
+    if (msg?.requestId) this._pendingCommands.delete(msg.requestId);
     for (let i = this._awaiters.length - 1; i >= 0; i -= 1) {
       if (this._awaiters[i].match(msg)) {
         const { resolve } = this._awaiters[i];

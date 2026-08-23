@@ -1,7 +1,7 @@
 // ABOUTME: Tests for the native-only Terminal Panel: lazy first creation, remote
 // ABOUTME: gating, height clamping, close-risk reporting, and DOM teardown.
 import { afterEach, expect, test, vi } from "vitest";
-import { TerminalPanel } from "./terminal-panel.js";
+import { formatTerminalStartError, TerminalPanel } from "./terminal-panel.js";
 
 // Tests assert aria-labels against the i18n key (fallback form), so stub
 // i18n to return the key itself and avoid missing-key console warns.
@@ -21,6 +21,108 @@ function mountedPanel(opts = {}) {
 
 afterEach(() => {
   document.body.textContent = "";
+});
+
+test("formats Git for Windows start failures with localized guidance", () => {
+  expect(formatTerminalStartError("Git for Windows was not found.")).toBe(
+    "terminal.gitBashMissing",
+  );
+  expect(formatTerminalStartError("pty spawn failed")).toBe("pty spawn failed");
+  expect(formatTerminalStartError("")).toBe("terminal.statusFailed");
+});
+
+test("failed tab metadata shows the host error inside the panel", () => {
+  const { panel } = mountedPanel();
+  panel.setTabs([
+    {
+      terminalId: "t-fail",
+      generation: 1,
+      label: "Terminal",
+      profileId: "default",
+      status: "failed",
+      failReason: "Git for Windows was not found.",
+    },
+  ]);
+  const errorEl = panel.bodyEl.querySelector("[data-terminal-start-error]");
+  expect(errorEl).not.toBeNull();
+  expect(errorEl.textContent).toBe("terminal.gitBashMissing");
+  expect(errorEl.getAttribute("role")).toBe("alert");
+});
+
+test("running tabs clear a previous start error", () => {
+  const { panel } = mountedPanel();
+  panel.showStartError("spawn failed");
+  panel.setTabs([
+    { terminalId: "t1", generation: 1, label: "zsh", profileId: "default", status: "running" },
+  ]);
+  expect(panel.bodyEl.querySelector("[data-terminal-start-error]")).toBeNull();
+});
+
+test("a failed tab shows the banner while other tabs stay interactive", () => {
+  const restart = vi.fn();
+  const close = vi.fn();
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  const { panel } = mountedPanel({ client: { restart, close } });
+  panel.setTabs([
+    {
+      terminalId: "t-fail",
+      generation: 1,
+      label: "broken",
+      profileId: "default",
+      status: "failed",
+      failReason: "pty spawn failed",
+    },
+    { terminalId: "t-ok", generation: 1, label: "zsh", profileId: "default", status: "running" },
+  ]);
+
+  const banner = panel.bodyEl.querySelector("[data-terminal-start-error]");
+  expect(banner).not.toBeNull();
+
+  // The healthy tab still renders and its controls keep working.
+  const okItem = panel.tabButtons.get("t-ok").parentElement;
+  okItem.querySelector(".terminal-tab-restart").click();
+  expect(restart).toHaveBeenCalledWith("t-ok", 1);
+  okItem.querySelector(".terminal-tab-close").click();
+  expect(close).toHaveBeenCalledWith("t-ok", 1);
+
+  // The error exists only as the body banner, never inside tab-bar DOM.
+  expect(panel.bodyEl.querySelectorAll("[data-terminal-start-error]")).toHaveLength(1);
+  expect(panel.tabBarEl.querySelector("[data-terminal-start-error]")).toBeNull();
+  confirm.mockRestore();
+});
+
+test("retrying a failed tab drives client.restart and success clears the banner", () => {
+  const restart = vi.fn();
+  const { panel } = mountedPanel({ client: { restart } });
+  panel.setTabs([
+    {
+      terminalId: "t-fail",
+      generation: 1,
+      label: "broken",
+      profileId: "default",
+      status: "failed",
+      failReason: "Git for Windows was not found.",
+    },
+  ]);
+  expect(panel.bodyEl.querySelector("[data-terminal-start-error]")).not.toBeNull();
+
+  panel.tabButtons.get("t-fail").parentElement.querySelector(".terminal-tab-restart").click();
+  expect(restart).toHaveBeenCalledWith("t-fail", 1);
+
+  // Host reports the restarted terminal as running → banner clears, tab renders.
+  panel.setTabs([
+    {
+      terminalId: "t-fail",
+      generation: 2,
+      label: "broken",
+      profileId: "default",
+      status: "running",
+    },
+  ]);
+  expect(panel.bodyEl.querySelector("[data-terminal-start-error]")).toBeNull();
+  const btn = panel.tabButtons.get("t-fail");
+  expect(btn).not.toBeNull();
+  expect(btn.classList.contains("active")).toBe(true);
 });
 
 test("first native expansion lazily creates one default tab", async () => {

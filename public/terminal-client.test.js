@@ -79,6 +79,35 @@ describe("TerminalClient replay", () => {
     expect(tab.calls).toEqual(["write:three", "ack:3"]);
   });
 
+  test("tracks start-class command types so failures can be classified", () => {
+    const client = new TerminalClient({ send: vi.fn(), createTab: fakeTab });
+    client.setWorkspaceGeneration(0);
+    client.command({ type: "terminal_create", profileId: "default" });
+    client.command({ type: "terminal_restart", terminalId: "t1", generation: 1 });
+
+    expect(client.consumeCommandType("tm-1")).toBe("terminal_create");
+    expect(client.consumeCommandType("tm-1")).toBeNull();
+    expect(client.consumeCommandType("tm-2")).toBe("terminal_restart");
+    expect(client.consumeCommandType("unknown")).toBeNull();
+  });
+
+  test("high-frequency command types never grow the pending map", () => {
+    const client = new TerminalClient({ send: vi.fn(), createTab: fakeTab });
+    client.setWorkspaceGeneration(0);
+    client.command({ type: "terminal_input", terminalId: "t1", generation: 1, dataBase64: "" });
+    client.command({ type: "terminal_ack", terminalId: "t1", generation: 1, sequence: 3 });
+    client.command({
+      type: "terminal_resize",
+      terminalId: "t1",
+      generation: 1,
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(client._pendingCommands.size).toBe(0);
+    expect(client.consumeCommandType("tm-1")).toBeNull();
+  });
+
   test("commands wait until the workspace generation is known", () => {
     const send = vi.fn();
     const client = new TerminalClient({ send, createTab: fakeTab });

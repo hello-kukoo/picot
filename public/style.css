@@ -8842,12 +8842,17 @@ body.file-preview-resizing {
   font-size: var(--font-size-lg);
 }
 
-.terminal-restart-notice {
+.terminal-restart-notice,
+.terminal-start-error {
   padding: var(--space-1) var(--space-2);
   background: var(--accent-subtle);
   color: var(--text-secondary);
   font-size: var(--font-size-sm);
   border-bottom: 1px solid var(--border);
+}
+
+.terminal-start-error {
+  color: var(--danger, #e54);
 }
 
 /* ═══════════════════════════════════════════════════════
