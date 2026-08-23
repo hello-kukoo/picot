@@ -197,4 +197,147 @@ describe("setupPackageManager", () => {
       expect(onRestarted).toHaveBeenCalledTimes(1);
     });
   });
+
+  it("checks for updates after load and badges packages with available updates", async () => {
+    const control = mockPackages([
+      { source: "npm:foo", scope: "global", version: "1.0.0", counts: {}, resources: [] },
+      { source: "npm:bar", scope: "global", version: "2.0.0", counts: {}, resources: [] },
+    ]);
+    control.checkPiPackageUpdates = vi
+      .fn()
+      .mockResolvedValue([{ source: "npm:foo", scope: "global", available: true }]);
+    const onUpdatesChecked = vi.fn();
+    const manager = setupPackageManager({
+      control,
+      getWorkspaceId: () => "ws-1",
+      onUpdatesChecked,
+    });
+
+    await manager.load();
+
+    expect(control.checkPiPackageUpdates).toHaveBeenCalledWith("ws-1");
+    expect(onUpdatesChecked).toHaveBeenCalledWith(1);
+    const badged = sidebarRows()[0].querySelector(".pkg-manager-update-badge");
+    expect(badged).toBeTruthy();
+    expect(badged.textContent).toBe(t("extensions.updateAvailable"));
+    expect(sidebarRows()[1].querySelector(".pkg-manager-update-badge")).toBeNull();
+  });
+
+  it("enables the detail Update button only when an update is available", async () => {
+    const control = mockPackages([
+      { source: "npm:foo", scope: "global", version: "1.0.0", counts: {}, resources: [] },
+    ]);
+    control.checkPiPackageUpdates = vi.fn().mockResolvedValue([]);
+    const manager = setupPackageManager({ control, getWorkspaceId: () => "ws-1" });
+    await manager.load();
+
+    // No update reported: Update stays disabled.
+    let updateBtn = [...detail().querySelectorAll("button")].find(
+      (btn) => btn.textContent === t("extensions.update"),
+    );
+    expect(updateBtn.disabled).toBe(true);
+
+    // Report an update: the same button becomes enabled.
+    control.checkPiPackageUpdates.mockResolvedValue([
+      { source: "npm:foo", scope: "global", available: true },
+    ]);
+    await manager.load(true);
+    updateBtn = [...detail().querySelectorAll("button")].find(
+      (btn) => btn.textContent === t("extensions.update"),
+    );
+    expect(updateBtn.disabled).toBe(false);
+  });
+
+  it("updates every package with a pending update via the update-all button", async () => {
+    const control = mockPackages([
+      { source: "npm:foo", scope: "global", version: "1.0.0", counts: {}, resources: [] },
+      { source: "npm:bar", scope: "project", version: "2.0.0", counts: {}, resources: [] },
+    ]);
+    control.checkPiPackageUpdates = vi.fn().mockResolvedValue([
+      { source: "npm:foo", scope: "global", available: true },
+      { source: "npm:bar", scope: "project", available: true },
+    ]);
+    const manager = setupPackageManager({ control, getWorkspaceId: () => "ws-1" });
+    await manager.load();
+
+    const updateAllBtn = document.getElementById("pkg-manager-update-all-btn");
+    expect(updateAllBtn).toBeTruthy();
+    expect(updateAllBtn.disabled).toBe(false);
+    updateAllBtn.click();
+
+    await vi.waitFor(() => {
+      expect(control.updatePiPackage).toHaveBeenCalledTimes(2);
+      expect(control.updatePiPackage).toHaveBeenNthCalledWith(1, "npm:foo");
+      expect(control.updatePiPackage).toHaveBeenNthCalledWith(2, "npm:bar");
+    });
+    // After updating, no package is badged anymore and the button disables.
+    expect(sidebarRows()[0].querySelector(".pkg-manager-update-badge")).toBeNull();
+    expect(document.getElementById("pkg-manager-update-all-btn").disabled).toBe(true);
+  });
+
+  it("keeps update buttons disabled while the check fails or is in flight", async () => {
+    const control = mockPackages([
+      { source: "npm:foo", scope: "global", version: "1.0.0", counts: {}, resources: [] },
+    ]);
+    control.checkPiPackageUpdates = vi.fn().mockRejectedValue(new Error("registry unavailable"));
+    const manager = setupPackageManager({ control, getWorkspaceId: () => "ws-1" });
+    await manager.load();
+
+    // The list survives a failed check; a notice explains why buttons are disabled.
+    expect(sidebarRows()).toHaveLength(1);
+    expect(document.getElementById("pkg-manager-footer").textContent).toContain(
+      t("extensions.checkUpdatesFailed"),
+    );
+  });
+
+  it("keeps the failed package badged and shows a failure notice when update-all partially fails", async () => {
+    const control = mockPackages([
+      { source: "npm:foo", scope: "global", version: "1.0.0", counts: {}, resources: [] },
+      { source: "npm:bar", scope: "project", version: "2.0.0", counts: {}, resources: [] },
+    ]);
+    control.checkPiPackageUpdates = vi.fn().mockResolvedValue([
+      { source: "npm:foo", scope: "global", available: true },
+      { source: "npm:bar", scope: "project", available: true },
+    ]);
+    control.updatePiPackage = vi
+      .fn()
+      .mockImplementation((source) =>
+        source === "npm:bar" ? Promise.reject(new Error("boom")) : Promise.resolve(),
+      );
+    const manager = setupPackageManager({ control, getWorkspaceId: () => "ws-1" });
+    await manager.load();
+
+    document.getElementById("pkg-manager-update-all-btn").click();
+
+    await vi.waitFor(() => {
+      expect(control.updatePiPackage).toHaveBeenCalledTimes(2);
+      // The succeeded package loses its badge; the failed one keeps it.
+      expect(sidebarRows()[0].querySelector(".pkg-manager-update-badge")).toBeNull();
+      expect(sidebarRows()[1].querySelector(".pkg-manager-update-badge")).toBeTruthy();
+    });
+    expect(document.getElementById("pkg-manager-footer").textContent).toContain(
+      t("extensions.updatedAllWithFailures", { count: 1, failed: 1 }),
+    );
+  });
+
+  it("merges concurrent loads into a single update probe", async () => {
+    const control = mockPackages([
+      { source: "npm:foo", scope: "global", version: "1.0.0", counts: {}, resources: [] },
+    ]);
+    let resolveProbe;
+    control.checkPiPackageUpdates = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveProbe = resolve;
+        }),
+    );
+    const manager = setupPackageManager({ control, getWorkspaceId: () => "ws-1" });
+
+    const first = manager.load(true);
+    const second = manager.load(true);
+    await vi.waitFor(() => expect(control.checkPiPackageUpdates).toHaveBeenCalledTimes(1));
+    resolveProbe([]);
+    await Promise.all([first, second]);
+    expect(control.checkPiPackageUpdates).toHaveBeenCalledTimes(1);
+  });
 });

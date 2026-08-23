@@ -45,6 +45,12 @@ export class HostControlGateway {
     return Array.isArray(frame?.packages) ? frame.packages : [];
   }
 
+  async checkPiPackageUpdates(workspaceId) {
+    const frame = await this.#request("check_pi_package_updates", { workspaceId });
+    // Only packages with an actual update are reported (source/scope/available).
+    return Array.isArray(frame?.updates) ? frame.updates : [];
+  }
+
   async installPiPackage(source, { local = false } = {}) {
     await this.#request("install_pi_package", { source, local });
   }

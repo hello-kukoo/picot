@@ -1847,6 +1847,15 @@ async function adoptTarget(nextTarget, { updateRoute = true } = {}) {
   // sidebar.load() at startup runs before the workspace is resolved.
   if (nextTarget.workspaceId !== previousTarget.workspaceId) {
     sidebar?.load().catch(showError);
+    // Header pills must follow the workspace, not the git panel: re-probe on
+    // every workspace entry so a non-Git workspace hides the git pill without
+    // opening the panel, and switching back un-hides it (v3 49564e0).
+    setupProjectHeader({
+      data,
+      workspaceId: nextTarget.workspaceId,
+    }).catch((error) => {
+      console.warn("[Native] Failed to load project header info:", error);
+    });
   }
   sessionInfo.refresh();
   headerStatusBar?.reset?.();

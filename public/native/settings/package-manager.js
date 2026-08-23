@@ -154,6 +154,10 @@ export function setupPackageManager(deps) {
   let lastError = null;
   let lastMessage = null;
   let lastLoaded = false;
+  let checkingUpdates = false;
+  let updatingAll = false;
+  let checkNotice = null;
+  let checkInFlight = null;
 
   async function resolveCwd() {
     try {
@@ -186,6 +190,9 @@ export function setupPackageManager(deps) {
   });
 
   async function load(force = false) {
+    // runUpdateAll owns the list while it is in flight; a concurrent reload
+    // (e.g. re-entering the tab mid-update) would swap the list underneath it.
+    if (updatingAll) return;
     if (!force && lastLoaded) {
       render();
       return;
@@ -196,32 +203,86 @@ export function setupPackageManager(deps) {
       return;
     }
     try {
-      cwd = await resolveCwd();
-      const listed = await control.listPiPackages();
-      packages = (Array.isArray(listed) ? listed : []).map((pkg, index) => {
-        const p = typeof pkg === "string" ? { source: pkg } : pkg;
-        const status = p.disabled ? "disabled" : p.installedPath ? "loaded" : "installed";
-        return {
-          source: sourceOf(p),
-          scope: p.scope || "global",
-          installedPath: p.installedPath || null,
-          packageName: p.packageName || null,
-          version: p.version || null,
-          description: p.description || null,
-          disabled: Boolean(p.disabled),
-          status,
-          counts: p.counts || {},
-          resources: Array.isArray(p.resources) ? p.resources : [],
-          index,
-        };
-      });
-      if (!packages.some((p) => keyOf(p) === selectedKey)) {
-        selectedKey = packages[0] ? keyOf(packages[0]) : null;
-      }
-      render();
+      await fetchList(null);
     } catch (error) {
       renderError(error);
+      return;
     }
+    render();
+    await checkForUpdates();
+  }
+
+  // Re-list installed packages. `previousStates` (keyOf -> updateAvailable) keeps
+  // already-known update badges stable across the reload instead of resetting them.
+  async function fetchList(previousStates) {
+    cwd = await resolveCwd();
+    const listed = await control.listPiPackages();
+    packages = (Array.isArray(listed) ? listed : []).map((pkg, index) => {
+      const p = typeof pkg === "string" ? { source: pkg } : pkg;
+      const status = p.disabled ? "disabled" : p.installedPath ? "loaded" : "installed";
+      const source = sourceOf(p);
+      // Normalize the scope once here so keyOf() below always produces the same
+      // key format as the update-probe response mapping.
+      const scope = p.scope === "project" ? "project" : "global";
+      const key = `${scope}\0${source}`;
+      return {
+        source,
+        scope,
+        installedPath: p.installedPath || null,
+        packageName: p.packageName || null,
+        version: p.version || null,
+        description: p.description || null,
+        disabled: Boolean(p.disabled),
+        status,
+        counts: p.counts || {},
+        resources: Array.isArray(p.resources) ? p.resources : [],
+        index,
+        updateAvailable: previousStates?.get(key) ?? null,
+      };
+    });
+    if (!packages.some((p) => keyOf(p) === selectedKey)) {
+      selectedKey = packages[0] ? keyOf(packages[0]) : null;
+    }
+  }
+
+  function updateCount() {
+    return packages.filter((pkg) => pkg.updateAvailable === true).length;
+  }
+
+  // Probe every installed package for an available update. Concurrent calls are
+  // merged into one probe so re-entering the page never stacks network checks.
+  function checkForUpdates() {
+    if (updatingAll) return Promise.resolve();
+    if (checkInFlight) return checkInFlight;
+    checkInFlight = (async () => {
+      checkingUpdates = true;
+      checkNotice = null;
+      render();
+      try {
+        const updates = await control.checkPiPackageUpdates(deps.getWorkspaceId?.());
+        const availableByKey = new Map(
+          (Array.isArray(updates) ? updates : []).map((update) => [
+            `${update.scope === "project" ? "project" : "global"}\0${update.source}`,
+            update.available === true,
+          ]),
+        );
+        packages = packages.map((pkg) => ({
+          ...pkg,
+          updateAvailable: availableByKey.get(keyOf(pkg)) ?? false,
+        }));
+      } catch {
+        // Keep the loaded list; every Update button stays disabled because no
+        // package reports updateAvailable === true, and the notice explains why.
+        checkNotice = t("extensions.checkUpdatesFailed");
+      } finally {
+        checkingUpdates = false;
+        render();
+        deps.onUpdatesChecked?.(updateCount());
+      }
+    })();
+    return checkInFlight.finally(() => {
+      checkInFlight = null;
+    });
   }
 
   function render() {
@@ -251,6 +312,13 @@ export function setupPackageManager(deps) {
   function emptyNote(text) {
     const el = document.createElement("div");
     el.className = "settings-api-keys-empty";
+    el.textContent = text;
+    return el;
+  }
+
+  function noticeNote(text, isError = false) {
+    const el = document.createElement("div");
+    el.className = `pkg-manager-notice${isError ? " pkg-manager-notice-error" : ""}`;
     el.textContent = text;
     return el;
   }
@@ -299,9 +367,21 @@ export function setupPackageManager(deps) {
       .filter(Boolean)
       .join(" · ");
     meta.appendChild(metaText);
+    if (pkg.updateAvailable === true) {
+      meta.appendChild(updateBadge());
+    }
     row.appendChild(meta);
 
     return row;
+  }
+
+  function updateBadge() {
+    const badge = document.createElement("span");
+    badge.className = "pkg-manager-update-badge";
+    badge.textContent = t("extensions.updateAvailable");
+    badge.title = t("extensions.updateAvailable");
+    badge.setAttribute("role", "status");
+    return badge;
   }
 
   function renderDetail(pkg) {
@@ -331,13 +411,18 @@ export function setupPackageManager(deps) {
     sourceEl.textContent = pkg.source;
     sourceEl.title = pkg.source;
     header.appendChild(sourceEl);
+    if (pkg.updateAvailable === true) {
+      header.appendChild(updateBadge());
+    }
     detailEl.appendChild(header);
 
     const actions = document.createElement("div");
     actions.className = "settings-extension-actions pkg-manager-actions";
 
+    // The update probe decides whether an update actually exists; until it
+    // succeeds for this package (updateAvailable === true) the button stays off.
     const updateBtn = iconButton(t("extensions.update"), {
-      disabled: busy || !canManage,
+      disabled: busy || !canManage || pkg.updateAvailable !== true || updatingAll,
       title: t("extensions.updateTip"),
     });
     updateBtn.addEventListener("click", () => runUpdate(pkg, key));
@@ -394,8 +479,15 @@ export function setupPackageManager(deps) {
   function renderFooter() {
     if (!footerEl) return;
     footerEl.innerHTML = "";
+    // Check-state notices use their own class on purpose: flashMessage manages
+    // .pkg-manager-message elements and would otherwise wipe these on re-render.
+    if (checkingUpdates) {
+      footerEl.appendChild(noticeNote(t("extensions.checkingUpdates")));
+    } else if (checkNotice) {
+      footerEl.appendChild(noticeNote(checkNotice, true));
+    }
     if (!packages.length) {
-      footerEl.textContent = t("extensions.noPackagesSummary");
+      footerEl.appendChild(document.createTextNode(t("extensions.noPackagesSummary")));
       return;
     }
     const totals = { extensions: 0, skills: 0, prompts: 0, themes: 0 };
@@ -419,11 +511,60 @@ export function setupPackageManager(deps) {
     reloadBtn.addEventListener("click", runRestart);
     footerEl.appendChild(reloadBtn);
 
+    const updatable = updateCount();
+    const updateAllBtn = iconButton(t("extensions.updateAll", { count: updatable }), {
+      disabled: updatingAll || restarting || busyScope !== null || !canManage || updatable === 0,
+      title: t("extensions.updateTip"),
+    });
+    updateAllBtn.id = "pkg-manager-update-all-btn";
+    updateAllBtn.addEventListener("click", () => void runUpdateAll());
+    footerEl.appendChild(updateAllBtn);
+
     const refreshBtn = iconButton(t("extensions.refresh"), {
+      disabled: updatingAll || restarting,
       title: t("extensions.refreshTip"),
     });
     refreshBtn.addEventListener("click", () => load(true));
     footerEl.appendChild(refreshBtn);
+  }
+
+  // Update every package that reported an available update, one at a time so
+  // failures stay isolated. Afterwards re-list to refresh versions while keeping
+  // each package's last known update state (no fresh network probe).
+  async function runUpdateAll() {
+    if (!canManage || busyScope !== null || restarting || updatingAll) return;
+    const targets = packages.filter((pkg) => pkg.updateAvailable === true);
+    if (!targets.length) return;
+    updatingAll = true;
+    let updated = 0;
+    let failed = 0;
+    for (const [index, pkg] of targets.entries()) {
+      checkNotice = t("extensions.updatingAll", { done: index, total: targets.length });
+      render();
+      try {
+        await control.updatePiPackage(pkg.source);
+        pkg.updateAvailable = false;
+        updated += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    updatingAll = false;
+    checkNotice = failed
+      ? t("extensions.updatedAllWithFailures", { count: updated, failed })
+      : null;
+    if (!failed) {
+      lastMessage = t("extensions.updatedAll", { count: updated });
+      lastError = null;
+    }
+    const previousStates = new Map(packages.map((pkg) => [keyOf(pkg), pkg.updateAvailable]));
+    try {
+      await fetchList(previousStates);
+    } catch {
+      // Keep showing the pre-update list; the user can hit Refresh to retry.
+    }
+    render();
+    deps.onUpdatesChecked?.(updateCount());
   }
 
   // Restart the embedded pi subprocess for the current workspace/session so

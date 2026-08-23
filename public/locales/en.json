@@ -253,6 +253,9 @@
     "submit": "Submit",
     "save": "Save"
   },
+  "header": {
+    "extensionUpdatesAvailable": "Extension updates available"
+  },
   "extensions": {
     "loadingPackages": "Loading packages...",
     "failedToLoadPackages": "Failed to load packages",
@@ -297,6 +300,13 @@
     "cwd": "Working directory",
     "resolvedResources": "Resolved resources",
     "update": "Update",
+    "checkingUpdates": "Checking for updates…",
+    "updateAvailable": "Update available",
+    "updateAll": "Update all ({count})",
+    "updatingAll": "Updating extensions {done}/{total}…",
+    "updatedAll": "Updated {count} extensions.",
+    "updatedAllWithFailures": "Updated {count} extensions, {failed} failed.",
+    "checkUpdatesFailed": "Update check failed; buttons stay disabled until a check succeeds.",
     "updateTip": "Update this package to the latest version",
     "updateMessage": "Updated {source}.",
     "remove": "Remove",

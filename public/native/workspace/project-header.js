@@ -1,3 +1,6 @@
+// ABOUTME: Populates the chat header with workspace path and git branch info.
+// ABOUTME: Safe to call repeatedly — each call re-probes and stale probes lose.
+
 import { onLocaleChange, t } from "../../i18n.js";
 
 /**
@@ -10,16 +13,41 @@ import { onLocaleChange, t } from "../../i18n.js";
  *  - Show the current git branch in the #git-branch-indicator label inside
  *    #diff-sidebar-toggle.
  *  - Both labels are hidden when data is unavailable.
+ *  - Re-probe on every workspace switch: the caller (app.js adoptTarget)
+ *    invokes this again whenever the workspaceId changes, so pill visibility
+ *    follows the current workspace even when the git panel is never opened.
+ *  - Late/stale probes never win: only the most recently started probe may
+ *    touch the DOM.
  *  - Click handling stays on the toggle buttons in app.js: the path label is
  *    display-only, matching the git-branch label.
  */
 
+// Sequence of the most recently started probe. A probe that resolves after a
+// newer one started is stale and must not touch the DOM.
+let latestProbeSequence = 0;
+
+// Info from the latest probe that got applied. The single locale listener
+// reads this instead of capturing a per-call closure, so a re-probe cannot
+// leave a stale workspace's label-retranslation behind.
+let currentHeaderInfo = null;
+let localeListenerRegistered = false;
+
+/** Apply the files-toggle title/aria-label for the given workspace path. */
+function applyFilesToggleLabels(filesToggleEl, info) {
+  filesToggleEl.title = info.path;
+  filesToggleEl.setAttribute(
+    "aria-label",
+    t("migrated.index.ariaLabel.openFilesPanel", { path: info.path }),
+  );
+}
+
 /**
  * @param {object} options
- * @param {import('./data-gateway.js').HostDataGateway} options.data
+ * @param {import('../transport/data-gateway.js').HostDataGateway} options.data
  * @param {string} options.workspaceId
  */
 export async function setupProjectHeader({ data, workspaceId } = {}) {
+  const sequence = ++latestProbeSequence;
   const workspaceEl = document.getElementById("workspace-indicator");
   const filesToggleEl = workspaceEl?.closest("#file-sidebar-toggle");
   // #git-branch-indicator is the label span inside #diff-sidebar-toggle.
@@ -34,25 +62,44 @@ export async function setupProjectHeader({ data, workspaceId } = {}) {
     const response = await data.workspaceInfo(workspaceId);
     info = response?.info;
   } catch {
-    // Network or host error — leave pills hidden.
+    // Network or host error — leave the header on its previous state.
     return;
   }
+  // A newer probe started while this one was in flight — drop this result so
+  // a slow old-workspace answer can never overwrite the new workspace's DOM.
+  if (sequence !== latestProbeSequence) return;
   if (!info) return;
+  currentHeaderInfo = info;
 
-  if (workspaceEl && info.path) {
-    workspaceEl.textContent = info.path;
-    workspaceEl.classList.remove("hidden");
-    if (filesToggleEl) {
-      const applyLabels = () => {
-        filesToggleEl.title = info.path;
-        filesToggleEl.setAttribute(
-          "aria-label",
-          t("migrated.index.ariaLabel.openFilesPanel", { path: info.path }),
-        );
-      };
-      applyLabels();
-      // Keep the label current when the user switches language mid-session.
-      onLocaleChange(applyLabels);
+  if (workspaceEl) {
+    if (info.path) {
+      workspaceEl.textContent = info.path;
+      workspaceEl.classList.remove("hidden");
+      if (filesToggleEl) {
+        applyFilesToggleLabels(filesToggleEl, info);
+        // One listener for the module's lifetime reads currentHeaderInfo, so
+        // repeated calls never accumulate listeners nor resurrect stale paths.
+        if (!localeListenerRegistered) {
+          localeListenerRegistered = true;
+          onLocaleChange(() => {
+            const currentInfo = currentHeaderInfo;
+            if (!currentInfo?.path) return;
+            const filesToggle = document
+              .getElementById("workspace-indicator")
+              ?.closest("#file-sidebar-toggle");
+            if (filesToggle) applyFilesToggleLabels(filesToggle, currentInfo);
+          });
+        }
+      }
+    } else {
+      // No path for this workspace — clear the previous workspace's label
+      // instead of leaving it visible.
+      workspaceEl.textContent = "";
+      workspaceEl.classList.add("hidden");
+      if (filesToggleEl) {
+        filesToggleEl.title = t("migrated.index.title.files");
+        filesToggleEl.setAttribute("aria-label", t("migrated.index.ariaLabel.toggleFileBrowser"));
+      }
     }
   }
 

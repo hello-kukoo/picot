@@ -180,6 +180,33 @@
   white-space: nowrap;
 }
 
+/* Extension package update pill (hidden until the package manager reports updates) */
+.update-indicator {
+  position: relative;
+  color: var(--accent, #3b82f6);
+}
+
+.update-indicator.hidden {
+  display: none;
+}
+
+.update-indicator-count {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 var(--space-0-5);
+  /* design-token-ignore: counter glyph below smallest type token, fits 14px pill */
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  color: var(--on-accent, #fff);
+  background: var(--accent, #3b82f6);
+  border-radius: var(--radius-pill);
+}
+
 .token-usage:hover {
   border-color: var(--border-hover);
   background: var(--bg-glass-hover);

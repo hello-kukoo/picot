@@ -253,6 +253,9 @@
     "submit": "提交",
     "save": "保存"
   },
+  "header": {
+    "extensionUpdatesAvailable": "扩展有可用更新"
+  },
   "extensions": {
     "loadingPackages": "正在加载包...",
     "failedToLoadPackages": "加载包失败",
@@ -297,6 +300,13 @@
     "cwd": "工作目录",
     "resolvedResources": "已解析的资源",
     "update": "更新",
+    "checkingUpdates": "正在检查版本更新…",
+    "updateAvailable": "有可用更新",
+    "updateAll": "全部更新（{count}）",
+    "updatingAll": "正在更新扩展 {done}/{total}…",
+    "updatedAll": "已更新 {count} 个扩展。",
+    "updatedAllWithFailures": "已更新 {count} 个扩展，{failed} 个失败。",
+    "checkUpdatesFailed": "检查更新失败；在检查成功之前按钮保持禁用。",
     "updateTip": "将扩展包更新到最新版本",
     "updateMessage": "已更新 {source}。",
     "remove": "移除",

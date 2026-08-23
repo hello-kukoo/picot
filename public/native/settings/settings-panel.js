@@ -1,6 +1,7 @@
 import { t } from "../../i18n.js";
 import { applyTheme, getCurrentTheme, themes } from "../../themes.js";
 import { applyLoadingPlaceholder, clearLoadingPlaceholder } from "../../ui/loading-placeholder.js";
+import { setupUpdateIndicator } from "../workspace/update-indicator.js";
 import { loadCostDashboard } from "./cost-dashboard.js";
 import { setupLanguageSelector } from "./language-selector.js";
 import { setupModelsPage } from "./models-page.js";
@@ -65,6 +66,10 @@ export function setupSettingsPanel({
   const appVersionValue = document.getElementById("setting-app-version-value");
   const costDashboard = document.getElementById("settings-cost-dashboard");
   const packageBrowse = setupPackageBrowse(control, { notify });
+  const updateIndicator = setupUpdateIndicator({
+    buttonEl: document.getElementById("package-update-indicator"),
+    onOpen: () => openSettings("extensions"),
+  });
   const packageManager = setupPackageManager({
     control,
     data,
@@ -73,6 +78,9 @@ export function setupSettingsPanel({
     getSessionId: () => getTarget?.()?.sessionId,
     onRestarted,
     onBrowseRevealed: () => void packageBrowse.load(),
+    // Mirror the update probe result onto the header pill so updates stay
+    // visible after the settings panel is closed.
+    onUpdatesChecked: (count) => updateIndicator.setCount(count),
   });
   const config = configGateway ? setupSettingsConfig({ configGateway }) : null;
   const modelsPage = configGateway
@@ -184,7 +192,9 @@ export function setupSettingsPanel({
     if (marketplaceMode) {
       void packageBrowse.load();
     } else {
-      void packageManager.load();
+      // Force a full reload + update probe on every visit to the installed view:
+      // staleness here would show wrong versions and miss available updates.
+      void packageManager.load(true);
     }
   }
 

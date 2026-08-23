@@ -253,6 +253,9 @@
     "submit": "送信",
     "save": "保存"
   },
+  "header": {
+    "extensionUpdatesAvailable": "拡張機能のアップデートがあります"
+  },
   "extensions": {
     "loadingPackages": "パッケージを読み込み中...",
     "failedToLoadPackages": "パッケージの読み込みに失敗しました",
@@ -297,6 +300,13 @@
     "cwd": "作業ディレクトリ",
     "resolvedResources": "解決済みリソース",
     "update": "更新",
+    "checkingUpdates": "アップデートを確認中…",
+    "updateAvailable": "アップデートあり",
+    "updateAll": "すべて更新（{count}）",
+    "updatingAll": "拡張機能を更新中 {done}/{total}…",
+    "updatedAll": "{count} 個の拡張機能を更新しました。",
+    "updatedAllWithFailures": "{count} 個を更新、{failed} 個が失敗しました。",
+    "checkUpdatesFailed": "アップデートの確認に失敗しました。成功するまでボタンは無効のままです。",
     "updateTip": "このパッケージを最新版に更新します",
     "updateMessage": "{source} を更新しました。",
     "remove": "削除",

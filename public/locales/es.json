@@ -253,6 +253,9 @@
     "submit": "Enviar",
     "save": "Guardar"
   },
+  "header": {
+    "extensionUpdatesAvailable": "Actualizaciones de extensiones disponibles"
+  },
   "extensions": {
     "loadingPackages": "Cargando paquetes...",
     "failedToLoadPackages": "Error al cargar paquetes",
@@ -297,6 +300,13 @@
     "cwd": "Directorio de trabajo",
     "resolvedResources": "Recursos resueltos",
     "update": "Actualizar",
+    "checkingUpdates": "Buscando actualizaciones…",
+    "updateAvailable": "Actualización disponible",
+    "updateAll": "Actualizar todo ({count})",
+    "updatingAll": "Actualizando extensiones {done}/{total}…",
+    "updatedAll": "Se actualizaron {count} extensiones.",
+    "updatedAllWithFailures": "Se actualizaron {count} extensiones, {failed} fallaron.",
+    "checkUpdatesFailed": "La comprobación falló; los botones permanecen desactivados hasta que tenga éxito.",
     "updateTip": "Actualiza este paquete a la última versión",
     "updateMessage": "Se actualizó {source}.",
     "remove": "Eliminar",

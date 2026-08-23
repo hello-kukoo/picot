@@ -92,6 +92,10 @@ export function setupGitPanel({
         normalized.error.includes("not a git repository")
       ) {
         panel.setNotGitRepo(true);
+        // Runtime parity for the startup probe in project-header: once git
+        // itself proves the workspace is not a repository, hide the header
+        // pill immediately instead of leaving an entry that cannot work.
+        document.getElementById("diff-sidebar-toggle")?.classList.add("hidden");
       } else {
         panel.applyCommitFailure(normalized.error);
       }
