@@ -185,6 +185,77 @@ describe("buildSessionTree", () => {
     }
   });
 
+  test("inactive branch renders a flat linear spine — one nesting level per branch container", () => {
+    // Regression (real session 2026-08-23…206d): every node inside an
+    // expanded inactive branch used to step one indent deeper along the
+    // spine. The branch group is the only nesting level.
+    const entries = [
+      u("u1", null, "Q"),
+      a("a1", "u1", "A"),
+      u("main", "a1", "Main path"),
+      u("b1", "a1", "Branch turn 1"),
+      a("b1a", "b1", "Branch answer 1"),
+      u("b2", "b1a", "Branch turn 2"),
+      a("b2a", "b2", "Branch answer 2"),
+      u("b3", "b2a", "Branch turn 3"),
+      a("b3a", "b3", "Branch answer 3"),
+    ];
+    const { rows } = buildSessionTree({ entries, leafId: "main" });
+    const branch = rows.find((r) => r.kind === "branch");
+    expect(branch.depth).toBe(0);
+    expect(branch.rows.map((r) => r.depth)).toEqual([1, 1, 1, 1, 1, 1]);
+  });
+
+  test("branch forking deep in the active path still anchors at depth 0", () => {
+    // The fork position along the flat active path must not shift the
+    // branch's indent; only nesting inside branch groups adds depth.
+    const entries = [
+      u("u1", null, "q1"),
+      a("a1", "u1", "a1"),
+      u("u2", "a1", "q2"),
+      a("a2", "u2", "a2"),
+      u("u3", "a2", "q3"),
+      a("a3", "u3", "a3"),
+      u("u4", "a3", "q4"),
+      a("a4", "u4", "a4"),
+      u("b1", "a4", "deep fork"),
+      a("b1a", "b1", "br"),
+    ];
+    const { rows } = buildSessionTree({ entries, leafId: "a4" });
+    const branch = rows.find((r) => r.kind === "branch");
+    expect(branch.entryId).toBe("b1");
+    expect(branch.depth).toBe(0);
+    expect(branch.rows.map((r) => r.depth)).toEqual([1, 1]);
+  });
+
+  test("nested fork inside a branch adds exactly one more nesting level", () => {
+    const entries = [
+      u("u1", null, "Q"),
+      a("a1", "u1", "A"),
+      u("main", "a1", "Main path"),
+      u("b1", "a1", "br1"),
+      a("b1a", "b1", "br1a"),
+      u("b2", "b1a", "br2"),
+      a("b2a", "b2", "br2a"),
+      u("n1", "b1a", "nested fork head"),
+      u("n2", "n1", "nested sub"),
+      a("n2a", "n2", "nested leaf"),
+    ];
+    const { rows } = buildSessionTree({ entries, leafId: "main" });
+    const branch = rows.find((r) => r.kind === "branch");
+    expect(branch.depth).toBe(0);
+    expect(branch.rows.map((r) => `${r.kind}:${r.entryId}`)).toEqual([
+      "node:b1",
+      "node:b1a",
+      "branch:b2",
+      "branch:n1",
+    ]);
+    for (const nested of branch.rows.filter((r) => r.kind === "branch")) {
+      expect(nested.depth).toBe(1);
+      expect(nested.rows.every((r) => r.depth === 2)).toBe(true);
+    }
+  });
+
   test("nested branch inside an inactive subtree stays its own collapsed summary", () => {
     const entries = [
       u("u1", null, "Q"),

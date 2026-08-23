@@ -231,24 +231,28 @@ export function buildSessionTree({ entries, leafId } = {}) {
    * inline, deeper children become their own branch rows. Cycle-guarded.
    */
   const branchRow = (head, headCls, depth) => {
+    // The branch group container is the ONLY visual nesting level: the head
+    // and its linear spine render flat at depth + 1 (mirroring the active
+    // path's flat depth 0); each nested fork adds exactly one more level via
+    // its own branchRow. A per-node increment here re-created the staircase
+    // defect inside every expanded inactive branch.
     const subRows = [nodeRow(head, headCls, depth + 1, false)];
     const seen = new Set([head.id]);
     let current = head;
-    let d = depth + 1;
+    const d = depth + 1;
     for (;;) {
       const kids = visibleChildren(current.id).filter(({ entry }) => !seen.has(entry.id));
       if (kids.length === 0) break;
       for (const { entry } of kids) seen.add(entry.id);
       if (kids.length === 1) {
         const { entry: kid, cls } = kids[0];
-        d += 1;
         subRows.push(nodeRow(kid, cls, d, false));
         current = kid;
         continue;
       }
       for (const { entry: kid, cls } of kids) {
         if (hasVisibleChildren(kid.id)) subRows.push(branchRow(kid, cls, d));
-        else subRows.push(nodeRow(kid, cls, d + 1, false));
+        else subRows.push(nodeRow(kid, cls, d, false));
       }
       break;
     }
@@ -262,15 +266,18 @@ export function buildSessionTree({ entries, leafId } = {}) {
     };
   };
 
-  // Top level: active-path roots walk inline; anything else becomes a branch.
+  // Top level: the active path renders flat (depth 0), so every branch
+  // forking off it anchors at depth 0 too — nesting increases only inside
+  // expanded branch groups (branchRow recursion), never from the fork
+  // point's position along the active path.
   const rows = [];
-  const walkActive = (entryId, depth) => {
+  const walkActive = (entryId) => {
     for (const { entry, cls } of visibleChildren(entryId)) {
       if (activePathIds.has(entry.id)) {
-        rows.push(nodeRow(entry, cls, depth, true));
-        walkActive(entry.id, depth + 1);
+        rows.push(nodeRow(entry, cls, 0, true));
+        walkActive(entry.id);
       } else {
-        rows.push(branchRow(entry, cls, depth));
+        rows.push(branchRow(entry, cls, 0));
       }
     }
   };
