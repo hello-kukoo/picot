@@ -418,6 +418,29 @@
   border-color: color-mix(in srgb, #ef4444 40%, var(--border));
 }
 
+/* Update-check state notices (checking / failed / progress). Separate class from
+   .pkg-manager-message on purpose: flashMessage owns the latter. */
+.pkg-manager-notice {
+  padding: var(--space-1-5) var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
+.pkg-manager-notice-error {
+  color: var(--danger, #ef4444);
+}
+
+.pkg-manager-update-badge {
+  flex-shrink: 0;
+  padding: var(--space-0-5) var(--space-1-5);
+  /* design-token-ignore: badge glyph below smallest token, matches sibling rules */
+  font-size: var(--font-size-xs, 11px);
+  font-weight: 600;
+  color: var(--accent, #3b82f6);
+  border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent);
+  border-radius: var(--radius-pill);
+}
+
 .pkg-manager-shell {
   display: flex;
   gap: var(--space-3);

@@ -1,18 +1,33 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { initI18n } from "../../i18n.js";
+import { initI18n, setLocale } from "../../i18n.js";
 import { setupProjectHeader } from "./project-header.js";
 
 const enMessages = JSON.parse(readFileSync(join(process.cwd(), "public/locales/en.json"), "utf8"));
-const BASE_HTML = `
-  <button id="file-sidebar-toggle" class="file-sidebar-toggle" title="Files" aria-label="Toggle file browser">
-    <span id="workspace-indicator" class="file-sidebar-toggle__label hidden"></span>
-  </button>
-  <button id="diff-sidebar-toggle" class="git-branch-toggle hidden">
-    <span id="git-branch-indicator" class="git-branch-toggle__label"></span>
-  </button>
-`;
+
+/** Mount the header DOM the module expects, built via DOM APIs (no innerHTML). */
+function mountBaseHeader() {
+  const filesToggle = document.createElement("button");
+  filesToggle.id = "file-sidebar-toggle";
+  filesToggle.className = "file-sidebar-toggle";
+  filesToggle.title = "Files";
+  filesToggle.setAttribute("aria-label", "Toggle file browser");
+  const workspaceIndicator = document.createElement("span");
+  workspaceIndicator.id = "workspace-indicator";
+  workspaceIndicator.className = "file-sidebar-toggle__label hidden";
+  filesToggle.append(workspaceIndicator);
+
+  const diffToggle = document.createElement("button");
+  diffToggle.id = "diff-sidebar-toggle";
+  diffToggle.className = "git-branch-toggle hidden";
+  const branchLabel = document.createElement("span");
+  branchLabel.id = "git-branch-indicator";
+  branchLabel.className = "git-branch-toggle__label";
+  diffToggle.append(branchLabel);
+
+  document.body.append(filesToggle, diffToggle);
+}
 
 describe("project header", () => {
   beforeEach(async () => {
@@ -31,7 +46,7 @@ describe("project header", () => {
   });
 
   it("shows the full workspace path in the files toggle", async () => {
-    document.body.innerHTML = BASE_HTML;
+    mountBaseHeader();
     const fullPath = "/Users/ShixinGuo/code/pi/pi-web-ui";
     const data = {
       workspaceInfo: vi.fn().mockResolvedValue({ info: { path: fullPath } }),
@@ -49,7 +64,7 @@ describe("project header", () => {
   });
 
   it("shows git branch toggle with branch name when git info is available", async () => {
-    document.body.innerHTML = BASE_HTML;
+    mountBaseHeader();
     const data = {
       workspaceInfo: vi.fn().mockResolvedValue({
         info: { path: "/some/path", gitBranch: "main" },
@@ -66,7 +81,7 @@ describe("project header", () => {
   });
 
   it("hides git branch toggle when project has no git info", async () => {
-    document.body.innerHTML = BASE_HTML;
+    mountBaseHeader();
     const data = {
       workspaceInfo: vi.fn().mockResolvedValue({
         info: { path: "/some/non-git-path" },
@@ -80,7 +95,7 @@ describe("project header", () => {
   });
 
   it("leaves the path label hidden when workspace path is unavailable", async () => {
-    document.body.innerHTML = BASE_HTML;
+    mountBaseHeader();
     const data = {
       workspaceInfo: vi.fn().mockResolvedValue({ info: { gitBranch: "main" } }),
     };
@@ -91,6 +106,79 @@ describe("project header", () => {
     const toggle = document.getElementById("file-sidebar-toggle");
     expect(indicator.classList.contains("hidden")).toBe(true);
     expect(indicator.textContent).toBe("");
+    expect(toggle.title).toBe("Files");
+    expect(toggle.getAttribute("aria-label")).toBe("Toggle file browser");
+  });
+
+  it("updates git pill visibility on every workspace switch, both directions", async () => {
+    mountBaseHeader();
+    const data = {
+      workspaceInfo: vi
+        .fn()
+        .mockResolvedValueOnce({ info: { path: "/git/workspace", gitBranch: "main" } })
+        .mockResolvedValueOnce({ info: { path: "/plain/workspace" } })
+        .mockResolvedValueOnce({ info: { path: "/git/workspace-2", gitBranch: "feature/x" } }),
+    };
+
+    await setupProjectHeader({ data, workspaceId: "git-ws" });
+    let toggle = document.getElementById("diff-sidebar-toggle");
+    expect(toggle.classList.contains("hidden")).toBe(false);
+    expect(document.getElementById("git-branch-indicator").textContent).toBe("main");
+
+    await setupProjectHeader({ data, workspaceId: "plain-ws" });
+    toggle = document.getElementById("diff-sidebar-toggle");
+    expect(toggle.classList.contains("hidden")).toBe(true);
+
+    await setupProjectHeader({ data, workspaceId: "git-ws-2" });
+    toggle = document.getElementById("diff-sidebar-toggle");
+    expect(toggle.classList.contains("hidden")).toBe(false);
+    expect(document.getElementById("git-branch-indicator").textContent).toBe("feature/x");
+  });
+
+  it("keeps the latest workspace probe authoritative when earlier probes resolve late", async () => {
+    mountBaseHeader();
+    let resolveOldProbe;
+    const data = {
+      workspaceInfo: vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveOldProbe = resolve;
+            }),
+        )
+        .mockResolvedValueOnce({ info: { path: "/new/workspace", gitBranch: "main" } }),
+    };
+
+    const oldProbe = setupProjectHeader({ data, workspaceId: "old-ws" });
+    await setupProjectHeader({ data, workspaceId: "new-ws" });
+    expect(document.getElementById("workspace-indicator").textContent).toBe("/new/workspace");
+
+    resolveOldProbe({ info: { path: "/old/workspace", gitBranch: "old-branch" } });
+    await oldProbe;
+
+    expect(document.getElementById("workspace-indicator").textContent).toBe("/new/workspace");
+    expect(document.getElementById("git-branch-indicator").textContent).toBe("main");
+    expect(document.getElementById("diff-sidebar-toggle").classList.contains("hidden")).toBe(false);
+  });
+
+  it("drops the previous workspace's locale relabeling after a re-probe", async () => {
+    mountBaseHeader();
+    const data = {
+      workspaceInfo: vi
+        .fn()
+        .mockResolvedValueOnce({ info: { path: "/old/workspace" } })
+        // Second workspace has no path: its labels stay hidden and the old
+        // workspace's listener must no longer overwrite them.
+        .mockResolvedValueOnce({ info: { gitBranch: "main" } }),
+    };
+
+    await setupProjectHeader({ data, workspaceId: "old-ws" });
+    await setupProjectHeader({ data, workspaceId: "new-ws" });
+
+    await setLocale("en");
+
+    const toggle = document.getElementById("file-sidebar-toggle");
     expect(toggle.title).toBe("Files");
     expect(toggle.getAttribute("aria-label")).toBe("Toggle file browser");
   });

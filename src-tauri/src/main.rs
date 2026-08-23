@@ -10,6 +10,7 @@ mod markitdown_preview;
 mod metadata_store;
 mod model_health;
 mod native_pi_manager;
+mod package_updates;
 mod pi_launch;
 mod pi_rpc_bridge;
 mod remote_auth;

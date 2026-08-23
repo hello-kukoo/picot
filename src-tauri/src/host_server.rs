@@ -1596,6 +1596,32 @@ async fn dispatch_host_operation(
                 "packages": packages,
             }))
         }
+        "check_pi_package_updates" => {
+            let workspace_root = frame
+                .get("workspaceId")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .and_then(|id| state.data.workspace_root_path(id).ok());
+            let resolver = state.pi_launch.clone();
+            let packages = tokio::task::spawn_blocking(move || resolver.list_pi_packages())
+                .await
+                .map_err(|error| ("host_operation_failed", error.to_string()))?
+                .map_err(|message| ("list_pi_packages_failed", message))?;
+            // npm probes run with the workspace as cwd so project-local npmCommand
+            // settings and .npmrc files are honored; failures degrade to no updates.
+            let updates = crate::package_updates::check_available_updates(
+                &packages,
+                workspace_root.as_deref(),
+            )
+            .await;
+            Ok(json!({
+                "type": "host_response",
+                "requestId": request_id,
+                "operation": "check_pi_package_updates",
+                "updates": updates,
+            }))
+        }
         "install_pi_package" | "remove_pi_package" | "update_pi_package" => {
             let source = frame
                 .get("source")

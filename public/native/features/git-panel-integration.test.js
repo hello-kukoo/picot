@@ -151,6 +151,35 @@ describe("setupGitPanel integration", () => {
     expect(result.panel.aiError).toBeNull();
   });
 
+  it("hides the header git pill once a status probe proves the workspace is not a repository", async () => {
+    const { setupGitPanel } = await import("./git-panel-integration.js");
+    const { container, fileList } = setupDom();
+    // The header pill lives outside the panel fixture (app header chrome).
+    const pill = document.createElement("button");
+    pill.id = "diff-sidebar-toggle";
+    document.body.append(pill);
+    const runtime = createRuntime();
+    runtime.git = vi.fn(async () => ({
+      type: "git_command_failed",
+      error: "fatal: not a git repository (or any of the parent directories): .git",
+    }));
+
+    const result = setupGitPanel({
+      runtime,
+      getTarget: () => ({ workspaceId: "ws-1" }),
+      container,
+      fileList,
+      filePreviewPanel: { openDiff: vi.fn() },
+      onError: vi.fn(),
+    });
+
+    result.setTab("git");
+    await vi.waitFor(() => {
+      expect(result.panel.notGitRepo).toBe(true);
+      expect(pill.classList.contains("hidden")).toBe(true);
+    });
+  });
+
   it("routes non-repository status failures to commit failure handling, not not-a-repo", async () => {
     const { setupGitPanel } = await import("./git-panel-integration.js");
     const { container, fileList } = setupDom();
