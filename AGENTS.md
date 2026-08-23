@@ -19,6 +19,15 @@ live in [`ARCHITECTURE.md`](ARCHITECTURE.md).
   contract. Changes to LAN access, cross-platform paths, or static serving also
   require the corresponding architecture update.
 
+## Agent memory
+
+This repo maintains an agent memory bank at `.memory/MEMORY.md` (gitignored,
+local-only). **Read it before starting work** in this repo: it holds decision
+logs, lessons from past mistakes, and a topic index under `.memory/topics/`.
+Batch notes live in `.memory/notes/`. To record new decisions/lessons after a
+work session, use the `update-memory` skill (`.claude/skills/update-memory/SKILL.md`).
+Dr. Lin's hand edits there always win over agent merges.
+
 ## Pi references
 
 - [RPC protocol](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/rpc.md)

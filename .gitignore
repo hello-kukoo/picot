@@ -36,3 +36,7 @@ public/vendor/
 
 # Zed editor
 .zed/
+
+# Agent memory tooling (workspace-private, see .memory/MEMORY.md)
+.pi/extensions/auto-memory.ts
+.claude/skills/update-memory/
