@@ -67,6 +67,21 @@ test("sidebar and File panel icons match the Lucide v1 geometry", () => {
   );
 });
 
+test("git-info matches shared Git repository indicator geometry", () => {
+  const icon = createIcon("git-info");
+  expect(icon?.querySelector('line[x1="6"][y1="3"][x2="6"][y2="15"]')).not.toBeNull();
+  expect(icon?.querySelector('circle[cx="18"][cy="6"]')).not.toBeNull();
+  expect(icon?.querySelector('circle[cx="6"][cy="18"]')).not.toBeNull();
+  expect(icon?.querySelector('path[d="M18 9a9 9 0 0 1-9 9"]')).not.toBeNull();
+});
+
+test("circle-info matches the Info panel toolbar geometry", () => {
+  const icon = createIcon("circle-info");
+  expect(icon?.querySelector("circle")?.getAttribute("r")).toBe("10");
+  expect(icon?.querySelector('path[d="M12 16v-4"]')).not.toBeNull();
+  expect(icon?.querySelector('path[d="M12 8h.01"]')).not.toBeNull();
+});
+
 test("every action glyph follows the 24x24 currentColor round-stroke contract", () => {
   for (const name of [
     "maximize",

@@ -41,6 +41,27 @@ describe("HostDataGateway", () => {
     await expect(response).resolves.toMatchObject({ sessions: [{ id: "session-a" }] });
   });
 
+  it("reads the full session tree snapshot with entries and leafId", async () => {
+    const adapter = createInMemoryRuntimeAdapter();
+    const data = new HostDataGateway(adapter);
+    const response = data.readSessionTree("workspace-a", "session-a");
+    const sent = adapter.takeSent();
+    expect(sent).toMatchObject({
+      type: "data_request",
+      operation: "read_session_tree",
+      workspaceId: "workspace-a",
+      sessionId: "session-a",
+    });
+    adapter.receive({
+      type: "data_response",
+      requestId: sent.requestId,
+      tree: { entries: [{ id: "u1" }], leafId: "u1" },
+    });
+    await expect(response).resolves.toMatchObject({
+      tree: { entries: [{ id: "u1" }], leafId: "u1" },
+    });
+  });
+
   it("rejects pending reads on disconnect", async () => {
     const adapter = createInMemoryRuntimeAdapter();
     const data = new HostDataGateway(adapter);

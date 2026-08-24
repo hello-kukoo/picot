@@ -18,6 +18,7 @@
 @import url("native/workspace/file-preview-panel.css");
 @import url("native/session/session-search-dialog.css");
 @import url("native/session/session-info.css");
+@import url("native/session/info-panel.css");
 @import url("native/workspace/header-open-app.css");
 @import url("native/extensions/command-palette.css");
 @import url("native/features/app-launcher.css");

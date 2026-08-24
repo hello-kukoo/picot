@@ -54,6 +54,7 @@ import {
   createTaskCompletionNotifications,
 } from "./notifications/task-completion-notifications.js";
 import { extractAssistantError, extractRuntimeEventError } from "./session/assistant-error.js";
+import { InfoPanel } from "./session/info-panel.js";
 import { setupSessionInfo } from "./session/session-info.js";
 import { createSessionSelectionHandler } from "./session/session-navigation.js";
 import { setupSessionSearchDialog } from "./session/session-search-dialog.js";
@@ -74,8 +75,12 @@ import { RuntimeGateway } from "./transport/runtime-gateway.js";
 import { setupAppKeyboardShortcuts } from "./utils/keyboard-shortcuts.js";
 import { randomId, sessionScopedClientId } from "./utils/random-id.js";
 import { appRoutePath, parseAppRoute, replaceTemporarySessionRoute } from "./utils/router.js";
+import { createWorkspaceAppActions } from "./workspace/app-actions.js";
 import { findLatestAssistantUsage, setupContextUsage } from "./workspace/context-usage.js";
-import { toggleExclusiveSideView } from "./workspace/exclusive-side-panel.js";
+import {
+  toggleExclusiveSidePanel,
+  toggleExclusiveSideView,
+} from "./workspace/exclusive-side-panel.js";
 import { NativeFileBrowser } from "./workspace/file-browser.js";
 import { setupHeaderOpenApp } from "./workspace/header-open-app.js";
 import { setupProjectHeader } from "./workspace/project-header.js";
@@ -361,6 +366,72 @@ const gitPanel = setupGitPanel({
   onError: showError,
 });
 
+// ── Info panel (session tree + workspace actions) ─────────────────────
+const infoSidebar = document.getElementById("info-sidebar");
+const infoAppActions = createWorkspaceAppActions({
+  control,
+  getWorkspacePath: () => infoPanel?.workspacePath || "",
+  // The app list arrives async: re-resolve the Info panel's app rows the
+  // moment the probe completes, otherwise they stay hidden until the next
+  // updateWorkspace call.
+  onAppsLoaded: () => infoPanel?.refreshApps(),
+});
+const infoPanel = infoSidebar
+  ? new InfoPanel({
+      panel: document.getElementById("info-panel"),
+      actions: infoAppActions,
+      t,
+    })
+  : null;
+
+let infoTreeSeq = 0;
+// Workspace path the app list was last probed for (loadApps force guard).
+let infoPanelWorkspacePath = "";
+async function refreshInfoPanel({ refreshWorkspace = false } = {}) {
+  if (!infoPanel || !infoSidebar || infoSidebar.classList.contains("collapsed")) return;
+  // Sequence guard: a session switch while a fetch is in flight must not let
+  // the stale response repaint the new session's tree.
+  const seq = ++infoTreeSeq;
+  if (refreshWorkspace) {
+    try {
+      const response = await data.workspaceInfo(target.workspaceId);
+      infoPanel.updateWorkspace(response?.info?.path ?? "");
+      // A workspace switch can change which apps apply: force a re-probe only
+      // on that path; same-workspace re-opens reuse the cached list.
+      await infoAppActions.loadApps({ force: response?.info?.path !== infoPanelWorkspacePath });
+      infoPanelWorkspacePath = response?.info?.path ?? "";
+    } catch {
+      // Workspace actions degrade to hidden rows; the tree still loads.
+    }
+  }
+  try {
+    const response = await data.readSessionTree(target.workspaceId, target.sessionId);
+    if (seq !== infoTreeSeq) return;
+    infoPanel.updateTree({
+      entries: response?.tree?.entries ?? [],
+      leafId: response?.tree?.leafId ?? null,
+    });
+  } catch (error) {
+    console.warn("[InfoPanel] tree refresh failed:", error);
+  }
+}
+
+function openInfoPanel() {
+  const opened = toggleExclusiveSidePanel(infoSidebar, [
+    document.getElementById("file-sidebar"),
+    document.getElementById("diff-sidebar"),
+  ]);
+  if (opened) void refreshInfoPanel({ refreshWorkspace: true });
+}
+
+document.getElementById("info-sidebar-toggle")?.addEventListener("click", openInfoPanel);
+document.getElementById("info-sidebar-close")?.addEventListener("click", () => {
+  infoSidebar?.classList.add("collapsed");
+});
+document.getElementById("info-sidebar-refresh")?.addEventListener("click", () => {
+  void refreshInfoPanel({ refreshWorkspace: true });
+});
+
 // Owned by setupFileBrowser() once the sidebar DOM is ready. Kept at module
 // scope so openFilesPanel() can refresh it after expanding the sidebar.
 let fileBrowser = null;
@@ -372,7 +443,9 @@ let fileBrowser = null;
 function openWorkspacePanel(view) {
   const sidebar = document.getElementById("file-sidebar");
   const result = toggleExclusiveSideView(sidebar, {
-    otherPanels: [document.getElementById("diff-sidebar")],
+    // Files / Git / Info are one exclusive group: opening any view collapses
+    // BOTH other side panels (Info shares the right rail, not a tab bar).
+    otherPanels: [document.getElementById("diff-sidebar"), infoSidebar],
     currentView: gitPanel?.getTab?.() ?? "files",
     nextView: view,
   });
@@ -1754,6 +1827,15 @@ async function handleRuntimeEvent(event) {
           convNav.notifyNewMessage();
         }
         showProviderErrorIfNeeded(event);
+        if (infoSidebar && !infoSidebar.classList.contains("collapsed")) {
+          void refreshInfoPanel();
+        }
+      } else if (event.message?.role === "user") {
+        // The persisted user turn is a new tree node; refresh the open Info
+        // panel so it appears before the assistant reply finishes.
+        if (infoSidebar && !infoSidebar.classList.contains("collapsed")) {
+          void refreshInfoPanel();
+        }
       }
       break;
     case "tool_execution_start":
@@ -1855,6 +1937,15 @@ async function adoptTarget(nextTarget, { updateRoute = true } = {}) {
       workspaceId: nextTarget.workspaceId,
     }).catch((error) => {
       console.warn("[Native] Failed to load project header info:", error);
+    });
+  }
+  // The Info panel's tree belongs to the active session: bump the sequence
+  // (dropping any in-flight fetch for the old session) and reload if open.
+  infoTreeSeq += 1;
+  infoPanel?.updateTree({ entries: [], leafId: null });
+  if (infoSidebar && !infoSidebar.classList.contains("collapsed")) {
+    void refreshInfoPanel({
+      refreshWorkspace: nextTarget.workspaceId !== previousTarget.workspaceId,
     });
   }
   sessionInfo.refresh();

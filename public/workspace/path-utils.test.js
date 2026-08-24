@@ -1,7 +1,12 @@
 // ABOUTME: Verifies cross-platform local filesystem path normalization for browser consumers.
 // ABOUTME: Covers POSIX, Windows drive, UNC, basename, and parent-path behavior.
 import { expect, test } from "vitest";
-import { basenameLocalPath, normalizeLocalPath, parentLocalPath } from "./path-utils.js";
+import {
+  basenameLocalPath,
+  displayLocalPath,
+  normalizeLocalPath,
+  parentLocalPath,
+} from "./path-utils.js";
 
 test("normalizes Windows separators while preserving a drive root", () => {
   expect(normalizeLocalPath("C:\\Users\\Lin\\repo\\..\\picot\\")).toBe("C:/Users/Lin/picot");
@@ -35,4 +40,10 @@ test("preserves relative parent traversal and normalizes empty dot segments", ()
   expect(normalizeLocalPath(".")).toBe("");
   expect(normalizeLocalPath("a/./b/../c")).toBe("a/c");
   expect(parentLocalPath(".")).toBe("");
+});
+
+test("formats relative paths with a leading slash for sidebar display", () => {
+  expect(displayLocalPath("Users/Lin/project")).toBe("/Users/Lin/project");
+  expect(displayLocalPath("/Users/Lin/project")).toBe("/Users/Lin/project");
+  expect(displayLocalPath("C:/Users/Lin/project")).toBe("C:/Users/Lin/project");
 });

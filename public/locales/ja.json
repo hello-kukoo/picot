@@ -1168,5 +1168,25 @@
     "deny": "拒否",
     "approve": "承認",
     "error": "リクエストを処理できませんでした。すでに処理済みの可能性があります。"
+  },
+  "infoPanel": {
+    "title": "情報",
+    "workspace": "ワークスペース",
+    "copyPath": "パスをコピー",
+    "copied": "コピーしました",
+    "sessionHistory": "セッション履歴",
+    "activePath": "アクティブな分岐",
+    "branch": "分岐",
+    "turns": "{count} ターン",
+    "resumeBranch": "分岐を再開",
+    "refresh": "セッション履歴を更新",
+    "empty": "メッセージはまだありません",
+    "statusError": "エラー",
+    "statusAborted": "中止しました",
+    "imageMessage": "画像",
+    "roleUser": "あなた",
+    "roleAssistant": "アシスタント",
+    "toggleAria": "セッション情報パネルを切り替え",
+    "closeAria": "セッション情報パネルを閉じる"
   }
 }

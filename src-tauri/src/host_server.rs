@@ -1593,6 +1593,26 @@ async fn dispatch(
                     "messages": messages,
                 }))
             }
+            Some("read_session_tree") => {
+                let workspace_id = frame
+                    .get("workspaceId")
+                    .and_then(Value::as_str)
+                    .ok_or(("invalid_workspace", "workspaceId is required".into()))?;
+                let session_id = frame
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .ok_or(("invalid_session", "sessionId is required".into()))?;
+                let tree = state
+                    .data
+                    .read_session_tree(workspace_id, session_id)
+                    .map_err(host_data_error)?;
+                Ok(json!({
+                    "type": "data_response",
+                    "requestId": request_id,
+                    "operation": "read_session_tree",
+                    "tree": tree,
+                }))
+            }
             Some("workspace_info") => {
                 let workspace_id = frame
                     .get("workspaceId")

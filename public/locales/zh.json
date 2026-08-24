@@ -1168,5 +1168,25 @@
     "deny": "拒绝",
     "approve": "批准",
     "error": "无法处理该请求。它可能已经被处理。"
+  },
+  "infoPanel": {
+    "title": "信息",
+    "workspace": "工作区",
+    "copyPath": "复制路径",
+    "copied": "已复制",
+    "sessionHistory": "会话历史",
+    "activePath": "当前分支",
+    "branch": "分支",
+    "turns": "{count} 轮",
+    "resumeBranch": "恢复分支",
+    "refresh": "刷新会话历史",
+    "empty": "暂无消息",
+    "statusError": "出错",
+    "statusAborted": "已中止",
+    "imageMessage": "图片",
+    "roleUser": "你",
+    "roleAssistant": "助手",
+    "toggleAria": "切换会话信息面板",
+    "closeAria": "关闭会话信息面板"
   }
 }

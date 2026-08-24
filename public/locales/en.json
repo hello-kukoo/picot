@@ -1168,5 +1168,25 @@
     "deny": "Deny",
     "approve": "Approve",
     "error": "That request could not be handled. It may already have been decided."
+  },
+  "infoPanel": {
+    "title": "Info",
+    "workspace": "Workspace",
+    "copyPath": "Copy path",
+    "copied": "Copied",
+    "sessionHistory": "Session history",
+    "activePath": "Active path",
+    "branch": "Branch",
+    "turns": "{count} turns",
+    "resumeBranch": "Resume branch",
+    "refresh": "Refresh session history",
+    "empty": "No messages yet",
+    "statusError": "Error",
+    "statusAborted": "Aborted",
+    "imageMessage": "Image",
+    "roleUser": "You",
+    "roleAssistant": "Assistant",
+    "toggleAria": "Toggle session info panel",
+    "closeAria": "Close session info panel"
   }
 }

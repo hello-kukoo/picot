@@ -7,6 +7,7 @@ const READ_OPERATIONS = new Set([
   "cost_dashboard",
   "workspace_info",
   "read_session_messages",
+  "read_session_tree",
 ]);
 
 const DEFAULT_SESSION_LIST_HTTP_TIMEOUT_MS = 1500;
@@ -150,6 +151,15 @@ export class HostDataGateway {
    */
   readSessionMessages(workspaceId, sessionId) {
     return this.request("read_session_messages", { workspaceId, sessionId });
+  }
+
+  /**
+   * Full session JSONL tree snapshot for the Info panel: every id-carrying
+   * entry verbatim (hidden entries keep the parent/child chain connected)
+   * plus the derived active leaf. Resolves to `{ tree: { entries, leafId } }`.
+   */
+  readSessionTree(workspaceId, sessionId) {
+    return this.request("read_session_tree", { workspaceId, sessionId });
   }
 
   async #listAllSessionsHttp(workspaceId) {
