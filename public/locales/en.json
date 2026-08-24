@@ -49,6 +49,18 @@
     "branchName": "Branch: {name}",
     "panel": "Git",
     "files": "Files",
+    "copyHash": "Copy hash",
+    "fallback": {
+      "binary": "This file is binary and cannot be displayed",
+      "copy": "This file was only copied in this commit",
+      "rename": "This file was only renamed in this commit"
+    },
+    "history": "History",
+    "historyEmpty": "No history yet",
+    "historySelectHint": "Select a commit to view details",
+    "messageTruncated": "Commit message truncated",
+    "filesTruncated": "Some changed files are omitted",
+    "justNow": "Just now",
     "staged": "Staged",
     "changes": "Changes",
     "untracked": "Untracked",
@@ -83,6 +95,7 @@
     "comparison": {
       "staged": "Staged",
       "changes": "Changes",
+      "commit": "Commit",
       "untracked": "Untracked"
     }
   },

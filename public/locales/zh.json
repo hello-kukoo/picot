@@ -49,6 +49,18 @@
     "branchName": "分支：{name}",
     "panel": "Git",
     "files": "文件",
+    "copyHash": "复制哈希",
+    "fallback": {
+      "binary": "此文件为二进制文件，无法显示",
+      "copy": "此文件在本次提交中仅复制",
+      "rename": "此文件在本次提交中仅重命名"
+    },
+    "history": "历史",
+    "historyEmpty": "没有历史记录",
+    "historySelectHint": "点击提交查看详情",
+    "messageTruncated": "提交说明已截断",
+    "filesTruncated": "部分变更文件已省略",
+    "justNow": "刚刚",
     "staged": "已暂存",
     "changes": "修改",
     "untracked": "未跟踪",
@@ -83,6 +95,7 @@
     "comparison": {
       "staged": "已暂存",
       "changes": "修改",
+      "commit": "提交",
       "untracked": "未跟踪"
     }
   },

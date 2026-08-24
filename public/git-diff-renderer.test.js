@@ -10,7 +10,8 @@ setMessages({
     diffOriginal: "Original",
     diffModified: "Modified",
     diffEmpty: "No changes to display",
-    comparison: { staged: "Staged", changes: "Changes", untracked: "Untracked" },
+    fallback: { binary: "Binary file", rename: "Renamed only", copy: "Copied only" },
+    comparison: { staged: "Staged", changes: "Changes", commit: "Commit", untracked: "Untracked" },
   },
 });
 
@@ -69,6 +70,19 @@ describe("git diff renderer", () => {
     const container = document.createElement("div");
     createGitDiffRenderer({ rawPatch: "raw", truncated: true }).mount(container);
     expect(container.querySelector("pre")?.textContent).toBe("raw");
+  });
+
+  it("localizes rename, copy, and binary fallback reasons", () => {
+    for (const [fallbackReason, text] of [
+      ["rename", "Renamed only"],
+      ["copy", "Copied only"],
+      ["binary", "Binary file"],
+    ]) {
+      const container = document.createElement("div");
+      createGitDiffRenderer({ fallbackReason, rawPatch: "" }).mount(container);
+      expect(container.querySelector(".git-diff-fallback-reason")?.textContent).toBe(text);
+      expect(container.querySelector(".git-diff-empty")).toBeNull();
+    }
   });
 
   it("uses shared logical grid rows when line wrapping is enabled", () => {

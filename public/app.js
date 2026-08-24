@@ -1155,6 +1155,8 @@ const gitClient = new GitClient({
 });
 let latestGitDiffRequest = null;
 let latestGitDiffDescriptor = null;
+let latestGitCommitDiffRequest = null;
+let latestGitCommitDiffDescriptor = null;
 const gitPanel = new GitPanel({
   container: gitPanelElement,
   fileList,
@@ -1163,6 +1165,10 @@ const gitPanel = new GitPanel({
   onDiffRequest: (requestId, descriptor) => {
     latestGitDiffRequest = requestId;
     latestGitDiffDescriptor = descriptor || null;
+  },
+  onHistoryDiffRequest: (requestId, descriptor) => {
+    latestGitCommitDiffRequest = requestId;
+    latestGitCommitDiffDescriptor = descriptor || null;
   },
 });
 const syncFileSidebarHiddenToggle = (showHidden) => {
@@ -1555,9 +1561,12 @@ wsClient.addEventListener("ownerBootstrap", async (event) => {
     // workspace cannot leak into the new one.
     latestGitDiffRequest = null;
     latestGitDiffDescriptor = null;
+    latestGitCommitDiffRequest = null;
+    latestGitCommitDiffDescriptor = null;
     gitPanel.aiSnapshot = null;
     gitPanel.commitMessage = "";
     gitPanel.pendingConfirmationToken = null;
+    gitPanel.historyPanel?.clearSession();
     gitPanel.notGitRepo = false;
     gitPanel.gitUnavailable = false;
     if (!gitPanelElement.classList.contains("hidden")) void gitPanel.refresh();
@@ -1617,6 +1626,21 @@ wsClient.addEventListener("gitDiff", (event) => {
   if (!gitResponseMatchesGeneration(event.detail)) return;
   filePreviewPanel.openDiff({ ...latestGitDiffDescriptor, ...diff });
 });
+wsClient.addEventListener("gitLog", (event) => {
+  if (!gitResponseMatchesGeneration(event.detail)) return;
+  gitPanel.historyPanel?.applyLog(event.detail);
+});
+wsClient.addEventListener("gitLogDetail", (event) => {
+  if (!gitResponseMatchesGeneration(event.detail)) return;
+  gitPanel.historyPanel?.applyLogDetail(event.detail);
+});
+wsClient.addEventListener("gitCommitDiff", (event) => {
+  const requestId = event.detail?.requestId;
+  const diff = event.detail?.diff;
+  if (!diff || requestId !== latestGitCommitDiffRequest) return;
+  if (!gitResponseMatchesGeneration(event.detail)) return;
+  filePreviewPanel.openDiff({ ...latestGitCommitDiffDescriptor, ...diff });
+});
 wsClient.addEventListener("gitCommitResult", (event) => {
   if (!gitResponseMatchesGeneration(event.detail)) return;
   // A result frame from commit A must never close or clear the dialog state
@@ -1635,6 +1659,7 @@ wsClient.addEventListener("gitCommandFailed", (event) => {
   console.warn("[git] command failed", event.detail);
   if (!gitResponseMatchesGeneration(event.detail)) return;
   gitClient.consumeWriteFailure(event.detail);
+  gitPanel.historyPanel?.handleFailure(event.detail?.requestId);
   // Only AI generation failure opens the commit dialog with an empty message so
   // the user can still write a commit message by hand.
   if (event.detail?.type === "git_ai_commit_message_failed") {
@@ -4759,6 +4784,7 @@ async function handleSessionSelectImpl(session, project) {
     gitPanel.selected = new Set();
     gitPanel.commitMessage = "";
     gitPanel.pendingConfirmationToken = null;
+    gitPanel.historyPanel?.clearSession();
     if (!gitPanelElement.classList.contains("hidden")) void gitPanel.refresh();
   } else {
     syncWorkspaceIndicatorFromInstances();
@@ -5158,6 +5184,7 @@ function handleMirrorSync(data) {
     gitPanel.selected = new Set();
     gitPanel.commitMessage = "";
     gitPanel.pendingConfirmationToken = null;
+    gitPanel.historyPanel?.clearSession();
     // Probe the new workspace's Git status on EVERY entry, not just when the
     // Git panel is already open. The git_command_failed / git_status result is
     // the authoritative, generation-safe signal that drives the Git tab's

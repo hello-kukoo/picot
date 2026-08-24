@@ -473,6 +473,19 @@ export class WebSocketClient extends EventTarget {
       );
       return;
     }
+    if (
+      message.type === "git_log" ||
+      message.type === "git_log_detail" ||
+      message.type === "git_commit_diff"
+    ) {
+      const eventName = {
+        git_log: "gitLog",
+        git_log_detail: "gitLogDetail",
+        git_commit_diff: "gitCommitDiff",
+      }[message.type];
+      this.dispatchEvent(new CustomEvent(eventName, { detail: message }));
+      return;
+    }
     if (message.type === "git_ai_commit_message") {
       this.dispatchEvent(new CustomEvent("gitAiCommitMessage", { detail: message }));
       return;

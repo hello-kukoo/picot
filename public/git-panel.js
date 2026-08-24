@@ -2,13 +2,22 @@
 // ABOUTME: Renders untrusted repository paths with DOM text nodes and delegates writes to GitClient.
 
 import { createFileTypeIcon } from "./file-type-icons.js";
+import { GitHistoryPanel } from "./git-history-panel.js";
 import { t } from "./i18n.js";
 import { createSectionChevron } from "./sidebar-workspace-group.js";
 
 const GROUPS = ["staged", "changes", "untracked", "conflicted"];
 
 export class GitPanel {
-  constructor({ container, client, openDiff, onDiffRequest, onStatus, fileList } = {}) {
+  constructor({
+    container,
+    client,
+    openDiff,
+    onDiffRequest,
+    onHistoryDiffRequest,
+    onStatus,
+    fileList,
+  } = {}) {
     this.container = container;
     this.client = client;
     this.openDiff = openDiff;
@@ -29,12 +38,53 @@ export class GitPanel {
     this.commitInProgress = false;
     this.pendingCommitRequestId = null;
     this.pendingAiRequestId = null;
+    this._subTab = "changes";
+    this.subTabBar = document.createElement("div");
+    this.subTabBar.className = "git-subtab-bar";
+    this.changesContainer = document.createElement("div");
+    this.changesContainer.className = "git-subtab-pane git-changes-pane";
+    this.historyContainer = document.createElement("div");
+    this.historyContainer.className = "git-subtab-pane git-history-pane hidden";
+    this.container.replaceChildren(this.subTabBar, this.changesContainer, this.historyContainer);
+    this.historyPanel = new GitHistoryPanel({
+      container: this.historyContainer,
+      client,
+      onDiffRequest: onHistoryDiffRequest,
+    });
+    this._renderSubTabBar();
+  }
+  _renderSubTabBar() {
+    for (const name of ["changes", "history"]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "git-subtab";
+      button.dataset.subtab = name;
+      button.setAttribute("role", "tab");
+      button.setAttribute("aria-selected", String(name === this._subTab));
+      button.textContent = name === "changes" ? t("git.comparison.changes") : t("git.history");
+      button.addEventListener("click", () => this.setSubTab(name));
+      this.subTabBar.append(button);
+    }
+  }
+  setSubTab(name) {
+    if (name !== "changes" && name !== "history") return;
+    const wasHistory = this._subTab === "history";
+    this._subTab = name;
+    const isHistory = name === "history";
+    this.changesContainer.classList.toggle("hidden", isHistory);
+    this.historyContainer.classList.toggle("hidden", !isHistory);
+    for (const button of this.subTabBar.querySelectorAll(".git-subtab")) {
+      button.setAttribute("aria-selected", String(button.dataset.subtab === name));
+    }
+    this.historyPanel.setActive(isHistory);
+    if (isHistory && !wasHistory) this.historyPanel.refresh();
   }
   setSnapshot(snapshot) {
     this.snapshot = snapshot;
     this.notGitRepo = false;
     this.gitUnavailable = false;
     this.pendingStatusRequestId = null;
+    this.historyPanel?.setUnavailable(false);
     const valid = new Set(
       (snapshot?.entries || []).flatMap((entry) =>
         this.groupsFor(entry).map(
@@ -57,12 +107,14 @@ export class GitPanel {
     this.notGitRepo = value;
     if (value) this.gitUnavailable = false;
     this.pendingStatusRequestId = null;
+    this.historyPanel?.setUnavailable(value || this.notGitRepo);
     this.render();
   }
   setGitUnavailable(value = true) {
     this.gitUnavailable = value;
     if (value) this.notGitRepo = false;
     this.pendingStatusRequestId = null;
+    this.historyPanel?.setUnavailable(value || this.notGitRepo);
     this.render();
   }
   /** True only for the failure of the most recent status probe, so stale or
@@ -72,6 +124,7 @@ export class GitPanel {
     return requestId != null && requestId === this.pendingStatusRequestId;
   }
   async refresh() {
+    this.historyPanel?.refresh();
     const id = this.client?.command({ type: "status" });
     if (!id) return null;
     this.pendingStatusRequestId = id;
@@ -320,19 +373,19 @@ export class GitPanel {
   }
   render() {
     if (!this.container) return;
-    const scrollTop = this.container.scrollTop;
-    this.container.replaceChildren();
+    const scrollTop = this.changesContainer.scrollTop;
+    this.changesContainer.replaceChildren();
     const snapshot = this.snapshot;
     if (this.gitUnavailable || this.notGitRepo) {
       const empty = document.createElement("p");
       empty.textContent = t(this.gitUnavailable ? "git.unavailable" : "git.notGitRepo");
-      this.container.append(empty);
+      this.changesContainer.append(empty);
       return;
     }
     if (!snapshot) {
       const empty = document.createElement("p");
       empty.textContent = t("git.noStatus");
-      this.container.append(empty);
+      this.changesContainer.append(empty);
       return;
     }
     const selectedEntriesFor = (group) =>
@@ -378,7 +431,7 @@ export class GitPanel {
       });
       section.append(heading);
       if (this.folded.has(group)) {
-        this.container.append(section);
+        this.changesContainer.append(section);
         continue;
       }
       const body = document.createElement("div");
@@ -420,7 +473,7 @@ export class GitPanel {
         }
         section.append(actions);
       }
-      this.container.append(section);
+      this.changesContainer.append(section);
     }
     const toolbar = document.createElement("header");
     toolbar.className = "git-panel-toolbar";
@@ -460,8 +513,8 @@ export class GitPanel {
     commit.addEventListener("click", () => this.requestAiCommitMessage());
     actions.append(commit);
     toolbar.append(actions);
-    this.container.prepend(toolbar);
-    this.container.scrollTop = scrollTop;
+    this.changesContainer.prepend(toolbar);
+    this.changesContainer.scrollTop = scrollTop;
   }
   buildTree(entries) {
     const root = { dirs: new Map(), files: [] };

@@ -57,6 +57,7 @@
     "committing": "Confirmando...",
     "comparison": {
       "changes": "Cambios",
+      "commit": "Commit",
       "staged": "Preparados",
       "untracked": "Sin seguimiento"
     },
@@ -69,6 +70,18 @@
     "discardConfirm": "¿Descartar los cambios de {count} archivo(s)? Esta acción no se puede deshacer.",
     "discardWarning": "Esta acción no se puede deshacer",
     "files": "Archivos",
+    "copyHash": "Copiar hash",
+    "fallback": {
+      "binary": "Este archivo es binario y no se puede mostrar",
+      "copy": "Este archivo solo se copió en este commit",
+      "rename": "Este archivo solo se renombró en este commit"
+    },
+    "history": "Historial",
+    "historyEmpty": "Aún no hay historial",
+    "historySelectHint": "Selecciona un commit para ver detalles",
+    "messageTruncated": "Mensaje de commit truncado",
+    "filesTruncated": "Se omitieron algunos archivos modificados",
+    "justNow": "Ahora mismo",
     "hookChangedTree": "Un hook de pre-commit modificó el contenido confirmado; el commit se creó pero puede diferir de la instantánea preparada.",
     "noStatus": "No se cargó el estado de Git",
     "notGitRepo": "Este espacio de trabajo no es un repositorio Git",

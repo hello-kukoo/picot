@@ -37,6 +37,14 @@ setMessages({
     hookChangedTree: "hook changed",
     commitInProgress: "in progress",
     outcomeUnknown: "unknown",
+    copyHash: "Copy hash",
+    fallback: { rename: "Renamed only", copy: "Copied only" },
+    history: "History",
+    historyEmpty: "No history yet",
+    historySelectHint: "Select a commit to view details",
+    justNow: "Just now",
+    sidebar: { showMore: "Show more" },
+    comparison: { changes: "Changes" },
   },
 });
 
@@ -48,6 +56,22 @@ beforeEach(() => {
 });
 
 describe("GitPanel", () => {
+  it("gates History loading until History sub-tab is active", () => {
+    const client = {
+      command: vi.fn(() => "status-1"),
+      log: vi.fn(() => "log-1"),
+    };
+    const panel = new GitPanel({ container: document.querySelector("#panel"), client });
+    expect(client.log).not.toHaveBeenCalled();
+    panel.subTabBar.querySelector('[data-subtab="history"]').click();
+    expect(panel.historyPanel._active).toBe(true);
+    expect(client.log).toHaveBeenCalledWith(50, null);
+    panel.subTabBar.querySelector('[data-subtab="history"]').click();
+    expect(client.log).toHaveBeenCalledTimes(1);
+    panel.subTabBar.querySelector('[data-subtab="changes"]').click();
+    expect(panel.historyPanel._active).toBe(false);
+  });
+
   it("renders four groups and repository paths as text", () => {
     const panel = new GitPanel({
       container: document.querySelector("#panel"),
@@ -62,7 +86,7 @@ describe("GitPanel", () => {
       ],
     });
     expect(panel.container.textContent).toContain("<unsafe>.js");
-    expect(panel.container.querySelectorAll("section")).toHaveLength(4);
+    expect(panel.container.querySelectorAll(".git-group")).toHaveLength(4);
     expect(panel.container.querySelector("script")).toBeNull();
   });
 

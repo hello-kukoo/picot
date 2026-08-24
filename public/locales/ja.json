@@ -57,6 +57,7 @@
     "committing": "コミット中...",
     "comparison": {
       "changes": "変更",
+      "commit": "コミット",
       "staged": "ステージ済み",
       "untracked": "未追跡"
     },
@@ -69,6 +70,18 @@
     "discardConfirm": "{count} 個のファイルの変更を破棄しますか？この操作は元に戻せません。",
     "discardWarning": "この操作は元に戻せません",
     "files": "ファイル",
+    "copyHash": "ハッシュをコピー",
+    "fallback": {
+      "binary": "このファイルはバイナリのため表示できません",
+      "copy": "このファイルはこのコミットでコピーのみ",
+      "rename": "このファイルはこのコミットで名前変更のみ"
+    },
+    "history": "履歴",
+    "historyEmpty": "履歴はまだありません",
+    "historySelectHint": "コミットを選択して詳細を表示",
+    "messageTruncated": "コミットメッセージは省略されています",
+    "filesTruncated": "一部の変更ファイルは省略されています",
+    "justNow": "たった今",
     "hookChangedTree": "pre-commitフックがコミット内容を変更しました。コミットは作成されましたが、ステージされたスナップショットと異なる可能性があります。",
     "noStatus": "Gitステータスが読み込まれていません",
     "notGitRepo": "このワークスペースは Git リポジトリではありません",

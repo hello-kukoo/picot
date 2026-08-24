@@ -14,6 +14,43 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+fn git_log_args(value: &Value) -> Result<(usize, Option<String>), String> {
+    let limit = value
+        .pointer("/command/limit")
+        .and_then(Value::as_u64)
+        .map(|value| value.clamp(1, 200) as usize)
+        .unwrap_or(50);
+    let before = value
+        .pointer("/command/before")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    Ok((limit, before))
+}
+
+fn git_log_detail_args(value: &Value) -> Result<String, String> {
+    value
+        .pointer("/command/oid")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| "invalid oid".into())
+}
+
+fn git_commit_diff_args(value: &Value) -> Result<(String, Vec<u8>), String> {
+    let oid = value
+        .pointer("/command/commitOid")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "invalid commitOid".to_string())?;
+    let path = value
+        .pointer("/command/pathBytesBase64")
+        .and_then(Value::as_str)
+        .and_then(|encoded| {
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).ok()
+        })
+        .ok_or_else(|| "invalid diff path".to_string())?;
+    Ok((oid.to_owned(), path))
+}
+
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
@@ -1255,6 +1292,73 @@ impl BrokerWs {
                 }
                 Err(error) => fail(&error),
             }
+        } else if command == "log" {
+            let (limit, before) = match git_log_args(value) {
+                Ok(args) => args,
+                Err(error) => {
+                    fail(&error);
+                    return;
+                }
+            };
+            match service.log(owner.as_str(), &root, generation, limit, before.as_deref()) {
+                Ok(log) => {
+                    let _ = client_tx.send(
+                        json!({
+                            "type": "git_log",
+                            "requestId": request_id,
+                            "workspaceGeneration": generation,
+                            "commits": log.commits,
+                            "hasMore": log.has_more,
+                        })
+                        .to_string(),
+                    );
+                }
+                Err(error) => fail(&error),
+            }
+        } else if command == "log_detail" {
+            let oid = match git_log_detail_args(value) {
+                Ok(oid) => oid,
+                Err(error) => {
+                    fail(&error);
+                    return;
+                }
+            };
+            match service.log_detail(owner.as_str(), &root, generation, &oid) {
+                Ok(detail) => {
+                    let _ = client_tx.send(
+                        json!({
+                            "type": "git_log_detail",
+                            "requestId": request_id,
+                            "workspaceGeneration": generation,
+                            "commit": detail,
+                        })
+                        .to_string(),
+                    );
+                }
+                Err(error) => fail(&error),
+            }
+        } else if command == "commit_diff" {
+            let (oid, path) = match git_commit_diff_args(value) {
+                Ok(args) => args,
+                Err(error) => {
+                    fail(&error);
+                    return;
+                }
+            };
+            match service.commit_diff(owner.as_str(), &root, generation, &oid, &path) {
+                Ok(diff) => {
+                    let _ = client_tx.send(
+                        json!({
+                            "type": "git_commit_diff",
+                            "requestId": request_id,
+                            "workspaceGeneration": generation,
+                            "diff": diff,
+                        })
+                        .to_string(),
+                    );
+                }
+                Err(error) => fail(&error),
+            }
         } else if command == "commit" {
             let snapshot_id = value
                 .pointer("/command/snapshotId")
@@ -1758,6 +1862,7 @@ fn rekey_ephemeral_payload(mut payload: Value, instance_id: &str, generation: u6
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::process::Command as StdCommand;
 
     #[test]
     fn extract_session_id_prefers_route_metadata() {
@@ -1974,6 +2079,305 @@ mod tests {
             },
             _ => panic!("expected native hello, owner mismatch: {:?}", owner),
         }
+    }
+
+    #[test]
+    fn git_log_args_host_clamps_limit() {
+        assert_eq!(
+            git_log_args(&json!({ "command": { "type": "log", "limit": 100, "before": "abc" } })),
+            Ok((100, Some("abc".into())))
+        );
+        assert_eq!(
+            git_log_args(&json!({ "command": { "type": "log", "limit": 0 } })),
+            Ok((1, None))
+        );
+        assert_eq!(
+            git_log_args(&json!({ "command": { "type": "log", "limit": 999 } })),
+            Ok((200, None))
+        );
+        assert_eq!(
+            git_log_args(&json!({ "command": { "type": "log", "limit": 201 } })),
+            Ok((200, None))
+        );
+        assert_eq!(
+            git_log_args(&json!({ "command": { "type": "log" } })),
+            Ok((50, None))
+        );
+    }
+
+    #[test]
+    fn git_log_detail_args_requires_oid() {
+        assert_eq!(
+            git_log_detail_args(&json!({ "command": { "oid": "aabb" } })),
+            Ok("aabb".into())
+        );
+        assert_eq!(
+            git_log_detail_args(&json!({ "command": {} })),
+            Err("invalid oid".into())
+        );
+    }
+
+    #[test]
+    fn git_commit_diff_args_decodes_path() {
+        let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"a.txt");
+        let value = json!({ "command": { "commitOid": "abcd", "pathBytesBase64": encoded } });
+        assert_eq!(
+            git_commit_diff_args(&value).unwrap(),
+            ("abcd".into(), b"a.txt".to_vec())
+        );
+        assert!(git_commit_diff_args(&json!({ "command": { "commitOid": "abcd" } })).is_err());
+    }
+
+    #[test]
+    fn git_command_rejects_remote_and_stale_native_frames() {
+        let (broker, registry) = broker_with_registry();
+        let remote = VerifiedClientContext {
+            client_id: 1,
+            class: ClientClass::Remote,
+            owner_id: None,
+        };
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker.route_ui_message(
+            &remote,
+            &serde_json::to_string(&json!({
+                "type": "git_command",
+                "requestId": "remote-git",
+                "workspaceGeneration": 0,
+                "command": { "type": "log" }
+            }))
+            .unwrap(),
+            &tx,
+        );
+        let remote_reply: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        assert_eq!(remote_reply["type"], "git_command_failed");
+        assert_eq!(remote_reply["error"], "unauthorized");
+
+        let native = native_ctx(&broker, &registry, "stale-git");
+        let generation = registry
+            .current_workspace_generation(native.owner_id.as_ref().unwrap())
+            .unwrap();
+        broker.route_ui_message(
+            &native,
+            &serde_json::to_string(&json!({
+                "type": "git_command",
+                "requestId": "stale-git",
+                "workspaceGeneration": generation + 1,
+                "command": { "type": "log" }
+            }))
+            .unwrap(),
+            &tx,
+        );
+        let stale_reply: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        assert_eq!(stale_reply["type"], "git_command_failed");
+        assert_eq!(stale_reply["error"], "stale workspace");
+    }
+
+    #[test]
+    fn git_log_route_emits_generation_bound_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let run = |args: &[&str]| {
+            let output = StdCommand::new("git")
+                .current_dir(&root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        run(&["init", "-q", "-b", "main"]);
+        run(&["config", "user.name", "Test"]);
+        run(&["config", "user.email", "test@example.com"]);
+        std::fs::write(root.join("file.txt"), "content\n").unwrap();
+        run(&["add", "file.txt"]);
+        run(&["commit", "-q", "-m", "initial"]);
+        std::fs::write(root.join("second.txt"), "second\n").unwrap();
+        run(&["add", "second.txt"]);
+        run(&["commit", "-q", "-m", "second"]);
+
+        let broker = BrokerWs {
+            port: 49000,
+            inner: Arc::new(BrokerInner::default()),
+        };
+        let registry = Arc::new(WindowOwnerRegistry::default());
+        broker.set_owner_registry(registry.clone());
+        let (owner, _) = registry
+            .create_owner(
+                "history-route".into(),
+                root.clone(),
+                47821,
+                "http://127.0.0.1:47821".into(),
+            )
+            .unwrap();
+        let ctx = VerifiedClientContext {
+            client_id: 1,
+            class: ClientClass::Native,
+            owner_id: Some(owner),
+        };
+        broker.set_git_service(Arc::new(GitService::new()));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker.route_ui_message(
+            &ctx,
+            &serde_json::to_string(&json!({
+                "type": "git_command",
+                "requestId": "history-log",
+                "workspaceGeneration": 0,
+                "command": { "type": "log", "limit": 1 }
+            }))
+            .unwrap(),
+            &tx,
+        );
+        let reply: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        assert_eq!(reply["type"], "git_log");
+        assert_eq!(reply["requestId"], "history-log");
+        assert_eq!(reply["workspaceGeneration"], 0);
+        assert_eq!(reply["commits"].as_array().unwrap().len(), 1);
+        assert_eq!(reply["hasMore"], true);
+    }
+
+    #[test]
+    fn git_log_detail_route_emits_commit_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let run = |args: &[&str]| {
+            let output = StdCommand::new("git")
+                .current_dir(&root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "git {args:?}");
+        };
+        run(&["init", "-q", "-b", "main"]);
+        run(&["config", "user.name", "Test"]);
+        run(&["config", "user.email", "test@example.com"]);
+        std::fs::write(root.join("file.txt"), "content\n").unwrap();
+        run(&["add", "file.txt"]);
+        run(&["commit", "-q", "-m", "detail"]);
+        let oid = String::from_utf8(
+            StdCommand::new("git")
+                .current_dir(&root)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_owned();
+
+        let (broker, registry) = broker_with_registry();
+        let (owner, _) = registry
+            .create_owner(
+                "history-detail".into(),
+                root.clone(),
+                47821,
+                "http://127.0.0.1:47821".into(),
+            )
+            .unwrap();
+        let ctx = VerifiedClientContext {
+            client_id: 1,
+            class: ClientClass::Native,
+            owner_id: Some(owner),
+        };
+        broker.set_git_service(Arc::new(GitService::new()));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker.route_ui_message(
+            &ctx,
+            &serde_json::to_string(&json!({
+                "type": "git_command",
+                "requestId": "history-detail",
+                "workspaceGeneration": 0,
+                "command": { "type": "log_detail", "oid": oid }
+            }))
+            .unwrap(),
+            &tx,
+        );
+        let reply: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        assert_eq!(reply["type"], "git_log_detail");
+        assert_eq!(reply["requestId"], "history-detail");
+        assert_eq!(reply["workspaceGeneration"], 0);
+        let commit = &reply["commit"];
+        assert!(commit["oid"].as_str().unwrap().len() == 40);
+        assert!(commit["authorName"].is_string());
+        assert!(commit["authorTime"].is_number());
+        assert!(commit["fullMessage"].is_string());
+        assert!(commit["messageTruncated"].is_boolean());
+        assert!(commit["filesTruncated"].is_boolean());
+        assert!(commit["files"].is_array());
+    }
+
+    #[test]
+    fn git_commit_diff_route_omits_snapshot_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let run = |args: &[&str]| {
+            let output = StdCommand::new("git")
+                .current_dir(&root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "git {args:?}");
+        };
+        run(&["init", "-q", "-b", "main"]);
+        run(&["config", "user.name", "Test"]);
+        run(&["config", "user.email", "test@example.com"]);
+        std::fs::write(root.join("file.txt"), "content\n").unwrap();
+        run(&["add", "file.txt"]);
+        run(&["commit", "-q", "-m", "diff"]);
+        let oid = String::from_utf8(
+            StdCommand::new("git")
+                .current_dir(&root)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_owned();
+
+        let (broker, registry) = broker_with_registry();
+        let (owner, _) = registry
+            .create_owner(
+                "history-diff".into(),
+                root.clone(),
+                47821,
+                "http://127.0.0.1:47821".into(),
+            )
+            .unwrap();
+        let ctx = VerifiedClientContext {
+            client_id: 1,
+            class: ClientClass::Native,
+            owner_id: Some(owner),
+        };
+        broker.set_git_service(Arc::new(GitService::new()));
+        let encoded =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"file.txt");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker.route_ui_message(
+            &ctx,
+            &serde_json::to_string(&json!({
+                "type": "git_command",
+                "requestId": "history-diff",
+                "workspaceGeneration": 0,
+                "command": {
+                    "type": "commit_diff",
+                    "commitOid": oid,
+                    "pathBytesBase64": encoded,
+                }
+            }))
+            .unwrap(),
+            &tx,
+        );
+        let reply: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        assert_eq!(reply["type"], "git_commit_diff");
+        assert_eq!(reply["requestId"], "history-diff");
+        assert_eq!(reply["workspaceGeneration"], 0);
+        assert!(reply["diff"].is_object());
+        assert!(reply["diff"].get("snapshotId").is_none());
     }
 
     #[test]
