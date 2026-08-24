@@ -106,4 +106,41 @@ describe("createFilePreviewFollow", () => {
     await follow.openPath("/ws/readme.md");
     expect(opened).toEqual(["readme.md"]);
   });
+
+  test("notifies onWriteApplied with the raw and preview paths", async () => {
+    const applied = [];
+    const follow = createFilePreviewFollow({
+      panel: { revealWrite: async (path) => ({ filePath: path }) },
+      getWorkspacePath: async () => "/ws",
+      onWriteApplied: (raw, previewPath) => applied.push([raw, previewPath]),
+    });
+    follow.onToolStart({ toolCallId: "t1", toolName: "write", args: { path: "/ws/new.js" } });
+    await follow.onToolEnd({ toolCallId: "t1", isError: false });
+    expect(applied).toEqual([["/ws/new.js", "new.js"]]);
+  });
+
+  test("notifies onWriteApplied even without a panel", async () => {
+    const applied = [];
+    const follow = createFilePreviewFollow({
+      getWorkspacePath: async () => "/ws",
+      onWriteApplied: (raw, previewPath) => applied.push([raw, previewPath]),
+    });
+    follow.onToolStart({ toolCallId: "t1", toolName: "edit", args: { file_path: "src/a.ts" } });
+    await follow.onToolEnd({ toolCallId: "t1", isError: false });
+    expect(applied).toEqual([["src/a.ts", "src/a.ts"]]);
+  });
+
+  test("does not notify for failed or non-write tools", async () => {
+    const applied = [];
+    const follow = createFilePreviewFollow({
+      panel: { revealWrite: async (path) => ({ filePath: path }) },
+      getWorkspacePath: async () => "/ws",
+      onWriteApplied: (raw, previewPath) => applied.push([raw, previewPath]),
+    });
+    follow.onToolStart({ toolCallId: "t1", toolName: "write", args: { path: "/ws/a.js" } });
+    await follow.onToolEnd({ toolCallId: "t1", isError: true });
+    follow.onToolStart({ toolCallId: "t2", toolName: "read", args: { path: "/ws/b.js" } });
+    await follow.onToolEnd({ toolCallId: "t2", isError: false });
+    expect(applied).toEqual([]);
+  });
 });

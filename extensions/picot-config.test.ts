@@ -89,6 +89,49 @@ describe("picot config default settings operations", () => {
     expect(SessionManager.open).not.toHaveBeenCalled();
   });
 
+  it("writes large pasted text into the active workspace scratch directory", async () => {
+    const { home, handlePicotConfig } = await loadConfigWithTempHome();
+    const workspace = join(home, "workspace");
+    mkdirSync(workspace, { recursive: true });
+
+    const result = await handlePicotConfig(
+      "write_paste_offload",
+      { content: "large pasted text" },
+      { cwd: workspace },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("Paste offload failed");
+    const relativePath = (result.data as { path: string }).path;
+    expect(relativePath.startsWith(".pi/tmp/paste-")).toBe(true);
+    expect(relativePath.endsWith(".txt")).toBe(true);
+    expect(readFileSync(join(workspace, relativePath), "utf8")).toBe("large pasted text");
+  });
+
+  it("navigates the active session tree through Pi context", async () => {
+    const { handlePicotConfig } = await loadConfigWithTempHome();
+    const navigateTree = vi.fn().mockResolvedValue({ cancelled: false });
+
+    await expect(
+      handlePicotConfig(
+        "navigate_tree",
+        { targetId: "entry-2", summarize: false, label: "Resume branch" },
+        { navigateTree } as never,
+      ),
+    ).resolves.toEqual({ ok: true, data: { cancelled: false } });
+    expect(navigateTree).toHaveBeenCalledWith("entry-2", {
+      summarize: false,
+      label: "Resume branch",
+    });
+  });
+
+  it("rejects navigation without a target entry", async () => {
+    const { handlePicotConfig } = await loadConfigWithTempHome();
+    await expect(
+      handlePicotConfig("navigate_tree", {}, { navigateTree: vi.fn() } as never),
+    ).resolves.toEqual({ ok: false, error: "targetId is required" });
+  });
+
   it("generates a title from the active persisted session", async () => {
     const { handlePicotConfig } = await loadConfigWithTempHome();
     await expect(
@@ -166,6 +209,7 @@ describe("picot config skills operations", () => {
     const listed = await handlePicotConfig("list_skill_inventory", { scope: "global" }, {});
 
     expect(listed.ok).toBe(true);
+    if (!listed.ok) throw new Error("Skill inventory lookup failed");
     const skill = (
       listed.data as { roots: Array<{ children: Array<{ id: string; name: string }> }> }
     ).roots[0].children[0];
@@ -199,7 +243,7 @@ describe("picot config models operations", () => {
       const result = handlePicotConfig(
         "write_models_config",
         { content },
-        { modelRegistry: registry },
+        { modelRegistry: registry as never },
       );
       await vi.advanceTimersByTimeAsync(2_000);
       await expect(result).resolves.toEqual({

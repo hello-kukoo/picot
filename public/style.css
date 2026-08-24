@@ -28,6 +28,7 @@
 @import url("native/composer/at-file-mention.css");
 @import url("native/composer/queued-messages.css");
 @import url("native/features/rpiv-todo-mirror.css");
+@import url("native/features/turn-file-chips.css");
 @import url("native/features/terminal-panel.css");
 @import url("native/notifications/notification-center.css");
 @import url("native/extensions/dialog.css");

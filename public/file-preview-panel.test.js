@@ -140,6 +140,50 @@ function createPanel(options = {}) {
 }
 
 describe("FilePreviewPanel", () => {
+  test("revealWrite returns null for a new file instead of forcing the panel open", async () => {
+    global.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: async () => ({ previewStatus: "ready", renderAs: "text", content: "x" }),
+      }),
+    );
+    const p = createPanel();
+    const tab = await p.revealWrite("/test/workspace/fresh.md");
+    expect(tab).toBeNull();
+    expect(p.state.getTabs()).toHaveLength(0);
+    p.destroy();
+  });
+
+  test("revealWrite silently reloads a clean tab without stealing focus", async () => {
+    global.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: async () => ({ previewStatus: "ready", renderAs: "text", content: "v1" }),
+      }),
+    );
+    const p = createPanel();
+    await p.openFile("/test/workspace/README.md");
+    await p.openFile("/test/workspace/other.md");
+    const activeId = p.state.getActiveTab().id;
+    let calls = 0;
+    global.fetch = vi.fn(() => {
+      calls += 1;
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ previewStatus: "ready", renderAs: "text", content: "v2" }),
+      });
+    });
+
+    const reloaded = await p.revealWrite("/test/workspace/README.md");
+
+    // No duplicate tab and no focus steal: the active tab stays untouched.
+    expect(p.state.getTabs()).toHaveLength(2);
+    expect(p.state.getActiveTab().id).toBe(activeId);
+    expect(reloaded.filePath).toBe("/test/workspace/README.md");
+    expect(calls).toBeGreaterThan(0);
+    p.destroy();
+  });
+
   test("renders converted responses as read-only Markdown", async () => {
     global.fetch = vi.fn(() =>
       Promise.resolve({

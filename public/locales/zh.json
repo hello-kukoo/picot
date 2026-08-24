@@ -145,7 +145,11 @@
     "expandAllToolsDesc": "展开所有工具卡片",
     "collapseAllTools": "折叠所有工具",
     "collapseAllToolsDesc": "折叠所有工具卡片",
-    "compacting": "压缩中…"
+    "compacting": "压缩中…",
+    "pasteDetected": "检测到大段粘贴（{size}）— 转存为文件？",
+    "pasteAsFile": "转存为文件",
+    "keepInline": "保留原文",
+    "pasteOffloadFailed": "粘贴内容保存失败"
   },
   "messages": {
     "attachedImage": "附加图片",
@@ -153,13 +157,18 @@
     "thinking": "思考中",
     "copy": "复制",
     "copied": "已复制！",
+    "forkSession": "复制会话",
+    "editMessage": "编辑消息",
+    "expand": "展开",
+    "collapse": "收起",
     "scrollToBottom": "滚动到最新消息",
     "processDetails": "处理详情",
     "processStep": "{count} 个步骤",
     "processSteps": "{count} 个步骤",
     "processToolCall": "{count} 次工具调用",
     "processToolCalls": "{count} 次工具调用",
-    "providerError": "模型请求失败。"
+    "providerError": "模型请求失败。",
+    "turnFiles": "本轮修改的文件（{count}）："
   },
   "tools": {
     "copyOutput": "复制输出",
@@ -372,6 +381,7 @@
     "compactedWithSummary": "✓ 上下文已压缩 — {summary}"
   },
   "errors": {
+    "treeNavigateFailed": "分支切换失败:{error}",
     "newSessionOnlyNative": "仅原生主机支持新建会话。",
     "newSessionPathUnavailable": "启动新会话失败：当前工作区路径不可用",
     "newSessionNavUnavailable": "启动新会话失败：导航不可用",
@@ -1179,6 +1189,8 @@
     "branch": "分支",
     "turns": "{count} 轮",
     "resumeBranch": "恢复分支",
+    "resumeStreamingBlocked": "生成回复时无法恢复分支",
+    "actionWhileStreaming": "请等待当前回复完成",
     "refresh": "刷新会话历史",
     "empty": "暂无消息",
     "statusError": "出错",

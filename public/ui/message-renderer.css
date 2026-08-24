@@ -118,25 +118,8 @@
   opacity: 0.5;
 }
 
-/* User footer: hidden until hover/focus. Visibility is JS-driven via a
-   `.visible` class (see _setupFooterHover), because a long user message
-   fills the row width and a CSS :hover on the block never ends. Touch
-   devices have no hover, so the footer stays visible there. */
-.message.user .message-footer {
-  opacity: 0;
-  transition: opacity 0.15s var(--ease);
-}
-
-.message.user .message-footer.visible,
-.message.user:focus-within .message-footer {
-  opacity: 1;
-}
-
-@media (hover: none) {
-  .message.user .message-footer {
-    opacity: 1;
-  }
-}
+/* User toolbar is always visible (v3 parity): no hover gating, keyboard
+   users reach copy/fork/edit without focus-within tricks. */
 
 /* biome-ignore lint/style/noDescendingSpecificity: base styles defined after scoped overrides intentionally */
 .message-content {
@@ -168,6 +151,46 @@
   margin: 4px 0;
   opacity: 0.75;
   font-style: italic;
+}
+
+/* Long user prompts stay readable without pushing the entire chat off-screen. */
+.message.user .message-content.user-message-collapsible {
+  position: relative;
+  max-height: calc(1.6em * 6 + var(--space-2) * 2);
+  overflow: hidden;
+}
+
+.message.user .message-content.user-message-collapsible.expanded {
+  max-height: none;
+  overflow: visible;
+}
+
+.message.user .message-content.user-message-collapsible:not(.expanded)::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2.5em;
+  background: linear-gradient(transparent, var(--user-bubble));
+  content: "";
+  pointer-events: none;
+}
+
+.message-user-collapse-toggle {
+  padding: var(--space-0-5) var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-placeholder);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.message-user-collapse-toggle:hover,
+.message-user-collapse-toggle:focus-visible {
+  color: var(--text-primary);
 }
 
 /* Assistant — clean, no container */
@@ -441,7 +464,6 @@ body.hide-thinking .thinking-block {
    Message footer: cost + copy button (inline row)
    ═══════════════════════════════════════════════════════ */
 
-/* biome-ignore lint/style/noDescendingSpecificity: base styles defined after scoped overrides intentionally */
 .message-footer {
   display: flex;
   flex-direction: row;
@@ -456,6 +478,7 @@ body.hide-thinking .thinking-block {
   margin: 0;
   height: 18px;
   border: none;
+  color: var(--text-ghost);
   cursor: pointer;
   padding: var(--space-0-5) var(--space-1);
   font-size: var(--font-size-sm);
@@ -493,6 +516,7 @@ body.hide-thinking .thinking-block {
   opacity: 0.45;
   background: none;
   border: none;
+  color: var(--text-ghost);
   cursor: pointer;
   padding: var(--space-0-5) var(--space-1);
   font-size: var(--font-size-sm);
@@ -522,6 +546,39 @@ body.hide-thinking .thinking-block {
 
 /* Hide fork button in Agent Inbox (super-agent) sessions */
 .super-agent-active .message-fork-btn {
+  display: none;
+}
+
+/* Edit button — same quiet affordance family as fork (user messages). */
+
+.message-edit-btn {
+  opacity: 0.45;
+  background: none;
+  border: none;
+  color: var(--text-ghost);
+  cursor: pointer;
+  padding: var(--space-0-5) var(--space-1);
+  font-size: var(--font-size-sm);
+  transition:
+    background 0.15s var(--ease),
+    color 0.15s var(--ease);
+  white-space: nowrap;
+}
+
+.message-edit-btn:hover {
+  opacity: 1;
+  color: var(--text-primary);
+}
+
+.message-edit-btn:active {
+  transform: scale(0.9);
+}
+
+.message-edit-btn:disabled {
+  cursor: wait;
+}
+
+.super-agent-active .message-edit-btn {
   display: none;
 }
 

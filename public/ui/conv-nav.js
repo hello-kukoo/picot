@@ -34,15 +34,20 @@ export class ConvNav {
   #tooltipHideTimer = null;
   #navLockedIdx = -1;
   #navLockTimer = null;
+  #onJumpToEntry = null;
   #turns = [];
   #hoveredIdx = -1;
 
   static #MAX_HEIGHT = 560;
 
-  constructor({ messagesEl, headerEl, badgeEl }) {
+  constructor({ messagesEl, headerEl, badgeEl, onJumpToEntry = null }) {
     this.#messagesEl = messagesEl;
     this.#headerEl = headerEl;
     this.#badgeEl = badgeEl;
+    // Jump-side hook for cross-panel sync (v3 parity): after the chat
+    // scrolls to a turn, app.js highlights/scrolls the Info panel's tree
+    // node for the same entry.
+    this.#onJumpToEntry = onJumpToEntry;
     this.#navEl = document.getElementById("conv-nav");
     this.#trackEl = document.getElementById("conv-nav-track");
     this.#tooltipEl = document.getElementById("conv-nav-tooltip");
@@ -201,7 +206,7 @@ export class ConvNav {
     const naturalHeight = this.#trackEl.scrollHeight;
     const scale = naturalHeight > ConvNav.#MAX_HEIGHT ? ConvNav.#MAX_HEIGHT / naturalHeight : 1;
     this.#trackEl.style.transform = scale < 1 ? `scale(${scale})` : "";
-    this.#trackEl.style.transformOrigin = scale < 1 ? "top right" : "";
+    this.#trackEl.style.transformOrigin = scale < 1 ? "top left" : "";
     this.#navEl.style.height = scale < 1 ? `${naturalHeight * scale}px` : "";
   }
 
@@ -236,6 +241,8 @@ export class ConvNav {
     const maxScrollTop = this.#messagesEl.scrollHeight - this.#messagesEl.clientHeight;
     const targetScrollTop = Math.max(0, Math.min(this.#messagesEl.scrollTop + delta, maxScrollTop));
     this.#messagesEl.scrollTo({ top: targetScrollTop, behavior: "smooth" });
+    const entryId = turn.user?.dataset.entryId;
+    if (entryId) this.#onJumpToEntry?.(entryId);
     this.#flashHighlight(turn.user);
     this.#buildDots();
   }
@@ -310,6 +317,7 @@ export class ConvNav {
     this.#tooltipEl.classList.remove("hidden");
     const dotRect = dotEl.getBoundingClientRect();
     const tipHeight = this.#tooltipEl.offsetHeight || 90;
+    const tipWidth = this.#tooltipEl.offsetWidth || 260;
     const top = Math.max(
       8,
       Math.min(
@@ -318,6 +326,9 @@ export class ConvNav {
       ),
     );
     this.#tooltipEl.style.top = `${top}px`;
+    // Anchor the tooltip to the right of the dot (the rail sits on the
+    // chat's left edge), following the dot so panels never cover it.
+    this.#tooltipEl.style.left = `${Math.min(dotRect.right + 8, window.innerWidth - tipWidth - 8)}px`;
 
     // Replay the enter animation only on first show. Updating while already
     // visible (moving along the track) must not fade the tooltip out.

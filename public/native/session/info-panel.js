@@ -38,12 +38,16 @@ export class InfoPanel {
    *   panel: HTMLElement,
    *   actions: { apps: Array, copyWorkspacePath: Function, openWorkspaceInApp: Function },
    *   t: (key: string, params?: object) => string,
+   *   onNavigateLeaf?: (entryId: string) => void,
+   *   isStreaming?: () => boolean,
    * }} options
    */
-  constructor({ panel, actions, t }) {
+  constructor({ panel, actions, t, onNavigateLeaf, isStreaming }) {
     this.panel = panel;
     this.actions = actions;
     this.t = t;
+    this.onNavigateLeaf = onNavigateLeaf || (() => {});
+    this.isStreaming = isStreaming || (() => false);
     this.workspacePath = "";
     this.expandedBranches = new Set();
     this.tree = null;
@@ -300,6 +304,29 @@ export class InfoPanel {
     preview.textContent = row.previewText || previewFallback(t, row);
 
     el.append(role, preview);
+
+    // Only full-tree leaves in inactive branches can become the active Pi
+    // leaf. The control is injected with the runtime callback so this view
+    // remains independent from transport details.
+    if (!row.isActive && row.isFullLeaf) {
+      const resume = document.createElement("button");
+      resume.type = "button";
+      resume.className = "info-panel-resume";
+      resume.textContent = t("infoPanel.resumeBranch");
+      resume.setAttribute(
+        "aria-label",
+        `${t("infoPanel.resumeBranch")}: ${row.previewText || previewFallback(t, row)}`,
+      );
+      if (this.isStreaming()) {
+        resume.disabled = true;
+        resume.title = t("infoPanel.resumeStreamingBlocked");
+      }
+      resume.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (!resume.disabled) this.onNavigateLeaf(row.entryId);
+      });
+      el.append(resume);
+    }
     return el;
   }
 

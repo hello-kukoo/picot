@@ -1,6 +1,6 @@
 // ABOUTME: Unit tests for the Info panel view (workspace actions + session tree).
-// Ported from picot-v3 5dd2bb9; Resume-branch and live-append coverage removed
-// alongside those unported affordances (navigateTree lands with fork/branch).
+// Ported from picot-v3 5dd2bb9; navigation callbacks stay injected so the
+// component remains independent from runtime transport details.
 import { describe, expect, test, vi } from "vitest";
 import { InfoPanel } from "./info-panel.js";
 
@@ -20,6 +20,8 @@ const t = (key, params = {}) => {
     "infoPanel.statusError": "Error",
     "infoPanel.statusAborted": "Aborted",
     "infoPanel.imageMessage": "Image",
+    "infoPanel.resumeBranch": "Resume branch",
+    "infoPanel.resumeStreamingBlocked": "Resume unavailable while streaming",
     "nav.openInApp": "Open in {app}",
   };
   let out = dict[key] ?? key;
@@ -137,7 +139,7 @@ describe("InfoPanel session history", () => {
   ];
 
   test("active path nodes are buttons; inactive branch collapses to a summary", () => {
-    const { panel } = makePanel();
+    const { panel } = makePanel({ onNavigateLeaf: vi.fn() });
     const info = new InfoPanel({
       panel,
       actions: { apps: [], copyWorkspacePath: async () => "", openWorkspaceInApp: async () => {} },
@@ -157,12 +159,14 @@ describe("InfoPanel session history", () => {
     expect(summary.textContent).toContain("1 turns"); // head user only in this subtree
     // Collapsed: no inactive rows in DOM yet.
     expect(panel.querySelector(".info-panel-row.inactive")).toBeNull();
-    // Resume is not ported in this phase (needs navigateTree, Phase 3).
+    // Resume controls render only after expanding inactive branch content.
     expect(panel.querySelector(".info-panel-resume")).toBeNull();
   });
 
-  test("expanding a branch reveals inactive non-navigable rows", () => {
+  test("expanding a branch reveals inactive rows with a Resume action on leaves", () => {
+    const onNavigateLeaf = vi.fn();
     const { info, panel } = makePanel({
+      onNavigateLeaf,
       actions: {
         apps: [],
         copyWorkspacePath: async () => "",
@@ -179,6 +183,22 @@ describe("InfoPanel session history", () => {
     // Inactive rows are divs (not focusable fake buttons) and aria-disabled.
     expect(inactive.every((r) => r.tagName === "DIV")).toBe(true);
     expect(inactive.every((r) => r.getAttribute("aria-disabled") === "true")).toBe(true);
+    const resume = panel.querySelector('.info-panel-resume[aria-label*="Cookie done"]');
+    expect(resume).not.toBeNull();
+    resume.click();
+    expect(onNavigateLeaf).toHaveBeenCalledWith("cookieA");
+  });
+
+  test("disables Resume while the runtime is streaming", () => {
+    const { info, panel } = makePanel({
+      isStreaming: () => true,
+      onNavigateLeaf: vi.fn(),
+    });
+    info.updateTree({ entries, leafId: "jwtA" });
+    panel.querySelector(".info-panel-branch-summary").click();
+    const resume = panel.querySelector(".info-panel-resume");
+    expect(resume.disabled).toBe(true);
+    expect(resume.title).toBe("Resume unavailable while streaming");
   });
 
   test("clicking an active node selects the Info row and scrolls the anchored message", () => {

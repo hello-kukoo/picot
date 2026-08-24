@@ -27,6 +27,7 @@ import { setupResizablePanel } from "../ui/resizable-panel.js";
 import { ToolCardRenderer } from "../ui/tool-card.js";
 import { setupComposerAutoResize } from "./composer/composer-autoresize.js";
 import { setupComposerImageAttachments } from "./composer/composer-images.js";
+import { setupComposerPasteOffload } from "./composer/composer-paste-offload.js";
 import { setupComposerSlashMenu } from "./composer/composer-slash-menu.js";
 import { setupComposerSubmitHandling } from "./composer/composer-submit.js";
 import { renderQueuedMessages } from "./composer/queued-messages.js";
@@ -48,6 +49,7 @@ import {
   RpivTodoMirrorPanel,
 } from "./features/rpiv-todo-mirror.js";
 import { setupTerminalPanel } from "./features/terminal-panel-integration.js";
+import { renderTurnFileChips } from "./features/turn-file-chips.js";
 import { createNotificationCenter } from "./notifications/notification-center.js";
 import {
   createNativeTaskNotificationSender,
@@ -119,6 +121,14 @@ const convNav = new ConvNav({
   messagesEl: messagesElement,
   headerEl: headerElement,
   badgeEl: scrollBottomBadge,
+  // v3 parity: jumping the chat to a turn highlights and scrolls the Info
+  // panel's session-history node for the same entry (panel-hidden latch is
+  // handled inside the panel).
+  onJumpToEntry: (entryId) => {
+    if (!infoPanel) return;
+    infoPanel.selectEntry(entryId);
+    infoPanel.scrollToSelectedEntry();
+  },
 });
 const notifications = createNotificationCenter();
 const sendNativeTaskNotification = createNativeTaskNotificationSender({
@@ -143,7 +153,7 @@ setupMessagesInsets({
   inputArea: document.querySelector(".input-area"),
   workspaceContent: document.querySelector(".workspace-content"),
 });
-const messageRenderer = new MessageRenderer(messagesElement);
+const messageRenderer = new MessageRenderer(messagesElement, { sessionTreeActions: true });
 const toolRenderer = new ToolCardRenderer(messagesElement);
 const input = document.getElementById("message-input");
 const form = document.getElementById("chat-form");
@@ -345,6 +355,9 @@ const extensionWidgets = new ExtensionWidgets({
 const contextUsage = setupContextUsage();
 const compactContextButton = document.getElementById("compact-context-btn");
 const filePreviewPanel = setupFilePreviewPanel();
+// Written-file paths collected during the current turn (via the preview
+// follow's onWriteApplied signal); rendered as chips when the turn settles.
+let turnWrittenPaths = [];
 const filePreviewFollow = createFilePreviewFollow({
   panel: filePreviewPanel,
   getWorkspacePath: async () => {
@@ -354,6 +367,9 @@ const filePreviewFollow = createFilePreviewFollow({
     } catch {
       return "";
     }
+  },
+  onWriteApplied: (_rawPath, previewPath) => {
+    if (!turnWrittenPaths.includes(previewPath)) turnWrittenPaths.push(previewPath);
   },
 });
 const gitPanel = setupGitPanel({
@@ -381,6 +397,8 @@ const infoPanel = infoSidebar
       panel: document.getElementById("info-panel"),
       actions: infoAppActions,
       t,
+      onNavigateLeaf: (entryId) => navigateActiveTree(entryId),
+      isStreaming: () => store.lifecycle === "working",
     })
   : null;
 
@@ -405,14 +423,41 @@ async function refreshInfoPanel({ refreshWorkspace = false } = {}) {
     }
   }
   try {
-    const response = await data.readSessionTree(target.workspaceId, target.sessionId);
-    if (seq !== infoTreeSeq) return;
-    infoPanel.updateTree({
-      entries: response?.tree?.entries ?? [],
-      leafId: response?.tree?.leafId ?? null,
-    });
-  } catch (error) {
-    console.warn("[InfoPanel] tree refresh failed:", error);
+    // Pi owns active leaf state. Prefer its live get_entries snapshot over the
+    // disk fallback so Resume reflects branch navigation immediately.
+    const runtimeResponse = await runtime.request({ type: "get_entries" }, target);
+    const tree = runtimeResponse?.response?.data;
+    if (Array.isArray(tree?.entries)) {
+      if (seq !== infoTreeSeq) return;
+      infoPanel.updateTree({ entries: tree.entries, leafId: tree.leafId ?? null });
+      return;
+    }
+    throw new Error("Runtime get_entries returned no entries");
+  } catch (runtimeError) {
+    try {
+      const response = await data.readSessionTree(target.workspaceId, target.sessionId);
+      if (seq !== infoTreeSeq) return;
+      infoPanel.updateTree({
+        entries: response?.tree?.entries ?? [],
+        leafId: response?.tree?.leafId ?? null,
+      });
+    } catch (error) {
+      console.warn("[InfoPanel] tree refresh failed:", runtimeError, error);
+    }
+  }
+}
+
+async function navigateActiveTree(entryId) {
+  if (!entryId || store.lifecycle === "working") return;
+  const result = await config.call("navigate_tree", {
+    targetId: entryId,
+    summarize: false,
+    label: t("infoPanel.resumeBranch"),
+  });
+  if (!result?.ok) throw new Error(result?.error || "Session tree navigation failed");
+  await hydrateSnapshotOnce();
+  if (infoSidebar && !infoSidebar.classList.contains("collapsed")) {
+    await refreshInfoPanel();
   }
 }
 
@@ -818,6 +863,18 @@ if (atFileMentionMenu) {
     },
   });
 }
+const pasteOffload = setupComposerPasteOffload({
+  textarea: input,
+  container: document.getElementById("composer-card"),
+  offload: async (content) => {
+    const result = await config.call("write_paste_offload", { content });
+    if (!result?.ok || typeof result.data?.path !== "string") {
+      throw new Error(result?.error || "Paste offload failed");
+    }
+    return result.data.path;
+  },
+  t,
+});
 setupComposerSubmitHandling({
   input,
   form,
@@ -844,6 +901,28 @@ messagesElement.addEventListener("messagefork", async (event) => {
     }
   } catch (error) {
     showError(error);
+  }
+});
+messagesElement.addEventListener("messageedit", async (event) => {
+  const { entryId, text } = event.detail || {};
+  if (!entryId) return;
+  if (store.lifecycle === "working") {
+    showError(new Error(t("infoPanel.actionWhileStreaming")));
+    return;
+  }
+  try {
+    // Same Pi bridge navigate as the Info panel Resume: leaf moves to the
+    // user entry, then the original prompt is prefilled for a new branch.
+    await navigateActiveTree(entryId);
+    if (typeof text === "string" && text) {
+      input.value = text;
+      composerAutoResize.sync();
+      input.focus();
+    }
+  } catch (error) {
+    showError(
+      new Error(t("errors.treeNavigateFailed", { error: String(error?.message ?? error) })),
+    );
   }
 });
 document.getElementById("refresh-sessions-btn")?.addEventListener("click", (e) => {
@@ -1725,6 +1804,7 @@ function setupFileBrowser() {
 }
 
 async function sendComposerInput({ altKey }) {
+  if (pasteOffload?.isBusy()) return;
   const value = input.value;
   const images = imageAttachments.getImages();
   if (!value.trim() && images.length === 0) return;
@@ -1762,6 +1842,23 @@ function runBuiltin(action) {
   }
 }
 
+/** Mount this turn's written-file chips under the final assistant message. */
+function mountTurnFileChips() {
+  if (!messagesElement || turnWrittenPaths.length === 0) return;
+  const writes = turnWrittenPaths.map((filePath) => ({ filePath }));
+  turnWrittenPaths = [];
+  const row = renderTurnFileChips(writes);
+  if (!row) return;
+  // Chip clicks bubble a previewfile event to the #messages listener, which
+  // routes through filePreviewFollow.openPath like tool-card references.
+  const lastAssistant = [...messagesElement.querySelectorAll(".message.assistant")].pop();
+  if (lastAssistant && lastAssistant.parentElement === messagesElement) {
+    lastAssistant.insertAdjacentElement("afterend", row);
+    return;
+  }
+  messagesElement.appendChild(row);
+}
+
 async function handleRuntimeEvent(event) {
   switch (event.type) {
     case "agent_start":
@@ -1769,6 +1866,7 @@ async function handleRuntimeEvent(event) {
       setStatus("working");
       contextUsage.setWorking(true);
       sidebar?.setStreaming(target.sessionId, true);
+      turnWrittenPaths = [];
       break;
     case "agent_settled":
     case "agent_end":
@@ -2310,6 +2408,7 @@ function settleForegroundAgent(event) {
   sidebar?.setStreaming(target.sessionId, false);
   hideLiveProcessIndicator();
   collapseCompletedTurn({ markDone: true });
+  mountTurnFileChips();
   showProviderErrorIfNeeded(event);
 }
 

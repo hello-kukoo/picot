@@ -92,6 +92,29 @@ describe("ConvNav", () => {
     nav.destroy();
   });
 
+  it("notifies onJumpToEntry with the jumped turn's entry id", () => {
+    const { messages, header, badge } = setupDom();
+    appendTurn(messages, 120, 180);
+    messages.querySelector(".message.user").dataset.entryId = "u-entry-1";
+    appendTurn(messages, 220, 280);
+
+    const seen = [];
+    const nav = new ConvNav({
+      messagesEl: messages,
+      headerEl: header,
+      badgeEl: badge,
+      onJumpToEntry: (entryId) => seen.push(entryId),
+    });
+    nav.mount();
+    nav.rebuild();
+
+    document.querySelectorAll(".conv-nav-dot")[0].click();
+
+    // v3 parity: a jump syncs the Info panel's session-history selection.
+    expect(seen).toEqual(["u-entry-1"]);
+    nav.destroy();
+  });
+
   it("keeps the tooltip visible while the pointer moves across the track", () => {
     const { messages, header, badge } = setupDom();
     const nav = new ConvNav({ messagesEl: messages, headerEl: header, badgeEl: badge });

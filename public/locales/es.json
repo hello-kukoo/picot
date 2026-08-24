@@ -145,7 +145,11 @@
     "expandAllToolsDesc": "Expandir todas las tarjetas de herramientas",
     "collapseAllTools": "Colapsar todas las herramientas",
     "collapseAllToolsDesc": "Colapsar todas las tarjetas de herramientas",
-    "compacting": "Compactando…"
+    "compacting": "Compactando…",
+    "pasteDetected": "Pegado grande detectado ({size}) — ¿adjuntar como archivo?",
+    "pasteAsFile": "Adjuntar como archivo",
+    "keepInline": "Mantener en línea",
+    "pasteOffloadFailed": "No se pudo guardar el texto pegado"
   },
   "messages": {
     "attachedImage": "Imagen adjunta",
@@ -153,13 +157,18 @@
     "thinking": "Pensando",
     "copy": "Copiar",
     "copied": "¡Copiado!",
+    "forkSession": "Bifurcar sesión",
+    "editMessage": "Editar mensaje",
+    "expand": "Expandir",
+    "collapse": "Contraer",
     "scrollToBottom": "Scroll to latest message",
     "processDetails": "Detalles del proceso",
     "processStep": "{count} paso",
     "processSteps": "{count} pasos",
     "processToolCall": "{count} llamada a herramienta",
     "processToolCalls": "{count} llamadas a herramientas",
-    "providerError": "La solicitud al modelo falló."
+    "providerError": "La solicitud al modelo falló.",
+    "turnFiles": "Archivos modificados en este turno ({count}):"
   },
   "tools": {
     "copyOutput": "Copiar salida",
@@ -372,6 +381,7 @@
     "compactedWithSummary": "✓ Contexto compactado — {summary}"
   },
   "errors": {
+    "treeNavigateFailed": "Error al cambiar de rama: {error}",
     "newSessionOnlyNative": "La nueva sesión solo está disponible con un host nativo.",
     "newSessionPathUnavailable": "Error al iniciar nueva sesión: la ruta del espacio de trabajo no está disponible",
     "newSessionNavUnavailable": "Error al iniciar nueva sesión: la navegación no está disponible",
@@ -1179,6 +1189,8 @@
     "branch": "Rama",
     "turns": "{count} turnos",
     "resumeBranch": "Retomar rama",
+    "resumeStreamingBlocked": "No se puede retomar mientras se genera una respuesta",
+    "actionWhileStreaming": "Espera a que termine la respuesta actual",
     "refresh": "Actualizar historial de sesión",
     "empty": "Aún no hay mensajes",
     "statusError": "Error",

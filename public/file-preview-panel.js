@@ -211,18 +211,19 @@ export class FilePreviewPanel {
   }
 
   /**
-   * Open a file the agent just wrote. Reloads an existing clean tab so the
-   * live preview (including HTML iframes) picks up disk changes; leaves a
-   * dirty tab alone aside from focusing it.
+   * Open a file the agent just wrote. New files do NOT force the panel open
+   * (the turn-end chips row is their entry point); an existing dirty tab is
+   * focused so the concurrent write is noticed without overwriting edits;
+   * an existing clean tab silently reloads from disk without stealing focus.
    */
   async revealWrite(filePath) {
     const normalizedPath = normalizeLocalPath(filePath);
     if (!normalizedPath) return null;
     const existing = this.state.getTabs().find((tab) => tab.filePath === normalizedPath);
-    if (existing?.dirty) return this.openFile(normalizedPath);
-    const tab = await this.openFile(normalizedPath);
-    if (existing) await this._reloadTab(existing.id, { skipConfirmation: true });
-    return tab;
+    if (!existing) return null;
+    if (existing.dirty) return this.openFile(normalizedPath);
+    await this._reloadTab(existing.id, { skipConfirmation: true });
+    return this.state.getTab(existing.id);
   }
 
   async closePanel() {
