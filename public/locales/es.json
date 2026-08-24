@@ -1103,5 +1103,25 @@
     "chooseProjectBeforeApproval": "Elige un proyecto antes de aprobar.",
     "loadingProjects": "Cargando proyectos…",
     "projectRunning": "{name} · en ejecución"
+  },
+  "infoPanel": {
+    "title": "Información",
+    "workspace": "Espacio de trabajo",
+    "copyPath": "Copiar ruta",
+    "copied": "Copiado",
+    "sessionHistory": "Historial de sesión",
+    "activePath": "Rama activa",
+    "branch": "Rama",
+    "turns": "{count} turnos",
+    "resumeBranch": "Retomar rama",
+    "refresh": "Actualizar historial de sesión",
+    "empty": "Aún no hay mensajes",
+    "statusError": "Error",
+    "statusAborted": "Cancelado",
+    "imageMessage": "Imagen",
+    "roleUser": "Tú",
+    "roleAssistant": "Asistente",
+    "toggleAria": "Alternar panel de información de sesión",
+    "closeAria": "Cerrar panel de información de sesión"
   }
 }

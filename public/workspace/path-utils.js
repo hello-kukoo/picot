@@ -43,6 +43,15 @@ export function normalizeLocalPath(value) {
   return joinRoot(root, parts);
 }
 
+/** Format a local path for sidebar display without changing its filesystem meaning. */
+export function displayLocalPath(value) {
+  const normalized = normalizeLocalPath(value);
+  if (!normalized || normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) {
+    return normalized;
+  }
+  return `/${normalized}`;
+}
+
 export function basenameLocalPath(value) {
   const normalized = normalizeLocalPath(value);
   if (!normalized || normalized === "/" || /^[A-Za-z]:\/$/.test(normalized)) return normalized;
