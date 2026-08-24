@@ -132,7 +132,11 @@
     "expandAllToolsDesc": "Expand all tool cards",
     "collapseAllTools": "Collapse All Tools",
     "collapseAllToolsDesc": "Collapse all tool cards",
-    "compacting": "Compacting…"
+    "compacting": "Compacting…",
+    "pasteDetected": "Large paste detected ({size}) — attach as file?",
+    "pasteAsFile": "Attach as file",
+    "keepInline": "Keep inline",
+    "pasteOffloadFailed": "Could not save pasted text"
   },
   "messages": {
     "attachedImage": "Attached image",
@@ -140,12 +144,17 @@
     "thinking": "Thinking",
     "copy": "Copy",
     "copied": "Copied!",
+    "forkSession": "Fork session",
+    "editMessage": "Edit message",
+    "expand": "Expand",
+    "collapse": "Collapse",
     "scrollToBottom": "Scroll to latest message",
     "processDetails": "Process details",
     "processStep": "{count} step",
     "processSteps": "{count} steps",
     "processToolCall": "{count} tool call",
-    "processToolCalls": "{count} tool calls"
+    "processToolCalls": "{count} tool calls",
+    "turnFiles": "Files changed this turn ({count}):"
   },
   "tools": {
     "copyOutput": "Copy output",
@@ -358,6 +367,7 @@
     "compactedWithSummary": "✓ Context compacted — {summary}"
   },
   "errors": {
+    "treeNavigateFailed": "Branch switch failed: {error}",
     "newSessionOnlyNative": "New session is only supported with a native host.",
     "newSessionPathUnavailable": "Failed to start new session: current workspace path is unavailable",
     "newSessionNavUnavailable": "Failed to start new session: navigation is unavailable",
@@ -1114,6 +1124,8 @@
     "branch": "Branch",
     "turns": "{count} turns",
     "resumeBranch": "Resume branch",
+    "resumeStreamingBlocked": "Resume unavailable while streaming",
+    "actionWhileStreaming": "Wait for the current response to finish",
     "refresh": "Refresh session history",
     "empty": "No messages yet",
     "statusError": "Error",

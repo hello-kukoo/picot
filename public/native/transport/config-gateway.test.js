@@ -57,6 +57,30 @@ describe("ConfigGateway", () => {
     await expect(promise).resolves.toEqual({ ok: true, data: { providers: [] } });
   });
 
+  it("sends navigate_tree through the bridge command contract", async () => {
+    const { requests, gateway } = createHarness();
+    const promise = gateway.call("navigate_tree", {
+      targetId: "leaf-9",
+      summarize: false,
+      label: "Resume branch",
+    });
+    const { command, options } = requests[0];
+    const payload = JSON.parse(command.message.slice("/picot-config ".length));
+    expect(payload).toMatchObject({
+      op: "navigate_tree",
+      params: { targetId: "leaf-9", summarize: false, label: "Resume branch" },
+    });
+    expect(options.idempotencyKey).toBe(payload.id);
+    gateway.consumeNotify({
+      message: JSON.stringify({
+        __picotConfig: payload.id,
+        ok: true,
+        data: { cancelled: false },
+      }),
+    });
+    await expect(promise).resolves.toEqual({ ok: true, data: { cancelled: false } });
+  });
+
   it("consumes a config response carried by a background runtime frame", async () => {
     const { requests, gateway } = createHarness();
     const promise = gateway.call("generate_session_title");

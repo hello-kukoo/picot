@@ -19,6 +19,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createAgentSession, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import { buildPackageSkillInventory } from "./package-skill-inventory";
+import { writePasteOffloadFile } from "./paste-offload";
 import {
   buildTelegramDmConfig,
   buildTelegramDoctorReport,
@@ -78,10 +79,20 @@ type ConfigContext = {
   cwd?: string;
   model?: unknown;
   sessionManager?: { getSessionFile: () => string | undefined };
+  navigateTree?: (
+    targetId: string,
+    options?: {
+      summarize?: boolean;
+      customInstructions?: string;
+      replaceInstructions?: boolean;
+      label?: string;
+    },
+  ) => Promise<{ cancelled?: boolean } | undefined>;
   isProjectTrusted?: () => boolean;
 };
 
 type ListedSession = { path?: string };
+type JsonObject = Record<string, unknown>;
 
 async function renameHistoricalSession(filePath: unknown, requestedName: unknown) {
   if (typeof filePath !== "string" || typeof requestedName !== "string") {
@@ -634,9 +645,12 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function readJsonFile(filePath: string): unknown {
+function readJsonFile(filePath: string): JsonObject | undefined {
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const value: unknown = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? (value as JsonObject)
+      : undefined;
   } catch {
     return undefined;
   }
@@ -652,9 +666,7 @@ function getChatWorkerStatuses(): TelegramWorkerStatusLike[] {
   return entries
     .filter((entry) => entry.endsWith(".json"))
     .map((entry) => readJsonFile(path.join(CHAT_WORKER_STATUS_DIR, entry)))
-    .filter((value): value is TelegramWorkerStatusLike =>
-      Boolean(value && typeof value === "object"),
-    );
+    .filter((value): value is JsonObject & TelegramWorkerStatusLike => Boolean(value));
 }
 
 type SuperAgentProject = { name: string; cwd: string; status: string };
@@ -776,6 +788,31 @@ export async function handlePicotConfig(
 
   try {
     switch (op) {
+      case "write_paste_offload": {
+        const content = params.content;
+        if (typeof content !== "string") throw new Error("content is required");
+        if (!ctx.cwd) throw new Error("Active workspace is required");
+        const result = writePasteOffloadFile(ctx.cwd, content);
+        return { ok: true, data: { path: result.relativePath } };
+      }
+      case "navigate_tree": {
+        const targetId = asString(params.targetId);
+        if (!targetId) throw new Error("targetId is required");
+        if (typeof ctx.navigateTree !== "function") {
+          throw new Error("Session tree navigation is unavailable.");
+        }
+        const result = await ctx.navigateTree(targetId, {
+          summarize: params.summarize === true,
+          ...(typeof params.customInstructions === "string"
+            ? { customInstructions: params.customInstructions }
+            : {}),
+          ...(typeof params.replaceInstructions === "boolean"
+            ? { replaceInstructions: params.replaceInstructions }
+            : {}),
+          ...(typeof params.label === "string" ? { label: params.label } : {}),
+        });
+        return { ok: true, data: result ?? { cancelled: false } };
+      }
       case "rename_historical_session": {
         const result = await renameHistoricalSession(params.filePath, params.name);
         return { ok: true, data: result };

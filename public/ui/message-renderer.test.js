@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n, setLocale } from "../i18n.js";
-import { MessageRenderer } from "./message-renderer.js";
+import { MessageRenderer, shouldCollapseUserMessage } from "./message-renderer.js";
 
 const enMessages = {
   messages: {
@@ -9,6 +9,8 @@ const enMessages = {
     attachedImage: "Attached image",
     copy: "Copy",
     copied: "Copied!",
+    expand: "Expand",
+    collapse: "Collapse",
   },
   app: {
     welcome: "Welcome to Picot",
@@ -24,6 +26,8 @@ const zhMessages = {
     attachedImage: "附件图片",
     copy: "复制",
     copied: "已复制！",
+    expand: "展开",
+    collapse: "收起",
   },
   app: {
     welcome: "欢迎使用 Picot",
@@ -156,6 +160,59 @@ describe("MessageRenderer streaming markdown preview", () => {
     expect(writeText).toHaveBeenCalledWith("Visible answer");
   });
 
+  it("does not collapse short user messages", () => {
+    expect(shouldCollapseUserMessage("short message")).toBe(false);
+    const el = renderer.renderUserMessage({ content: "short message" }, true);
+
+    expect(el.querySelector(".message-user-collapse-toggle")).toBeNull();
+    expect(
+      el.querySelector(".message-content").classList.contains("user-message-collapsible"),
+    ).toBe(false);
+  });
+
+  it("collapses long user messages in live and history rendering", () => {
+    const content = "a".repeat(400);
+
+    expect(shouldCollapseUserMessage(content)).toBe(true);
+    const live = renderer.renderUserMessage({ content });
+    const history = renderer.renderUserMessage({ content }, true);
+
+    for (const el of [live, history]) {
+      const messageContent = el.querySelector(".message-content");
+      const toggle = el.querySelector(".message-user-collapse-toggle");
+      expect(messageContent.classList.contains("user-message-collapsible")).toBe(true);
+      expect(messageContent.classList.contains("expanded")).toBe(false);
+      expect(toggle.textContent).toBe("Expand");
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(toggle.closest(".message-footer")).toBe(el.querySelector(".message-footer"));
+      expect(el.querySelector(".message-footer").firstElementChild).toBe(toggle);
+    }
+  });
+
+  it("collapses messages with eight or more line breaks", () => {
+    const content = Array.from({ length: 9 }, (_, index) => `line ${index}`).join("\n");
+    expect(shouldCollapseUserMessage(content)).toBe(true);
+    expect(
+      renderer.renderUserMessage({ content }).querySelector(".message-user-collapse-toggle"),
+    ).not.toBeNull();
+  });
+
+  it("expands and collapses long user messages accessibly", () => {
+    const el = renderer.renderUserMessage({ content: "a".repeat(400) });
+    const content = el.querySelector(".message-content");
+    const toggle = el.querySelector(".message-user-collapse-toggle");
+
+    toggle.click();
+    expect(content.classList.contains("expanded")).toBe(true);
+    expect(toggle.textContent).toBe("Collapse");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+    toggle.click();
+    expect(content.classList.contains("expanded")).toBe(false);
+    expect(toggle.textContent).toBe("Expand");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("removes unsafe HTML attributes and URL schemes from user markdown", () => {
     const el = renderer.renderUserMessage({
       content:
@@ -168,14 +225,30 @@ describe("MessageRenderer streaming markdown preview", () => {
     expect(el.querySelector("a").getAttribute("href")).toBeNull();
   });
 
-  it("renders a fork action for user messages with an entry id", () => {
+  it("renders fork and edit actions only when sessionTreeActions is enabled", () => {
     const events = [];
     container.addEventListener("messagefork", (event) => events.push(event.detail));
 
     renderer.renderUserMessage({ content: "Try this path", entryId: "entry-user-1" }, true);
+    expect(container.querySelector(".message-fork-btn")).toBeNull();
+    expect(container.querySelector(".message-edit-btn")).toBeNull();
+
+    const treeRenderer = new MessageRenderer(container, { sessionTreeActions: true });
+    treeRenderer.renderUserMessage({ content: "Try this path", entryId: "entry-user-1" }, true);
     container.querySelector(".message-fork-btn").click();
 
-    expect(events).toEqual([{ entryId: "entry-user-1" }]);
+    expect(events).toEqual([{ entryId: "entry-user-1", text: "Try this path" }]);
+  });
+
+  it("dispatches messageedit with the entry id and prompt text", () => {
+    const events = [];
+    container.addEventListener("messageedit", (event) => events.push(event.detail));
+
+    const treeRenderer = new MessageRenderer(container, { sessionTreeActions: true });
+    treeRenderer.renderUserMessage({ content: "Revise me", entryId: "entry-user-2" }, true);
+    container.querySelector(".message-edit-btn").click();
+
+    expect(events).toEqual([{ entryId: "entry-user-2", text: "Revise me" }]);
   });
 
   it("highlights keyword matches across rendered messages", () => {
@@ -276,7 +349,7 @@ describe("MessageRenderer message toolbar timestamps", () => {
     expect(formatMessageTime(1e20)).toBe("");
   });
 
-  it("renders the message time first in the user message footer", () => {
+  it("orders the user footer slots copy before time, with tree actions leading", () => {
     const ts = new Date(2020, 0, 15, 10, 30).getTime();
     renderer.renderUserMessage({ content: "hello", timestamp: ts });
 
@@ -285,9 +358,28 @@ describe("MessageRenderer message toolbar timestamps", () => {
     const time = footer.querySelector(".message-time");
     expect(time?.textContent).toBe("01/15 10:30");
     expect(time?.title).toContain("2020-01-15 10:30");
-    // Order: time, then copy.
-    expect(footer.querySelector(".message-copy-btn")).not.toBeNull();
-    expect(footer.firstElementChild).toBe(time);
+    // Fixed user order (v3 2026-08-21 design): Expand → Fork → Edit → Copy →
+    // Timestamp. Without tree actions or a collapsible prompt the visible
+    // slots reduce to Copy → Time.
+    const classes = [...footer.children].map((el) => el.className);
+    expect(classes).toEqual(["message-copy-btn", "message-time"]);
+  });
+
+  it("renders the full tree-action slot order ahead of copy and time", () => {
+    const ts = new Date(2020, 0, 15, 10, 30).getTime();
+    const treeRenderer = new MessageRenderer(container, { sessionTreeActions: true });
+    treeRenderer.renderUserMessage({ content: "a".repeat(400), timestamp: ts, entryId: "u1" });
+
+    const classes = [...container.querySelector(".message.user .message-footer").children].map(
+      (el) => el.className,
+    );
+    expect(classes).toEqual([
+      "message-user-collapse-toggle",
+      "message-action message-fork-btn",
+      "message-action message-edit-btn",
+      "message-copy-btn",
+      "message-time",
+    ]);
   });
 
   it("omits the time span when a user message carries no timestamp", () => {
@@ -327,12 +419,12 @@ describe("MessageRenderer message toolbar timestamps", () => {
     expect(footer?.querySelector(".message-time")).not.toBeNull();
   });
 
-  it("reveals the user footer via the visible class on hover", () => {
+  it("keeps the user footer permanently visible without a hover reveal", () => {
     const el = renderer.renderUserMessage({ content: "hello", timestamp: 1 });
     const footer = el.querySelector(".message-footer");
-    expect(footer.classList.contains("visible")).toBe(false);
+    // Always-visible toolbar (v3 parity): no JS-driven .visible toggling.
     el.querySelector(".message-content").dispatchEvent(new MouseEvent("mouseenter"));
-    expect(footer.classList.contains("visible")).toBe(true);
+    expect(footer.classList.contains("visible")).toBe(false);
   });
 });
 
@@ -389,6 +481,25 @@ describe("MessageRenderer locale change", () => {
     await setLocale("zh");
 
     expect(labelEl.textContent).toBe("思考中");
+  });
+
+  it("updates user collapse toggle labels on locale change without re-rendering content", async () => {
+    const el = renderer.renderUserMessage({ content: "a".repeat(400) });
+    const toggle = el.querySelector(".message-user-collapse-toggle");
+    expect(toggle.textContent).toBe("Expand");
+
+    toggle.click();
+    expect(toggle.textContent).toBe("Collapse");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+    const contentHtmlBefore = el.querySelector(".message-content").innerHTML;
+
+    await setLocale("zh");
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.textContent).toBe("收起");
+    // Content must not be re-rendered on locale change.
+    expect(el.querySelector(".message-content").innerHTML).toBe(contentHtmlBefore);
   });
 
   it("re-renders welcome on locale change when .welcome exists", async () => {

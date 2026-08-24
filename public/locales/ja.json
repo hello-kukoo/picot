@@ -132,7 +132,11 @@
     "expandAllToolsDesc": "すべてのツールカードを展開する",
     "collapseAllTools": "すべてのツールを折りたたむ",
     "collapseAllToolsDesc": "すべてのツールカードを折りたたむ",
-    "compacting": "コンパクト中…"
+    "compacting": "コンパクト中…",
+    "pasteDetected": "大きな貼り付けを検出（{size}）— ファイルとして添付しますか？",
+    "pasteAsFile": "ファイルとして添付",
+    "keepInline": "インラインのまま",
+    "pasteOffloadFailed": "貼り付けたテキストを保存できませんでした"
   },
   "messages": {
     "attachedImage": "添付画像",
@@ -140,12 +144,17 @@
     "thinking": "考え中",
     "copy": "コピー",
     "copied": "コピーしました！",
+    "forkSession": "セッションをフォーク",
+    "editMessage": "メッセージを編集",
+    "expand": "展開",
+    "collapse": "折りたたむ",
     "scrollToBottom": "Scroll to latest message",
     "processDetails": "処理の詳細",
     "processStep": "{count} ステップ",
     "processSteps": "{count} ステップ",
     "processToolCall": "{count} 件のツール呼び出し",
-    "processToolCalls": "{count} 件のツール呼び出し"
+    "processToolCalls": "{count} 件のツール呼び出し",
+    "turnFiles": "このターンで変更されたファイル（{count}）:"
   },
   "tools": {
     "copyOutput": "出力をコピー",
@@ -358,6 +367,7 @@
     "compactedWithSummary": "✓ コンテキストをコンパクトにしました — {summary}"
   },
   "errors": {
+    "treeNavigateFailed": "分岐の切り替えに失敗しました:{error}",
     "newSessionOnlyNative": "新しいセッションはネイティブホストでのみサポートされています。",
     "newSessionPathUnavailable": "新しいセッションの開始に失敗しました：現在のワークスペースパスが利用できません",
     "newSessionNavUnavailable": "新しいセッションの開始に失敗しました：ナビゲーションが利用できません",
@@ -1114,6 +1124,8 @@
     "branch": "分岐",
     "turns": "{count} ターン",
     "resumeBranch": "分岐を再開",
+    "resumeStreamingBlocked": "ストリーミング中は再開できません",
+    "actionWhileStreaming": "現在の応答が完了するまでお待ちください",
     "refresh": "セッション履歴を更新",
     "empty": "メッセージはまだありません",
     "statusError": "エラー",

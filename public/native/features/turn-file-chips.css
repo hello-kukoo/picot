@@ -1,0 +1,36 @@
+/* ABOUTME: Per-turn written-file chips row shown under the final assistant message. */
+
+/* Per-turn written-file chips under the final assistant message. */
+.turn-file-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: var(--space-1-5) 0 var(--space-1);
+}
+
+.turn-file-chips-label {
+  color: var(--text-ghost);
+  font-size: var(--font-size-sm);
+}
+
+.turn-file-chip {
+  max-width: 220px;
+  padding: var(--space-0-5) var(--space-1-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-glass);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.turn-file-chip:hover,
+.turn-file-chip:focus-visible {
+  border-color: var(--border-hover);
+  color: var(--text-primary);
+  background: var(--bg-glass-hover);
+}
