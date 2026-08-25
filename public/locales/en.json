@@ -330,7 +330,8 @@
     "insertExample": "Insert example",
     "remove": "Remove",
     "delete": "Delete",
-    "openLink": "Open Link"
+    "openLink": "Open Link",
+    "close": "Close"
   },
   "status": {
     "saving": "Saving...",
@@ -672,7 +673,22 @@
       "docsLink": "models.json docs",
       "helpPost2": "for the full schema. Changes are picked up immediately — no restart needed.",
       "replaceConfirm": "Replace current content with the Ollama example?",
-      "docsOpenFailed": "Could not open the documentation link"
+      "docsOpenFailed": "Could not open the documentation link",
+      "oauth": {
+        "signInWithChatGPT": "Sign in with ChatGPT",
+        "preparing": "Preparing ChatGPT sign-in…",
+        "completeInBrowser": "Complete authorization in your browser to continue.",
+        "openBrowser": "Open browser",
+        "copyCode": "Copy code",
+        "cancel": "Cancel",
+        "connected": "ChatGPT connected.",
+        "logout": "Logout",
+        "logoutConfirm": "Log out of ChatGPT? This removes the saved sign-in credential.",
+        "cancelled": "ChatGPT sign-in cancelled.",
+        "expired": "This device code has expired. Start again.",
+        "failed": "ChatGPT sign-in failed.",
+        "retry": "Try again"
+      }
     },
     "apiKeys": {
       "noProviders": "No providers known.",

@@ -408,3 +408,21 @@ describe("picot config auth operations", () => {
     expect(registry.refresh).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("picot config oauth operations", () => {
+  it("rejects oauth_logout for providers outside the codex whitelist (design §3)", async () => {
+    const { handlePicotConfig } = await loadConfigWithTempHome();
+    const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+
+    await expect(handlePicotConfig("oauth_logout", { provider: "anthropic" }, {})).resolves.toEqual(
+      { ok: false, error: "Unsupported OAuth provider" },
+    );
+    await expect(handlePicotConfig("oauth_logout", {}, {})).resolves.toEqual({
+      ok: false,
+      error: "Unsupported OAuth provider",
+    });
+    // Rejected before any runtime is constructed — the op surface never
+    // forwards a non-codex provider to runtime.logout().
+    expect(ModelRuntime.create).not.toHaveBeenCalled();
+  });
+});
