@@ -344,7 +344,8 @@
     "insertExample": "插入示例",
     "remove": "移除",
     "delete": "删除",
-    "openLink": "打开链接"
+    "openLink": "打开链接",
+    "close": "关闭"
   },
   "status": {
     "saving": "保存中...",
@@ -696,7 +697,22 @@
       "docsLink": "models.json 文档",
       "helpPost2": "了解完整架构。更改即时生效 — 无需重启。",
       "replaceConfirm": "用 Ollama 示例替换当前内容？",
-      "docsOpenFailed": "无法打开文档链接"
+      "docsOpenFailed": "无法打开文档链接",
+      "oauth": {
+        "signInWithChatGPT": "使用 ChatGPT 登录",
+        "preparing": "正在准备 ChatGPT 登录…",
+        "completeInBrowser": "请在浏览器中完成授权以继续。",
+        "openBrowser": "打开浏览器",
+        "copyCode": "复制代码",
+        "cancel": "取消",
+        "connected": "ChatGPT 已连接。",
+        "logout": "退出登录",
+        "logoutConfirm": "退出 ChatGPT 登录？这将移除已保存的登录凭据。",
+        "cancelled": "ChatGPT 登录已取消。",
+        "expired": "此设备代码已过期，请重新开始。",
+        "failed": "ChatGPT 登录失败。",
+        "retry": "重试"
+      }
     },
     "providerPicker": {
       "builtIn": "内置",

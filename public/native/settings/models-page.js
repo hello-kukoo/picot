@@ -57,8 +57,12 @@ function providerIcon(provider, className = "provider-logo") {
   return img;
 }
 
-export function setupModelsPage({ configGateway, onModelConfigurationChanged }) {
+export function setupModelsPage({ configGateway, oauthGateway, onModelConfigurationChanged }) {
   const call = (op, params, options) => configGateway.call(op, params, options);
+  const oauthCall = (op, params, options) =>
+    oauthGateway
+      ? oauthGateway.command({ type: op, ...params }, options)
+      : Promise.reject(new Error("oauth unavailable"));
   const apiKeysContainer = document.getElementById("settings-api-keys");
   const providerExpansionState = new Map();
   let catalogProviders = [];
@@ -136,6 +140,26 @@ export function setupModelsPage({ configGateway, onModelConfigurationChanged }) 
     apiKeysContainer.appendChild(wrap);
   }
 
+  function isCodexProvider(provider) {
+    return provider?.provider === "openai-codex";
+  }
+
+  /** Connected-state card for the OAuth-managed Codex provider. */
+  function buildCodexConnectedCard() {
+    const card = document.createElement("div");
+    card.className = "provider-manager-card oauth-connected-card";
+    const title = document.createElement("div");
+    title.className = "api-key-row-name";
+    title.textContent = t("settings.models.oauth.connected");
+    const logoutBtn = document.createElement("button");
+    logoutBtn.type = "button";
+    logoutBtn.className = "ui-button ui-button--secondary";
+    logoutBtn.textContent = t("settings.models.oauth.logout");
+    logoutBtn.addEventListener("click", () => void logoutCodex());
+    card.append(title, logoutBtn);
+    return card;
+  }
+
   function renderApiKeysPanel(providers) {
     catalogProviders = providers;
     if (inlineModelsTextarea) {
@@ -147,11 +171,82 @@ export function setupModelsPage({ configGateway, onModelConfigurationChanged }) 
     }
 
     apiKeysContainer.replaceChildren();
-    const configured = providers.filter((provider) => provider.configured);
+    // Codex is OAuth-managed: its configured card is rendered separately as a
+    // connected state with a logout action, never as an API-key row.
+    const configured = providers.filter(
+      (provider) => provider.configured && !isCodexProvider(provider),
+    );
     for (const provider of configured.sort((a, b) =>
       (a.displayName || a.provider).localeCompare(b.displayName || b.provider),
     )) {
       apiKeysContainer.appendChild(buildApiKeyRow(provider));
+    }
+    if (codexOAuthCapability?.configured) {
+      apiKeysContainer.appendChild(buildCodexConnectedCard());
+    }
+  }
+
+  // Codex OAuth capability from the read-only surface; null until queried.
+  // Never inferred from the API-key catalog (baseline protocol rule).
+  let codexOAuthCapability = null;
+  let oauthDialog = null;
+
+  async function loadOAuthCapability() {
+    if (!oauthGateway) return;
+    try {
+      const resp = await oauthCall("get_oauth_login_capabilities");
+      const providers =
+        resp?.success && Array.isArray(resp.data?.providers) ? resp.data.providers : [];
+      codexOAuthCapability = providers.find((p) => p.providerId === "openai-codex") ?? null;
+    } catch {
+      codexOAuthCapability = null;
+    }
+    // The panel may have rendered before this resolve (loadModels fires the
+    // capability probe alongside loadApiKeysPanel): re-render with the
+    // fresh capability so the Codex connected card / login entry appears.
+    if (apiKeysContainer?.isConnected && catalogProviders.length > 0) {
+      renderApiKeysPanel(catalogProviders);
+    }
+  }
+
+  function startOAuthLogin() {
+    oauthDialog?.destroy();
+    oauthDialog = createModelsOAuthLoginDialog({
+      command: (frame) => oauthCall(frame.type, frame),
+      subscribe: (handler) => oauthGateway.subscribe(handler),
+      openExternal: (url) => {
+        // System-browser handoff only: no WebView window.open fallback for a
+        // Pi-provided URL (open-redirect surface stays closed).
+        call("open_external", { url }).catch((error) => {
+          console.warn("[models-page] open_external failed:", error);
+        });
+      },
+      copyText: (text) => {
+        void navigator.clipboard?.writeText(text);
+      },
+      onSuccess: async () => {
+        await onModelConfigurationChanged?.();
+        await loadApiKeysPanel();
+        // Re-query the capability surface so the card flips to the connected
+        // state with a fresh configured flag.
+        await loadOAuthCapability();
+        await loadInlineModelsEditor();
+      },
+      onTerminal: () => {},
+    });
+    void oauthDialog.start().catch(() => {});
+  }
+
+  async function logoutCodex() {
+    const ok = confirm(t("settings.models.oauth.logoutConfirm", { provider: "OpenAI Codex" }));
+    if (!ok) return;
+    const resp = await call("oauth_logout", { provider: "openai-codex" }).catch(() => null);
+    if (resp?.ok) {
+      await onModelConfigurationChanged?.();
+      await loadApiKeysPanel();
+      // Re-query the capability surface so the card flips back to the
+      // sign-in entry once Pi confirms the credential is gone.
+      await loadOAuthCapability();
     }
   }
 
@@ -203,7 +298,10 @@ export function setupModelsPage({ configGateway, onModelConfigurationChanged }) 
           matches.filter(
             (p) =>
               !p.custom &&
-              (p.authType === "oauth" || p.source === "oauth" || p.source === "subscription"),
+              (p.authType === "oauth" ||
+                p.source === "oauth" ||
+                p.source === "subscription" ||
+                (isCodexProvider(p) && Boolean(oauthGateway))),
           ),
         ],
         [
@@ -211,6 +309,7 @@ export function setupModelsPage({ configGateway, onModelConfigurationChanged }) 
           matches.filter(
             (p) =>
               !p.custom &&
+              !(isCodexProvider(p) && Boolean(oauthGateway)) &&
               p.authType !== "oauth" &&
               p.source !== "oauth" &&
               p.source !== "subscription",
@@ -314,6 +413,35 @@ export function setupModelsPage({ configGateway, onModelConfigurationChanged }) 
   }
 
   function openSubscriptionSetup(p) {
+    const isCodex = oauthGateway && isCodexProvider(p);
+    if (isCodex && codexOAuthCapability && !codexOAuthCapability.configured) {
+      startOAuthLogin();
+      return;
+    }
+    if (isCodex && codexOAuthCapability?.configured) {
+      const ok = confirm(t("settings.models.oauth.logoutConfirm", { provider: "OpenAI Codex" }));
+      if (!ok) return;
+      void logoutCodex();
+      return;
+    }
+    if (isCodex && !codexOAuthCapability) {
+      // Capability not loaded yet: probe once, then re-route. If the probe
+      // yields nothing (unsupported/unavailable), degrade to the terminal
+      // instructions instead of recursing.
+      void loadOAuthCapability().then(() => {
+        if (!codexOAuthCapability) {
+          showTerminalLoginDialog(p);
+          return;
+        }
+        openSubscriptionSetup(p);
+      });
+      return;
+    }
+    showTerminalLoginDialog(p);
+  }
+
+  /** Fallback instructions for subscriptions without an in-app device flow. */
+  function showTerminalLoginDialog(p) {
     const { backdrop, dialog } = setupDialog(
       `Connect ${p.displayName || p.provider}`,
       "This provider uses your subscription account.",
@@ -1509,8 +1637,10 @@ export function setupModelsPage({ configGateway, onModelConfigurationChanged }) 
 
   modelsConfigDocsLink?.addEventListener("click", (e) => {
     e.preventDefault();
-    call("open_external", { url: MODELS_DOCS_URL }).catch(() => {
-      window.open(MODELS_DOCS_URL, "_blank", "noopener,noreferrer");
+    // System-browser handoff only: no WebView window.open fallback for the
+    // docs link (keeps the open-redirect surface closed entirely).
+    call("open_external", { url: MODELS_DOCS_URL }).catch((error) => {
+      console.warn("[models-page] open_external failed:", error);
     });
   });
 
@@ -1518,5 +1648,5 @@ export function setupModelsPage({ configGateway, onModelConfigurationChanged }) 
     if (apiKeysContainer?.isConnected) void loadApiKeysPanel({ preserveUi: true });
   });
 
-  return { loadApiKeysPanel, loadInlineModelsEditor };
+  return { loadApiKeysPanel, loadInlineModelsEditor, loadOAuthCapability };
 }

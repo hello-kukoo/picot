@@ -31,6 +31,7 @@ export function setupSettingsPanel({
   getWorkspaceId,
   control,
   configGateway,
+  oauthGateway,
   onModelConfigurationChanged,
   runtime,
   getTarget,
@@ -84,7 +85,7 @@ export function setupSettingsPanel({
   });
   const config = configGateway ? setupSettingsConfig({ configGateway }) : null;
   const modelsPage = configGateway
-    ? setupModelsPage({ configGateway, onModelConfigurationChanged })
+    ? setupModelsPage({ configGateway, oauthGateway, onModelConfigurationChanged })
     : null;
   const thinkingControl = setupThinkingEffortControl({
     runtime,
@@ -177,6 +178,9 @@ export function setupSettingsPanel({
     if (!modelsPage) return;
     void modelsPage.loadApiKeysPanel();
     void modelsPage.loadInlineModelsEditor();
+    // Preload the OAuth capability surface so Codex renders with its login
+    // entry immediately instead of probing on first click.
+    void modelsPage.loadOAuthCapability();
   }
 
   function setExtensionsView(mode) {

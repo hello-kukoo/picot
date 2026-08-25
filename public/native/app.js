@@ -71,6 +71,7 @@ import {
 } from "./transport/config-gateway-readiness.js";
 import { HostControlGateway } from "./transport/control-gateway.js";
 import { HostDataGateway } from "./transport/data-gateway.js";
+import { createOauthGateway } from "./transport/oauth-gateway.js";
 import { HostRuntimeAdapter, resolveHostWebSocketUrl } from "./transport/runtime-adapter.js";
 import { routeRuntimeFrame } from "./transport/runtime-frame-routing.js";
 import { RuntimeGateway } from "./transport/runtime-gateway.js";
@@ -342,6 +343,9 @@ const config = new ConfigGateway({
   getTarget: () => target,
   waitUntilReady: () => (configGatewayTargetReady ? Promise.resolve() : configGatewayReady),
 });
+// OAuth login flows share the config transport; their __picotOauth frames
+// must be consumed before the config gateway sees them (design §5 M3).
+const oauthGateway = createOauthGateway({ runtime, getTarget: () => target });
 window.__picotConfigCall = (op, params, options) => config.call(op, params, options);
 const customUiPanel = new CustomUiPanel({
   runtime,
@@ -810,7 +814,12 @@ runtime.subscribe((frame) => {
     frame,
     target,
     store,
-    consumeConfigResponse: (candidate) => consumeConfigResponseFrame(config, candidate),
+    consumeConfigResponse: (candidate) => {
+      // M3 mutual exclusion: OAuth envelopes are consumed first and never
+      // reach the config gateway or chat rendering.
+      if (oauthGateway.consumeFrame(candidate)) return true;
+      return consumeConfigResponseFrame(config, candidate);
+    },
     reduceForeground: reduceSessionState,
   });
   if (routed.kind === "background" || routed.kind === "consumed-background") {
@@ -995,6 +1004,7 @@ const settingsPanel = setupSettingsPanel({
   control,
   getWorkspaceId: () => target.workspaceId,
   configGateway: config,
+  oauthGateway,
   onModelConfigurationChanged: () => loadAvailableModels(),
   runtime,
   getTarget: () => target,

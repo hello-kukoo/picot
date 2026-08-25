@@ -35,10 +35,19 @@ export default function picotBridge(pi: ExtensionAPI) {
       const respond = (payload: Record<string, unknown>) => {
         ctx.ui.notify(JSON.stringify({ __picotConfig: id, ...payload }), "info");
       };
+      // OAuth login events stream over the same config channel: each frame
+      // carries the initiating request id so only the requesting window's
+      // active session consumes them (design §5 envelope).
+      const oauthNotify = (event: unknown) => {
+        ctx.ui.notify(JSON.stringify({ __picotOauth: id, event }), "info");
+      };
       const op = typeof request.op === "string" ? request.op : "";
       const params = request.params && typeof request.params === "object" ? request.params : {};
       try {
-        const result = await handlePicotConfig(op, params, ctx);
+        const result = await handlePicotConfig(op, params, { ...ctx, oauthNotify });
+        // SAFETY: handlePicotConfig returns PicotConfigResult ({ ok, data?, error? }) —
+        // a plain JSON-serializable record by construction; the cast only
+        // widens the discriminated union to its record shape for respond().
         respond(result as unknown as Record<string, unknown>);
       } catch (error) {
         respond({ ok: false, error: error instanceof Error ? error.message : String(error) });

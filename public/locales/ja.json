@@ -344,7 +344,8 @@
     "insertExample": "例を挿入",
     "remove": "削除",
     "delete": "削除",
-    "openLink": "リンクを開く"
+    "openLink": "リンクを開く",
+    "close": "閉じる"
   },
   "status": {
     "saving": "保存中...",
@@ -696,7 +697,22 @@
       "docsLink": "models.jsonドキュメント",
       "helpPost2": "を参照してください。変更はすぐに反映されます — 再起動不要。",
       "replaceConfirm": "現在の内容をOllamaの例で置き換えますか？",
-      "docsOpenFailed": "ドキュメントリンクを開けませんでした"
+      "docsOpenFailed": "ドキュメントリンクを開けませんでした",
+      "oauth": {
+        "signInWithChatGPT": "ChatGPT でサインイン",
+        "preparing": "ChatGPT サインインを準備しています…",
+        "completeInBrowser": "ブラウザで認証を完了して続行してください。",
+        "openBrowser": "ブラウザを開く",
+        "copyCode": "コードをコピー",
+        "cancel": "キャンセル",
+        "connected": "ChatGPT に接続しました。",
+        "logout": "ログアウト",
+        "logoutConfirm": "ChatGPT からログアウトしますか？保存されたサインイン資格情報が削除されます。",
+        "cancelled": "ChatGPT サインインをキャンセルしました。",
+        "expired": "このデバイスコードは期限切れです。もう一度開始してください。",
+        "failed": "ChatGPT サインインに失敗しました。",
+        "retry": "再試行"
+      }
     },
     "providerPicker": {
       "builtIn": "組み込み",
