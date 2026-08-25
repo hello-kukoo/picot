@@ -107,12 +107,6 @@ import { isLoopbackAddress, isLoopbackOnlyApiRequest } from "./request-access.ts
 import { buildProjectSearchMatch } from "./session-search";
 import { removeSessionFileTrashFirst } from "./session-trash.ts";
 import {
-  type ExpansionCommand,
-  type ExpansionFileReader,
-  type ExpansionResult,
-  expandSkillOrTemplate,
-} from "./skill-command-expansion.ts";
-import {
   type InstallCandidateSelection,
   type InstallHostSource,
   installSkillLinks,
@@ -879,20 +873,6 @@ export function normalizeSkillCommands(commands: SlashCommandLike[]): SkillComma
             ? "temporary"
             : "personal",
     }));
-}
-
-/**
- * Resolve the text that the prompt handler is allowed to send. Keeping this
- * boundary separate makes the send-before-expand invariant directly testable.
- */
-export function preparePromptMessage(
-  message: string,
-  commands: ExpansionCommand[],
-  readFile: ExpansionFileReader,
-): { kind: "ready"; text: string } | { kind: "error"; message: string } {
-  const result: ExpansionResult = expandSkillOrTemplate(message, commands, readFile);
-  if (result.kind === "error") return result;
-  return { kind: "ready", text: result.kind === "expanded" ? result.text : message };
 }
 
 export type SkillInventoryMutation = {
@@ -2477,27 +2457,25 @@ export default function (pi: ExtensionAPI) {
         case "prompt": {
           const a = requireApi("prompt");
           if (!a) break;
-          // Expand `/skill:<name>` and `/<template>` commands before sending.
-          // Pi's sendUserMessage() intentionally skips slash/skill/template
-          // expansion (it calls prompt() with expandPromptTemplates:false), so
-          // a literal `/skill:foo` would reach the model as plain text and the
-          // model would improvise (e.g. bash+find). Here we reproduce Pi TUI's
-          // _expandSkillCommand / expandPromptTemplate on the success path.
-          // See docs/superpowers/specs/2026-08-07-composer-skill-discovery-and-execution-fixes.md §3.
-          const prepared = preparePromptMessage(command.message, a.getCommands(), (p) =>
-            fs.readFileSync(p, "utf-8"),
-          );
-          if (prepared.kind === "error") {
-            sendTo(ws, error("prompt", prepared.message));
-            break;
-          }
-          const messageText = prepared.text;
+          // Send the raw message; Pi itself dispatches extension commands and
+          // expands `/skill:<name>` / `/<template>` (expandPromptTemplates:true,
+          // added to sendUserMessage() in Pi 0.84.2). Behavior therefore always
+          // tracks the embedded Pi version instead of Picot's byte-for-byte
+          // re-implementation of _expandSkillCommand / expandPromptTemplate
+          // (removed with skill-command-expansion.ts). Only difference from the
+          // old expander: an unreadable skill source no longer aborts the send
+          // with an explicit error — Pi emits an extension error event and
+          // passes the original text through.
+          const messageText = command.message;
           if (ctx && !ctx.isIdle()) {
             promptBehavior = command.streamingBehavior || "steer";
             if (promptBehavior === "steer") {
-              a.sendUserMessage(messageText, { deliverAs: "steer" });
+              a.sendUserMessage(messageText, { deliverAs: "steer", expandPromptTemplates: true });
             } else {
-              a.sendUserMessage(messageText, { deliverAs: "followUp" });
+              a.sendUserMessage(messageText, {
+                deliverAs: "followUp",
+                expandPromptTemplates: true,
+              });
             }
           } else {
             // Build content with optional images
@@ -2542,11 +2520,11 @@ export default function (pi: ExtensionAPI) {
               // Only send content array if we actually have images, otherwise just text
               promptHasImages = content.some((c) => c.type === "image");
               if (promptHasImages) {
-                a.sendUserMessage(content);
+                a.sendUserMessage(content, { expandPromptTemplates: true });
               } else {
-                a.sendUserMessage(messageText);
+                a.sendUserMessage(messageText, { expandPromptTemplates: true });
               }
-            } else a.sendUserMessage(messageText);
+            } else a.sendUserMessage(messageText, { expandPromptTemplates: true });
           }
           sendTo(ws, success("prompt"));
           break;

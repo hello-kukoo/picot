@@ -13,7 +13,6 @@ import {
   parseSkillInstallScanInternalRequest,
   parseSkillInventoryMutation,
   parseSkillInventoryScope,
-  preparePromptMessage,
 } from "./embedded-server.ts";
 
 describe("normalizeSkillCommands", () => {
@@ -47,64 +46,6 @@ describe("normalizeSkillCommands", () => {
         scope: "personal",
       },
     ]);
-  });
-});
-
-describe("preparePromptMessage", () => {
-  const skill = {
-    name: "skill:review",
-    source: "skill" as const,
-    sourceInfo: { path: "/skills/review/SKILL.md", baseDir: "/skills/review" },
-  };
-  const template = {
-    name: "brief",
-    source: "prompt" as const,
-    sourceInfo: { path: "/prompts/brief.md" },
-  };
-
-  test("prepares an expanded skill for the idle send path", () => {
-    expect(
-      preparePromptMessage(
-        "/skill:review",
-        [skill],
-        () => `---
-description: review
----
-Do review`,
-      ),
-    ).toEqual({
-      kind: "ready",
-      text: `<skill name="review" location="/skills/review/SKILL.md">
-References are relative to /skills/review.
-
-Do review
-</skill>`,
-    });
-  });
-
-  test("prepares a template for a follow-up send path", () => {
-    expect(
-      preparePromptMessage(
-        "/brief hello",
-        [template],
-        () => `---
-description: brief
----
-$1`,
-      ),
-    ).toEqual({ kind: "ready", text: "hello" });
-  });
-
-  test("keeps unknown slash commands ready with their original text", () => {
-    expect(preparePromptMessage("/new", [], () => "")).toEqual({ kind: "ready", text: "/new" });
-  });
-
-  test("blocks a known source that cannot be expanded", () => {
-    expect(
-      preparePromptMessage("/skill:review", [skill], () => {
-        throw new Error("ENOENT");
-      }),
-    ).toMatchObject({ kind: "error" });
   });
 });
 

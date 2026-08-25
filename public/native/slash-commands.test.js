@@ -4,17 +4,40 @@ import { buildCommandCatalog, resolveComposerInput } from "./slash-commands.js";
 const catalog = buildCommandCatalog({
   builtIns: [{ name: "settings", description: "Open settings", action: "open_settings" }],
   nativeCommands: [
-    { name: "review", description: "Review", source: "extension", path: "/global/review.ts" },
-    { name: "fix", description: "Fix", source: "prompt", location: "project" },
-    { name: "skill:test", description: "Test", source: "skill", location: "global" },
+    {
+      name: "review",
+      description: "Review",
+      source: "extension",
+      sourceInfo: { path: "/global/review.ts", source: "local", scope: "user" },
+    },
+    {
+      name: "fix",
+      description: "Fix",
+      source: "prompt",
+      sourceInfo: { path: "/project/prompts/fix.md", source: "local", scope: "project" },
+    },
+    {
+      name: "skill:test",
+      description: "Test",
+      source: "skill",
+      sourceInfo: { path: "/skills/test/SKILL.md", source: "local", scope: "user" },
+    },
   ],
 });
 
 describe("slash commands", () => {
   it("merges command source, scope, type, and capability state", () => {
     expect(catalog.get("settings")).toMatchObject({ type: "builtin", scope: "picot" });
-    expect(catalog.get("review")).toMatchObject({ type: "extension", scope: "global" });
+    expect(catalog.get("review")).toMatchObject({ type: "extension", scope: "user" });
     expect(catalog.get("fix")).toMatchObject({ type: "prompt", scope: "project" });
+    expect(catalog.get("skill:test")).toMatchObject({ type: "skill", scope: "user" });
+  });
+
+  it("falls back to global scope for commands without sourceInfo", () => {
+    const legacy = buildCommandCatalog({
+      nativeCommands: [{ name: "old", description: "Old", source: "extension" }],
+    });
+    expect(legacy.get("old")).toMatchObject({ type: "extension", scope: "global" });
   });
 
   it("treats // as a literal slash and rejects unknown commands", () => {

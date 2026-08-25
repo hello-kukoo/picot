@@ -1,5 +1,14 @@
 # Composer 中 Skill 的发现与执行：问题分析与修复方案
 
+> **Status:** Superseded in part（2026-08-25）。§3.9 设计点 1-2（在
+> `sendUserMessage` 之前由 `skill-command-expansion.ts` 复刻 Pi 的
+> `_expandSkillCommand` / `expandPromptTemplate`，且读源失败时显式报错阻止发送）
+> 已随 Pi 0.84.2 的 `sendUserMessage({ expandPromptTemplates })` 选项
+> （earendil-works/pi#7857）移除：`embedded-server.ts` 现在把原始输入交给 Pi
+> 原生展开（`expandPromptTemplates: true`），复刻模块及其测试已删除。读源失败
+> 不再阻止发送——Pi 会 emit extension error 事件并透传原文。本文档其余部分
+> （Q1 命令来源链路、Q2 统一发现系统）仍为现状描述。
+>
 > **Status:** Decided（设计点已与 Dr. Lin 确认，2026-08-07）。本文档取代
 > [`2026-07-27-claude-skills-discovery-design.md`](2026-07-27-claude-skills-discovery-design.md)
 > 中"写死扫描 `~/.claude/skills` 并提供专属 Enable 按钮"的设计取向。

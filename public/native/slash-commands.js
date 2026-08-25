@@ -1,9 +1,8 @@
 function normalizeNativeCommand(command) {
-  const scope =
-    command.location ??
-    (typeof command.path === "string" && command.path.includes("/.pi/agent/")
-      ? "global"
-      : "global");
+  // Pi reports commands with a nested sourceInfo.scope ("user" | "project" |
+  // "temporary"); top-level location/path do not exist on the wire. Fall back
+  // to "global" only for synthetic/legacy entries that carry no sourceInfo.
+  const scope = command.sourceInfo?.scope ?? "global";
   return {
     ...command,
     type: command.source ?? "extension",
