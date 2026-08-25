@@ -1030,7 +1030,6 @@ body {
   transition: opacity var(--duration) var(--ease);
 }
 
-.session-pin-btn,
 .session-archive-btn,
 .session-rename-btn {
   position: absolute;
@@ -1056,25 +1055,12 @@ body {
   pointer-events: none;
 }
 
-.session-pin-btn {
-  right: 48px;
-}
-
 .session-rename-btn {
   right: 24px;
 }
 
 .session-archive-btn {
   right: 0;
-}
-
-.session-pin-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  color: currentColor;
 }
 
 .context-menu-pin-icon {
@@ -1092,10 +1078,6 @@ body {
   mask-size: contain;
 }
 
-.session-pin-btn[aria-pressed="true"] .session-pin-icon {
-  color: var(--accent);
-}
-
 .session-archive-btn svg {
   width: 14px;
   height: 14px;
@@ -1110,7 +1092,6 @@ body {
   opacity: 0;
 }
 
-.session-item:hover .session-pin-btn,
 .session-item:hover .session-archive-btn,
 .session-item:hover .session-rename-btn {
   opacity: 1;
@@ -1118,7 +1099,6 @@ body {
   pointer-events: auto;
 }
 
-.session-pin-btn:hover,
 .session-archive-btn:hover,
 .session-rename-btn:hover {
   background: var(--bg-glass-hover);

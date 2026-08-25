@@ -22,6 +22,41 @@ test("extracts Windows workspace folder names", () => {
   expect(result.projects[0].folderName).toBe("Picot");
 });
 
+test("orders history workspaces by session mtime", () => {
+  const result = mergeWorkspaceProjects(
+    [
+      {
+        path: "/work/old-created",
+        dirName: "old-created",
+        sessions: [
+          {
+            filePath: "/sessions/old.jsonl",
+            timestamp: "2026-07-14T10:00:00Z",
+            mtime: Date.parse("2026-07-14T12:00:00Z"),
+          },
+        ],
+      },
+      {
+        path: "/work/new-created",
+        dirName: "new-created",
+        sessions: [
+          {
+            filePath: "/sessions/new.jsonl",
+            timestamp: "2026-07-14T11:00:00Z",
+            mtime: Date.parse("2026-07-14T11:30:00Z"),
+          },
+        ],
+      },
+    ],
+    [],
+    [],
+  );
+  expect(result.projects.map((project) => project.workspaceId)).toEqual([
+    "history:old-created",
+    "history:new-created",
+  ]);
+});
+
 test("merges live zero-session workspaces and orders by activity", () => {
   const result = mergeWorkspaceProjects(
     [

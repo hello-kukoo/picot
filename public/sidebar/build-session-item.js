@@ -6,6 +6,15 @@ export function getSessionDisplayTitle(session) {
   return session?.name || session?.firstMessage || t("sidebar.emptySession");
 }
 
+export function sessionActivityTime(session) {
+  const modified = Number(session?.mtime);
+  if (Number.isFinite(modified)) return modified;
+  const timestamp = Date.parse(session?.timestamp || "");
+  if (Number.isFinite(timestamp)) return timestamp;
+  const created = Number(session?.ctime);
+  return Number.isFinite(created) ? created : 0;
+}
+
 /**
  * Relative timestamp for a session row ("Just now", "2h ago", weekday, …).
  * Shared by the normal sidebar and the focus sidebar so both render the same
@@ -39,15 +48,12 @@ export function buildSessionItem({
   isUnread = false,
   isStreaming = false,
   isArchived = false,
-  isPinned = false,
-  showPinButton = true,
   showArchiveButton = true,
   showDeleteButton = false,
   archiveDisabledReason = null,
   projectSearchText = "",
   formattedTime = "",
   onSelect = null,
-  onPinToggle = null,
   onArchiveToggle = null,
   onDelete = null,
   onRename = null,
@@ -66,7 +72,6 @@ export function buildSessionItem({
   if (isStreaming) item.classList.add("streaming");
 
   const title = getSessionDisplayTitle(session);
-  const pinBtnLabel = isPinned ? t("sidebar.unpinSession") : t("sidebar.pinSession");
   const archiveBtnLabel = isArchived ? t("sidebar.unarchiveSession") : t("sidebar.archiveSession");
 
   const titleRow = document.createElement("div");
@@ -100,28 +105,6 @@ export function buildSessionItem({
       event.stopPropagation();
       onContextMenu(event, item, session);
     });
-  }
-
-  if (showPinButton) {
-    const pinBtn = document.createElement("button");
-    pinBtn.type = "button";
-    pinBtn.className = "session-pin-btn";
-    pinBtn.title = pinBtnLabel;
-    pinBtn.setAttribute("aria-label", pinBtnLabel);
-    pinBtn.setAttribute("aria-pressed", String(isPinned));
-    const pinIcon = document.createElement("span");
-    pinIcon.className = "session-pin-icon";
-    pinIcon.setAttribute("aria-hidden", "true");
-    if (typeof createIcon === "function") {
-      const pinGlyph = createIcon("pin", { size: 13 });
-      if (pinGlyph) pinIcon.replaceChildren(pinGlyph);
-    }
-    pinBtn.appendChild(pinIcon);
-    pinBtn.addEventListener("click", (event) => {
-      event.stopPropagation();
-      if (typeof onPinToggle === "function") onPinToggle(session.filePath);
-    });
-    actionSlot.appendChild(pinBtn);
   }
 
   if (showArchiveButton) {

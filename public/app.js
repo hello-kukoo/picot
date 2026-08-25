@@ -386,8 +386,7 @@ function refreshFocusView() {
 
 // Deletes a single session from the focus view. Reuses the archived-delete
 // confirmation + delete-batch flow; the server rejects any path still held by
-// a running Pi instance. On confirmed success it cleans the recent cookie and
-// session pin, then reloads sessions (which refreshes the focus view).
+// a running Pi instance, then reloads sessions to refresh the focus view.
 async function deleteFocusSession(filePath) {
   if (!filePath) return;
   const ok = await sidebar.confirmArchivedDeletion(1);
@@ -406,16 +405,14 @@ async function deleteFocusSession(filePath) {
       return;
     }
     if (errors.has(filePath)) return;
-    sidebar.removeFromRecentSessions(filePath);
-    sidebar.pinStore.unpinSession(filePath);
   } catch (err) {
     console.error("[Focus] deleteFocusSession failed:", err);
   }
   await sidebar.loadSessions();
 }
 
-// Fetches the git repository name for the focus info card. Mirrors the
-// WorkspaceQuickInfo metadata path; returns null when the workspace is not a
+// Fetches the git repository name for the Focus workspace info card; returns
+// null when the workspace is not a
 // git repo or the request fails so the card simply omits the repo row.
 async function fetchWorkspaceRepository(workspaceId) {
   if (!workspaceId) return null;
@@ -2678,6 +2675,10 @@ function handleRPCEvent(event) {
       break;
     case "message_end":
       handleMessageEnd(event.message, eventSessionFile, event.entryId);
+      // Session file mtime is updated when the persisted message arrives.
+      // Refresh here so an older session can move to its current activity position
+      // even when persistence completes after the prompt refresh timers.
+      sidebar.loadSessions({ quiet: true }).catch(() => {});
       if (pendingNewSessionRefresh) {
         refreshSidebarForNewSession(event).catch(() => {});
       }

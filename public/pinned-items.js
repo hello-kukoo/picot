@@ -1,7 +1,7 @@
-// ABOUTME: Persists ordered workspace and session Pins across localhost ports.
+// ABOUTME: Persists ordered workspace Pins across localhost ports.
 // ABOUTME: Owns capacity checks, legacy Favourites migration, and change detection.
 /**
- * Pinned Items - v1 cookie store for workspace/session Pins.
+ * Pinned Items - v1 cookie store for workspace Pins.
  *
  * Owns parsing, normalization, deduplication, capacity-bounded writes,
  * provisional-to-history workspace reconciliation, current-origin
@@ -16,8 +16,6 @@
 
 export const PINNED_ITEMS_COOKIE = "picot-pinned-items";
 export const PINNED_ITEMS_EVENT = "picot:pinned-items-change";
-export const FAVOURITES_STORAGE_KEY = "pi-studio-favourites";
-export const FAVOURITES_MIGRATED_FLAG = "picot-pinned-favourites-migrated";
 export const MAX_PINNED_BYTES = 3800;
 export const PINNED_SCHEMA_VERSION = 1;
 
@@ -44,7 +42,7 @@ export class PinnedCapacityError extends Error {
     this.name = "PinnedCapacityError";
     this.attemptedBytes = context.attemptedBytes ?? 0;
     this.limitBytes = context.limitBytes ?? MAX_PINNED_BYTES;
-    this.previousState = context.previousState ?? { workspaces: [], sessions: [] };
+    this.previousState = context.previousState ?? { workspaces: [] };
     if (typeof Error.captureStackTrace === "function") {
       Error.captureStackTrace(this, PinnedCapacityError);
     }
@@ -64,14 +62,11 @@ function normalizeWorkspaceRecord(record) {
  *
  * - Workspace records require a `history:` / `path:` id and a non-empty path;
  *   duplicates (by id) are dropped while preserving first-seen order.
- * - Sessions require non-empty strings; duplicates are dropped preserving order.
  * - Malformed payloads collapse to an empty (recoverable) state.
  */
 export function normalizePinnedState(payload) {
   const workspaces = [];
-  const sessions = [];
-
-  if (!payload || typeof payload !== "object") return { workspaces, sessions };
+  if (!payload || typeof payload !== "object") return { workspaces: [] };
 
   const rawWorkspaces = Array.isArray(payload.workspaces) ? payload.workspaces : [];
   const seenWorkspaceIds = new Set();
@@ -82,22 +77,13 @@ export function normalizePinnedState(payload) {
     workspaces.push(normalized);
   }
 
-  const rawSessions = Array.isArray(payload.sessions) ? payload.sessions : [];
-  const seenSessions = new Set();
-  for (const session of rawSessions) {
-    if (typeof session !== "string" || !session || seenSessions.has(session)) continue;
-    seenSessions.add(session);
-    sessions.push(session);
-  }
-
-  return { workspaces, sessions };
+  return { workspaces };
 }
 
 function serializeState(state) {
   return {
     v: PINNED_SCHEMA_VERSION,
     workspaces: state.workspaces.map((workspace) => ({ id: workspace.id, path: workspace.path })),
-    sessions: state.sessions.slice(),
   };
 }
 
@@ -138,11 +124,11 @@ function readCookieValue(documentRef) {
  */
 export function readPinnedItems(documentRef = defaultDocument()) {
   const value = readCookieValue(documentRef);
-  if (!value) return { workspaces: [], sessions: [] };
+  if (!value) return { workspaces: [] };
   try {
     return normalizePinnedState(JSON.parse(value));
   } catch {
-    return { workspaces: [], sessions: [] };
+    return { workspaces: [] };
   }
 }
 
@@ -179,13 +165,7 @@ export function writePinnedItems(nextState, documentRef = defaultDocument()) {
 function withWorkspace(documentRef, updater) {
   const current = readPinnedItems(documentRef);
   const workspaces = updater(current.workspaces);
-  return writePinnedItems({ workspaces, sessions: current.sessions }, documentRef);
-}
-
-function withSessions(documentRef, updater) {
-  const current = readPinnedItems(documentRef);
-  const sessions = updater(current.sessions);
-  return writePinnedItems({ workspaces: current.workspaces, sessions }, documentRef);
+  return writePinnedItems({ workspaces }, documentRef);
 }
 
 /**
@@ -206,23 +186,6 @@ export function unpinWorkspace(id, documentRef = defaultDocument()) {
   if (typeof id !== "string" || !id) return readPinnedItems(documentRef);
   return withWorkspace(documentRef, (workspaces) =>
     workspaces.filter((workspace) => workspace.id !== id),
-  );
-}
-
-/** Pin a session file path. New pins appear first. Reads the newest cookie first. */
-export function pinSession(filePath, documentRef = defaultDocument()) {
-  if (typeof filePath !== "string" || !filePath) return readPinnedItems(documentRef);
-  return withSessions(documentRef, (sessions) => [
-    filePath,
-    ...sessions.filter((session) => session !== filePath),
-  ]);
-}
-
-/** Remove a session pin by file path. Reads the newest cookie first. */
-export function unpinSession(filePath, documentRef = defaultDocument()) {
-  if (typeof filePath !== "string" || !filePath) return readPinnedItems(documentRef);
-  return withSessions(documentRef, (sessions) =>
-    sessions.filter((session) => session !== filePath),
   );
 }
 
@@ -253,99 +216,6 @@ export function reconcileWorkspaceId(oldId, newId, documentRef = defaultDocument
     next[provisionalIndex] = { id: newId, path: record.path };
     return next;
   });
-}
-
-/**
- * Best-effort migration of the current origin's `pi-studio-favourites`
- * localStorage value into the shared Pin cookie.
- *
- * Each browser origin (localhost port) owns its own localStorage, so migration
- * runs once per origin and records completion in that origin's storage. On a
- * capacity failure the legacy value is preserved, the unresolved session paths
- * are returned via `pendingLegacySessions` for in-memory rendering, and a
- * `capacityError` is reported so the UI can warn and retry after a later Unpin
- * frees space. Migration is never silently skipped or marked done on failure.
- *
- * @returns {{ migrated: string[], pendingLegacySessions: string[], capacityError: PinnedCapacityError | null, skipped: boolean }}
- */
-export function migrateFavourites({
-  documentRef = defaultDocument(),
-  storageRef = typeof localStorage !== "undefined" ? localStorage : null,
-  migratedFlagKey = FAVOURITES_MIGRATED_FLAG,
-} = {}) {
-  const result = { migrated: [], pendingLegacySessions: [], capacityError: null, skipped: false };
-
-  let alreadyMigrated = false;
-  try {
-    alreadyMigrated = storageRef?.getItem?.(migratedFlagKey) === "1";
-  } catch {
-    alreadyMigrated = false;
-  }
-  if (alreadyMigrated) {
-    result.skipped = true;
-    return result;
-  }
-
-  let raw = null;
-  try {
-    raw = storageRef?.getItem ? storageRef.getItem(FAVOURITES_STORAGE_KEY) : null;
-  } catch {
-    raw = null;
-  }
-  if (raw === null) {
-    markMigrated(storageRef, migratedFlagKey);
-    return result;
-  }
-
-  let parsed = [];
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    parsed = [];
-  }
-  const legacySessions = Array.isArray(parsed)
-    ? parsed.filter((session) => typeof session === "string" && session)
-    : [];
-
-  if (legacySessions.length === 0) {
-    markMigrated(storageRef, migratedFlagKey);
-    return result;
-  }
-
-  const current = readPinnedItems(documentRef);
-  const existing = new Set(current.sessions);
-  const toAdd = [];
-  for (const session of legacySessions) {
-    if (!existing.has(session) && !toAdd.includes(session)) toAdd.push(session);
-  }
-
-  if (toAdd.length === 0) {
-    markMigrated(storageRef, migratedFlagKey);
-    return result;
-  }
-
-  const mergedSessions = [...toAdd, ...current.sessions];
-  try {
-    writePinnedItems({ workspaces: current.workspaces, sessions: mergedSessions }, documentRef);
-    markMigrated(storageRef, migratedFlagKey);
-    result.migrated = toAdd;
-    return result;
-  } catch (error) {
-    if (error instanceof PinnedCapacityError) {
-      result.capacityError = error;
-      result.pendingLegacySessions = toAdd;
-      return result;
-    }
-    throw error;
-  }
-}
-
-function markMigrated(storageRef, migratedFlagKey) {
-  try {
-    storageRef?.setItem?.(migratedFlagKey, "1");
-  } catch {
-    // Storage may be unavailable; migration will retry on the next load.
-  }
 }
 
 // --- Cross-window change detection --------------------------------------
@@ -487,20 +357,13 @@ export function createPinnedItemsStore(options = {}) {
   const documentRef = options.documentRef ?? options.document ?? defaultDocument();
   const windowRef =
     options.windowRef ?? options.window ?? documentRef?.defaultView ?? defaultWindow();
-  const storageRef =
-    options.storageRef ??
-    options.storage ??
-    documentRef?.defaultView?.localStorage ??
-    (typeof localStorage !== "undefined" ? localStorage : null);
   const setIntervalRef = options.setIntervalRef || windowRef?.setInterval?.bind(windowRef);
   const clearIntervalRef = options.clearIntervalRef || windowRef?.clearInterval?.bind(windowRef);
   let destroyed = false;
-  let legacyPending = [];
   const listeners = new Set();
   let state = readPinnedItems(documentRef);
   const snapshot = () => ({
     workspaces: state.workspaces.map((item) => ({ ...item })),
-    sessions: [...state.sessions],
   });
   const emit = (next) => {
     const before = JSON.stringify(state);
@@ -546,16 +409,9 @@ export function createPinnedItemsStore(options = {}) {
   }, 1000);
   return {
     getState: snapshot,
-    getRenderableState: () => ({
-      ...snapshot(),
-      sessions: [
-        ...state.sessions,
-        ...legacyPending.filter((path) => !state.sessions.includes(path)),
-      ],
-    }),
-    hasMigrationError: () => legacyPending.length > 0,
+    getRenderableState: snapshot,
+    hasMigrationError: () => false,
     isWorkspacePinned: (id) => state.workspaces.some((item) => item.id === id),
-    isSessionPinned: (filePath) => state.sessions.includes(filePath),
     refresh: () => {
       const before = JSON.stringify(state);
       const next = readPinnedItems(documentRef);
@@ -578,26 +434,11 @@ export function createPinnedItemsStore(options = {}) {
           { id, path: workspacePath },
           ...current.workspaces.filter((item) => item.id !== id),
         ],
-        sessions: current.sessions,
       }));
     },
     unpinWorkspace: (id) =>
       mutate((current) => ({
         workspaces: current.workspaces.filter((item) => item.id !== id),
-        sessions: current.sessions,
-      })),
-    pinSession: (filePath) => {
-      if (typeof filePath !== "string" || !filePath)
-        return { ok: false, error: "invalid", state: snapshot() };
-      return mutate((current) => ({
-        workspaces: current.workspaces,
-        sessions: [filePath, ...current.sessions.filter((item) => item !== filePath)],
-      }));
-    },
-    unpinSession: (filePath) =>
-      mutate((current) => ({
-        workspaces: current.workspaces,
-        sessions: current.sessions.filter((item) => item !== filePath),
       })),
     reconcileWorkspace: ({ fromId, toId, path }) =>
       mutate((current) => {
@@ -605,7 +446,7 @@ export function createPinnedItemsStore(options = {}) {
         if (index < 0) return current;
         const workspaces = current.workspaces.slice();
         workspaces[index] = { id: toId, path: path || workspaces[index].path };
-        return { workspaces, sessions: current.sessions };
+        return { workspaces };
       }),
     replaceWorkspaceId: (fromId, toId) =>
       mutate((current) => {
@@ -613,23 +454,8 @@ export function createPinnedItemsStore(options = {}) {
         if (index < 0) return current;
         const workspaces = current.workspaces.slice();
         workspaces[index] = { ...workspaces[index], id: toId };
-        return { workspaces, sessions: current.sessions };
+        return { workspaces };
       }),
-    migrateLegacyFavourites: ({ excludedSessions = [] } = {}) => {
-      const result = migrateFavourites({ documentRef, storageRef });
-      legacyPending = (result.pendingLegacySessions || []).filter(
-        (path) => !excludedSessions.includes(path),
-      );
-      if (result.capacityError) return { ok: false, error: "capacity", state: snapshot() };
-      refreshFromCookie();
-      return { ok: true, state: snapshot() };
-    },
-    retryMigration: () => {
-      const result = migrateFavourites({ documentRef, storageRef });
-      legacyPending = result.pendingLegacySessions || [];
-      refreshFromCookie();
-      return result;
-    },
     refreshFromCookie,
     subscribe: (listener) => {
       if (typeof listener !== "function") return () => {};

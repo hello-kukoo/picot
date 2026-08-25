@@ -1,5 +1,5 @@
 // ABOUTME: Builds stable workspace identities and merges Pi history with live instances.
-// ABOUTME: Resolves ordered workspace groups for workspace and session Pins.
+// ABOUTME: Resolves ordered workspace groups for workspace Pins.
 
 import { basenameLocalPath, normalizeLocalPath } from "./workspace/path-utils.js";
 
@@ -30,7 +30,11 @@ const time = (value) => {
   const parsed = Date.parse(value || "");
   return Number.isFinite(parsed) ? parsed : 0;
 };
-const sessionTime = (s) => Math.max(time(s?.timestamp), Number(s?.ctime) || 0);
+const sessionTime = (s) => {
+  const modified = Number(s?.mtime);
+  if (Number.isFinite(modified)) return modified;
+  return Math.max(time(s?.timestamp), Number(s?.ctime) || 0);
+};
 function latestActivity(sessions, instances) {
   let latest = 0;
   for (const session of sessions) latest = Math.max(latest, sessionTime(session));
@@ -151,10 +155,6 @@ export function resolvePinnedWorkspaceGroups({
 } = {}) {
   const byId = new Map(projects.map((p) => [p.workspaceId, p]));
   const byPath = new Map(projects.map((p) => [workspacePathKey(p.path), p]));
-  const bySession = new Map();
-  for (const project of projects)
-    for (const session of project.sessions || [])
-      bySession.set(session.filePath, { session, project });
   const archived = new Set(archivedPaths);
   const groups = [];
   const owned = new Set();
@@ -177,28 +177,5 @@ export function resolvePinnedWorkspaceGroups({
       unavailable: false,
     });
   }
-  const sessionGroups = new Map();
-  for (const filePath of Array.isArray(pinState.sessions) ? pinState.sessions : []) {
-    if (archived.has(filePath)) continue;
-    const resolved = bySession.get(filePath);
-    if (!resolved) {
-      groups.push({
-        workspace: null,
-        workspacePin: false,
-        sessions: [{ filePath, unavailable: true }],
-        unavailable: true,
-      });
-      continue;
-    }
-    if (owned.has(resolved.project.workspaceId)) continue;
-    if (!sessionGroups.has(resolved.project.workspaceId))
-      sessionGroups.set(resolved.project.workspaceId, {
-        workspace: resolved.project,
-        workspacePin: false,
-        sessions: [],
-        unavailable: false,
-      });
-    sessionGroups.get(resolved.project.workspaceId).sessions.push(resolved.session);
-  }
-  return [...groups, ...sessionGroups.values()];
+  return groups;
 }

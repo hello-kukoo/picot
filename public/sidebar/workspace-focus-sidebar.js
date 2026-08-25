@@ -104,7 +104,7 @@ export class WorkspaceFocusSidebar {
         isActive: session.filePath === this.activeSessionFile,
         isUnread: this.unread.has(session.filePath),
         isStreaming: this.streaming.has(session.filePath),
-        formattedTime: formatSessionTime(session.timestamp),
+        formattedTime: formatSessionTime(session.mtime ?? session.timestamp),
         showPinButton: false,
         showArchiveButton: false,
         showDeleteButton: true,

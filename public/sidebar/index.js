@@ -1,5 +1,5 @@
 // ABOUTME: Lists sessions grouped by project and handles session switching.
-// ABOUTME: Coordinates recent, pinned, and live workspace state for the sidebar.
+// ABOUTME: Coordinates pinned workspaces and live session state for the sidebar.
 
 /**
  * Session Sidebar - Lists sessions grouped by project, handles switching
@@ -8,11 +8,6 @@
 import { onLocaleChange, t } from "../i18n.js";
 import { createIcon } from "../icons.js";
 import { createPinnedItemsStore } from "../pinned-items.js";
-import {
-  readRecentSessions,
-  recordRecentSession,
-  writeRecentSessions,
-} from "../recent-sessions.js";
 import {
   buildSidebarSection,
   buildSidebarWorkspaceGroup,
@@ -23,11 +18,11 @@ import { isSuperAgentEnabled } from "../super-agent/settings.js";
 import { cacheSidebarProjects } from "../workspace/nav-state-cache.js";
 import { basenameLocalPath } from "../workspace/path-utils.js";
 import { mergeWorkspaceProjects, resolvePinnedWorkspaceGroups } from "../workspace-projects.js";
-import { WorkspaceQuickInfo } from "../workspace-quick-info.js";
 import {
   buildSessionItem as buildSessionItemNode,
   formatSessionTime,
   getSessionDisplayTitle,
+  sessionActivityTime,
 } from "./build-session-item.js";
 
 function readJsonArray(key) {
@@ -84,21 +79,18 @@ export class SessionSidebar {
     // Instance-level fold state. Workspaces default to collapsed (empty set =
     // none expanded); only IDs added here render expanded. Kept in memory only,
     // so a fresh app start always begins with every workspace collapsed while
-    // subsequent reloads (refresh button, + new session, pin/unpin) preserve
+    // subsequent reloads (refresh button, + new session, workspace pin/unpin) preserve
     // the user's current expand/collapse choices.
     this.expandedWorkspaces = new Set();
     this.pinnedCollapsed = false;
     this.projectsCollapsed = false;
     this.searchQuery = "";
-    this.recent = readRecentSessions();
-    this.recentCollapsed = false;
     this.archived = readJsonArray("pi-studio-archived");
     // ARCHIVED starts collapsed on every app launch (in-memory, like PINNED /
     // PROJECTS) so a previous session's expand choice does not carry over.
     this.archivedCollapsed = true;
     this.unread = new Set(readJsonArray("pi-studio-unread"));
     this.pinStore = options.pinStore || createPinnedItemsStore();
-    this.quickInfo = options.quickInfo || new WorkspaceQuickInfo({ pinStore: this.pinStore });
     this.lastPinnedWorkspaceIds = this.snapshotPinnedWorkspaceIds();
     this.unsubscribePinStore =
       this.pinStore.subscribe?.((next) => {
@@ -112,9 +104,8 @@ export class SessionSidebar {
           if (!this.lastPinnedWorkspaceIds.has(id)) this.expandedWorkspaces.add(id);
         }
         this.lastPinnedWorkspaceIds = nextIds;
-        this.render({ preserveQuickInfo: true });
+        this.render();
       }) || null;
-    this.pinStore.migrateLegacyFavourites?.({ excludedSessions: this.archived });
     this.streamingFiles = new Set();
     this.projectVisibleSessionCounts = new Map();
     this.contextMenu = null;
@@ -247,19 +238,11 @@ export class SessionSidebar {
       if (errors.has(filePath)) return;
       this.archived = this.archived.filter((p) => p !== filePath);
       this.saveArchived();
-      this.removeFromRecentSessions(filePath);
-      this.pinStore.unpinSession(filePath);
     } catch (err) {
       console.error("[Sidebar] deleteArchivedSession failed:", err);
     }
 
     await this.loadSessions();
-  }
-
-  removeFromRecentSessions(filePath) {
-    const current = readRecentSessions();
-    const next = current.filter((p) => p !== filePath);
-    if (next.length !== current.length) writeRecentSessions(next);
   }
 
   async confirmArchivedDeletion(count) {
@@ -568,25 +551,13 @@ export class SessionSidebar {
         el.classList.remove("hidden");
       });
       this.container
-        .querySelectorAll(".project-group, .pinned-group, .archived-group, .recent-group")
+        .querySelectorAll(".project-group, .pinned-group, .archived-group")
         .forEach((el) => {
           el.style.display = "";
         });
       const searchGroup = this.container.querySelector(".search-results-group");
       if (searchGroup) searchGroup.remove();
       return;
-    }
-
-    // Search RECENT section
-    const recentSection = this.container.querySelector(".recent-group");
-    if (recentSection) {
-      let hasVisible = false;
-      recentSection.querySelectorAll(".session-item").forEach((item) => {
-        const matches = this.sessionItemMatchesSearch(item);
-        item.classList.toggle("hidden", !matches);
-        if (matches) hasVisible = true;
-      });
-      recentSection.style.display = hasVisible ? "" : "none";
     }
 
     this.container.querySelectorAll(".project-group, .archived-group").forEach((group) => {
@@ -610,30 +581,6 @@ export class SessionSidebar {
     return searchable.some((value) => value.includes(this.searchQuery));
   }
 
-  resolveRecentSessions() {
-    const sessionsByPath = new Map();
-    for (const project of this.projects) {
-      for (const session of project.sessions) {
-        if (!this.isArchived(session.filePath)) {
-          sessionsByPath.set(session.filePath, { session, project });
-        }
-      }
-    }
-
-    const resolved = this.recent.map((filePath) => sessionsByPath.get(filePath)).filter(Boolean);
-    const validPaths = resolved.map(({ session }) => session.filePath);
-    if (JSON.stringify(validPaths) !== JSON.stringify(this.recent)) {
-      this.recent = writeRecentSessions(validPaths);
-    }
-    return resolved;
-  }
-
-  recordRecent(filePath) {
-    const next = recordRecentSession(filePath);
-    const changed = JSON.stringify(next) !== JSON.stringify(this.recent);
-    this.recent = next;
-    return changed;
-  }
   setActive(filePath) {
     this.activeSessionFile = filePath;
     if (filePath && this.unread.has(filePath)) {
@@ -647,10 +594,6 @@ export class SessionSidebar {
         el.classList.remove("unread");
       }
     });
-
-    if (this.recordRecent(filePath) && this.projects.length > 0) {
-      this.render();
-    }
   }
 
   clearActive() {
@@ -674,7 +617,6 @@ export class SessionSidebar {
         iconKind: "pin",
         label: isPinned ? t("sidebar.unpinWorkspace") : t("sidebar.pinWorkspace"),
         action: () => {
-          this.quickInfo.close();
           if (isPinned) this.pinStore.unpinWorkspace(workspace.workspaceId);
           else this.pinStore.pinWorkspace(workspace.workspaceId, workspace.path);
         },
@@ -765,8 +707,8 @@ export class SessionSidebar {
 
   // Deletes every deletable session of a workspace in one confirmed batch.
   // Mirrors deleteArchivedSession's response handling: paths the server
-  // reports as `running` or `errors` keep their local state (recent cookie,
-  // session pin, archived entry); only confirmed deletions are cleaned up.
+  // reports as `running` or `errors` keep their local and archived state;
+  // only confirmed deletions are cleaned up.
   async deleteWorkspaceSessions(workspace) {
     const filePaths = (workspace?.sessions || [])
       .map((session) => session?.filePath)
@@ -790,8 +732,6 @@ export class SessionSidebar {
       const blocked = new Set([...(data.running || []), ...(data.errors || [])]);
       for (const filePath of filePaths) {
         if (blocked.has(filePath)) continue;
-        this.removeFromRecentSessions(filePath);
-        this.pinStore.unpinSession(filePath);
       }
       this.archived = this.archived.filter((p) => !filePaths.includes(p) || blocked.has(p));
       this.saveArchived();
@@ -1012,7 +952,6 @@ export class SessionSidebar {
   buildSessionItem(session, project, options = {}) {
     const {
       showArchiveButton = true,
-      showPinButton = true,
       showDeleteButton = false,
       archiveDisabledReason = null,
       onDelete = null,
@@ -1024,20 +963,15 @@ export class SessionSidebar {
       isUnread: this.unread.has(session.filePath),
       isStreaming: this.streamingFiles.has(session.filePath),
       isArchived: this.isArchived(session.filePath),
-      isPinned: this.pinStore.isSessionPinned(session.filePath),
-      showPinButton,
+      showPinButton: false,
       showArchiveButton,
       showDeleteButton,
       archiveDisabledReason: showArchiveButton
         ? (archiveDisabledReason ?? this.archiveDisabledReason(session.filePath))
         : null,
       projectSearchText: this.getProjectSearchText(project),
-      formattedTime: this.formatTime(session.timestamp),
+      formattedTime: this.formatTime(session.mtime ?? session.timestamp),
       onSelect: this.onSessionSelect ? (s, p) => this.onSessionSelect(s, p) : null,
-      onPinToggle: (filePath) => {
-        if (this.pinStore.isSessionPinned(filePath)) this.pinStore.unpinSession(filePath);
-        else this.pinStore.pinSession(filePath);
-      },
       onArchiveToggle: (filePath) => this.toggleArchived(filePath),
       onDelete,
       onRename: (filePath, session, item) => this.renameSession(filePath, session, item),
@@ -1090,10 +1024,10 @@ export class SessionSidebar {
 
   // Snapshot of pinned workspace IDs, used to detect newly-pinned workspaces
   // across pin-store notifications. Falls back to getRenderableState for stubs
-  // (and the legacy test pin store) that do not expose getState.
+  // that do not expose getState.
   snapshotPinnedWorkspaceIds() {
     const state = (typeof this.pinStore.getState === "function" && this.pinStore.getState()) ||
-      this.pinStore.getRenderableState?.() || { workspaces: [], sessions: [] };
+      this.pinStore.getRenderableState?.() || { workspaces: [] };
     return new Set((state.workspaces || []).map((workspace) => workspace?.id).filter(Boolean));
   }
 
@@ -1205,7 +1139,7 @@ export class SessionSidebar {
             Array.isArray(pinned.sessions) &&
             pinned.sessions.some((s) => s?.filePath === this.activeSessionFile);
           const pinnedCurrent = !pinned.unavailable && this.isCurrentWorkspace?.(workspace);
-          const { group, header } = buildSidebarWorkspaceGroup({
+          const { group } = buildSidebarWorkspaceGroup({
             workspaceId,
             folderName,
             workspacePath,
@@ -1234,12 +1168,9 @@ export class SessionSidebar {
 
                 const unpin = document.createElement("button");
                 unpin.type = "button";
-                unpin.textContent = pinned.workspacePin
-                  ? t("sidebar.unpinWorkspace")
-                  : t("sidebar.unpinSession");
+                unpin.textContent = t("sidebar.unpinWorkspace");
                 unpin.addEventListener("click", () => {
-                  if (pinned.workspacePin) this.pinStore.unpinWorkspace(workspace.workspaceId);
-                  else this.pinStore.unpinSession(unavailableFilePath);
+                  this.pinStore.unpinWorkspace(workspace.workspaceId);
                 });
                 container.appendChild(unpin);
                 return;
@@ -1264,8 +1195,6 @@ export class SessionSidebar {
           });
           group.classList.add("pinned-workspace-group");
 
-          if (!pinned.unavailable && workspace) this.quickInfo.bindHeader(header, workspace);
-
           body.appendChild(group);
         }
       },
@@ -1274,7 +1203,7 @@ export class SessionSidebar {
     this.container.appendChild(section);
   }
 
-  render({ preserveQuickInfo = false } = {}) {
+  render() {
     // While Focus mode owns the sidebar, delegate any render request to the
     // focus view instead of rebuilding the normal session list. This keeps
     // loadSessions()/setActive() refreshes from clobbering the focus view.
@@ -1282,16 +1211,12 @@ export class SessionSidebar {
       this.onFocusRefresh();
       return;
     }
-    const recentSessions = this.resolveRecentSessions();
-
     const pinnedSuperAgent = isSuperAgentEnabled()
       ? getSuperAgentProject(this.projects, this.superAgentPath)
       : null;
     const pinnedSessionFile = pinnedSuperAgent?.session?.filePath || null;
 
     this.container.replaceChildren();
-    this.quickInfo.clearHeaders({ preserveCard: preserveQuickInfo });
-    this.quickInfo.setWorkspaces(this.projects);
 
     const pinnedSuperAgentGroup = this.buildPinnedSuperAgentGroup(pinnedSuperAgent);
     if (pinnedSuperAgentGroup) {
@@ -1307,46 +1232,6 @@ export class SessionSidebar {
       }
     }
 
-    if (recentSessions.length > 0) {
-      const recentGroup = document.createElement("div");
-      recentGroup.className = "recent-group";
-
-      const header = document.createElement("div");
-      header.className = `project-header recent-header sidebar-section-header${
-        this.recentCollapsed ? " collapsed" : ""
-      }`;
-      header.setAttribute("role", "button");
-      header.tabIndex = 0;
-      header.setAttribute("aria-expanded", String(!this.recentCollapsed));
-      header.appendChild(createSectionChevron());
-      const label = document.createElement("span");
-      label.className = "sidebar-section-title";
-      label.textContent = t("sidebar.recent");
-      header.appendChild(label);
-      recentGroup.appendChild(header);
-
-      const sessionsDiv = document.createElement("div");
-      sessionsDiv.className = `project-sessions${this.recentCollapsed ? " collapsed" : ""}`;
-      for (const { session, project } of recentSessions) {
-        sessionsDiv.appendChild(this.buildSessionItem(session, project));
-      }
-
-      const toggleRecent = () => {
-        this.recentCollapsed = !this.recentCollapsed;
-        header.classList.toggle("collapsed", this.recentCollapsed);
-        header.setAttribute("aria-expanded", String(!this.recentCollapsed));
-        sessionsDiv.classList.toggle("collapsed", this.recentCollapsed);
-      };
-      header.addEventListener("click", toggleRecent);
-      header.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        toggleRecent();
-      });
-
-      recentGroup.appendChild(sessionsDiv);
-      this.container.appendChild(recentGroup);
-    }
     this.renderPinnedSection();
 
     const { section: projectsSection, sessionsContainer: projectsGroup } = buildSidebarSection({
@@ -1371,7 +1256,7 @@ export class SessionSidebar {
       const projectActive = Array.isArray(project.sessions)
         ? project.sessions.some((s) => s?.filePath === this.activeSessionFile)
         : false;
-      const { group, header } = buildSidebarWorkspaceGroup({
+      const { group } = buildSidebarWorkspaceGroup({
         workspaceId: project.workspaceId,
         folderName:
           project.folderName ||
@@ -1407,20 +1292,13 @@ export class SessionSidebar {
       });
       group.dataset.projectSearchText = this.getProjectSearchText(project);
       projectsGroup.appendChild(group);
-      this.quickInfo.bindHeader(header, project);
     }
     this.container.appendChild(projectsSection);
 
     {
-      archivedSessions.sort((a, b) => {
-        const aCreated = a.session.timestamp
-          ? new Date(a.session.timestamp).getTime()
-          : a.session.ctime || 0;
-        const bCreated = b.session.timestamp
-          ? new Date(b.session.timestamp).getTime()
-          : b.session.ctime || 0;
-        return bCreated - aCreated;
-      });
+      archivedSessions.sort(
+        (a, b) => sessionActivityTime(b.session) - sessionActivityTime(a.session),
+      );
       const archivedGroup = document.createElement("div");
       archivedGroup.className = "archived-group";
 
@@ -1481,10 +1359,8 @@ export class SessionSidebar {
     if (
       !pinnedSuperAgent &&
       nonSuperAgentProjects.length === 0 &&
-      recentSessions.length === 0 &&
       archivedSessions.length === 0 &&
-      pinState.workspaces.length === 0 &&
-      pinState.sessions.length === 0
+      pinState.workspaces.length === 0
     ) {
       this.renderEmptyState({ append: true });
     }

@@ -407,10 +407,9 @@ Settings → Skills 固定为 **Discovered / Install / Packages**。每个页签
   下拉共用唯一 action 源 `workspace-actions.js`（apps 加载、图标/
   monogram fallback、选择持久化、clipboard 只在此实现一次）。主聊天仅渲染
   root→leaf 的 ancestor path（`mirror_sync.leafId` 缺失时回退旧全量渲染）。
-- **侧栏 / 文件工作区** —— `sidebar/index.js`、`recent-sessions.js`、
+- **侧栏 / 文件工作区** —— `sidebar/index.js`、
   `pinned-items.js`（跨端口 Pin cookie）、`workspace-projects.js`
-  （history/live workspace 合并）、`workspace-quick-info.js`
-  （按需 Git quick-info）、`sidebar/build-session-item.js`（普通、归档与 Focus
+  （history/live workspace 合并）、`sidebar/build-session-item.js`（普通、归档与 Focus
   session row 共用 DOM builder）、`sidebar/focus-state.js`（URL-scoped Focus 状态机）、
   `sidebar/workspace-focus-sidebar.js`（Focus 工作台）和
   `sidebar-workspace-group.js`（安全、可访问的 region/workspace DOM builder）；以及
@@ -829,24 +828,17 @@ release workflow 以 `TAURI_SIGNING_PRIVATE_KEY` 和
 每个 workspace 窗口加载自不同端口的 `http://localhost:<port>`，
 而 `localStorage` 按 origin（端口）隔离。需要跨所有本地 workspace
 窗口一致的浏览器侧状态，用 `Path=/` 的 cookie 持久化 —— `localhost`
-的 cookie 跨端口共享。目前四个消费者：
+的 cookie 跨端口共享。目前三个消费者：
 
 | Cookie key              | 模块                 | 用途                          |
 | ----------------------- | -------------------- | ----------------------------- |
 | `pi-studio-theme`       | `themes.js`          | 主题选择                      |
 | `picot-language`        | `i18n.js`            | 语言偏好（en / zh / system）  |
-| `picot-recent-sessions` | `recent-sessions.js` | RECENT 会话 MRU 列表（≤5 条） |
-| `picot-pinned-items`    | `pinned-items.js`    | 有序 workspace / session Pins |
-
-RECENT 会话的完整设计见
-[`docs/superpowers/specs/2026-07-11-recent-sessions-design.md`](docs/superpowers/specs/2026-07-11-recent-sessions-design.md)。
-该 cookie 存百分编码的 JSON 数组（session `filePath`），同步读写，
-last-write-wins 语义；并发窗口可能丢失中间 MRU 排序，下一次访问
-重写完整的五条列表。`SessionSidebar.setActive()` 是唯一记录入口。
+| `picot-pinned-items`    | `pinned-items.js`    | 有序 workspace Pins |
 
 Pin cookie 使用版本化 JSON；每次变更先重读 cookie，再执行有序去重写入。编码后
 超过 3,800 字节的变更必须拒绝而不能淘汰已有 Pin；无法解析的 Pin 保留为
-unavailable。旧 `pi-studio-favourites` 仅在当前 origin 尽力迁移。
+unavailable。旧 session Pin、RECENT cookie 和 `pi-studio-favourites` 不再读取或迁移。
 
 `GET /api/workspace-info?workspaceId=` 只接受 `/api/sessions` 历史记录或
 运行实例登记表中已知的 `history:` / `path:` / `workspace:` ID，绝不接收任意文件系统路径。
@@ -856,10 +848,10 @@ unavailable。旧 `pi-studio-favourites` 仅在当前 origin 尽力迁移。
 `GIT_TERMINAL_PROMPT=0`。Git 输出和所有 Pin 文本均是不可信数据，前端只能
 用 `textContent` 渲染。
 
-`WorkspaceQuickInfo` 的卡片遵循紧凑原型：folder name + Pin/Unpin，含归档
-会话的 thread 总数，完整路径，以及有 Git remote 时在分隔线后的 repository
-名称。type、branch 与 detached HEAD 仍可由 API 返回，但当前卡片不显示它们；
-卡片和所有 workspace 文本均以 `textContent` 构建。
+Focus 模式保留静态 workspace info card：显示 folder name、含归档会话的 thread
+总数、完整路径，以及有 Git remote 时的 repository 名称。左侧栏 workspace
+header 不再绑定 hover/focus quick-info 浮窗；workspace Pin 仅通过 workspace
+操作菜单提供。卡片和所有 workspace 文本均以 `textContent` 构建。
 
 #### Workspace Focus 与归档删除
 

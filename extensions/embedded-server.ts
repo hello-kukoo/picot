@@ -5011,6 +5011,18 @@ export default function (pi: ExtensionAPI) {
     return results;
   }
 
+  function sessionActivityTime(session: Record<string, unknown> | null | undefined) {
+    const modified = Number(session?.mtime);
+    if (Number.isFinite(modified)) return modified;
+    const timestamp = session?.timestamp;
+    if (typeof timestamp === "string" && timestamp) {
+      const parsed = new Date(timestamp).getTime();
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    const created = Number(session?.ctime);
+    return Number.isFinite(created) ? created : 0;
+  }
+
   async function serveSessionsList(res: http.ServerResponse) {
     try {
       if (!fs.existsSync(SESSIONS_DIR)) {
@@ -5089,11 +5101,7 @@ export default function (pi: ExtensionAPI) {
               if (r) sessions.push(r);
             }
 
-            sessions.sort((a, b) => {
-              const aCreated = a.timestamp ? new Date(a.timestamp).getTime() : a.ctime || 0;
-              const bCreated = b.timestamp ? new Date(b.timestamp).getTime() : b.ctime || 0;
-              return bCreated - aCreated;
-            });
+            sessions.sort((a, b) => sessionActivityTime(b) - sessionActivityTime(a));
 
             if (sessions.length === 0) return null;
 
@@ -5122,13 +5130,7 @@ export default function (pi: ExtensionAPI) {
       projects.sort((a, b) => {
         const aSession = a.sessions[0];
         const bSession = b.sessions[0];
-        const aTime = aSession?.timestamp
-          ? new Date(aSession.timestamp).getTime()
-          : aSession?.ctime || 0;
-        const bTime = bSession?.timestamp
-          ? new Date(bSession.timestamp).getTime()
-          : bSession?.ctime || 0;
-        return bTime - aTime;
+        return sessionActivityTime(bSession) - sessionActivityTime(aSession);
       });
       globalState.lastSessionProjects = projects;
 

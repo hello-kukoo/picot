@@ -115,23 +115,17 @@ describe("SessionSidebar workspace deletion", () => {
     const sidebar = makeSidebar({ notice });
     sidebar.showFallbackConfirmDialog = vi.fn(async () => true);
     sidebar.archived = ["/s/a.jsonl", "/s/b.jsonl"];
-    sidebar.pinStore.pinSession("/s/a.jsonl");
-    // Stub recent-cookie cleanup via the public method.
-    sidebar.removeFromRecentSessions = vi.fn();
 
     await sidebar.deleteWorkspaceSessions(WORKSPACE);
 
     expect(fetchMock.lastPayload).toEqual({ filePaths: ["/s/a.jsonl", "/s/b.jsonl"] });
     expect(sidebar.archived).toEqual(["/s/b.jsonl"]);
-    expect(sidebar.pinStore.isSessionPinned("/s/a.jsonl")).toBe(false);
-    expect(sidebar.removeFromRecentSessions).toHaveBeenCalledWith("/s/a.jsonl");
-    expect(sidebar.removeFromRecentSessions).not.toHaveBeenCalledWith("/s/b.jsonl");
     expect(notice).toHaveBeenCalled();
   });
 
   test("workspace context menu renders the delete-all entry", () => {
     const sidebar = makeSidebar();
-    sidebar.pinStore.getRenderableState = () => ({ workspaces: [], sessions: [] });
+    sidebar.pinStore.getRenderableState = () => ({ workspaces: [] });
     const event = new window.MouseEvent("contextmenu", { bubbles: true });
     Object.defineProperty(event, "preventDefault", { value: vi.fn() });
 

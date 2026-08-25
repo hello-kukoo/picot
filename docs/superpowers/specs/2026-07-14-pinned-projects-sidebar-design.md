@@ -67,8 +67,8 @@ reload restores the expanded default.
 
 New Pins appear first. Explicitly pinned workspaces follow workspace Pin order.
 Session-only workspace groups follow the order of their first pinned session.
-An explicitly pinned workspace shows sessions in the timestamp order supplied by
-its project; a session-only group follows session Pin order.
+An explicitly pinned workspace shows sessions in most-recent-activity order
+supplied by its project; a session-only group follows session Pin order.
 
 The `PINNED` header always renders. When expanded without Pins, it shows a short,
 localized empty-state hint. An unresolved Pin remains visible as an unavailable

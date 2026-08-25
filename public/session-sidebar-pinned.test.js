@@ -3,10 +3,9 @@
 import { JSDOM } from "jsdom";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { initI18n } from "./i18n.js";
-import { writeRecentSessions } from "./recent-sessions.js";
 import { SessionSidebar } from "./sidebar/index.js";
 
-function makePinStore(initial = { workspaces: [], sessions: [] }) {
+function makePinStore(initial = { workspaces: [] }) {
   const state = structuredClone(initial);
   const listeners = new Set();
   const notify = () => {
@@ -17,7 +16,6 @@ function makePinStore(initial = { workspaces: [], sessions: [] }) {
   return {
     getRenderableState: () => structuredClone(state),
     isWorkspacePinned: (id) => state.workspaces.some((item) => item.id === id),
-    isSessionPinned: (filePath) => state.sessions.includes(filePath),
     pinWorkspace: vi.fn((id, path) => {
       state.workspaces = [{ id, path }, ...state.workspaces.filter((item) => item.id !== id)];
       notify();
@@ -28,17 +26,6 @@ function makePinStore(initial = { workspaces: [], sessions: [] }) {
       notify();
       return { ok: true };
     }),
-    pinSession: vi.fn((filePath) => {
-      state.sessions = [filePath, ...state.sessions.filter((item) => item !== filePath)];
-      notify();
-      return { ok: true };
-    }),
-    unpinSession: vi.fn((filePath) => {
-      state.sessions = state.sessions.filter((item) => item !== filePath);
-      notify();
-      return { ok: true };
-    }),
-    migrateLegacyFavourites: vi.fn(() => ({ ok: true })),
     subscribe: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -49,10 +36,7 @@ function makePinStore(initial = { workspaces: [], sessions: [] }) {
 
 function makeQuickInfo() {
   return {
-    clearHeaders: vi.fn(),
-    setWorkspaces: vi.fn(),
     bindHeader: vi.fn(),
-    close: vi.fn(),
     destroy: vi.fn(),
   };
 }
@@ -93,13 +77,10 @@ beforeEach(async () => {
         ok: true,
         json: async () => ({
           sidebar: {
-            recent: "RECENT",
             pinned: "PINNED",
             projects: "PROJECTS",
             archived: "ARCHIVED",
             unavailable: "Unavailable",
-            pinSession: "Pin session",
-            unpinSession: "Unpin session",
             pinWorkspace: "Pin workspace",
             unpinWorkspace: "Unpin workspace",
             archiveWorkspaceSessions: "Archive sessions",
@@ -145,10 +126,8 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("SessionSidebar PINNED integration", () => {
   test("renders fixed region order, unresolved Pins, and a live zero-session workspace", () => {
-    writeRecentSessions(["/sessions/alpha.jsonl"]);
     const pinStore = makePinStore({
       workspaces: [{ id: "history:alpha", path: "/work/alpha" }],
-      sessions: ["/sessions/missing.jsonl"],
     });
     const quickInfo = makeQuickInfo();
     const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
@@ -159,48 +138,31 @@ describe("SessionSidebar PINNED integration", () => {
     sidebar.render();
 
     const regions = Array.from(
-      document.querySelectorAll(".recent-group, .pinned-group, .projects-group, .archived-group"),
+      document.querySelectorAll(".pinned-group, .projects-group, .archived-group"),
     );
     expect(regions.map((region) => region.className.split(" ")[0])).toEqual([
-      "recent-group",
       "pinned-group",
       "projects-group",
       "archived-group",
     ]);
     expect(document.querySelector(".favourites-group")).toBeNull();
-    expect(document.querySelector(".pinned-unavailable").textContent).toContain(
-      "/sessions/missing.jsonl",
-    );
+    expect(document.querySelector(".pinned-unavailable")).toBeNull();
     expect(document.querySelector(".projects-group").textContent).toContain("live");
     expect(document.querySelector(".projects-group .sidebar-section-header").textContent).toContain(
       "PROJECTS",
     );
-    expect(quickInfo.bindHeader).toHaveBeenCalledTimes(3);
+    expect(quickInfo.bindHeader).not.toHaveBeenCalled();
   });
 
-  test("pins and unpins a session with the action left of Archive", () => {
-    const pinStore = makePinStore();
+  test("session rows do not expose Pin controls", () => {
     const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
-      pinStore,
-      quickInfo: makeQuickInfo(),
+      pinStore: makePinStore(),
     });
     sidebar.projects = createProjects();
     sidebar.render();
-
     const item = document.querySelector('.session-item[data-file-path="/sessions/alpha.jsonl"]');
-    const pin = item.querySelector(".session-pin-btn");
-    const archive = item.querySelector(".session-archive-btn");
-    expect(pin).not.toBeNull();
-    expect(archive).not.toBeNull();
-    expect(pin.nextElementSibling).toBe(archive);
-
-    pin.click();
-    expect(pinStore.pinSession).toHaveBeenCalledWith("/sessions/alpha.jsonl");
-
-    item.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }));
-    const menu = document.querySelector(".sidebar-context-menu");
-    expect(menu).not.toBeNull();
-    expect(menu.textContent).toContain("Rename");
+    expect(item.querySelector(".session-pin-btn")).toBeNull();
+    expect(item.querySelector(".session-archive-btn")).not.toBeNull();
   });
 
   test("opens the same workspace actions from an ellipsis button and right click", () => {
@@ -479,8 +441,7 @@ describe("SessionSidebar fold-state stability", () => {
     expect(sidebar.isWorkspaceExpanded({ workspaceId: "path:/work/live" })).toBe(false);
   });
 
-  test("all four section headers share the section chevron and no folder icon", () => {
-    writeRecentSessions(["/sessions/alpha.jsonl"]);
+  test("all section headers share the section chevron and no folder icon", () => {
     const pinStore = makePinStore({
       workspaces: [{ id: "history:alpha", path: "/work/alpha" }],
       sessions: [],
@@ -493,7 +454,7 @@ describe("SessionSidebar fold-state stability", () => {
     sidebar.render();
 
     const headers = document.querySelectorAll(".sidebar-section-header");
-    expect(headers.length).toBe(4);
+    expect(headers.length).toBe(3);
     headers.forEach((header) => {
       expect(header.querySelector(".section-chevron")).not.toBeNull();
       expect(header.querySelector(".folder-icon")).toBeNull();

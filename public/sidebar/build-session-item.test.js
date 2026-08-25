@@ -55,9 +55,9 @@ describe("formatSessionTime", () => {
 });
 
 describe("buildSessionItem action visibility", () => {
-  test("normal row exposes pin and archive but not delete", () => {
+  test("normal row exposes archive but not pin or delete", () => {
     const item = buildSessionItem({ session: makeSession(), createIcon: fakeIcon });
-    expect(item.querySelector(".session-pin-btn")).toBeTruthy();
+    expect(item.querySelector(".session-pin-btn")).toBeNull();
     expect(item.querySelector(".session-archive-btn")).toBeTruthy();
     expect(item.querySelector(".session-delete-btn")).toBeNull();
   });
@@ -138,19 +138,5 @@ describe("buildSessionItem callbacks", () => {
     const item = buildSessionItem({ session, project, onSelect, createIcon: fakeIcon });
     item.click();
     expect(onSelect).toHaveBeenCalledWith(session, project);
-  });
-
-  test("pin click stops propagation and fires onPinToggle", () => {
-    const onSelect = vi.fn();
-    const onPinToggle = vi.fn();
-    const item = buildSessionItem({
-      session: makeSession(),
-      onSelect,
-      onPinToggle,
-      createIcon: fakeIcon,
-    });
-    item.querySelector(".session-pin-btn").click();
-    expect(onPinToggle).toHaveBeenCalledWith("/sessions/a.jsonl");
-    expect(onSelect).not.toHaveBeenCalled();
   });
 });
