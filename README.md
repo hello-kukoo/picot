@@ -4,25 +4,56 @@
 
 A local desktop GUI for the [Pi](https://github.com/badlogic/pi-mono) coding agent. No cloud, no account — runs entirely on your machine.
 
-Picot ships a known-good build of the `pi` runtime **inside the .app bundle**, so there's no separate `pi` install to manage, no PATH shenanigans, and no version drift between Picot and the agent it talks to.
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/shixin-guo/picot?include_prereleases&label=release)](https://github.com/shixin-guo/picot/releases)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#install)
+
+Picot ships a known-good build of the `pi` runtime **inside the .app bundle**, so there's no separate `pi` install to manage, no PATH shenanigans, and no version drift between Picot and the agent it talks to. Open any project folder, start chatting with the agent, browse sessions and files — no terminal required. Multiple projects run in parallel, each in its own window with its own isolated agent process.
 
 <p align="center">
-  <img width="1200" alt="Picot hero" src="https://github.com/user-attachments/assets/27d1b71e-77e8-420c-84ab-5e56eb48335a" />
+  <img width="1200" alt="Picot hero" src="docs/images/hero.webp" />
 </p>
+
+---
+
+## Contents
+
+- [Install](#install)
+- [Quick Start](#quick-start)
+- [Features](#features)
+- [For Developers](#for-developers)
+- [Upstream](#upstream)
+- [License](#license)
 
 ---
 
 ## Install
 
-[Download from GitHub Releases](https://github.com/shixin-guo/picot/releases)
+macOS / Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shixin-guo/picot/main/scripts/install.sh | bash
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/shixin-guo/picot/main/scripts/install.ps1 | iex
+```
+
+Or [download from GitHub Releases](https://github.com/shixin-guo/picot/releases).
 
 You **do not** need to install the `pi` CLI separately — Picot bundles its own pi runtime.
 
 ---
 
-## What it does
+## Quick Start
 
-Picot gives you a full visual interface for Pi. Open any project folder, start chatting with the agent, browse sessions, preview and edit workspace files — no terminal required. Multiple projects run in parallel, each in its own window with its own isolated agent process. The interface is available in English and Chinese.
+1. Launch **Picot**
+2. Click a project bubble or pick a folder
+3. Start chatting — the embedded pi agent starts automatically
+
+Provide credentials with `pi /login` inside any workspace, shell-exported provider variables, or via Settings → Configuration. API keys saved in Settings use Pi's existing `~/.pi/agent/auth.json` format. The interface is available in English and Chinese.
 
 ---
 
@@ -31,10 +62,11 @@ Picot gives you a full visual interface for Pi. Open any project folder, start c
 ### 📸 UI Preview
 
 <p align="center">
-  <img width="1200" alt="Picot workspace and project UI" src="https://github.com/user-attachments/assets/ffde7b7a-1eb9-4da7-8916-e06b612aaea1" />
+  <img width="1200" alt="Picot workspace and project UI" src="docs/images/workspace.webp" />
 </p>
 
-### 💬 Chat
+<details>
+<summary><strong>💬 Chat</strong></summary>
 
 - Full markdown rendering with syntax-highlighted code blocks
 - **Streaming responses** with live typing indicator (powered by remend)
@@ -45,14 +77,23 @@ Picot gives you a full visual interface for Pi. Open any project folder, start c
 - Scroll-to-bottom button with unread indicator
 - **Message queuing** — type while the agent is working; messages queue as pills and auto-send when ready
 - **`@` file mentions** — type `@` in any composer to search and insert a file-path reference (workspace, `../`, `~/`, or absolute); shared across Main, Side, and Quick Chat
+- **Conversation turn navigator** — Codex-style dot rail beside the chat; hover a dot for a preview, click to jump to that turn
+- **Command palette** — quick access to Compact, Expand/Collapse All Tools, Settings, and Help
+- **Fork from any message** — branch a new session off any point in the conversation
 
-### ⚡ Temporary chats
+</details>
+
+<details>
+<summary><strong>⚡ Temporary chats</strong></summary>
 
 - **Side Chat** keeps tools available in an isolated, unsaved Pi process for the current workspace; open up to five as tabs alongside file tabs in the right panel — the panel stays open while any Side Chat tab remains, and collapses only when both file and Side Chat tabs are closed.
 - **Quick Chat** is a single non-modal, tool-free, unsaved chat. Open it from the icon directly after the sidebar search field.
 - Both compose with the same model selector, thinking-level control, voice input, and icon controls as the primary chat. They are available only in authenticated desktop windows, never through mobile or LAN access.
 
-### 🗂️ Multi-Session & Multi-Agent
+</details>
+
+<details>
+<summary><strong>🗂️ Multi-Session & Multi-Agent</strong></summary>
 
 - **Multiple agents in parallel** — each session spawns its own headless pi process; no new OS window, no interruption of running sessions
 - Browse and resume any past session from the sidebar
@@ -63,61 +104,92 @@ Picot gives you a full visual interface for Pi. Open any project folder, start c
 - **Safe individual deletion** — delete a session from Focus or ARCHIVED; running sessions are refused by the server
 - **RECENT** — a cross-workspace, most-recently-used list keeps the last five visited sessions at the top of the sidebar
 
-### 🗃️ Projects & Workspace
+</details>
+
+<details>
+<summary><strong>📥 Agent Inbox</strong> <sub>(Beta)</sub></summary>
+
+- Connect a Telegram bot — incoming DMs land in a pinned **Agent Inbox** session, kept separate from your normal project chats
+- Dispatch tasks from the inbox to any open project's agent; track pending / running / done in a resizable task panel
+- Task lifecycle events (dispatched, needs input, done, failed) round-trip back to the inbox, including a reply to the original Telegram sender
+- Built-in Telegram Doctor check to diagnose bot/token/connectivity issues from Settings
+
+</details>
+
+<details>
+<summary><strong>🗃️ Projects & Workspace</strong></summary>
 
 - **Multi-project** — each project gets its own window, working directory, session history, and agent
 - Shows the **current git branch** in the project header
 - **Open in external editor** — launch VS Code, Cursor, or any app directly from Picot
 - Native folder picker to open any project without touching the terminal
 
-### 📱 Mobile & LAN Access
+</details>
+
+<details>
+<summary><strong>📱 Mobile & LAN Access</strong></summary>
 
 <p align="center">
-  <img width="900" alt="LAN and mobile access panel" src="https://github.com/user-attachments/assets/f50ce09d-1ba7-4a67-93dd-f8ff1bc2631f" />
+  <img width="900" alt="LAN and mobile access panel" src="docs/images/lan-mobile-panel.webp" />
 </p>
 <p align="center">
-  <img width="360" alt="Picot on mobile" src="https://github.com/user-attachments/assets/d1975347-a3d9-49fd-9d66-94942016ed19" />
+  <img width="360" alt="Picot on mobile" src="docs/images/mobile.webp" />
 </p>
 
 - **LAN QR code** — scan to open Picot on any device on the same network
 - Mobile-optimised URL handling and App Launcher support (installable as PWA on iOS/Android)
 
-### 📦 Package Manager
+</details>
+
+<details>
+<summary><strong>📦 Package Manager</strong></summary>
 
 <p align="center">
-  <img width="1200" alt="Built-in package manager UI" src="https://github.com/user-attachments/assets/e7e3a100-16db-4b63-b257-801b7f6b5e00" />
+  <img width="1200" alt="Built-in package manager UI" src="docs/images/package-manager.webp" />
 </p>
 
 - Browse, install, and remove community packages from within the UI
 - Built on top of `pi install` — no separate package commands needed
 
-### 💰 Cost & Usage Dashboard
+</details>
+
+<details>
+<summary><strong>💰 Cost & Usage Dashboard</strong></summary>
 
 <p align="center">
-  <img width="1200" alt="Cost dashboard overview" src="https://github.com/user-attachments/assets/1c381a9f-c587-406f-8f62-f3f029aa5c3e" />
+  <img width="1200" alt="Cost dashboard overview" src="docs/images/cost-dashboard.webp" />
 </p>
 <p align="center">
-  <img width="1200" alt="Per-model and trend breakdown" src="https://github.com/user-attachments/assets/d9f07d41-d38a-454d-a46a-1ab8ed34c19b" />
+  <img width="1200" alt="Per-model and trend breakdown" src="docs/images/cost-breakdown.webp" />
 </p>
 
 - Per-session cost tracking with live token/cost metrics
 - Full cost dashboard with infobar, trends, and per-model breakdown
 - **Context window visualiser** — click the token pill to see cached tokens, fresh input, and available space
 
-### 🎨 Themes & Appearance
+</details>
 
-- Six built-in themes: **Dusk**, Dawn, Midnight, Clean, Terracotta, Sage
+<details>
+<summary><strong>🎨 Themes & Appearance</strong></summary>
+
+- Six built-in themes: **Dusk** (default), Dawn, Midnight, Clean, Terracotta, Sage
 - Frosted-glass header and input bar (`backdrop-filter: blur`)
 - Native macOS title bar overlay integration
 - **Window dragging** from the header area — feels like a native app
 - **Language** — switch the live interface between English, Simplified Chinese, or the system preference
 
-### 🎤 Voice Input
+</details>
+
+<details>
+<summary><strong>🎤 Voice Input</strong></summary>
 
 - Mic button in the input area using Web Speech API (on-device dictation)
 - Live transcription into the textarea; pulses red while recording
 
-### 🗄️ File Browser, Preview & Editor
+</details>
+
+<details>
+<summary><strong>🗄️ File Browser, Preview & Editor</strong></summary>
 
 - Right sidebar with a lazy-loaded workspace file tree
 - Click a file to open it in a resizable, tabbed preview panel; tabs are restored separately for each workspace
@@ -126,10 +198,13 @@ Picot gives you a full visual interface for Pi. Open any project folder, start c
 - Double-click to open a file in its native desktop application
 - Drag a file from the tree onto the chat input to insert a workspace-relative `@path` reference
 
-### ⚙️ Settings & Control
+</details>
+
+<details>
+<summary><strong>⚙️ Settings & Control</strong></summary>
 
 <p align="center">
-  <img width="1200" alt="Settings and controls" src="https://github.com/user-attachments/assets/44f884de-f2d1-45af-8a13-9b8d01d227a5" />
+  <img width="1200" alt="Settings and controls" src="docs/images/settings.webp" />
 </p>
 
 - Model picker with search/filter and keyboard support
@@ -139,35 +214,28 @@ Picot gives you a full visual interface for Pi. Open any project folder, start c
 - **Skills management** — Settings → Skills: browse every discovered skill per source root and toggle individual skills or whole groups using Pi's `!`/`+`/`-` rule semantics (takes effect on next session/restart)
 - **Auto-updater** — Settings → General → Updates for one-click in-app updates
 
----
-
-## Pi capabilities integrated
-
-Picot does not re-implement agent logic — it embeds Pi and exposes its runtime capabilities through a native UI.
-
-- **Embedded `pi --mode rpc` runtime** — one managed process per workspace, isolated by project
-- **Streaming RPC bridge** — token-by-token output, tool-call events, and thinking blocks rendered live
-- **Session lifecycle APIs** — create, switch, and resume sessions; full per-project history
-- **WebSocket broker** — multiple UI clients can connect to the same pi process simultaneously
-- **Extension compatibility** — user extensions from `~/.pi/agent/extensions/` and `.pi/extensions/` are auto-loaded
-- **Credential reuse and setup** — reuses Pi's `~/.pi/agent/auth.json`, imports shell-exported provider variables for GUI launches, and can persist API keys from Settings
+</details>
 
 ---
 
-## How it works
+## For Developers
+
+### Architecture
+
+Picot starts a Rust `HostServer` and a managed native `pi --mode rpc` process. The WebView talks to `/v2/ws` on the host, and the host bridges those frames to Pi over stdio RPC. The bundled `embedded-server.mjs` extension owns the HTTP/WebSocket surface the Tauri WebView talks to (static assets, `/api/*`, `/ws`); `picot-bridge.mjs` provides Picot-specific Pi commands.
 
 ```
 ┌──────────────────────────────────────────────────────┐
 │ Picot .app                                       │
 │                                                      │
-│   Tauri + PiManager (Rust)                           │
-│      ├─► spawn  pi --mode rpc  (project A, :3001)    │
-│      ├─► spawn  pi --mode rpc  (project B, :3002)    │
-│      └─► OS Window per project ──► WebView ──► HTTP  │
+│   Tauri + native HostServer (Rust)                   │
+│      ├─► spawn  pi --mode rpc --extension embedded-server.mjs --extension picot-bridge.mjs │
+│      ├─► bridge stdio RPC frames over /v2/ws         │
+│      └─► OS Window ──► WebView ──► native host HTTP  │
 │                                                      │
 │   resources/                                         │
 │      ├─ public/             (frontend)               │
-│      ├─ extensions/         (embedded-server.mjs)    │
+│      ├─ extensions/         (embedded-server + picot-bridge) │
 │      └─ pi/                 (bun-compiled pi binary) │
 └──────────────────────────────────────────────────────┘
                        │
@@ -178,21 +246,21 @@ Picot does not re-implement agent logic — it embeds Pi and exposes its runtime
                  └─ settings.json
 ```
 
-The embedded pi process loads `embedded-server.mjs` at startup. That extension owns the HTTP + WebSocket surface the Tauri WebView talks to: static assets, `/api/sessions`, `/api/cost-dashboard`, RPC bridge for prompts, etc. Picot's Rust side controls process lifecycle, port allocation, and window management.
+> This diagram is a public-facing summary. The source-of-truth version — kept in sync with this one — lives in [`AGENTS.md`](./AGENTS.md#read-first), which also covers goals, constraints, and per-module conventions for anyone contributing code.
 
----
+### Pi capabilities integrated
 
-## Usage
+Picot does not re-implement agent logic — it embeds Pi and exposes its runtime capabilities through a native UI.
 
-1. Launch **Picot**
-2. Click a project bubble or pick a folder
-3. Start chatting — the embedded pi agent starts automatically
+- **Embedded `pi --mode rpc` runtime** — one managed process per workspace, isolated by project
+- **Streaming RPC bridge** — token-by-token output, tool-call events, and thinking blocks rendered live
+- **Session lifecycle APIs** — create, switch, and resume sessions; full per-project history
+- **Native host server** — Rust owns per-workspace `pi` lifecycle, port allocation, the broker WebSocket, and window management; bridges browser frames to Pi RPC
+- **WebSocket broker** — multiple UI clients can connect to the same pi process simultaneously
+- **Extension compatibility** — user extensions from `~/.pi/agent/extensions/` and `.pi/extensions/` are auto-loaded
+- **Credential reuse and setup** — reuses Pi's existing `~/.pi/agent/auth.json`, imports shell-exported provider variables for GUI launches, and can persist API keys from Settings
 
-Provide credentials with `pi /login`, shell-exported provider variables, or Settings → Configuration. API keys saved in Settings use Pi's existing `~/.pi/agent/auth.json` format.
-
----
-
-## Build from source
+### Build from source
 
 ```bash
 git clone https://github.com/shixin-guo/picot.git
@@ -213,7 +281,13 @@ After any changes under `src-tauri/`:
 bun run check:rust   # cargo check + clippy + fmt (fast; no full build needed)
 ```
 
-To bump the embedded pi version, edit `scripts/pi-version.json`, run `bun run fetch:pi`, smoke-test, and commit.
+For the full command reference (tests, lint/format, Rust checks, bumping the embedded pi version), see [`AGENTS.md` → Toolchain & Verification](./AGENTS.md#verification).
+
+### Project docs
+
+- [`AGENTS.md`](./AGENTS.md) — architecture, module conventions, and the full command reference for anyone (human or agent) working in this repo
+- [`ROADMAP.md`](./ROADMAP.md) — shipped, in-progress, and planned features
+- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — detailed architecture, invariants, and design documents
 
 ---
 
@@ -221,10 +295,10 @@ To bump the embedded pi version, edit `scripts/pi-version.json`, run `bun run fe
 
 Picot is a maintained fork of **Tau**, adapted for Pi-first, local development workflows. Key additions:
 
-- **Tauri-native PiManager** — spawns one `pi --mode rpc` process per project window
+- **Native Pi runtime manager** — spawns and supervises `pi --mode rpc` processes
 - **Embedded pi runtime** — no separate global install; Picot ships its own binary
-- **Multi-session without new windows** — headless pi processes, current WebView navigates
-- **LAN + mobile access** — QR code, PWA support, WebSocket broker for multi-client
+- **Protocol v2 host bridge** — typed routing for runtime, data, auth, and extension UI frames
+- **Host data plane** — Rust serves session and workspace data directly to the native UI
 
 ---
 
