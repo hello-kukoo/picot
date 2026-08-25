@@ -123,9 +123,15 @@ impl NativePiManager {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let child = command
-            .spawn()
-            .map_err(|error| format!("Cannot start embedded Pi native RPC process: {error}"))?;
+        let child = command.spawn().map_err(|error| {
+            // Report the failing component unambiguously (v3 306f161): a
+            // \?\-prefixed resource path alone looked like a missing binary.
+            format!(
+                "Cannot start embedded Pi native RPC process (program: {}; cwd: {}): {error}",
+                launch.program.display(),
+                spec.cwd.display(),
+            )
+        })?;
         let (bridge, mut process) = PiRpcBridge::attach(child, MAX_RPC_FRAME_BYTES)?;
         if let Err(error) = self
             .inner

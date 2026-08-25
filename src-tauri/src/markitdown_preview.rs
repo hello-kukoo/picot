@@ -30,10 +30,20 @@ pub enum ConversionOutcome {
     Failed,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProbeMode {
+    /// The executable IS the markitdown launcher (installed via
+    /// `uv tool install` / `pipx install`); conversion passes only `-x`.
+    Cli,
+    /// A Python interpreter with markitdown importable as a module.
+    PythonModule,
+}
+
 #[derive(Debug, Clone)]
 enum DependencyProbe {
     Available {
         executable: String,
+        mode: ProbeMode,
     },
     Unavailable {
         reason: DependencyReason,
@@ -62,7 +72,7 @@ impl MarkitdownPreviewService {
             return ConversionOutcome::Failed;
         }
         let dependency = self.probe.get_or_init(probe_dependency).await.clone();
-        let DependencyProbe::Available { executable } = dependency else {
+        let DependencyProbe::Available { executable, mode } = dependency else {
             let DependencyProbe::Unavailable {
                 reason,
                 display_command,
@@ -78,8 +88,21 @@ impl MarkitdownPreviewService {
         let Ok(_permit) = self.permits.clone().try_acquire_owned() else {
             return ConversionOutcome::Failed;
         };
-        let args = ["-m", "markitdown", "-x", &format!(".{suffix}")];
-        match run_bounded(&executable, &args, Some(input), false).await {
+        let args = match mode {
+            // CLI launchers are the markitdown binary itself; only the
+            // extension flag is needed.
+            ProbeMode::Cli => vec!["-x".to_string(), format!(".{suffix}")],
+            ProbeMode::PythonModule => {
+                vec![
+                    "-m".to_string(),
+                    "markitdown".to_string(),
+                    "-x".to_string(),
+                    format!(".{suffix}"),
+                ]
+            }
+        };
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        match run_bounded(&executable, &arg_refs, Some(input), false).await {
             Some((status, stdout, _)) if status && !stdout.trim().is_empty() => {
                 ConversionOutcome::Ready(stdout)
             }
@@ -107,6 +130,25 @@ pub fn is_convertible_suffix(suffix: &str) -> bool {
 }
 
 async fn probe_dependency() -> DependencyProbe {
+    // CLI candidates first (v3 cc4b32a): a `uv tool install` / `pipx install`
+    // markitdown launcher needs no Python interpreter at all. Probed by
+    // checking `--help` for the -x/--extension flag.
+    const CLI_PROBE_ARGS: [&str; 1] = ["--help"];
+    let Some((true, cli_help, cli_err)) =
+        run_bounded("markitdown", &CLI_PROBE_ARGS, None, false).await
+    else {
+        return python_module_probe().await;
+    };
+    if format!("{cli_help}{cli_err}").contains("-x") || cli_help.contains("--extension") {
+        return DependencyProbe::Available {
+            executable: "markitdown".to_string(),
+            mode: ProbeMode::Cli,
+        };
+    }
+    python_module_probe().await
+}
+
+async fn python_module_probe() -> DependencyProbe {
     const VERSION_SCRIPT: &str =
         "import sys; print(sys.version_info[0], sys.version_info[1], sys.version_info[2]); print(sys.executable)";
     const CAPABILITY_SCRIPT: &str = "from markitdown import MarkItDown, StreamInfo; print('ok')";
@@ -166,7 +208,10 @@ async fn probe_dependency() -> DependencyProbe {
             incompatible.get_or_insert(display.to_owned());
             continue;
         }
-        return DependencyProbe::Available { executable };
+        return DependencyProbe::Available {
+            executable,
+            mode: ProbeMode::PythonModule,
+        };
     }
     if let Some(display_command) = missing {
         DependencyProbe::Unavailable {
