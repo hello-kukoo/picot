@@ -2010,7 +2010,16 @@ body {
   z-index: 260;
   display: grid;
   grid-template-columns: 272px 1fr;
+  grid-template-rows: 32px minmax(0, 1fr);
   background: var(--bg-solid);
+}
+
+/* Settings covers the chat header, so it owns a small, control-free title-bar
+   drag strip while preserving native interaction for every Settings control. */
+.settings-drag-region {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  -webkit-app-region: drag;
 }
 
 .settings-panel.hidden {
@@ -2018,6 +2027,8 @@ body {
 }
 
 .settings-nav {
+  grid-column: 1;
+  grid-row: 2;
   border-right: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-glass) 70%, transparent);
   padding: var(--space-2) var(--space-3);
@@ -2087,8 +2098,9 @@ body {
 }
 
 .settings-content {
+  grid-column: 2;
+  grid-row: 2;
   padding: var(--space-3) var(--space-6);
-  height: 100%;
   min-height: 0;
   overflow-y: auto;
 }
@@ -2871,6 +2883,17 @@ body {
   background: white;
 }
 
+.api-model-select-all-toggle:indeterminate {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.api-model-select-all-toggle:indeterminate::after {
+  left: 11px;
+  border-radius: var(--radius-sm);
+  background: white;
+}
+
 .api-model-visibility-toggle:focus-visible,
 .api-model-select-all-toggle:focus-visible {
   outline: 2px solid var(--accent);
@@ -3118,7 +3141,17 @@ body {
 @media (max-width: 920px) {
   .settings-panel {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: 32px auto minmax(0, 1fr);
+  }
+
+  .settings-nav {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .settings-content {
+    grid-column: 1;
+    grid-row: 3;
   }
 
   .settings-nav {
@@ -9631,6 +9664,14 @@ body.file-preview-resizing {
 .skills-switch:checked::after {
   left: 18px;
   background: #fff;
+}
+.skills-switch:indeterminate {
+  border-color: var(--border-hover);
+  background: var(--bg-glass-strong, var(--bg-glass-hover));
+}
+.skills-switch:indeterminate::after {
+  left: 11px;
+  background: var(--text-secondary);
 }
 .skills-switch:disabled {
   cursor: not-allowed;

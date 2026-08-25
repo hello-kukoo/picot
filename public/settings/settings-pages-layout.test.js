@@ -21,6 +21,22 @@ describe("settings page split", () => {
     expect(document.querySelector('[data-settings-panel="models"]')).not.toBeNull();
   });
 
+  test("keeps a dedicated drag region above the Settings overlay controls", () => {
+    const dom = new JSDOM(html, { url: "http://localhost" });
+    const { document } = dom.window;
+    const dragRegion = document.querySelector("#settings-drag-region");
+    const css = readFileSync(join(process.cwd(), "public/style.css"), "utf8");
+
+    expect(dragRegion).not.toBeNull();
+    expect(dragRegion.getAttribute("aria-hidden")).toBe("true");
+    expect(document.querySelector("#settings-drag-region + .settings-nav")).not.toBeNull();
+    expect(css).toMatch(/\.settings-drag-region\s*\{[^}]*-webkit-app-region:\s*drag/s);
+    expect(appJs).toContain(
+      'const settingsDragRegion = document.getElementById("settings-drag-region")',
+    );
+    expect(appJs).toContain('settingsDragRegion?.addEventListener("mousedown"');
+  });
+
   test("splits Configuration and Models panels by ownership", () => {
     const dom = new JSDOM(html, { url: "http://localhost" });
     const { document } = dom.window;

@@ -114,6 +114,39 @@ describe("models provider editor", () => {
     expect(call.mock.calls.map(([operation]) => operation)).toContain("read_models_config");
   });
 
+  test("marks a partially enabled provider with an indeterminate master toggle", async () => {
+    const partialCall = vi.fn(async (operation) => {
+      if (operation === "list_model_catalog") {
+        return {
+          ok: true,
+          data: {
+            providers: [
+              {
+                provider: "partial",
+                displayName: "Partial",
+                configured: true,
+                source: "stored",
+                models: [
+                  { provider: "partial", id: "one", visible: true, available: true },
+                  { provider: "partial", id: "two", visible: false, available: true },
+                  { provider: "partial", id: "three", available: true },
+                ],
+              },
+            ],
+          },
+        };
+      }
+      return call(operation);
+    });
+    const page = setupModelsPage({ configGateway: { call: partialCall } });
+    await page.loadApiKeysPanel();
+
+    const toggle = document.querySelector(".api-model-select-all-toggle");
+    expect(toggle.checked).toBe(false);
+    expect(toggle.indeterminate).toBe(true);
+    expect(toggle.getAttribute("aria-checked")).toBe("mixed");
+  });
+
   test("switches providers without removing siblings from models.json", async () => {
     const page = setupModelsPage({ configGateway: { call } });
     await page.loadInlineModelsEditor();

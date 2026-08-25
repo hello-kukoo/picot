@@ -883,12 +883,16 @@ if (convNavTooltip.parentElement && convNavTooltip.parentElement !== document.bo
 const mainContainer = document.querySelector(".main");
 const headerEl = document.querySelector(".header");
 const inputAreaEl = document.querySelector(".input-area");
+const settingsDragRegion = document.getElementById("settings-drag-region");
 
-headerEl?.addEventListener("mousedown", (e) => {
+function startWindowDrag(e) {
   if (e.button !== 0) return;
   if (e.target.closest("button, a, input, select, textarea, [role=button]")) return;
   window.__TAURI__?.window?.getCurrentWindow().startDragging();
-});
+}
+
+headerEl?.addEventListener("mousedown", startWindowDrag);
+settingsDragRegion?.addEventListener("mousedown", startWindowDrag);
 
 setupMessagesInsets({
   main: mainContainer,

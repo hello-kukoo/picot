@@ -189,6 +189,11 @@ describe("skills-page tree renderer", () => {
     ).toBe("/root/a/skills");
     expect(container.querySelector(`[data-skill-group="${BAOYU_GROUP_ID}"]`)).not.toBeNull();
     expect(container.querySelector('[data-skill-group-state="mixed"]').textContent).toBe("1/3");
+    const groupToggle = container.querySelector(
+      `[data-skill-group="${BAOYU_GROUP_ID}"] .skills-switch`,
+    );
+    expect(groupToggle.indeterminate).toBe(true);
+    expect(groupToggle.getAttribute("aria-checked")).toBe("mixed");
     // Groups start collapsed: skill rows are not rendered until the group is expanded.
     expect(container.querySelectorAll("[data-skill-row]").length).toBe(0);
     container.querySelector(`[data-skill-group="${BAOYU_GROUP_ID}"] .skills-expand`).click();

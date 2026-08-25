@@ -245,7 +245,10 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
     const input = el("input", {
       type: "checkbox",
       class: "skills-switch",
-      aria: { label: ariaLabel },
+      aria: {
+        label: ariaLabel,
+        checked: indeterminate ? "mixed" : String(Boolean(checked)),
+      },
     });
     input.checked = Boolean(checked);
     input.indeterminate = Boolean(indeterminate);

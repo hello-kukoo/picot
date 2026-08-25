@@ -625,11 +625,18 @@ export function setupModelsPage({
     actions.className = "api-model-list-heading-actions";
     const visibilityColumn = document.createElement("label");
     visibilityColumn.className = "api-model-select-all";
-    const allModelsEnabled = models.every((model) => model.visible !== false);
+    const enabledModelCount = models.filter((model) => model.visible !== false).length;
+    const allModelsEnabled = enabledModelCount === models.length;
+    const modelsPartiallyEnabled = enabledModelCount > 0 && !allModelsEnabled;
     const visibilityToggle = document.createElement("input");
     visibilityToggle.type = "checkbox";
     visibilityToggle.className = "api-model-select-all-toggle";
     visibilityToggle.checked = allModelsEnabled;
+    visibilityToggle.indeterminate = modelsPartiallyEnabled;
+    visibilityToggle.setAttribute(
+      "aria-checked",
+      modelsPartiallyEnabled ? "mixed" : String(allModelsEnabled),
+    );
     visibilityToggle.setAttribute(
       "aria-label",
       t(allModelsEnabled ? "settings.apiKeys.deselectAll" : "settings.apiKeys.selectAll", {
