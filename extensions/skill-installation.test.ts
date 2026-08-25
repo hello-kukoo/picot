@@ -6,7 +6,9 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -144,6 +146,63 @@ describe("installSkillLinks", () => {
         context,
       }),
     ).rejects.toThrow(/rescan/);
+    expect(() => readFileSync(join(root, ".pi", "agent", "settings.json"))).toThrow();
+  });
+
+  it("rejects a selection issued for a different source identity", async () => {
+    const root = fixture();
+    const context = options(root);
+    const scan = scanSkillInstallSource(source(root), context);
+
+    await expect(
+      installSkillLinks({
+        source: { ...source(root), sourceId: "another-source" },
+        scope: "global",
+        scanRevision: scan.scanRevision,
+        selection: scan.defaultSelection,
+        context,
+      }),
+    ).rejects.toThrow(/selection/);
+    expect(() => readFileSync(join(root, ".pi", "agent", "settings.json"))).toThrow();
+  });
+
+  it("rejects a candidate path change even when the source remains accessible", async () => {
+    const root = fixture();
+    const context = options(root);
+    const scan = scanSkillInstallSource(source(root), context);
+    renameSync(join(root, "review"), join(root, "renamed-review"));
+
+    await expect(
+      installSkillLinks({
+        source: source(root),
+        scope: "global",
+        scanRevision: scan.scanRevision,
+        selection: scan.defaultSelection,
+        context,
+      }),
+    ).rejects.toThrow(/rescan/);
+    expect(() => readFileSync(join(root, ".pi", "agent", "settings.json"))).toThrow();
+  });
+
+  it("rejects replacing the scanned source symlink before install", async () => {
+    const root = fixture();
+    const replacement = fixture();
+    const alias = `${root}-alias`;
+    symlinkSync(root, alias);
+    const context = options(root);
+    const scan = scanSkillInstallSource(source(alias), context);
+    unlinkSync(alias);
+    symlinkSync(replacement, alias);
+
+    await expect(
+      installSkillLinks({
+        source: source(alias),
+        scope: "global",
+        scanRevision: scan.scanRevision,
+        selection: scan.defaultSelection,
+        context,
+      }),
+    ).rejects.toThrow(/rescan|selection/);
     expect(() => readFileSync(join(root, ".pi", "agent", "settings.json"))).toThrow();
   });
 });

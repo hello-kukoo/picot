@@ -798,10 +798,19 @@ fn select_fresh_startup_target(
     home_cwd: String,
     latest_session: Option<(String, String)>,
 ) -> (String, Option<String>) {
+    // Only adopt the latest workspace when it still exists on disk (v3
+    // 306f161): a moved/deleted directory (e.g. OneDrive relocation) would
+    // otherwise abort pi's spawn with ERROR_DIRECTORY (os error 267).
     let cwd = latest_session
         .map(|(session_cwd, _session_path)| session_cwd)
+        .filter(|cwd| PathBuf::from(cwd).is_dir())
         .unwrap_or(home_cwd);
     (cwd, None)
+}
+
+/** Windows ERROR_DIRECTORY from a spawn with an invalid working directory. */
+fn is_invalid_working_directory_error(error: &str) -> bool {
+    error.contains("(os error 267)")
 }
 
 fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(), String> {
@@ -915,13 +924,21 @@ fn main() {
             let static_dir = find_static_dir(app);
             if let Err(error) = setup_native_runtime(app, static_dir) {
                 log::error!("[picot-native] startup failed: {error}");
+                // v3 306f161: point at the real failing component. A cwd
+                // rejection is transient (next launch falls back to home via
+                // select_fresh_startup_target), unlike a corrupted install.
+                let cwd_hint = if is_invalid_working_directory_error(&error) {
+                    "\n\nThe configured workspace directory may have been moved or deleted; Picot will start from your home folder on the next launch."
+                } else {
+                    ""
+                };
                 if let Err(window_error) = open_bootstrap_window(&app.handle().clone(), &error) {
                     log::error!(
                         "[picot-native] failed to open bootstrap window after startup error: {window_error}"
                     );
                     app.dialog()
                         .message(format!(
-                            "Picot could not start the embedded pi runtime.\n\n{error}\n\nThe Picot installation may be incomplete or corrupted. Please reinstall Picot and try again."
+                            "Picot could not start the embedded pi runtime.\n\n{error}{cwd_hint}\n\nThe Picot installation may be incomplete or corrupted. Please reinstall Picot and try again."
                         ))
                         .title("Picot startup failed")
                         .kind(MessageDialogKind::Error)
@@ -992,7 +1009,10 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_static_dir, select_fresh_startup_target, session_dir_name};
+    use super::{
+        is_invalid_working_directory_error, resolve_static_dir, select_fresh_startup_target,
+        session_dir_name,
+    };
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1044,14 +1064,50 @@ mod tests {
     }
 
     #[test]
-    fn keeps_the_latest_workspace_but_never_resumes_its_session_on_app_start() {
+    fn keeps_an_existing_latest_workspace_but_never_resumes_its_session_on_app_start() {
+        let home = unique_temp_dir("startup-home");
+        let workspace = unique_temp_dir("startup-workspace");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+
         let selected = select_fresh_startup_target(
-            "/home/user".to_string(),
+            home.to_string_lossy().into_owned(),
             Some((
-                "/work/project".to_string(),
+                workspace.to_string_lossy().into_owned(),
                 "/sessions/old-session.jsonl".to_string(),
             )),
         );
-        assert_eq!(selected, ("/work/project".to_string(), None));
+
+        assert_eq!(selected, (workspace.to_string_lossy().into_owned(), None));
+        let _ = std::fs::remove_dir_all(home);
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn falls_back_to_home_when_latest_workspace_no_longer_exists() {
+        let home = unique_temp_dir("startup-home");
+        std::fs::create_dir_all(&home).unwrap();
+        let missing_workspace = home.join("deleted-workspace");
+
+        let selected = select_fresh_startup_target(
+            home.to_string_lossy().into_owned(),
+            Some((
+                missing_workspace.to_string_lossy().into_owned(),
+                "/sessions/old-session.jsonl".to_string(),
+            )),
+        );
+
+        assert_eq!(selected, (home.to_string_lossy().into_owned(), None));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn detects_windows_invalid_working_directory_spawn_error() {
+        assert!(is_invalid_working_directory_error(
+            "Cannot start embedded Pi native RPC process: 目录名称无效。 (os error 267)"
+        ));
+        assert!(!is_invalid_working_directory_error(
+            "Cannot start embedded Pi native RPC process: Access is denied. (os error 5)"
+        ));
     }
 }

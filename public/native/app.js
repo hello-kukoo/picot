@@ -61,6 +61,7 @@ import {
   createTaskCompletionNotifications,
 } from "./notifications/task-completion-notifications.js";
 import { extractAssistantError, extractRuntimeEventError } from "./session/assistant-error.js";
+import { shouldSuppressFileBrowserRefresh } from "./session/file-browser-refresh-guard.js";
 import { InfoPanel } from "./session/info-panel.js";
 import { activeSession, setupSessionInfo } from "./session/session-info.js";
 import { createSessionSelectionHandler } from "./session/session-navigation.js";
@@ -382,6 +383,34 @@ const filePreviewPanel = setupFilePreviewPanel();
 // Written-file paths collected during the current turn (via the preview
 // follow's onWriteApplied signal); rendered as chips when the turn settles.
 let turnWrittenPaths = [];
+// Debounced post-write sidebar refresh with cross-workspace gating (v3
+// e2567dd): a stale relative path must never resolve against a new workspace.
+let fileBrowserWorkspaceId = null;
+let fileBrowserRefreshTimer = null;
+
+function cancelFileBrowserRefresh() {
+  if (fileBrowserRefreshTimer) {
+    clearTimeout(fileBrowserRefreshTimer);
+    fileBrowserRefreshTimer = null;
+  }
+}
+
+function scheduleFileBrowserRefresh() {
+  if (!fileBrowser?.currentPath) return;
+  const suppress = () =>
+    shouldSuppressFileBrowserRefresh({
+      currentWorkspaceId: target.workspaceId,
+      fileBrowserWorkspaceId,
+    });
+  if (suppress()) return;
+  cancelFileBrowserRefresh();
+  fileBrowserRefreshTimer = setTimeout(() => {
+    fileBrowserRefreshTimer = null;
+    if (!fileBrowser?.currentPath) return;
+    if (suppress()) return;
+    void fileBrowser.refresh().catch(() => {});
+  }, 500);
+}
 const filePreviewFollow = createFilePreviewFollow({
   panel: filePreviewPanel,
   getWorkspacePath: async () => {
@@ -394,6 +423,8 @@ const filePreviewFollow = createFilePreviewFollow({
   },
   onWriteApplied: (_rawPath, previewPath) => {
     if (!turnWrittenPaths.includes(previewPath)) turnWrittenPaths.push(previewPath);
+    // Coalesce multi-file writes into one debounced listing reload.
+    scheduleFileBrowserRefresh();
   },
 });
 const gitPanel = setupGitPanel({
@@ -1782,6 +1813,9 @@ function setupFileBrowser() {
     onPathChange(path) {
       // Enable the up button only when we're inside a subdirectory.
       if (upBtn) upBtn.disabled = path === "";
+      // Track which workspace the rendered listing belongs to so post-write
+      // refreshes can be gated during cross-workspace switches.
+      fileBrowserWorkspaceId = target.workspaceId;
     },
     onShowHiddenChange(showHidden) {
       toggleHiddenBtn?.setAttribute("aria-pressed", String(showHidden));
@@ -2047,6 +2081,10 @@ async function adoptTarget(nextTarget, { updateRoute = true } = {}) {
   extensionWidgets.clear();
   customUiPanel.close({ notifyExtension: false });
   filePreviewFollow.clear();
+  // Turn writes and pending sidebar refreshes belong to the previous session
+  // or workspace; carrying them across would leak state (v3 e2567dd).
+  turnWrittenPaths = [];
+  cancelFileBrowserRefresh();
   streamingElement = null;
   liveProcessGroup = null;
   adapter.subscribeTarget(target);
