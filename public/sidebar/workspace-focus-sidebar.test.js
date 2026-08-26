@@ -77,12 +77,13 @@ function makeSidebar(overrides = {}) {
     project: { path: "/work/alpha", sessions, ...overrides.project },
     activeSessionFile: overrides.activeSessionFile,
     isArchived: overrides.isArchived,
-    buildSessionItem: fakeBuilder(),
+    buildSessionItem: overrides.buildSessionItem || fakeBuilder(),
     onBack: overrides.onBack,
     onNewTask: overrides.onNewTask,
     onSessionSelect: overrides.onSessionSelect,
     onDelete: overrides.onDelete,
     onRename: overrides.onRename,
+    createIcon: overrides.createIcon,
   });
 }
 
@@ -211,7 +212,12 @@ describe("WorkspaceFocusSidebar", () => {
     focusSidebar.render();
 
     const item = document.querySelector('.session-item[data-file-path="/sessions/0.jsonl"]');
-    item.querySelector(".session-rename-btn").click();
+    const renameButton = item.querySelector(".session-rename-btn");
+    const actionSlot = item.querySelector(".session-action-slot");
+    expect(renameButton).toBeTruthy();
+    expect(renameButton.querySelector("svg")).toBeTruthy();
+    expect(actionSlot.lastElementChild).toBe(renameButton.nextElementSibling);
+    renameButton.click();
     const input = item.querySelector(".session-rename-input");
     input.value = "Focus renamed";
     input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
@@ -225,6 +231,14 @@ describe("WorkspaceFocusSidebar", () => {
     expect(normalSidebar.projects[0].sessions[0].name).toBe("Focus renamed");
     expect(item.dataset.name).toBe("focus renamed");
     expect(item.querySelector(".session-title").textContent).toBe("Focus renamed");
+  });
+
+  test("renders rename and delete controls for hover-reveal styling", () => {
+    const sidebar = makeSidebar({ sessions: makeSessions(1), buildSessionItem });
+    sidebar.render();
+    const item = sidebar.container.querySelector(".session-item");
+    expect(item.querySelector(".session-rename-btn")).toBeTruthy();
+    expect(item.querySelector(".session-delete-btn")).toBeTruthy();
   });
 
   test("delete button fires onDelete with the filePath", () => {

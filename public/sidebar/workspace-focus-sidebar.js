@@ -38,6 +38,7 @@ export class WorkspaceFocusSidebar {
     this.unread = options.unread instanceof Set ? options.unread : new Set();
     this.streaming = options.streaming instanceof Set ? options.streaming : new Set();
     this.buildSessionItem = options.buildSessionItem || null;
+    this.createIcon = options.createIcon || createIcon;
     this.isArchived = typeof options.isArchived === "function" ? options.isArchived : null;
     this.cardInfo = options.cardInfo || null;
     this.onBack = options.onBack || null;
@@ -111,6 +112,7 @@ export class WorkspaceFocusSidebar {
         onSelect: (s, p) => this.onSessionSelect?.(s, p),
         onDelete: (filePath) => this.onDelete?.(filePath),
         onRename: (filePath, targetSession, item) => this.onRename?.(filePath, targetSession, item),
+        createIcon: this.createIcon,
       });
       list.appendChild(item);
     }

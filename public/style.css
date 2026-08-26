@@ -242,9 +242,15 @@ body {
    and size as normal mode, laid out left of delete instead of overlapping. */
 .focus-session-list .session-action-slot {
   display: inline-flex;
+  width: auto;
   justify-content: flex-end;
   align-items: center;
   gap: var(--space-0-5);
+}
+
+.focus-session-list .session-time {
+  position: static;
+  width: auto;
 }
 
 .focus-session-list .session-action-slot .session-rename-btn {
@@ -252,6 +258,22 @@ body {
   width: 22px;
   height: 22px;
   padding: 0;
+}
+
+.focus-session-list .session-delete-btn {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity var(--duration) var(--ease),
+    visibility var(--duration) var(--ease),
+    background var(--duration) var(--ease);
+}
+
+.focus-session-list .session-item:hover .session-delete-btn {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
 }
 
 .focus-session-list .session-action-slot .session-rename-btn:hover {

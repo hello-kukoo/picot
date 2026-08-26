@@ -293,6 +293,7 @@ function enterFocus(project) {
     streaming: sidebar.streamingFiles,
     isArchived: (filePath) => sidebar.isArchived(filePath),
     buildSessionItem,
+    createIcon,
     onBack: () => exitFocus(),
     onNewTask: (p) => {
       handleNewProjectChat(p);
