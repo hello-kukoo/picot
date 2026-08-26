@@ -273,7 +273,7 @@ Picot 仅将 Pi provider-owned OAuth 的非敏感交互投影给拥有当前原�
 
 #### Extensions 包管理页（`#/settings/extensions`）
 
-Settings → Extensions 固定为 **已安装 / 社区** 两个内部页签，打开时默认选中已安装；它不是左侧边栏或资源对话框入口。已安装页是 host 解析的 configured-package 管理面板，社区页只负责 registry 发现与安装/卸载入口，社区页不再提供 installed-only 筛选器。
+Settings → Extensions 固定为 **已安装 / 社区** 两个内部页签，打开时默认选中已安装；它不是左侧边栏或资源对话框入口。已安装页是 host 解析的 configured-package 管理面板，社区页只负责 registry 发现与安装/卸载入口，社区页不再提供 installed-only 筛选器。社区目录不经由 Worker 实时拉取：`scripts/build_extension_catalog.py` 手动抓取 pi-packages-api Worker 并把投影后的快照 commit 进仓库（`community-extensions.json`，仅保留 UI 消费字段 + minified），前端一次性 GET `raw.githubusercontent.com/hello-kukoo/picot/private/features-v3/community-extensions.json`（tauri CSP 的 `connect-src` 白名单包含该域名）；抓取失败时 UI 报错并提供重试按钮，不回退 Worker。
 
 浏览器只接收 native host 返回的 rich package records；包元数据、资源路径、settings 写入、Pi 命令执行和 scope 解析均由 host 负责。所有包变更和 runtime 生命周期操作要求已认证的 desktop owner；LAN/mobile 客户端可以浏览社区目录但不能管理包。包变更不会自动重启 Pi；已安装页的 **Reload agent** 明确重启当前 owner 的 workspace/session runtime，成功后前端重新连接。
 

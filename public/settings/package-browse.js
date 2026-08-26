@@ -9,9 +9,12 @@ export function setupPackageBrowse({
   createIcon,
   renderPackageInstallFailure,
   setExtensionActionButton,
-  apiBase = "https://pi-packages-api.shixin.workers.dev",
+  catalogUrl = "https://raw.githubusercontent.com/hello-kukoo/picot/private/features-v3/community-extensions.json",
 }) {
-  const PKG_API_BASE = apiBase;
+  // Catalog is a committed snapshot refreshed manually via
+  // scripts/build_extension_catalog.py; see that script before changing the
+  // expected schema or fields.
+  const PKG_CATALOG_URL = catalogUrl;
   const browseListEl = root.getElementById("pkg-browse-list");
   const browseSearchEl = root.getElementById("pkg-browse-search");
   const browsePillsEl = root.getElementById("pkg-browse-pills");
@@ -78,19 +81,11 @@ export function setupPackageBrowse({
   }
 
   async function fetchBrowsePackages() {
-    const pageSize = 250;
-    const all = [];
-    let page = 1;
-    let totalPages = 1;
-    do {
-      const res = await fetch(`${PKG_API_BASE}/packages?page=${page}&pageSize=${pageSize}`);
-      if (!res.ok) throw new Error(`Registry returned ${res.status}`);
-      const data = await res.json();
-      if (Array.isArray(data?.packages)) all.push(...data.packages);
-      totalPages = Number(data?.totalPages) || 1;
-      page += 1;
-    } while (page <= totalPages);
-    return all;
+    const res = await fetch(PKG_CATALOG_URL, { headers: { Accept: "application/json" } });
+    if (!res.ok) throw new Error(`Catalog fetch returned ${res.status}`);
+    const data = await res.json();
+    if (!Array.isArray(data?.packages)) throw new Error("Catalog response has no packages list");
+    return data.packages;
   }
 
   async function fetchInstalledSources() {

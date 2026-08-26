@@ -56,11 +56,11 @@ describe("Community package browser", () => {
       vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
+          version: 1,
           packages: [
             { name: "installed", description: "Installed package", types: ["extensions"] },
             { name: "available", description: "Available package", types: ["skills"] },
           ],
-          totalPages: 1,
         }),
       }),
     );
@@ -75,7 +75,7 @@ describe("Community package browser", () => {
       setExtensionActionButton: (button, label) => {
         button.textContent = label;
       },
-      apiBase: "https://registry.test",
+      catalogUrl: "https://registry.test/catalog.json",
     });
     await browser.load();
 

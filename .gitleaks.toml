@@ -1,0 +1,7 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Rust build artifacts are gitignored binaries; README marketing copy trips entropy rules"
+paths = ['''^src-tauri/target/''']
+stopwords = ["expand/collapse"]
