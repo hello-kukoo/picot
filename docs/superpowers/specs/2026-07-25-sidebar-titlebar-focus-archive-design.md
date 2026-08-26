@@ -1,4 +1,4 @@
-# 侧栏 / Title Bar 重构 + Workspace Focus 模式 + 归档删除
+# 侧栏 / Title Bar 重构 + Workspace Focus 模式 + 永久删除
 
 - 日期：2026-07-25
 - 状态：已实现（含实现偏差，见 §11）
@@ -8,9 +8,9 @@
 ## 1. 背景与目标
 
 Picot 顶部空间利用不充分：聊天 header 的 workspace 路径发现性弱，侧栏 header
-把 logo、搜索框、工具按钮挤在一行，且「归档」功能是 localStorage 临时态，
-缺少单条删除路径。本次重构在不动进程模型与通讯路径的前提下，重新组织顶部
-布局、新增 workspace focus 工作台、补齐归档→删除流程。
+把 logo、搜索框、工具按钮挤在一行，且旧「归档」功能是 localStorage 临时态，
+缺少统一永久删除确认。本次重构在不动进程模型与通讯路径的前提下，重新组织顶部
+布局、新增 workspace focus 工作台，并统一 session 永久删除流程。
 
 **五项需求**
 
@@ -18,13 +18,13 @@ Picot 顶部空间利用不充分：聊天 header 的 workspace 路径发现性�
 2. 把侧栏的 toolbar（搜索框 + 工具按钮）移到侧栏 title bar 位置。
 3. 在侧栏 logo 右侧显示「Picot Workspace」字样。
 4. 双击/显式入口进入当前 active workspace 的 focus 模式，侧栏切换为任务工作台。
-5. 归档后的 session 支持单条真实删除（先归档、再删除）。
+5. session 支持单条永久删除；workspace 批量删除要求输入精确 workspace 名称确认。
 
 ## 2. 非目标（YAGNI）
 
 - 不做无边框自绘 Windows/Linux 窗口（保留原生装饰）。
-- 不补归档区的「取消归档」（un-archive）入口；维持现状。
-- Focus 模式不做置顶、批量管理、归档/删除。
+- 不提供 session archive/unarchive 状态或归档区。
+- Focus 模式不做置顶或 workspace 批量管理；保留单条 Rename/Delete。
 - 不改变 session 切换、端口路由、broker 协议。
 - 不改 Super Agent / Side Chat / Quick Chat 的现有行为。
 
@@ -155,7 +155,7 @@ focus 是一种不同的页面形态（任务工作台 vs session 管理列表�
 | workspace 名称 | 只读展示 active workspace 的 `folderName` / 完整路径（title） |
 | `+ New Task` | 调用现有 `onNewChat(project)`（= New Session，同 workspace 派生可并行 session） |
 | session 列表 | 当前 workspace 的**非归档** sessions，先 5 条，超出显示「显示更多」（复用 `buildProjectSessionsToggleRow` 同模式） |
-| session 条目 | 通过共享 builder（§7 `build-session-item.js`）构建，传 `showPinButton: false, showArchiveButton: false`（focus 不含置顶/归档操作）；保留 active 高亮、unread/streaming 状态标记；点击走 `onSessionSelect` 切换/打开 |
+| session 条目 | 通过共享 builder（§7 `build-session-item.js`）构建，Focus 不含 workspace Pin；保留 active 高亮、unread/streaming 状态标记与 Rename/Delete；点击走 `onSessionSelect` 切换/打开 |
 
 **Focus 内不提供**：搜索框、打开目录/Quick Chat/刷新按钮、归档区、删除、置顶、
 上下文菜单批量归档。
@@ -187,52 +187,30 @@ focus 是一种不同的页面形态（任务工作台 vs session 管理列表�
   切换期间取消或忽略已过期的 sidebar load；focus 内 refresh 只更新 focus 组件。
 - active workspace 已确定且与 matched focus ID 不同时，移除 URL 参数并退出。
 
-### 4.5 #5 归档 → 删除
+### 4.5 #5 Session 永久删除
 
-**现状（保持不变的部分）**
+**当前契约**
 
-- 归档态存于 localStorage `pi-studio-archived`（数组 of filePath），不影响 Pi `.jsonl`。
-- 归档区 session 用 `buildSessionItem(..., { showArchiveButton: false })` 渲染，无解档 UI。
+- 左侧栏只显示 PINNED 与 PROJECTS，不再读取或写入 `pi-studio-archived`。
+- 普通模式与 Focus 模式 session 行均使用 Delete；不再提供 Archive/Unarchive。
+- 单条 Delete 先显示二次确认，取消时不发送请求。
+- workspace「Delete all sessions」先显示危险操作 modal；用户必须输入当前 workspace
+  名称，点击 Delete 时做精确匹配。名称不匹配显示 warning、保持 modal 打开且不发送请求。
+- 名称匹配后只发送一次 `POST /api/sessions/delete-batch`，body 为 `{ filePaths }`。
+- active、streaming、live-instance session 不进入可删除列表；服务端仍是最终安全边界，
+  返回 `running`/`errors` 时前端保留保护提示并刷新 session 列表。
 
-**改动**
+**安全与渲染**
 
-1. **移除「全部删除归档」按钮**：删除 `sidebar/index.js` 归档区 header 中的
-   `deleteAllBtn` 构建（约 `:1217-1224`）、`deleteAllArchived()`、
-   `confirmArchivedDeletion()`，以及 `style.css` `.archived-delete-all-btn` 规则。
-   理由：该按钮仅 hover 显示、无键盘可达性、发现性差。
-2. **归档区去置顶，但不改 pin 数据**：`buildSessionItem` 增加选项控制是否渲染 pin 按钮；
-   归档区传 `showPinButton: false`。归档不会自动 unpin：session pin 仍保留，未来若增加
-   un-archive 会恢复原置顶状态；只有真实删除才移除该 session pin。
-3. **归档区加单条删除**：归档区 session 渲染一个删除按钮（trash 图标），
-   点击弹二次确认（复用既有 `sidebar.deleteArchivedConfirmOne` / `showFallbackConfirmDialog`）。
-   前端可先以 fresh `fetchInstances()` 禁用/提示已知 live session，但这只是 UX 优化，不能作为
-   删除安全边界；确认后仍调 `POST /api/sessions/delete-batch`。
-   - **服务端强制校验**：`extensions/embedded-server.ts` 的 delete-batch 对每个 filePath 用
-     `getRunningInstances()` 检查 `sessionFile`，命中则不 unlink，响应新增 `running: string[]`；
-     前端据此显示 i18n 的 running 提示。
-   - 只有服务端确认成功删除时，才从 `this.archived`、recent cookie（通过
-     `writeRecentSessions` 保持 MRU 顺序）及 pinStore 的 session pins（`unpinSession(filePath)`）
-     移除该 filePath，再重渲染。
-   - 范围不对称是预期的：归档列表是 per-port localStorage，而 recent/session-pin cookie
-     跨端口共享。文件级删除应全局生效，故清理跨端口 cookie 是正确的；归档列表只随当前端口的视图
-     移除，不试图跨端口同步（与现状一致），并非遗漏。
-4. **归档保护（归档时）**：任何仍由 live instance 持有、当前 active 或正在 streaming 的
-   session 禁止归档。
-   - `buildSessionItem` 中，当 `session.filePath === activeSessionFile`、
-     `streamingFiles.has(filePath)` 或 `liveInstances` 含同一 `sessionFile` 时，archive 按钮
-     `disabled` 并显示对应原因（优先级：active → streaming → live instance）。
-   - 上下文菜单的「归档本 workspace sessions」批量项同样过滤这些 session。
-
-**遗留（本次不做）**
-
-- 不补 un-archive UI。归档后取消归档仍无入口，维持现状。如后续需要，可在归档区
-  给 session 加「恢复」按钮调用现有 `toggleArchived(filePath)`。
+- workspace 名称使用 `textContent` 渲染，用户输入只参与字符串精确比较，不拼接 HTML。
+- workspace Pin 保留且不受 session 删除影响。
+- Focus 静态 workspace info card 保留；Focus session row 仍只显示 Rename/Delete。
 
 ## 5. 数据与状态
 
 | 状态 | 位置 | 变化 |
 | --- | --- | --- |
-| 归档列表 | localStorage `pi-studio-archived` | 不变；删除成功后从中移除 |
+| session 删除状态 | 服务端 `.jsonl` 文件与当前 session 列表 | 删除成功后由 `loadSessions()` 刷新；不维护浏览器 archive 状态 |
 | active workspace | 派生：`project` 包含 `activeSessionFile` | 新增派生计算，供 focus 入口与自动退出 |
 | focus 模式开/关 | 当前窗口导航 URL 的 `focusWorkspaceId` query parameter | 新增；只随同 workspace 的跨 port 导航传递，不写 cookie/localStorage |
 | workspace 路径 | `getCurrentWorkspacePath()` | 不变；渲染目标迁移 |
@@ -254,17 +232,17 @@ focus 状态不跨应用启动保存：初始 URL 没有 `focusWorkspaceId` 时�
 | `workspace.showMore` | Show more | 显示更多 |
 | `sidebar.deleteSession` | Delete | 删除 |
 | `sidebar.deleteSessionRunning` | Cannot delete a running session | 无法删除正在运行的会话 |
-| `sidebar.archiveDisabledActive` | Cannot archive the active session | 无法归档当前会话 |
-| `sidebar.archiveDisabledStreaming` | Cannot archive a streaming session | 无法归档正在流式输出的会话 |
-| `sidebar.archiveDisabledRunning` | Cannot archive a running session | 无法归档正在运行的会话 |
+| `sidebar.deleteDisabledActive` | Cannot delete the active session | 无法删除当前会话 |
+| `sidebar.deleteDisabledStreaming` | Cannot delete a streaming session | 无法删除正在流式输出的会话 |
+| `sidebar.deleteDisabledRunning` | Cannot delete a running session | 无法删除正在运行的会话 |
 
 ## 7. 模块改动清单
 
 **前端（`public/`）**
 
 - 新增 `public/sidebar/build-session-item.js`：从 `SessionSidebar.buildSessionItem`
-  提取的共享 DOM builder，接受 `{ showPinButton, showArchiveButton }` 与
-  active/unread/streaming/archive 状态及选择/归档回调，返回 session item 元素。
+  提取的共享 DOM builder，接受删除显示/阻止原因及 active/unread/streaming 状态，返回
+  session item 元素。
   `SessionSidebar` 与 `WorkspaceFocusSidebar` 共用，避免复制渲染逻辑。
 - 新增 `public/sidebar/focus-state.js`：纯函数模块，持有 `focusWorkspaceId` query
   parameter 的读、写、清除、`pending → matched/mismatched` 解析及 `withFocusParam`。
@@ -273,10 +251,9 @@ focus 状态不跨应用启动保存：初始 URL 没有 `focusWorkspaceId` 时�
 - 所有新增 `.js` 文件开头均使用两行 `// ABOUTME:` 注释。
 - `public/sidebar/index.js`：
   - workspace 行加 focus 按钮（仅 active workspace）；dblclick 入口。
-  - `buildSessionItem` 改为调用共享 builder；归档区传 `showPinButton: false`；
-    archive 禁用态（active/streaming）。
-  - 归档区：去 `deleteAllBtn`/`deleteAllArchived`/`confirmArchivedDeletion`；
-    去置顶；加单条删除 + 确认。
+  - `buildSessionItem` 改为调用共享 builder；普通/Focus session row 显式显示 Delete。
+  - 移除 archive state、ARCHIVED 区和 workspace Archive 菜单；增加统一单条删除确认与
+    workspace 名称确认 modal。
 - `public/sidebar-workspace-group.js`：workspace 行 builder 增加显式 `onFocus` 槽位；
   `SessionSidebar` 仅为 active workspace 传入该 callback。builder 负责 focus button 的
   `aria-label`/tooltip、`stopPropagation`，并实现 §4.4 的 deferred 单击/double-click 协作。
@@ -286,12 +263,12 @@ focus 状态不跨应用启动保存：初始 URL 没有 `focusWorkspaceId` 时�
   - `updateWorkspaceIndicator` → 更新新路径元素 + Windows/Linux `setTitle`。
   - focus URL 状态机、`navigateFocusAware(targetCwd, url)` 导航封装、boot
     pending/matched/mismatched 恢复，以及 active workspace 变更自动退出。
-  - 将 live instance predicate 注入 `SessionSidebar` 以禁用归档；删除成功后清理
-    recent/session pin，并将服务端 `running` 响应显示为提示。
+  - 将 live instance predicate 注入 `SessionSidebar` 以阻止删除；删除成功后刷新 session
+    列表，并将服务端 `running` 响应显示为提示。
   - 移除 `#workspace-indicator` 创建/插入。
 - `src-tauri/capabilities/default.json`：加入 `core:window:allow-set-title`。
-- `public/style.css`：两行布局；focus 容器样式；路径中间省略；删除
-  `.archived-delete-all-btn`；归档区删除按钮样式。
+- `public/style.css`：两行布局；focus 容器样式；路径中间省略；普通/Focus
+  session Delete hover 样式与 workspace 名称确认 modal 样式。
 
 **后端（`extensions/`）**
 
@@ -323,12 +300,12 @@ focus 状态不跨应用启动保存：初始 URL 没有 `focusWorkspaceId` 时�
   - deferred single-click 在 double-click 时不改变折叠态。
 - **扩展** `extensions/embedded-server-*.test.ts`：
   - delete-batch 对 live instance 返回 `running` 且不 unlink；非 live session 可删除。
-- **扩展** `public/session-sidebar-recent.test.js` / `session-sidebar-pinned.test.js`：
-  - 归档区不渲染置顶按钮；
-  - 归档区渲染删除按钮 + 二次确认；
-  - active/streaming/live-instance session 的 archive 按钮 disabled；
-  - delete-batch 的 `running` 响应使 live-instance session 删除被拒绝；成功删除会清理 recent 与 session pin;
-  - 「全部删除归档」UI 与方法已移除。
+- **扩展** sidebar deletion tests：
+  - 普通/Focus session row 显示 Delete，不显示 Archive；
+  - 单条 Delete 取消确认时不发请求；
+  - workspace 名称不匹配时 warning、不发请求；精确匹配后只发一次 batch 请求；
+  - active/streaming/live-instance session 被过滤；workspace Pin 保留；
+  - ARCHIVED 区与 workspace Archive 菜单项不存在。
 - **路径中间省略**：新增 `public/titlebar-workspace-path.test.js`，纯函数测试截断
   逻辑（输入完整路径 + 可用宽度 → 预期首尾保留 + 中间省略）。
 - 验证：前端改后 `bun run check` 通过；修改 capability 后跑 `bun run test`（含 capability
@@ -342,7 +319,7 @@ focus 状态不跨应用启动保存：初始 URL 没有 `focusWorkspaceId` 时�
 | focus 参数被手工篡改 | 只把它视为字符串 ID；只和已加载 project ID 比较，绝不当路径使用；渲染只取已解析 project 字段并用 textContent |
 | 路径中间省略在 resize 时抖动 | 仅在路径变更与 resize 结束（debounce）时重算，不持续监听 |
 | Windows setTitle 被 capability 拒绝 | `default.json` 显式加入 `core:window:allow-set-title`，并以 Windows/Linux smoke test 验证 |
-| 删除后台运行的 session 后复活 | 服务端 delete-batch 在 unlink 前以 `getRunningInstances()` 拒绝；前端 fresh `fetchInstances()` 只作即时 UX，archive 阶段也禁止 live instance |
+| 删除后台运行的 session 后复活 | 服务端 delete-batch 在 unlink 前以 `getRunningInstances()` 拒绝；前端删除前过滤 active/streaming/live session |
 | 删除留下浏览器侧死引用 | 成功后主动清理 MRU recent 与 session pin；workspace pin 不受影响 |
 | 拆两行后 sidebar-header 可拖拽区缩小 | 行1 整行保持 `drag`；行2 标 `no-drag`，与现有 `.header-left/right` 分区一致 |
 
@@ -355,9 +332,11 @@ focus 状态不跨应用启动保存：初始 URL 没有 `focusWorkspaceId` 时�
 - Focus 页：返回、workspace 名、New Task、≤5 session + 显示更多；可点切换；无归档/删除/搜索/工具按钮。
 - 同 workspace 的跨 port session 切换保持 focus；跨 workspace 导航退出；boot 的 null activeSession 过渡不误退出。
 - 带有效 `focusWorkspaceId` 参数启动时，解析完成前先以普通侧栏占位，active workspace 解析后再进入 focus（解析前的占位属预期行为，不计为缺陷）。
-- 归档区无置顶、无「全部删除」；每条有删除按钮 + 二次确认；仅非 live instance session 可真实删除 `.jsonl`，成功后 recent 与 session pin 被清理。
-- active/streaming/live-instance session 的归档按钮禁用并提示原因。
-- `bun run check` 与 `bun run test` 通过。
+- 左侧栏无 ARCHIVED 区；普通/Focus session row 有 Delete，无 Archive；删除前必须确认。
+- workspace「Delete all sessions」要求输入精确 workspace 名称；不匹配 warning 且不发请求，匹配后
+  只发一次 batch。
+- active/streaming/live-instance session 不进入删除 batch，并提示保护原因。
+- `bun run check` 与 `bun run test` 通过；允许既有 CSS specificity warnings。
 
 ## 11. 实现结果与设计偏差
 
@@ -375,15 +354,14 @@ focus 状态不跨应用启动保存：初始 URL 没有 `focusWorkspaceId` 时�
   入口；workspace header 的单击、Enter 和 Space 始终只负责展开/收起。
 - **Focus 内容实际行为**：侧栏以 `WorkspaceFocusSidebar` 替换普通 session 列表；显示返回、
   inline workspace quick-info card（路径与 Git repository 之间复用 `.wqi-git-region`
-  分隔线）、New Task，以及所有非归档 session。session row 不提供 pin/archive，但提供
-  单条删除；搜索、打开目录和 Quick Chat 被隐藏，刷新按钮保留。Focus 状态仍由不可信的
+  分隔线）、New Task，以及全部 session。session row 不提供 workspace Pin，但提供
+  Rename/单条 Delete；搜索、打开目录和 Quick Chat 被隐藏，刷新按钮保留。Focus 状态仍由不可信的
   URL `focusWorkspaceId` 传递，同 cwd 跨 port 导航才保留；该值不用于文件系统访问。
-- **删除范围扩大**：归档列表和 Focus 列表都可发起单条真实删除，而非仅「先归档、再删除」。
-  两条前端路径均调用 `/api/sessions/delete-batch`；服务端在 `.jsonl` / sessions directory
-  containment 校验后，以 running instance 的 `sessionFile` 拒绝删除。成功删除会清理
-  recent cookie 与 session pin；归档列表还会移除本端 `pi-studio-archived` 条目。
-- **归档保护保持**：active、streaming 或 live-instance session 的归档按钮禁用；workspace
-  批量归档同样跳过这些 session。
+- **删除范围统一**：普通 sidebar 与 Focus sidebar 都可发起单条永久删除，两条路径均调用
+  `/api/sessions/delete-batch`；服务端在 `.jsonl` / sessions directory containment 校验后，
+  以 running instance 的 `sessionFile` 拒绝删除。浏览器不再维护 archive state。
+- **workspace 批量删除**：必须输入精确 workspace 名称；不匹配时只显示 warning，不发送请求；
+  匹配后一次提交 batch。active、streaming 或 live-instance session 在提交前过滤。
 
 已由 `workspace-focus-sidebar.test.js`、`focus-state.test.js`、
 `session-sidebar-focus.test.js`、`sidebar-workspace-group.test.js`、

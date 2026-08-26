@@ -39,7 +39,6 @@ export class WorkspaceFocusSidebar {
     this.streaming = options.streaming instanceof Set ? options.streaming : new Set();
     this.buildSessionItem = options.buildSessionItem || null;
     this.createIcon = options.createIcon || createIcon;
-    this.isArchived = typeof options.isArchived === "function" ? options.isArchived : null;
     this.cardInfo = options.cardInfo || null;
     this.onBack = options.onBack || null;
     this.onNewTask = options.onNewTask || null;
@@ -91,10 +90,7 @@ export class WorkspaceFocusSidebar {
     newTask.addEventListener("click", () => this.onNewTask?.(this.project));
     root.appendChild(newTask);
 
-    const allSessions = Array.isArray(this.project?.sessions) ? this.project.sessions : [];
-    const sessions = this.isArchived
-      ? allSessions.filter((session) => !this.isArchived(session.filePath))
-      : allSessions;
+    const sessions = Array.isArray(this.project?.sessions) ? this.project.sessions : [];
     const list = document.createElement("div");
     list.className = "focus-session-list";
     const visible = sessions.slice(0, this.visibleCount);
@@ -107,7 +103,6 @@ export class WorkspaceFocusSidebar {
         isStreaming: this.streaming.has(session.filePath),
         formattedTime: formatSessionTime(session.mtime ?? session.timestamp),
         showPinButton: false,
-        showArchiveButton: false,
         showDeleteButton: true,
         onSelect: (s, p) => this.onSessionSelect?.(s, p),
         onDelete: (filePath) => this.onDelete?.(filePath),

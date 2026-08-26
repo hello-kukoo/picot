@@ -235,9 +235,8 @@ body {
   margin-top: var(--space-1);
 }
 
-/* Focus rows show rename + delete only (no pin/archive), but the shared
-   action-slot absolutely positions rename (right:24px was tuned for the
-   pin+rename+archive trio), which stacks it on the flow-positioned delete
+/* Focus rows show rename + delete only. The shared action slot uses flow
+   layout here so controls stay side by side without overlapping.
    button. Re-flow rename inside the focus list: same icon, hover behavior,
    and size as normal mode, laid out left of delete instead of overlapping. */
 .focus-session-list .session-action-slot {
@@ -253,7 +252,8 @@ body {
   width: auto;
 }
 
-.focus-session-list .session-action-slot .session-rename-btn {
+.focus-session-list .session-action-slot .session-rename-btn,
+.focus-session-list .session-action-slot .session-delete-btn {
   position: static;
   width: 22px;
   height: 22px;
@@ -824,9 +824,8 @@ body {
   outline: none;
 }
 
-/* Section headers (RECENT / PINNED / PROJECTS / ARCHIVED) render as muted
-   group labels, visually distinct from the workspace folder headers below.
-   All four share one disclosure arrow and one typographic treatment. */
+/* Section headers (PINNED / PROJECTS) render as muted group labels,
+   visually distinct from workspace folder headers below. */
 .sidebar-section-header {
   color: var(--text-secondary);
   font-size: var(--font-size-sm);
@@ -957,6 +956,64 @@ body {
   background: #ef4444;
 }
 
+.workspace-delete-confirm-dialog {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.workspace-delete-confirm-dialog .sidebar-confirm-message,
+.workspace-delete-confirm-dialog .workspace-delete-confirm-prompt,
+.workspace-delete-confirm-dialog .workspace-delete-confirm-label,
+.workspace-delete-confirm-dialog .workspace-delete-confirm-name,
+.workspace-delete-confirm-dialog .workspace-delete-warning {
+  margin: 0;
+}
+
+.workspace-delete-confirm-dialog .sidebar-confirm-actions {
+  flex-shrink: 0;
+  margin-top: var(--space-1);
+}
+
+.workspace-delete-confirm-prompt,
+.workspace-delete-confirm-label {
+  display: block;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.workspace-delete-confirm-name {
+  display: block;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.workspace-delete-confirm-label input {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: var(--space-1);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-glass);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.workspace-delete-confirm-label input:focus {
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.workspace-delete-warning {
+  margin-top: var(--space-2);
+  color: #ef4444;
+  font-size: var(--font-size-sm);
+}
+
 .project-sessions {
   display: flex;
   flex-direction: column;
@@ -1052,7 +1109,7 @@ body {
   transition: opacity var(--duration) var(--ease);
 }
 
-.session-archive-btn,
+.session-delete-btn,
 .session-rename-btn {
   position: absolute;
   top: 0;
@@ -1081,7 +1138,7 @@ body {
   right: 24px;
 }
 
-.session-archive-btn {
+.session-delete-btn {
   right: 0;
 }
 
@@ -1100,7 +1157,7 @@ body {
   mask-size: contain;
 }
 
-.session-archive-btn svg {
+.session-delete-btn svg {
   width: 14px;
   height: 14px;
   stroke: currentColor;
@@ -1114,14 +1171,14 @@ body {
   opacity: 0;
 }
 
-.session-item:hover .session-archive-btn,
+.session-item:hover .session-delete-btn,
 .session-item:hover .session-rename-btn {
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
 }
 
-.session-archive-btn:hover,
+.session-delete-btn:hover,
 .session-rename-btn:hover {
   background: var(--bg-glass-hover);
 }

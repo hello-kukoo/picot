@@ -1,5 +1,5 @@
 // ABOUTME: Tests for the shared session-row DOM builder.
-// ABOUTME: Covers action visibility, disabled archive, state classes, and XSS-safe titles.
+// ABOUTME: Covers action visibility, disabled delete, state classes, and XSS-safe titles.
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("../i18n.js", () => ({
@@ -55,35 +55,35 @@ describe("formatSessionTime", () => {
 });
 
 describe("buildSessionItem action visibility", () => {
-  test("normal row exposes archive but not pin or delete", () => {
-    const item = buildSessionItem({ session: makeSession(), createIcon: fakeIcon });
-    expect(item.querySelector(".session-pin-btn")).toBeNull();
-    expect(item.querySelector(".session-archive-btn")).toBeTruthy();
-    expect(item.querySelector(".session-delete-btn")).toBeNull();
-  });
-
-  test("focus options expose neither pin nor archive nor delete", () => {
+  test("normal row exposes delete but not pin", () => {
     const item = buildSessionItem({
       session: makeSession(),
-      showPinButton: false,
-      showArchiveButton: false,
-      createIcon: fakeIcon,
-    });
-    expect(item.querySelector(".session-pin-btn")).toBeNull();
-    expect(item.querySelector(".session-archive-btn")).toBeNull();
-    expect(item.querySelector(".session-delete-btn")).toBeNull();
-  });
-
-  test("archived-delete options expose only delete", () => {
-    const item = buildSessionItem({
-      session: makeSession(),
-      showPinButton: false,
-      showArchiveButton: false,
       showDeleteButton: true,
       createIcon: fakeIcon,
     });
     expect(item.querySelector(".session-pin-btn")).toBeNull();
-    expect(item.querySelector(".session-archive-btn")).toBeNull();
+    expect(item.querySelector(".session-delete-btn")).toBeTruthy();
+  });
+
+  test("focus options expose neither pin nor delete", () => {
+    const item = buildSessionItem({
+      session: makeSession(),
+      showPinButton: false,
+      showDeleteButton: false,
+      createIcon: fakeIcon,
+    });
+    expect(item.querySelector(".session-pin-btn")).toBeNull();
+    expect(item.querySelector(".session-delete-btn")).toBeNull();
+  });
+
+  test("delete options expose only delete", () => {
+    const item = buildSessionItem({
+      session: makeSession(),
+      showPinButton: false,
+      showDeleteButton: true,
+      createIcon: fakeIcon,
+    });
+    expect(item.querySelector(".session-pin-btn")).toBeNull();
     const del = item.querySelector(".session-delete-btn");
     expect(del).toBeTruthy();
     expect(del.querySelector("[data-icon='trash-2']")).toBeTruthy();
@@ -114,19 +114,20 @@ describe("buildSessionItem state and safety", () => {
     expect(title.querySelector("img")).toBeNull();
   });
 
-  test("disabled archive button keeps reason and does not fire toggle", () => {
-    const onArchiveToggle = vi.fn();
+  test("disabled delete button keeps reason and does not fire delete", () => {
+    const onDelete = vi.fn();
     const item = buildSessionItem({
       session: makeSession(),
-      archiveDisabledReason: "sidebar.archiveDisabledActive",
-      onArchiveToggle,
+      showDeleteButton: true,
+      deletionBlockedReason: "sidebar.deleteDisabledActive",
+      onDelete,
       createIcon: fakeIcon,
     });
-    const archive = item.querySelector(".session-archive-btn");
-    expect(archive.disabled).toBe(true);
-    expect(archive.title).toBe("sidebar.archiveDisabledActive");
-    archive.click();
-    expect(onArchiveToggle).not.toHaveBeenCalled();
+    const del = item.querySelector(".session-delete-btn");
+    expect(del.disabled).toBe(true);
+    expect(del.title).toBe("sidebar.deleteDisabledActive");
+    del.click();
+    expect(onDelete).not.toHaveBeenCalled();
   });
 });
 

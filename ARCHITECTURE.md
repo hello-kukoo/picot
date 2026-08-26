@@ -848,12 +848,16 @@ unavailable。旧 session Pin、RECENT cookie 和 `pi-studio-favourites` 不再�
 `GIT_TERMINAL_PROMPT=0`。Git 输出和所有 Pin 文本均是不可信数据，前端只能
 用 `textContent` 渲染。
 
-Focus 模式保留静态 workspace info card：显示 folder name、含归档会话的 thread
+Focus 模式保留静态 workspace info card：显示 folder name、session thread
 总数、完整路径，以及有 Git remote 时的 repository 名称。左侧栏 workspace
 header 不再绑定 hover/focus quick-info 浮窗；workspace Pin 仅通过 workspace
 操作菜单提供。卡片和所有 workspace 文本均以 `textContent` 构建。
 
-#### Workspace Focus 与归档删除
+左侧栏只渲染 PINNED 与 PROJECTS 两个区域。session 不再有浏览器侧 archive
+状态；Delete 是永久删除入口，普通模式与 Focus 模式共用确认和
+`POST /api/sessions/delete-batch` 路径。
+
+#### Workspace Focus 与 session 删除
 
 Focus 只替换左侧的 session list，不改变聊天与文件面板。当前 foreground Pi
 实例 `cwd` 所属 workspace header 显示唯一的 `workspace-focus-btn` 入口；这在
@@ -863,22 +867,21 @@ search、scroll 与 workspace 展开状态；以 URL query `focusWorkspaceId` �
 port 导航中传递，并在跨 workspace 或无 cwd 导航时清除。该值是 `workspace:<path>`
 形式的不可信标识，只与已加载 project 比较，绝不作为路径访问。
 
-Focus 显示返回、inline workspace quick-info card、New Task 和非归档 session。该卡片
+Focus 显示返回、inline workspace quick-info card、New Task 和全部 session。该卡片
 复用 `.workspace-quick-info` / `.wqi-git-region` 的 Git 分隔线样式。Focus session row
-隐藏 pin/archive，仍可删除；归档区同样只提供单条删除。两条删除路径都调用
-`POST /api/sessions/delete-batch`：`applySessionDeletions()` 先限制 `.jsonl` 与
+隐藏 workspace Pin，保留 Rename/Delete；普通模式与 Focus 模式都必须先确认，再调用
+`POST /api/sessions/delete-batch`。`applySessionDeletions()` 先限制 `.jsonl` 与
 sessions directory containment，再以 `getRunningInstances()` 中的 `sessionFile` 拒绝
-live session。成功后清理跨端口 recent cookie 与 session pin；从归档区删除还会清除
-本端 localStorage `pi-studio-archived` 条目。归档本身不会删除文件，但 active、streaming
-或 live-instance session 不可归档，批量归档也跳过它们。
+live session。active、streaming 或 live-instance session 不进入可删除列表。
 
 **删除语义：** `delete-batch` 的 `removeFile` 绑定 `removeSessionFileTrashFirst()`
 （`extensions/session-trash.ts`）——优先 `trash` CLI 移入系统回收站（可恢复，
 与 Pi TUI `/resume` + Ctrl-D 的 `deleteSessionFile` 同策略），trash 不可用或失败时
 退回永久 `unlink`；失败计入响应 `errors`，绝不谎报成功。workspace 上下文菜单提供
-「Delete all sessions」入口（`deleteWorkspaceSessions()`）：二次确认后一次批量提交
-该 workspace 全部可删除 session（active/streaming/live 同样被排除在提交列表外），
-按响应分类清理 recent/pin/archived，`running` 条目保留并提示。
+「Delete all sessions」入口（`deleteWorkspaceSessions()`）：危险操作 modal 要求用户输入
+当前 workspace 名称，点击 Delete 时做精确匹配；名称不匹配显示 warning、保持 modal
+打开且不发请求。匹配后一次批量提交该 workspace 可删除 session，active/streaming/live
+被排除在提交列表外，`running` 条目保留并提示。
 
 **跨边界与视觉验证不变量：** `embedded-server.ts` 的 HTTP 路由必须同时兼容
 Node HTTP 生命周期和 Bun Fetch adapter；adapter 路径以 `AbortSignal` 为标准，

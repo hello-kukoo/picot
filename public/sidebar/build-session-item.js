@@ -1,5 +1,5 @@
 // ABOUTME: Shared DOM builder for a single session row.
-// ABOUTME: Consumed by the normal sidebar, the focus sidebar, and the archived section.
+// ABOUTME: Consumed by normal and Focus sidebars for session row rendering.
 import { t } from "../i18n.js";
 
 export function getSessionDisplayTitle(session) {
@@ -47,14 +47,11 @@ export function buildSessionItem({
   isActive = false,
   isUnread = false,
   isStreaming = false,
-  isArchived = false,
-  showArchiveButton = true,
   showDeleteButton = false,
-  archiveDisabledReason = null,
+  deletionBlockedReason = null,
   projectSearchText = "",
   formattedTime = "",
   onSelect = null,
-  onArchiveToggle = null,
   onDelete = null,
   onRename = null,
   onContextMenu = null,
@@ -72,8 +69,6 @@ export function buildSessionItem({
   if (isStreaming) item.classList.add("streaming");
 
   const title = getSessionDisplayTitle(session);
-  const archiveBtnLabel = isArchived ? t("sidebar.unarchiveSession") : t("sidebar.archiveSession");
-
   const titleRow = document.createElement("div");
   titleRow.className = "session-title-row";
   const titleElement = document.createElement("div");
@@ -107,28 +102,6 @@ export function buildSessionItem({
     });
   }
 
-  if (showArchiveButton) {
-    const archiveBtn = document.createElement("button");
-    archiveBtn.type = "button";
-    archiveBtn.className = "session-archive-btn";
-    if (archiveDisabledReason) {
-      archiveBtn.disabled = true;
-      archiveBtn.classList.add("disabled");
-      archiveBtn.title = archiveDisabledReason;
-      archiveBtn.setAttribute("aria-label", archiveDisabledReason);
-    } else {
-      archiveBtn.title = archiveBtnLabel;
-      archiveBtn.setAttribute("aria-label", archiveBtnLabel);
-    }
-    if (typeof createIcon === "function") archiveBtn.appendChild(createIcon("archive"));
-    archiveBtn.addEventListener("click", (event) => {
-      event.stopPropagation();
-      if (archiveBtn.disabled) return;
-      if (typeof onArchiveToggle === "function") onArchiveToggle(session.filePath);
-    });
-    actionSlot.appendChild(archiveBtn);
-  }
-
   if (typeof onRename === "function") {
     const renameBtn = document.createElement("button");
     renameBtn.type = "button";
@@ -155,11 +128,16 @@ export function buildSessionItem({
     deleteBtn.type = "button";
     deleteBtn.className = "session-delete-btn";
     const deleteLabel = t("sidebar.deleteSession");
-    deleteBtn.title = deleteLabel;
-    deleteBtn.setAttribute("aria-label", deleteLabel);
+    deleteBtn.title = deletionBlockedReason || deleteLabel;
+    deleteBtn.setAttribute("aria-label", deletionBlockedReason || deleteLabel);
+    if (deletionBlockedReason) {
+      deleteBtn.disabled = true;
+      deleteBtn.classList.add("disabled");
+    }
     if (typeof createIcon === "function") deleteBtn.appendChild(createIcon("trash-2"));
     deleteBtn.addEventListener("click", (event) => {
       event.stopPropagation();
+      if (deleteBtn.disabled) return;
       if (typeof onDelete === "function") onDelete(session.filePath);
     });
     actionSlot.appendChild(deleteBtn);

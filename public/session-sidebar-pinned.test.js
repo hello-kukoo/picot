@@ -79,28 +79,19 @@ beforeEach(async () => {
           sidebar: {
             pinned: "PINNED",
             projects: "PROJECTS",
-            archived: "ARCHIVED",
             unavailable: "Unavailable",
             pinWorkspace: "Pin workspace",
             unpinWorkspace: "Unpin workspace",
-            archiveWorkspaceSessions: "Archive sessions",
             openInFinder: "Open in Finder",
+            deleteWorkspaceSessions: "Delete all sessions",
             workspaceActions: "Workspace actions",
             showMore: "Show more",
             showLess: "Show less",
             openProject: "Open project",
             emptySession: "Empty session",
-            archive: "Archive",
-            unarchive: "Unarchive",
-            archiveSession: "Archive session",
-            unarchiveSession: "Unarchive session",
-            archiveDisabledActive: "Cannot archive the active session",
-            archiveDisabledStreaming: "Cannot archive a streaming session",
-            archiveDisabledRunning: "Cannot archive a running session",
             deleteSession: "Delete",
             deleteSessionRunning: "Cannot delete a running session",
             newChat: "New chat in {path}",
-            deleteAllArchived: "Delete all archived sessions",
             justNow: "Just now",
             minutesAgo: "{minutes}m ago",
             hoursAgo: "{hours}h ago",
@@ -137,13 +128,10 @@ describe("SessionSidebar PINNED integration", () => {
     sidebar.projects = createProjects();
     sidebar.render();
 
-    const regions = Array.from(
-      document.querySelectorAll(".pinned-group, .projects-group, .archived-group"),
-    );
+    const regions = Array.from(document.querySelectorAll(".pinned-group, .projects-group"));
     expect(regions.map((region) => region.className.split(" ")[0])).toEqual([
       "pinned-group",
       "projects-group",
-      "archived-group",
     ]);
     expect(document.querySelector(".favourites-group")).toBeNull();
     expect(document.querySelector(".pinned-unavailable")).toBeNull();
@@ -162,7 +150,7 @@ describe("SessionSidebar PINNED integration", () => {
     sidebar.render();
     const item = document.querySelector('.session-item[data-file-path="/sessions/alpha.jsonl"]');
     expect(item.querySelector(".session-pin-btn")).toBeNull();
-    expect(item.querySelector(".session-archive-btn")).not.toBeNull();
+    expect(item.querySelector(".session-delete-btn")).not.toBeNull();
   });
 
   test("opens the same workspace actions from an ellipsis button and right click", () => {
@@ -183,6 +171,9 @@ describe("SessionSidebar PINNED integration", () => {
     expect(document.querySelector(".sidebar-context-menu").textContent).toContain("Pin workspace");
     expect(document.querySelector(".sidebar-context-menu").textContent).toContain("Open in Finder");
     expect(document.querySelector(".sidebar-context-menu").textContent).toContain(
+      "Delete all sessions",
+    );
+    expect(document.querySelector(".sidebar-context-menu").textContent).not.toContain(
       "Archive sessions",
     );
 
@@ -285,8 +276,7 @@ describe("SessionSidebar fold-state stability", () => {
     ).toBe("true");
   });
 
-  test("archived section starts collapsed on every launch, ignoring any prior expand choice", () => {
-    localStorage.setItem("pi-studio-archived-collapsed", "false");
+  test("sidebar has no legacy hidden-session section or collapse state", () => {
     const pinStore = makePinStore({ workspaces: [], sessions: [] });
     const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
       pinStore,
@@ -295,9 +285,8 @@ describe("SessionSidebar fold-state stability", () => {
     sidebar.projects = createProjects();
     sidebar.render();
 
-    const archivedHeader = document.querySelector(".archived-group .sidebar-section-header");
-    expect(archivedHeader.getAttribute("aria-expanded")).toBe("false");
-    expect(archivedHeader.classList.contains("collapsed")).toBe(true);
+    expect(document.querySelector(".archived-group")).toBeNull();
+    expect("archivedCollapsed" in sidebar).toBe(false);
   });
 
   test("rebuilding the sidebar preserves workspace expansion state", () => {
@@ -454,7 +443,7 @@ describe("SessionSidebar fold-state stability", () => {
     sidebar.render();
 
     const headers = document.querySelectorAll(".sidebar-section-header");
-    expect(headers.length).toBe(3);
+    expect(headers.length).toBe(2);
     headers.forEach((header) => {
       expect(header.querySelector(".section-chevron")).not.toBeNull();
       expect(header.querySelector(".folder-icon")).toBeNull();

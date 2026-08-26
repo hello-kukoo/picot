@@ -10,8 +10,8 @@ const FOLDER_CLOSED_ICON =
 const FOLDER_OPEN_ICON =
   '<svg class="folder-open-icon" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 14l1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg>';
 
-// Static disclosure arrow for the four section headers (RECENT, PINNED,
-// PROJECTS, ARCHIVED). Points right when collapsed; CSS rotates it 90deg to
+// Static disclosure arrow for sidebar section headers (PINNED, PROJECTS).
+// Points right when collapsed; CSS rotates it 90deg to
 // point down when expanded.
 
 export function createFolderIcon() {
@@ -27,8 +27,8 @@ export function createFolderIcon() {
 }
 
 /**
- * Builds the disclosure arrow shared by all four sidebar section headers.
- * Exported so inline section builders (recent / archived in index.js) render
+ * Builds disclosure arrow shared by sidebar section headers.
+ * Exported so section builders render
  * the exact same icon contract as buildSidebarSection.
  */
 export function createSectionChevron() {
@@ -78,8 +78,7 @@ function wireDisclosure(header, body, expanded, onToggle) {
 }
 
 /**
- * Builds a collapsible sidebar region section (RECENT, PINNED, PROJECTS,
- * ARCHIVED).
+ * Builds a collapsible sidebar region section (PINNED or PROJECTS).
  *
  * @param {object}  opts
  * @param {string}  opts.region          Region slug used for CSS classes.
@@ -158,7 +157,7 @@ export function buildSidebarSection({
  * @param {string}  opts.workspaceId         Stable ID for data-workspace-id.
  * @param {string}  opts.folderName          Folder name to display (inert text).
  * @param {string}  [opts.workspacePath]     Full path for the tooltip (inert).
- * @param {number}  [opts.sessionCount=0]    Non-archived session count.
+ * @param {number}  [opts.sessionCount=0]    Session count.
  * @param {boolean} [opts.expanded=false]    Initial expanded state.
  * @param {function} [opts.onToggle]         Called with the new expanded boolean.
  * @param {function} [opts.onNewChat]        New-chat callback (button shown only when provided).

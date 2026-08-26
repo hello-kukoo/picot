@@ -29,7 +29,6 @@ beforeEach(async () => {
             projects: "Projects",
             newChat: "New chat in {path}",
             emptySession: "Empty session",
-            archived: "Archived",
             openProject: "Open project",
             untitled: "Untitled",
           },
@@ -183,7 +182,7 @@ describe("buildSidebarSection", () => {
   test("respects initial collapsed state", () => {
     setupDom();
     const { header, sessionsContainer } = buildSidebarSection({
-      region: "archived",
+      region: "projects",
       titleKey: "sidebar.recent",
       expanded: false,
     });

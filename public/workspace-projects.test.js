@@ -114,11 +114,10 @@ test("resolves workspace and session-only Pin groups", () => {
   ];
   expect(
     resolvePinnedWorkspaceGroups({
-      pinState: { workspaces: [{ id: "history:a", path: "/work/a" }], sessions: ["/s/a"] },
+      pinState: { workspaces: [{ id: "history:a", path: "/work/a" }] },
       projects,
-      archivedPaths: ["/s/old"],
     })[0].sessions,
-  ).toHaveLength(1);
+  ).toHaveLength(2);
 });
 test("signature is stable for equivalent logical models", () => {
   const a = [

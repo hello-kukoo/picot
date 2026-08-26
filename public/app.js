@@ -291,7 +291,6 @@ function enterFocus(project) {
     activeSessionFile: sidebar.activeSessionFile,
     unread: sidebar.unread,
     streaming: sidebar.streamingFiles,
-    isArchived: (filePath) => sidebar.isArchived(filePath),
     buildSessionItem,
     createIcon,
     onBack: () => exitFocus(),
@@ -299,7 +298,7 @@ function enterFocus(project) {
       handleNewProjectChat(p);
     },
     onSessionSelect: handleSessionSelect,
-    onDelete: (filePath) => deleteFocusSession(filePath),
+    onDelete: (filePath) => sidebar.deleteSession(filePath),
     onRename: (filePath, session, item) => sidebar.renameSession(filePath, session, item),
   });
   currentFocusSidebar = focusSidebar;
@@ -383,33 +382,6 @@ function refreshFocusView() {
     streaming: sidebar.streamingFiles,
   });
   currentFocusSidebar.render();
-}
-
-// Deletes a single session from the focus view. Reuses the archived-delete
-// confirmation + delete-batch flow; the server rejects any path still held by
-// a running Pi instance, then reloads sessions to refresh the focus view.
-async function deleteFocusSession(filePath) {
-  if (!filePath) return;
-  const ok = await sidebar.confirmArchivedDeletion(1);
-  if (!ok) return;
-  try {
-    const res = await fetch("/api/sessions/delete-batch", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePaths: [filePath] }),
-    });
-    const data = await res.json();
-    const running = new Set(data.running || []);
-    const errors = new Set(data.errors || []);
-    if (running.has(filePath)) {
-      sidebar.onSessionNotice?.(t("sidebar.deleteSessionRunning"));
-      return;
-    }
-    if (errors.has(filePath)) return;
-  } catch (err) {
-    console.error("[Focus] deleteFocusSession failed:", err);
-  }
-  await sidebar.loadSessions();
 }
 
 // Fetches the git repository name for the Focus workspace info card; returns

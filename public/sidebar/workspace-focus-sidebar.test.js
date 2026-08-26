@@ -45,7 +45,6 @@ beforeEach(async () => {
             emptySession: "Empty",
             showLess: "Show less",
             pinSession: "Pin session",
-            archiveSession: "Archive session",
             rename: "Rename",
             renameSessionAriaLabel: "Rename session",
             deleteSession: "Delete session",
@@ -53,7 +52,6 @@ beforeEach(async () => {
             projects: "Projects",
             workspaceActions: "Workspace actions",
             newChat: "New chat",
-            archived: "Archived",
             justNow: "Just now",
             minutesAgo: "{minutes}m ago",
             hoursAgo: "{hours}h ago",
@@ -76,7 +74,6 @@ function makeSidebar(overrides = {}) {
   return new WorkspaceFocusSidebar(document.getElementById("root"), {
     project: { path: "/work/alpha", sessions, ...overrides.project },
     activeSessionFile: overrides.activeSessionFile,
-    isArchived: overrides.isArchived,
     buildSessionItem: overrides.buildSessionItem || fakeBuilder(),
     onBack: overrides.onBack,
     onNewTask: overrides.onNewTask,
@@ -149,14 +146,13 @@ describe("WorkspaceFocusSidebar", () => {
     expect(onSessionSelect).toHaveBeenCalledWith(sessions[0], expect.anything());
   });
 
-  test("rows are read-only (no pin/archive) but expose delete", () => {
+  test("rows are read-only (no pin) but expose delete", () => {
     const builder = fakeBuilder();
     const sidebar = makeSidebar({ sessions: makeSessions(1), activeSessionFile: "/s/0.jsonl" });
     sidebar.buildSessionItem = builder;
     sidebar.render();
     const opts = builder.mock.calls[0][0];
     expect(opts.showPinButton).toBe(false);
-    expect(opts.showArchiveButton).toBe(false);
     expect(opts.showDeleteButton).toBe(true);
     expect(opts.isActive).toBe(true);
   });
@@ -233,12 +229,20 @@ describe("WorkspaceFocusSidebar", () => {
     expect(item.querySelector(".session-title").textContent).toBe("Focus renamed");
   });
 
-  test("renders rename and delete controls for hover-reveal styling", () => {
+  test("renders rename and delete controls in one non-overlapping action slot", () => {
     const sidebar = makeSidebar({ sessions: makeSessions(1), buildSessionItem });
     sidebar.render();
     const item = sidebar.container.querySelector(".session-item");
-    expect(item.querySelector(".session-rename-btn")).toBeTruthy();
-    expect(item.querySelector(".session-delete-btn")).toBeTruthy();
+    const actionSlot = item.querySelector(".session-action-slot");
+    const rename = actionSlot.querySelector(".session-rename-btn");
+    const del = actionSlot.querySelector(".session-delete-btn");
+
+    expect(rename).toBeTruthy();
+    expect(del).toBeTruthy();
+    expect(rename.parentElement).toBe(actionSlot);
+    expect(del.parentElement).toBe(actionSlot);
+    expect(actionSlot.children).toContain(rename);
+    expect(actionSlot.children).toContain(del);
   });
 
   test("delete button fires onDelete with the filePath", () => {
@@ -266,18 +270,15 @@ describe("WorkspaceFocusSidebar", () => {
     expect(more).toBeTruthy();
   });
 
-  test("excludes archived sessions from the list", () => {
+  test("renders all sessions without legacy filtering", () => {
     const sessions = [
       { filePath: "/s/free.jsonl", name: "Free" },
-      { filePath: "/s/archived.jsonl", name: "Archived" },
+      { filePath: "/s/former.jsonl", name: "Formerly hidden" },
     ];
-    const sidebar = makeSidebar({
-      sessions,
-      isArchived: (filePath) => filePath === "/s/archived.jsonl",
-    });
+    const sidebar = makeSidebar({ sessions });
     sidebar.render();
     const items = sidebar.container.querySelectorAll(".session-item");
-    expect(items).toHaveLength(1);
-    expect(items[0].dataset.filePath).toBe("/s/free.jsonl");
+    expect(items).toHaveLength(2);
+    expect(items[1].dataset.filePath).toBe("/s/former.jsonl");
   });
 });

@@ -148,14 +148,9 @@ export function workspaceModelSignature(projects = []) {
   );
 }
 
-export function resolvePinnedWorkspaceGroups({
-  pinState = {},
-  projects = [],
-  archivedPaths = [],
-} = {}) {
+export function resolvePinnedWorkspaceGroups({ pinState = {}, projects = [] } = {}) {
   const byId = new Map(projects.map((p) => [p.workspaceId, p]));
   const byPath = new Map(projects.map((p) => [workspacePathKey(p.path), p]));
-  const archived = new Set(archivedPaths);
   const groups = [];
   const owned = new Set();
   for (const pin of Array.isArray(pinState.workspaces) ? pinState.workspaces : []) {
@@ -173,7 +168,7 @@ export function resolvePinnedWorkspaceGroups({
     groups.push({
       workspace: project,
       workspacePin: true,
-      sessions: (project.sessions || []).filter((s) => !archived.has(s.filePath)),
+      sessions: project.sessions || [],
       unavailable: false,
     });
   }

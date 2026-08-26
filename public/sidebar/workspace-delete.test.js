@@ -40,12 +40,21 @@ beforeEach(async () => {
             recent: "RECENT",
             pinned: "PINNED",
             projects: "PROJECTS",
-            archived: "Archived",
             openProject: "Open project",
             emptySession: "Empty",
             deleteSession: "Delete",
+            deleteSessionConfirmOne: "Delete this session permanently?",
+            deleteSessionConfirmMany: "Delete {count} sessions permanently?",
+            deleteSessionAriaLabel: "Delete sessions",
+            deleteSessionRunning: "Cannot delete a running session",
+            pinWorkspace: "Pin workspace",
+            unpinWorkspace: "Unpin workspace",
+            openInFinder: "Open in Finder",
             deleteWorkspaceSessions: "Delete all sessions",
             deleteWorkspaceConfirm: "Delete {count} sessions permanently?",
+            deleteWorkspaceNamePrompt: "Type workspace name to confirm:",
+            deleteWorkspaceNameWarning: "Workspace name does not match.",
+            deleteWorkspaceNameLabel: "Workspace name",
             deleteWorkspaceRunning: "Some sessions are still running",
           },
           actions: { cancel: "Cancel", delete: "Delete" },
@@ -78,13 +87,26 @@ const WORKSPACE = {
 };
 
 describe("SessionSidebar workspace deletion", () => {
-  test("confirm cancel sends no delete-batch request", async () => {
-    const fetchMock = deleteBatchFetch({ deleted: 0, errors: [], running: [] });
+  test("individual delete cancellation sends no delete-batch request", async () => {
+    const fetchMock = deleteBatchFetch({ deleted: 1, errors: [], running: [] });
     global.fetch = fetchMock;
     const sidebar = makeSidebar();
     sidebar.showFallbackConfirmDialog = vi.fn(async () => false);
 
-    await sidebar.deleteWorkspaceSessions(WORKSPACE);
+    await expect(sidebar.deleteSession("/s/a.jsonl")).resolves.toBe(false);
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("/api/sessions/delete-batch"),
+      expect.anything(),
+    );
+  });
+
+  test("confirm cancel sends no delete-batch request", async () => {
+    const fetchMock = deleteBatchFetch({ deleted: 0, errors: [], running: [] });
+    global.fetch = fetchMock;
+    const sidebar = makeSidebar();
+    const operation = sidebar.deleteWorkspaceSessions(WORKSPACE);
+    document.querySelector(".sidebar-confirm-no").click();
+    await operation;
 
     expect(fetchMock).not.toHaveBeenCalledWith(
       expect.stringContaining("/api/sessions/delete-batch"),
@@ -96,12 +118,17 @@ describe("SessionSidebar workspace deletion", () => {
     const fetchMock = deleteBatchFetch({ deleted: 2, errors: [], running: [] });
     global.fetch = fetchMock;
     const sidebar = makeSidebar();
-    sidebar.showFallbackConfirmDialog = vi.fn(async () => true);
-
-    await sidebar.deleteWorkspaceSessions(WORKSPACE);
+    const operation = sidebar.deleteWorkspaceSessions({
+      ...WORKSPACE,
+      folderName: "w",
+    });
+    const dialog = document.querySelector(".sidebar-confirm-dialog");
+    const input = dialog.querySelector(".workspace-delete-confirm-input");
+    input.value = "w";
+    dialog.querySelector(".sidebar-confirm-yes").click();
+    await operation;
 
     expect(fetchMock.lastPayload).toEqual({ filePaths: ["/s/a.jsonl", "/s/b.jsonl"] });
-    expect(sidebar.archived).toEqual([]);
   });
 
   test("running sessions stay listed and surface a notice; deleted ones are cleaned", async () => {
@@ -113,14 +140,88 @@ describe("SessionSidebar workspace deletion", () => {
     global.fetch = fetchMock;
     const notice = vi.fn();
     const sidebar = makeSidebar({ notice });
-    sidebar.showFallbackConfirmDialog = vi.fn(async () => true);
-    sidebar.archived = ["/s/a.jsonl", "/s/b.jsonl"];
-
-    await sidebar.deleteWorkspaceSessions(WORKSPACE);
+    const operation = sidebar.deleteWorkspaceSessions({
+      ...WORKSPACE,
+      folderName: "w",
+    });
+    const dialog = document.querySelector(".sidebar-confirm-dialog");
+    const input = dialog.querySelector(".workspace-delete-confirm-input");
+    input.value = "w";
+    dialog.querySelector(".sidebar-confirm-yes").click();
+    await operation;
 
     expect(fetchMock.lastPayload).toEqual({ filePaths: ["/s/a.jsonl", "/s/b.jsonl"] });
-    expect(sidebar.archived).toEqual(["/s/b.jsonl"]);
     expect(notice).toHaveBeenCalled();
+  });
+
+  test("workspace name mismatch keeps modal open and sends no request", async () => {
+    const fetchMock = deleteBatchFetch({ deleted: 1, errors: [], running: [] });
+    global.fetch = fetchMock;
+    const sidebar = makeSidebar();
+    const operation = sidebar.deleteWorkspaceSessions({
+      path: "/work/picot-v3",
+      folderName: "picot-v3",
+      sessions: [{ filePath: "/s/a.jsonl" }],
+    });
+    const dialog = document.querySelector(".sidebar-confirm-dialog");
+    const input = dialog.querySelector(".workspace-delete-confirm-input");
+    const confirm = dialog.querySelector(".sidebar-confirm-yes");
+    input.value = "wrong";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    confirm.click();
+
+    expect(dialog.querySelector(".workspace-delete-warning").hidden).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("/api/sessions/delete-batch"),
+      expect.anything(),
+    );
+
+    dialog.querySelector(".sidebar-confirm-no").click();
+    await operation;
+  });
+
+  test("exact workspace name sends one batch request", async () => {
+    const fetchMock = deleteBatchFetch({ deleted: 2, errors: [], running: [] });
+    global.fetch = fetchMock;
+    const sidebar = makeSidebar();
+    const operation = sidebar.deleteWorkspaceSessions({
+      path: "/work/picot-v3",
+      folderName: "picot-v3",
+      sessions: [{ filePath: "/s/a.jsonl" }, { filePath: "/s/b.jsonl" }],
+    });
+    const dialog = document.querySelector(".sidebar-confirm-dialog");
+    const input = dialog.querySelector(".workspace-delete-confirm-input");
+    input.value = "picot-v3";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    dialog.querySelector(".sidebar-confirm-yes").click();
+
+    await operation;
+    const deleteRequests = fetchMock.mock.calls.filter(([url]) =>
+      String(url).includes("/api/sessions/delete-batch"),
+    );
+    expect(deleteRequests).toHaveLength(1);
+    expect(fetchMock.lastPayload).toEqual({ filePaths: ["/s/a.jsonl", "/s/b.jsonl"] });
+  });
+
+  test("workspace delete modal keeps input and actions in separate flow sections", () => {
+    const sidebar = makeSidebar();
+    const operation = sidebar.deleteWorkspaceSessions({
+      ...WORKSPACE,
+      folderName: "w",
+    });
+    const dialog = document.querySelector(".workspace-delete-confirm-dialog");
+    const input = dialog.querySelector(".workspace-delete-confirm-input");
+    const actions = dialog.querySelector(".sidebar-confirm-actions");
+
+    expect(dialog).toBeTruthy();
+    expect(input).toBeTruthy();
+    expect(actions).toBeTruthy();
+    expect(input.closest(".workspace-delete-confirm-label")).toBeTruthy();
+    expect(actions.previousElementSibling).toBe(dialog.querySelector(".workspace-delete-warning"));
+    expect(dialog.classList.contains("sidebar-confirm-dialog")).toBe(true);
+
+    dialog.querySelector(".sidebar-confirm-no").click();
+    return operation;
   });
 
   test("workspace context menu renders the delete-all entry", () => {

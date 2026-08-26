@@ -1,5 +1,5 @@
-// ABOUTME: Tests for archive protection over active, streaming, and live sessions.
-// ABOUTME: Covers reason precedence and batch-archive filtering.
+// ABOUTME: Tests for permanent-delete protection over active, streaming, and live sessions.
+// ABOUTME: Covers reason precedence and batch-delete filtering.
 import { JSDOM } from "jsdom";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { initI18n } from "../i18n.js";
@@ -24,17 +24,21 @@ beforeEach(async () => {
             recent: "RECENT",
             pinned: "PINNED",
             projects: "PROJECTS",
-            archived: "Archived",
             openProject: "Open project",
             emptySession: "Empty",
             pinSession: "Pin",
             unpinSession: "Unpin",
-            archiveSession: "Archive",
-            unarchiveSession: "Unarchive",
-            archiveDisabledActive: "Cannot archive the active session",
-            archiveDisabledStreaming: "Cannot archive a streaming session",
-            archiveDisabledRunning: "Cannot archive a running session",
+            deleteDisabledActive: "Cannot delete the active session",
+            deleteDisabledStreaming: "Cannot delete a streaming session",
+            deleteDisabledRunning: "Cannot delete a running session",
+            deleteWorkspaceSessions: "Delete all sessions",
+            deleteWorkspaceConfirm: "Delete {count} sessions permanently?",
+            deleteWorkspaceNamePrompt: "Type workspace name to confirm:",
+            deleteWorkspaceNameLabel: "Workspace name",
+            deleteWorkspaceNameWarning: "Workspace name does not match.",
+            unavailable: "Unavailable",
           },
+          actions: { cancel: "Cancel", delete: "Delete" },
         }),
       };
     }
@@ -47,18 +51,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("SessionSidebar archive protection", () => {
-  test("archiveDisabledReason covers active, streaming, and live; null otherwise", () => {
+describe("SessionSidebar deletion protection", () => {
+  test("deletionBlockedReason covers active, streaming, and live; null otherwise", () => {
     const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
       getLiveInstances: () => [{ sessionFile: "/s/live.jsonl" }],
     });
     sidebar.activeSessionFile = "/s/active.jsonl";
     sidebar.setStreaming("/s/stream.jsonl", true);
 
-    expect(sidebar.archiveDisabledReason("/s/active.jsonl")).not.toBeNull();
-    expect(sidebar.archiveDisabledReason("/s/stream.jsonl")).not.toBeNull();
-    expect(sidebar.archiveDisabledReason("/s/live.jsonl")).not.toBeNull();
-    expect(sidebar.archiveDisabledReason("/s/free.jsonl")).toBeNull();
+    expect(sidebar.deletionBlockedReason("/s/active.jsonl")).not.toBeNull();
+    expect(sidebar.deletionBlockedReason("/s/stream.jsonl")).not.toBeNull();
+    expect(sidebar.deletionBlockedReason("/s/live.jsonl")).not.toBeNull();
+    expect(sidebar.deletionBlockedReason("/s/free.jsonl")).toBeNull();
   });
 
   test("active reason takes precedence over streaming and live", () => {
@@ -67,19 +71,31 @@ describe("SessionSidebar archive protection", () => {
     });
     sidebar.activeSessionFile = "/s/active.jsonl";
     sidebar.setStreaming("/s/active.jsonl", true);
-    expect(sidebar.archiveDisabledReason("/s/active.jsonl")).toBe(
-      "Cannot archive the active session",
+    expect(sidebar.deletionBlockedReason("/s/active.jsonl")).toBe(
+      "Cannot delete the active session",
     );
   });
 
-  test("archiveWorkspaceSessions skips active, streaming, and live sessions", () => {
+  test("deleteWorkspaceSessions skips active, streaming, and live sessions", async () => {
     const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
       getLiveInstances: () => [{ sessionFile: "/s/live.jsonl" }],
     });
     sidebar.projects = [];
     sidebar.activeSessionFile = "/s/active.jsonl";
     sidebar.setStreaming("/s/stream.jsonl", true);
+    sidebar.loadSessions = vi.fn(async () => {});
+    const fetchMock = vi.fn(async (_url, init) => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        fetchMock.lastPayload = JSON.parse(init?.body || "{}");
+        return { deleted: 1, errors: [], running: [] };
+      },
+    }));
+    global.fetch = fetchMock;
     const workspace = {
+      folderName: "workspace",
+      path: "/work/workspace",
       sessions: [
         { filePath: "/s/free.jsonl", name: "Free" },
         { filePath: "/s/active.jsonl", name: "Active" },
@@ -88,8 +104,13 @@ describe("SessionSidebar archive protection", () => {
       ],
     };
 
-    sidebar.archiveWorkspaceSessions(workspace);
+    const operation = sidebar.deleteWorkspaceSessions(workspace);
+    const dialog = document.querySelector(".sidebar-confirm-dialog");
+    const input = dialog.querySelector(".workspace-delete-confirm-input");
+    input.value = "workspace";
+    dialog.querySelector(".sidebar-confirm-yes").click();
+    await operation;
 
-    expect(sidebar.archived).toEqual(["/s/free.jsonl"]);
+    expect(fetchMock.lastPayload).toEqual({ filePaths: ["/s/free.jsonl"] });
   });
 });

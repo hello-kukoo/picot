@@ -8,11 +8,7 @@
 import { onLocaleChange, t } from "../i18n.js";
 import { createIcon } from "../icons.js";
 import { createPinnedItemsStore } from "../pinned-items.js";
-import {
-  buildSidebarSection,
-  buildSidebarWorkspaceGroup,
-  createSectionChevron,
-} from "../sidebar-workspace-group.js";
+import { buildSidebarSection, buildSidebarWorkspaceGroup } from "../sidebar-workspace-group.js";
 import { getSuperAgentProject, isSuperAgentProjectPath } from "../super-agent/session.js";
 import { isSuperAgentEnabled } from "../super-agent/settings.js";
 import { cacheSidebarProjects } from "../workspace/nav-state-cache.js";
@@ -22,7 +18,6 @@ import {
   buildSessionItem as buildSessionItemNode,
   formatSessionTime,
   getSessionDisplayTitle,
-  sessionActivityTime,
 } from "./build-session-item.js";
 
 function readJsonArray(key) {
@@ -36,7 +31,7 @@ function readJsonArray(key) {
 
 function createActionIcon(kind, options = {}) {
   const size = typeof options === "number" ? options : options.size || 16;
-  const iconName = kind === "folder" ? "folder" : kind === "archive" ? "archive" : kind;
+  const iconName = kind === "folder" ? "folder" : kind;
   return createIcon(iconName, { size });
 }
 
@@ -85,10 +80,6 @@ export class SessionSidebar {
     this.pinnedCollapsed = false;
     this.projectsCollapsed = false;
     this.searchQuery = "";
-    this.archived = readJsonArray("pi-studio-archived");
-    // ARCHIVED starts collapsed on every app launch (in-memory, like PINNED /
-    // PROJECTS) so a previous session's expand choice does not carry over.
-    this.archivedCollapsed = true;
     this.unread = new Set(readJsonArray("pi-studio-unread"));
     this.pinStore = options.pinStore || createPinnedItemsStore();
     this.lastPinnedWorkspaceIds = this.snapshotPinnedWorkspaceIds();
@@ -134,10 +125,6 @@ export class SessionSidebar {
       this.render();
       this.container.scrollTop = savedScroll;
     });
-  }
-
-  saveArchived() {
-    localStorage.setItem("pi-studio-archived", JSON.stringify(this.archived));
   }
 
   saveUnread() {
@@ -202,26 +189,12 @@ export class SessionSidebar {
     });
   }
 
-  isArchived(filePath) {
-    return this.archived.includes(filePath);
-  }
+  async deleteSession(filePath) {
+    if (!filePath) return false;
+    const ok = await this.confirmSessionDeletion(1);
+    if (!ok) return false;
 
-  toggleArchived(filePath) {
-    const idx = this.archived.indexOf(filePath);
-    if (idx >= 0) {
-      this.archived.splice(idx, 1);
-    } else {
-      this.archived.push(filePath);
-    }
-    this.saveArchived();
-    this.render();
-  }
-
-  async deleteArchivedSession(filePath) {
-    if (!filePath) return;
-    const ok = await this.confirmArchivedDeletion(1);
-    if (!ok) return;
-
+    let deleted = false;
     try {
       const res = await fetch("/api/sessions/delete-batch", {
         method: "POST",
@@ -233,24 +206,105 @@ export class SessionSidebar {
       const errors = new Set(data.errors || []);
       if (running.has(filePath)) {
         this.onSessionNotice?.(t("sidebar.deleteSessionRunning"));
-        return;
+        return false;
       }
-      if (errors.has(filePath)) return;
-      this.archived = this.archived.filter((p) => p !== filePath);
-      this.saveArchived();
+      deleted = !errors.has(filePath);
     } catch (err) {
-      console.error("[Sidebar] deleteArchivedSession failed:", err);
+      console.error("[Sidebar] deleteSession failed:", err);
+      return false;
     }
-
+    if (!deleted) return false;
     await this.loadSessions();
+    return true;
   }
 
-  async confirmArchivedDeletion(count) {
+  async confirmSessionDeletion(count) {
     const message =
       count === 1
-        ? t("sidebar.deleteArchivedConfirmOne", { count })
-        : t("sidebar.deleteArchivedConfirmMany", { count });
+        ? t("sidebar.deleteSessionConfirmOne", { count })
+        : t("sidebar.deleteSessionConfirmMany", { count });
     return this.showFallbackConfirmDialog(message);
+  }
+
+  confirmWorkspaceDeletion(workspaceName, count) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "sidebar-confirm-overlay";
+      const dialog = document.createElement("div");
+      dialog.className = "sidebar-confirm-dialog workspace-delete-confirm-dialog";
+      dialog.setAttribute("role", "dialog");
+      dialog.setAttribute("aria-modal", "true");
+      dialog.setAttribute("aria-label", t("sidebar.deleteWorkspaceSessions"));
+
+      const message = document.createElement("div");
+      message.className = "sidebar-confirm-message";
+      message.textContent = t("sidebar.deleteWorkspaceConfirm", { count });
+
+      const prompt = document.createElement("div");
+      prompt.className = "workspace-delete-confirm-prompt";
+      prompt.textContent = t("sidebar.deleteWorkspaceNamePrompt");
+
+      const expected = document.createElement("code");
+      expected.className = "workspace-delete-confirm-name";
+      expected.textContent = workspaceName;
+
+      const label = document.createElement("label");
+      label.className = "workspace-delete-confirm-label";
+      label.textContent = t("sidebar.deleteWorkspaceNameLabel");
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "workspace-delete-confirm-input";
+      input.autocomplete = "off";
+      input.setAttribute("aria-label", t("sidebar.deleteWorkspaceNameLabel"));
+      label.appendChild(input);
+
+      const warning = document.createElement("div");
+      warning.className = "workspace-delete-warning";
+      warning.hidden = true;
+      warning.textContent = t("sidebar.deleteWorkspaceNameWarning");
+
+      const actions = document.createElement("div");
+      actions.className = "sidebar-confirm-actions";
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "sidebar-confirm-no";
+      cancel.textContent = t("actions.cancel");
+      const confirm = document.createElement("button");
+      confirm.type = "button";
+      confirm.className = "sidebar-confirm-yes";
+      confirm.textContent = t("actions.delete");
+      actions.append(cancel, confirm);
+      dialog.append(message, prompt, expected, label, warning, actions);
+      overlay.appendChild(dialog);
+
+      const cleanup = (result) => {
+        document.removeEventListener("keydown", onKeyDown);
+        overlay.remove();
+        resolve(result);
+      };
+      const onKeyDown = (event) => {
+        if (event.key === "Escape") cleanup(false);
+      };
+      const updateWarning = () => {
+        warning.hidden = input.value.length === 0 || input.value === workspaceName;
+      };
+      input.addEventListener("input", updateWarning);
+      cancel.addEventListener("click", () => cleanup(false));
+      confirm.addEventListener("click", () => {
+        if (input.value !== workspaceName) {
+          warning.hidden = false;
+          input.focus();
+          return;
+        }
+        cleanup(true);
+      });
+      overlay.addEventListener("click", (event) => {
+        if (event.target === overlay) cleanup(false);
+      });
+      document.addEventListener("keydown", onKeyDown);
+      document.body.appendChild(overlay);
+      input.focus();
+    });
   }
 
   showFallbackConfirmDialog(message) {
@@ -261,7 +315,7 @@ export class SessionSidebar {
       dialog.className = "sidebar-confirm-dialog";
       dialog.setAttribute("role", "dialog");
       dialog.setAttribute("aria-modal", "true");
-      dialog.setAttribute("aria-label", t("sidebar.deleteArchivedAriaLabel"));
+      dialog.setAttribute("aria-label", t("sidebar.deleteSessionAriaLabel"));
       const messageElement = document.createElement("div");
       messageElement.className = "sidebar-confirm-message";
       messageElement.textContent = message;
@@ -550,17 +604,15 @@ export class SessionSidebar {
       this.container.querySelectorAll(".session-item").forEach((el) => {
         el.classList.remove("hidden");
       });
-      this.container
-        .querySelectorAll(".project-group, .pinned-group, .archived-group")
-        .forEach((el) => {
-          el.style.display = "";
-        });
+      this.container.querySelectorAll(".project-group, .pinned-group").forEach((el) => {
+        el.style.display = "";
+      });
       const searchGroup = this.container.querySelector(".search-results-group");
       if (searchGroup) searchGroup.remove();
       return;
     }
 
-    this.container.querySelectorAll(".project-group, .archived-group").forEach((group) => {
+    this.container.querySelectorAll(".project-group").forEach((group) => {
       let hasVisible = false;
       const projectMatches = (group.dataset.projectSearchText || "").includes(this.searchQuery);
       group.querySelectorAll(".session-item").forEach((item) => {
@@ -627,11 +679,6 @@ export class SessionSidebar {
         action: () => this.onOpenProject?.(workspace),
       },
       {
-        iconKind: "archive",
-        label: t("sidebar.archiveWorkspaceSessions"),
-        action: () => this.archiveWorkspaceSessions(workspace),
-      },
-      {
         iconKind: "trash-2",
         label: t("sidebar.deleteWorkspaceSessions"),
         action: () => this.deleteWorkspaceSessions(workspace),
@@ -676,10 +723,10 @@ export class SessionSidebar {
     this.contextMenu = menu;
   }
 
-  archiveDisabledReason(filePath) {
-    if (filePath === this.activeSessionFile) return t("sidebar.archiveDisabledActive");
-    if (this.streamingFiles.has(filePath)) return t("sidebar.archiveDisabledStreaming");
-    if (this.isLiveSession(filePath)) return t("sidebar.archiveDisabledRunning");
+  deletionBlockedReason(filePath) {
+    if (filePath === this.activeSessionFile) return t("sidebar.deleteDisabledActive");
+    if (this.streamingFiles.has(filePath)) return t("sidebar.deleteDisabledStreaming");
+    if (this.isLiveSession(filePath)) return t("sidebar.deleteDisabledRunning");
     return null;
   }
 
@@ -689,37 +736,23 @@ export class SessionSidebar {
     return Array.isArray(live) && live.some((instance) => instance?.sessionFile === filePath);
   }
 
-  archiveWorkspaceSessions(workspace) {
-    const filePaths = (workspace?.sessions || [])
-      .map((session) => session?.filePath)
-      .filter(
-        (filePath) =>
-          typeof filePath === "string" &&
-          filePath &&
-          !this.isArchived(filePath) &&
-          this.archiveDisabledReason(filePath) === null,
-      );
-    if (filePaths.length === 0) return;
-    this.archived.push(...filePaths);
-    this.saveArchived();
-    this.render();
-  }
-
   // Deletes every deletable session of a workspace in one confirmed batch.
-  // Mirrors deleteArchivedSession's response handling: paths the server
-  // reports as `running` or `errors` keep their local and archived state;
-  // only confirmed deletions are cleaned up.
+  // Paths the server reports as `running` or `errors` remain protected;
+  // only confirmed deletions are removed after the session list reloads.
   async deleteWorkspaceSessions(workspace) {
     const filePaths = (workspace?.sessions || [])
       .map((session) => session?.filePath)
       .filter(
         (filePath) =>
-          typeof filePath === "string" && filePath && this.archiveDisabledReason(filePath) === null,
+          typeof filePath === "string" && filePath && this.deletionBlockedReason(filePath) === null,
       );
     if (filePaths.length === 0) return;
-    const ok = await this.showFallbackConfirmDialog(
-      t("sidebar.deleteWorkspaceConfirm", { count: filePaths.length }),
-    );
+    const workspaceName =
+      workspace?.folderName ||
+      basenameLocalPath(workspace?.path) ||
+      workspace?.path ||
+      t("sidebar.unavailable");
+    const ok = await this.confirmWorkspaceDeletion(workspaceName, filePaths.length);
     if (!ok) return;
 
     try {
@@ -733,8 +766,6 @@ export class SessionSidebar {
       for (const filePath of filePaths) {
         if (blocked.has(filePath)) continue;
       }
-      this.archived = this.archived.filter((p) => !filePaths.includes(p) || blocked.has(p));
-      this.saveArchived();
       if ((data.running || []).length > 0) {
         this.onSessionNotice?.(t("sidebar.deleteSessionRunning"));
       }
@@ -950,30 +981,20 @@ export class SessionSidebar {
   // ═══════════════════════════════════════
 
   buildSessionItem(session, project, options = {}) {
-    const {
-      showArchiveButton = true,
-      showDeleteButton = false,
-      archiveDisabledReason = null,
-      onDelete = null,
-    } = options;
+    const { showDeleteButton = false, deletionBlockedReason = null, onDelete = null } = options;
     return buildSessionItemNode({
       session,
       project,
       isActive: session.filePath === this.activeSessionFile,
       isUnread: this.unread.has(session.filePath),
       isStreaming: this.streamingFiles.has(session.filePath),
-      isArchived: this.isArchived(session.filePath),
       showPinButton: false,
-      showArchiveButton,
       showDeleteButton,
-      archiveDisabledReason: showArchiveButton
-        ? (archiveDisabledReason ?? this.archiveDisabledReason(session.filePath))
-        : null,
+      deletionBlockedReason: deletionBlockedReason ?? this.deletionBlockedReason(session.filePath),
       projectSearchText: this.getProjectSearchText(project),
       formattedTime: this.formatTime(session.mtime ?? session.timestamp),
       onSelect: this.onSessionSelect ? (s, p) => this.onSessionSelect(s, p) : null,
-      onArchiveToggle: (filePath) => this.toggleArchived(filePath),
-      onDelete,
+      onDelete: onDelete || ((filePath) => this.deleteSession(filePath)),
       onRename: (filePath, session, item) => this.renameSession(filePath, session, item),
       onContextMenu: (event, item, session) => this.showSessionContextMenu(event, item, session),
       createIcon: createActionIcon,
@@ -1009,9 +1030,7 @@ export class SessionSidebar {
     const sessionsDiv = document.createElement("div");
     sessionsDiv.className = "project-sessions";
     sessionsDiv.appendChild(
-      this.buildSessionItem(pinned.session, pinned.project, {
-        showArchiveButton: false,
-      }),
+      this.buildSessionItem(pinned.session, pinned.project, { showDeleteButton: false }),
     );
     group.appendChild(sessionsDiv);
 
@@ -1112,7 +1131,6 @@ export class SessionSidebar {
     const pinnedGroups = resolvePinnedWorkspaceGroups({
       pinState: state,
       projects: this.projects,
-      archivedPaths: this.archived,
     });
     const { section } = buildSidebarSection({
       region: "pinned",
@@ -1183,7 +1201,9 @@ export class SessionSidebar {
               );
               const pinnedToRender = pinnedSessions.slice(0, pinnedVisibleCount);
               for (const session of pinnedToRender) {
-                container.appendChild(this.buildSessionItem(session, workspace));
+                container.appendChild(
+                  this.buildSessionItem(session, workspace, { showDeleteButton: true }),
+                );
               }
               const pinnedToggle = this.buildProjectSessionsToggleRow(
                 workspace,
@@ -1223,15 +1243,6 @@ export class SessionSidebar {
       this.container.appendChild(pinnedSuperAgentGroup);
     }
 
-    const archivedSessions = [];
-    for (const project of this.projects) {
-      const isSuperAgentProject = isSuperAgentProjectPath(project.path, this.superAgentPath);
-      for (const session of project.sessions || []) {
-        if (session.filePath === pinnedSessionFile || isSuperAgentProject) continue;
-        if (this.isArchived(session.filePath)) archivedSessions.push({ session, project });
-      }
-    }
-
     this.renderPinnedSection();
 
     const { section: projectsSection, sessionsContainer: projectsGroup } = buildSidebarSection({
@@ -1247,7 +1258,7 @@ export class SessionSidebar {
     for (const project of this.projects) {
       if (isSuperAgentProjectPath(project.path, this.superAgentPath)) continue;
       const visibleSessions = (project.sessions || []).filter(
-        (session) => session.filePath !== pinnedSessionFile && !this.isArchived(session.filePath),
+        (session) => session.filePath !== pinnedSessionFile,
       );
       const visibleCount = this.getProjectVisibleSessionCount(project, visibleSessions.length);
       const sessionsToRender = this.searchQuery
@@ -1278,7 +1289,9 @@ export class SessionSidebar {
             : null,
         renderSessions: (sessionsDiv) => {
           for (const session of sessionsToRender) {
-            sessionsDiv.appendChild(this.buildSessionItem(session, project));
+            sessionsDiv.appendChild(
+              this.buildSessionItem(session, project, { showDeleteButton: true }),
+            );
           }
           if (!this.searchQuery) {
             const toggleRow = this.buildProjectSessionsToggleRow(
@@ -1295,63 +1308,6 @@ export class SessionSidebar {
     }
     this.container.appendChild(projectsSection);
 
-    {
-      archivedSessions.sort(
-        (a, b) => sessionActivityTime(b.session) - sessionActivityTime(a.session),
-      );
-      const archivedGroup = document.createElement("div");
-      archivedGroup.className = "archived-group";
-
-      const header = document.createElement("div");
-      header.className = `project-header archived-header sidebar-section-header${
-        this.archivedCollapsed ? " collapsed" : ""
-      }`;
-      header.setAttribute("role", "button");
-      header.tabIndex = 0;
-      header.setAttribute("aria-expanded", String(!this.archivedCollapsed));
-      header.appendChild(createSectionChevron());
-      const archivedLabel = document.createElement("span");
-      archivedLabel.className = "sidebar-section-title";
-      archivedLabel.textContent = t("sidebar.archived");
-      const archivedCount = document.createElement("span");
-      archivedCount.className = "project-count sidebar-section-count";
-      archivedCount.textContent = String(archivedSessions.length);
-      header.append(archivedLabel, archivedCount);
-      archivedGroup.appendChild(header);
-
-      const sessionsDiv = document.createElement("div");
-      sessionsDiv.className = `project-sessions${this.archivedCollapsed ? " collapsed" : ""}`;
-      for (const { session, project } of archivedSessions) {
-        sessionsDiv.appendChild(
-          this.buildSessionItem(session, project, {
-            showPinButton: false,
-            showArchiveButton: false,
-            showDeleteButton: true,
-            onDelete: (filePath) => this.deleteArchivedSession(filePath),
-          }),
-        );
-      }
-
-      const toggleArchived = () => {
-        this.archivedCollapsed = !this.archivedCollapsed;
-        header.classList.toggle("collapsed", this.archivedCollapsed);
-        header.setAttribute("aria-expanded", String(!this.archivedCollapsed));
-        sessionsDiv.classList.toggle("collapsed", this.archivedCollapsed);
-      };
-      header.addEventListener("click", (event) => {
-        if (event.target.closest("button")) return;
-        toggleArchived();
-      });
-      header.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        toggleArchived();
-      });
-
-      archivedGroup.appendChild(sessionsDiv);
-      this.container.appendChild(archivedGroup);
-    }
-
     const nonSuperAgentProjects = this.projects.filter(
       (project) => !isSuperAgentProjectPath(project.path, this.superAgentPath),
     );
@@ -1359,7 +1315,6 @@ export class SessionSidebar {
     if (
       !pinnedSuperAgent &&
       nonSuperAgentProjects.length === 0 &&
-      archivedSessions.length === 0 &&
       pinState.workspaces.length === 0
     ) {
       this.renderEmptyState({ append: true });
