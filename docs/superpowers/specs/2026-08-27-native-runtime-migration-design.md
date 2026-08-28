@@ -1,9 +1,14 @@
 # Picot Native Runtime 迁移设计（embedded-server 退役）
 
-> 状态：**修订草案，阻塞项待拍板**。本稿取代此前 P0–P8 直接实施版本。
-> 修订 R3.1（2026-08-27）：在 R3 基础上同步实施计划审计结论——固定 `shared/mutation-types.json` 的 14 项当前 baseline 与单一来源地位；细化 OAuth native process generation 生命周期；将入/出站载荷边界测试和 N-1 recovery release gate 写为验收要求。R3 的 Gate R、namespace、Operation Registry、turn-bound abort、P3 adapter、Cost compatibility 与 D1–D10 定案不变。
+> 状态：**D1–D7、D9 已拍板；D8、D10 待 Gate 证据**。本稿取代此前 P0–P8 直接实施版本。
+> 修订 R4（2026-08-28）：核对已提交 workspace registry（`7acbc0a`）后的实际交付状态。Gate R 明确为 partial：补 registry 精确只读 API/原子 owner snapshot 的缺口、`runtime.*` 保留 namespace 与 rollout writer policy、未注册 startup tmp/Quick Chat 生命周期、registry v1 surface 的 v2 inventory；P1/P3 继续 blocked，直到 Gate R 全部 exit criteria 满足。R3.1 的 Operation Registry、turn-bound abort、P3 adapter、Cost compatibility 与 D1–D10 主体不变。
+> 修订 R4.1（2026-08-28）：双文档评审收尾——§6 P5/P6/P7 补 Depends on 行；workspace info 单一归属 P4（P6 移除）；删除 P2 悬空 "P1 proxy" 引用；§5.1 session export 行修正为真实 legacy 面（WS `export_html` command + `GET /api/sessions/:dirName/:file`）；§2.1/§5.1 统一 `/v2/session-export/{token}` 命名。
+> 修订 R4.2（2026-08-28）：Gate R 归属改定——registry 已按其自身设计交付（`7acbc0a`），Gate R 的 authority 缺口改由**本迁移直接承担收编改造**（WP-R 工作包，见 implementation plan §3），不再是外部等待项；WP-R 仅含 additive 只读 API 与 `runtime.*` fail-closed 守卫，不触碰生产启动路径/origin/认证/spawn/路由。
+> 修订 R4.3（2026-08-28）：D1–D7、D9 已由 Dr. Lin 按默认建议拍板，§16 表回填决议与日期；D2 附 Gate B 重开条件；D8 待 Gate A external caller 盘点、D10 cohort 门槛待 Gate D telemetry 方案后补拍。
+> 修订 R4.4（2026-08-28）：收敛 Gate R review 歧义——`OwnerWorkspaceSnapshot` 改为 Registered/Temporary/NoWorkspace 判别联合，Temporary 禁入 v2 workspace target/route/capability；§9 同步 WP-R migration-owned 定位；`runtime.*` ingress guard 与 internal storage/writer 分层；Foundation F0 与迁移 P0 分名；决策门槛按各 work package 的 §16 Blocks 列执行。
+> 修订 R4.5（2026-08-28）：双文档评审收尾——开工门槛改按 §16 Blocks 列执行并定义 Gate R=closure；Gate B/D 决策标题标注已拍板；implementation plan 引用补显式路径；Gate R 标题去 external 残留；§1.5 lookup 措辞对齐 WP-R；P7 exit 限定 host-origin；P8 统一 Depends on；Gate B capability 列表重编号；`snapshot_too_large`/`response_too_large` 补入 §4.2。
 >
-> **开工门槛：** Gate R、Gate A–D 全部通过、§16 的决策全部落定前，禁止开始任何会改变生产启动路径、WebView origin、认证链、spawn 路径或路由行为的实现。允许做仅验证现状的只读盘点与测试基建。
+> **开工门槛：** Gate R（指 closure：WP-R.1–R.5 交付且 exit criteria 评审通过）、Gate A–D 全部通过、且 §16 **Blocks** 列指向该 work package 的决策已落定前，禁止开始任何会改变生产启动路径、WebView origin、认证链、spawn 路径或路由行为的实现。允许做仅验证现状的只读盘点与测试基建（即 implementation plan 的 Foundation F0）；另允许 **WP-R**（Gate R closure 专属工作包）：仅限 additive 只读 authority API 与 `runtime.*` fail-closed 守卫，不改变上述任何路径。
 >
 > 前置阅读：
 >
@@ -63,7 +68,7 @@ fn native_runtime_enabled() -> bool {
 
 - 不改 Pi stdin RPC wire format，除非 embedded Pi 版本升级单独决策；
 - 不把 Rust 改造成 Pi runtime 逻辑复刻；Pi session/model/tool 语义仍归 Pi；
-- 不在本稿中实现 workspace registry 的 UI/DB command。本稿只依赖它已提供的 canonical `workspaceId ↔ root` lookup；
+- 不在本稿中实现 workspace registry 的 UI/DB command。本稿只依赖 Gate R/WP-R 交付的 canonical `workspaceId ↔ root` lookup；
 - 不改变 session delete 的产品语义；当前 **trash-first + running protection** 必须保持；
 - 不以 runtime migration 改写 UI 信息架构、视觉或交互；
 - 不把 LAN 当作 CORS 问题；CORS 不是认证；
@@ -81,7 +86,7 @@ fn native_runtime_enabled() -> bool {
 │  existing shell: /workspaces/:wid/sessions/:sid                      │
 │  experimental native shell: /app/workspaces/:wid/sessions/:sid       │
 │  WS:     /v2/ws (canonical protocol)                                │
-│  HTTP:   /v2/paste-offload, /v2/files/raw, /v2/session-export/:id   │
+│  HTTP:   /v2/paste-offload, /v2/files/raw, /v2/session-export/{token} │
 └──────────────────────────────────┬──────────────────────────────────┘
                                    │ authenticated HostClientContext
 ┌──────────────────────────────────▼──────────────────────────────────┐
@@ -124,33 +129,53 @@ fn native_runtime_enabled() -> bool {
 
 > Gate 是设计和验证阶段，不是代码命名。每个 Gate 产出都必须 review 通过并成为后续实现的验收输入。
 
-### Gate R — Workspace Registry / Preferences external readiness
+### Gate R — Registry authority 收编（migration-owned）
 
-本迁移依赖 2026-08-26 workspace registry 设计，但不拥有其 UI/DB 实现。此前把该依赖写在 D5/D10 而未标为阶段前置，会使 P1 的 `HostDataPlane` authority 收敛和 P3 的 release flag 无法排程。故 registry 是**外部交付 gate**，不是“迁到时再补”的 helper。
+本迁移构建在 2026-08-26 workspace registry 设计之上。registry 已按其自身范围交付（`7acbc0a`：SQLite 数据源、workspace/preference 存储、默认 `~/.pi/tmp` 启动根、Quick Chat 0700/token 清理）；其 UI/DB 产品范围不属于本迁移。Gate R 的语义随之更新（R4.2）：**它不再是等待 registry 轨道的外部交付 gate，而是本迁移直接承担的 authority 收编工作包（WP-R，见 implementation plan（`docs/superpowers/plans/2026-08-27-native-runtime-migration-plan.md`）§3）**——把 `7acbc0a` 的实现改造成本节与 §9 要求的 host authority contract。
 
-Gate R 的交付必须来自 workspace-registry 方案并在本分支可用，至少包括：
+#### 当前交付状态（R4 核验：`7acbc0a`）
+
+registry 已提交 SQLite 数据源、`workspace.list/add/remove/pin` 与 `preference.*` v1 controls、默认 `~/.pi/tmp` 启动根、Quick Chat 0700/token 清理边界；这些是 Gate R 的有效输入，**不是 Gate R 完成证明**。当前缺口：
+
+| Gate R contract | 当前实现 | 结论 |
+| --- | --- | --- |
+| `workspace_id_for_canonical_root(root)`（只读） | `MetadataStore::workspace_id_for_path()` 会在未注册路径调用 `add_workspace()` | 不可用作 authority lookup |
+| `canonical_root_for_workspace_id(wid) -> root \| not_registered` | 仅 `get_workspace(wid) -> Option<WorkspaceRow>` | 需显式只读 adapter 与稳定 not_registered 语义 |
+| `owner_current_workspace(owner) -> {wid,root,generation}` 原子快照 | `WindowOwnerRegistry::current_workspace()` 与 `current_workspace_generation()` 分开读取，owner record 无 wid | 存在 TOCTOU；必须新增原子 API |
+| `pref_get("runtime.native_origin")` 的 release authority | `preference.set/delete/list` 允许 Native owner 任意 key | 必须增加保留 namespace 与内部 writer policy |
+
+debug native path 的随机 `native-UUID + HashMap<wid, root>` 与 `HostDataPlane` 启动期 map 只能作为当前调试证据；不得被 P1/P3 复用成终态 authority。上表四行缺口分别由 **WP-R.1**（只读 lookup 拆分）、**WP-R.2**（inverse adapter + 稳定 `not_registered`）、**WP-R.3**（owner record 增持 workspaceId + 原子 snapshot）、**WP-R.4**（`runtime.*` 保留 namespace 与内部 rollout writer）承接，**WP-R.5** 完成 release must-run 演练；工作包定义见 implementation plan（`docs/superpowers/plans/2026-08-27-native-runtime-migration-plan.md`）§3。
+
+Gate R closure 由本迁移在 `7acbc0a` 已交付基础上实施（WP-R，见 implementation plan（`docs/superpowers/plans/2026-08-27-native-runtime-migration-plan.md`）§3），最终必须提供：
 
 ```text
-workspace_id_for_canonical_root(root) -> WorkspaceId
+workspace_id_for_canonical_root(root) -> WorkspaceId | not_registered
 canonical_root_for_workspace_id(wid) -> CanonicalRoot | not_registered
-owner_current_workspace(owner) -> { wid, root, generation }
+owner_current_workspace(owner) -> OwnerWorkspaceSnapshot // atomic
 pref_get("runtime.native_origin") -> Option<bool>
+
+OwnerWorkspaceSnapshot =
+  Registered { wid, root, generation }
+  | Temporary { root, generation, temporaryKind }
+  | NoWorkspace
 ```
 
 要求：
 
-- inverse lookup 只读、canonical、无浏览器 supplied root 回退；`HostDataPlane`、P1 target resolver 与 P3 flag reader 必须只能经该 contract 表达，不能继续持有启动期 `HashMap<wid, root>`，更不能以 URL path 或 browser root 作为 authority 回退；
-- 明确 `~/.pi/tmp` / 未注册但存活 runtime 的身份、可见性与跨重启策略。它不得以临时 Map 变成跨窗口/跨重启 authority；
-- owner current workspace 把 `wid/root/generation` 作为同一原子快照返回，不允许 host 分别读取 cwd、port、generation 后拼接；
-- preferences 可在 Rust **launch time** 读取；flag 读失败时 fail closed 为 legacy origin；debug env 只能覆盖开发构建，不能成为 release storage；
+- inverse lookup 只读、canonical、无浏览器 supplied root 回退；`workspace_id_for_canonical_root` **不得**复用会写 DB 的 `workspace_id_for_path`；`canonical_root_for_workspace_id` 必须以 `not_registered` 稳定失败而非隐式 `Option`/临时 map 表达；`HostDataPlane`、P1 target resolver 与 P3 flag reader 必须只能经该 contract 表达，不能继续持有启动期 `HashMap<wid, root>`，更不能以 URL path 或 browser root 作为 authority 回退；
+- `~/.pi/tmp` 是未注册、fresh-session、仅 live 可见的 default startup root：不得 add/touch registry，不得跨重启成为 `wid→root` authority。Quick Chat 可共享此 root，但必须使用 token 化 0700 child directory；其 child lifecycle、symlink/root-delete guard、cleanup 与 default startup runtime 分别建模和测试；
+- owner current workspace 以同一原子、判别联合返回：注册 workspace 只能为 `Registered { wid, root, generation }`；未注册 default startup tmp/Quick Chat child 只能为 `Temporary { root, generation, temporaryKind }`；无当前 workspace 为 `NoWorkspace`。不得分别读取 cwd、port、generation 后拼接，也不得为 Temporary 伪造 wid；
+- `RuntimeTarget`、production host-origin route、desktop capability route binding、OperationScope 与任何 v2 workspace command 仅接受 `Registered`。Temporary 仅可走明确的 legacy/default-startup 或 ephemeral policy；若该 policy 尚未由 Gate A/B 定义，fail closed，不得转换为 v2 workspace target；
+- preferences 可在 Rust **launch time** 读取；flag 读失败时 fail closed 为 legacy origin；debug env 只能覆盖开发构建，不能成为 release storage。`runtime.*` 是保留 rollout namespace：公开 `preference.get/set/delete/list` 必须拒绝读取、枚举、写入、删除；只有 rollout-authorized internal host path 可写 `runtime.native_origin`，并记录脱敏审计事件；
 - registry schema/version policy 与 N-1 binary 兼容策略已定义（见 §13.2）；
 - Gate R 的 release must-run 覆盖：fresh DB、旧 DB 升级、缺 workspace、目录消失、未注册 tmp workspace、N→N-1 恢复。
 
 #### Gate R exit criteria
 
-- workspace registry 的 schema/API/测试已经合入或作为明确版本化依赖可用；
+- WP-R.1–R.5 已交付并通过测试（当前 `7acbc0a` 的 `workspace_id_for_path`、`get_workspace`、拆分 owner reads 不计入 authority API 完成证明）；`OwnerWorkspaceSnapshot` 三个 variant 与 Registered-only v2 admission 均须测试；
 - HostDataPlane adapter、P1 target resolver 和 host flag reader 可仅以这些 API 表达，不需要裸 root map、URL path 或浏览器路径；
-- 未注册 temporary runtime 的 identity、visibility 与 recovery policy 已定义并测试；
+- 公开 `preference.*` 对 `runtime.*` 保留 namespace 的 get/set/delete/list 全部 fail closed；普通 Native owner 无法自行 enable、disable、枚举或读取 rollout flag；
+- 未注册 temporary runtime 的 identity、visibility 与 recovery policy 已定义并测试（default startup tmp 与 Quick Chat child 分别覆盖）；
 - N-1 schema compatibility/backup/recovery 方案已演练；
 - P1、P3 的 dependency 列显式引用 Gate R。
 
@@ -207,7 +232,7 @@ pref_get("runtime.native_origin") -> Option<bool>
 
 P2 不得将它们混称“broker_control”。必须先决定 canonical protocol 与 adapter 生命周期。
 
-#### 决策（本稿默认建议）
+#### 决策（D2 已拍板 2026-08-28；附 Gate B 重开条件）
 
 **Canonical protocol = host `/v2/ws` v2。** legacy broker v1 在过渡期仅作为已存在 controls 的 server-side adapter，不能让 host-origin WebView 同时自行连接两条未经统一授权的 WS。若实现成本证明 v2 接管 controls 不可接受，必须另起设计，明确“host origin + broker v1 adapter”如何认证、路由、升级和删除；不能隐式双连。
 
@@ -220,32 +245,32 @@ P2 不得将它们混称“broker_control”。必须先决定 canonical protoco
 3. capability 仅经 Tauri initialization script 注入 top-level host-origin document；不得出现在 URL/query/hash、日志、静态 HTML、HTTP response、clipboard、crash telemetry、remote bootstrap。
 4. v2 hello：
 
-```jsonc
-{
-  "type": "hello",
-  "protocolVersion": 2,
-  "clientType": "desktop",
-  "clientId": "opaque-client-instance",
-  "desktopCapability": "opaque-bearer"
-}
-```
+   ```jsonc
+   {
+     "type": "hello",
+     "protocolVersion": 2,
+     "clientType": "desktop",
+     "clientId": "opaque-client-instance",
+     "desktopCapability": "opaque-bearer"
+   }
+   ```
 
-1. host 验证 capability 后创建不可伪造的 `HostClientContext`：
+5. host 验证 capability 后创建不可伪造的 `HostClientContext`：
 
-```text
-HostClientContext {
-  class: NativeDesktop | PairedRemote | UnpairedBrowser,
-  client_id,
-  owner_id: Option<OwnerId>,
-  workspace_id: Option<WorkspaceId>,
-  workspace_generation: Option<u64>,
-  device_id: Option<DeviceId>
-}
-```
+   ```text
+   HostClientContext {
+     class: NativeDesktop | PairedRemote | UnpairedBrowser,
+     client_id,
+     owner_id: Option<OwnerId>,
+     workspace_id: Option<WorkspaceId>,
+     workspace_generation: Option<u64>,
+     device_id: Option<DeviceId>
+   }
+   ```
 
-1. capability 在窗口 destroyed、owner revoke、workspace generation 超出 scope、host restart 后失效。host restart 的桌面重载必须由 window lifecycle 重新注入新 capability；不持久化 capability。
-2. navigation gate：同一 host origin 允许的仅为绑定 workspace ID 的路径前缀和明确 app-global path；`about:srcdoc`/`about:blank` 依当前安全规则受限允许。不得仅因“host 相同”允许任意 `/app/workspaces/:wid`。
-3. `WindowOwnerRegistry` 必须显式增加 owner→workspaceId 及 generation lookup；不可把 `HostDataPlane` 的 `workspaceId→root` Map 误写成 registry 已有字段。
+6. capability 在窗口 destroyed、owner revoke、workspace generation 超出 scope、host restart 后失效。host restart 的桌面重载必须由 window lifecycle 重新注入新 capability；不持久化 capability。
+7. navigation gate：同一 host origin 允许的仅为绑定 workspace ID 的路径前缀和明确 app-global path；`about:srcdoc`/`about:blank` 依当前安全规则受限允许。不得仅因“host 相同”允许任意 `/app/workspaces/:wid`。
+8. `WindowOwnerRegistry` 必须显式增加 owner→workspaceId 及 generation lookup；不可把 `HostDataPlane` 的 `workspaceId→root` Map 误写成 registry 已有字段。
 
 #### Remote / LAN deployment 设计
 
@@ -293,9 +318,10 @@ HostServer 当前只能 bind `127.0.0.1:0`。在 release 启用 LAN 前，必须
 | Runtime type | cwd/session | extension set | required env | owner/generation | ready signal | stop/cleanup | special cases |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | primary workspace | canonical registry root / optional resume | `picot-bridge` + allowed user/project extensions | PATH、PI version、canonical agent root、static/resource locator、secret | owner + generation | RPC state/health equivalent | window exit / app exit | process crash/restart |
+| default startup tmp | unregistered `~/.pi/tmp` / fresh session | explicit approved startup set | tmp root 0700 + no registry touch | live-only; no durable wid authority | ready | app/window lifecycle only | must not be adopted as registered primary without explicit registry add |
 | dedicated session | owner workspace / session path | 同 primary | 同 primary | owner route | session bound | session close | switch/fork |
 | Side Chat | canonical owner workspace / ephemeral session | approved extension set | ephemeral identity/profile | owner + generation | ready + profile applied | transition/close | max one / standby |
-| Quick Chat | secure temp root / no session | no-tools restrictions | temp capability and 0700 root | owner + generation | ready | remove validated temp dir | replacement and standby |
+| Quick Chat | `~/.pi/tmp` tokenized 0700 child / no session | no-tools restrictions | temp capability + child token + root-delete/symlink guard | owner + generation; child never registry authority | ready | validated child cleanup | replacement/standby; lifecycle distinct from default startup tmp |
 | standby | matching intended cwd/flags | exact adoptable set | placeholder ephemeral binding | no public owner until adopted | ready | TTL/consume/kill | cannot leak placeholder |
 | Super Agent / pi-chat | explicit source workspace/session | explicit | secrets/log redaction | documented | explicit | bounded cleanup | external service/process |
 | Windows path variant | every above | every above | every above | every above | every above | job/process group | spaces, verbatim paths, child tree |
@@ -321,7 +347,7 @@ HostServer 当前只能 bind `127.0.0.1:0`。在 release 启用 LAN 前，必须
 
 ### Gate D — UI parity、origin 与发布策略
 
-#### 决策（本稿默认推荐）
+#### 决策（D1 已拍板 2026-08-28）
 
 **P3 host origin 使用 existing shell：`/workspaces/:wid/sessions/:sid` → `public/index.html` + `public/app.js`。** 它不得使用 `/app/` 前缀。
 
@@ -427,7 +453,7 @@ HostServer 当前只能 bind `127.0.0.1:0`。在 release 启用 LAN 前，必须
 | capability/auth | `unauthenticated`, `capability_expired`, `forbidden_class`, `owner_revoked`, `unauthorized_device` |
 | runtime | `runtime_not_found`, `unknown_target`, `not_ready`, `runtime_crashed`, `duplicate_pending`, `duplicate_completed`, `operation_not_found`, `operation_expired`, `stale_turn` |
 | path/data | `invalid_workspace`, `path_outside_workspace`, `invalid_path`, `not_a_directory`, `file_access_failed` |
-| transport | `frame_too_large`（16 MiB physical frame only）, `command_too_large`（v2 business limit）, `event_sequence_gap`, `request_cancelled`, `upstream_unavailable` |
+| transport | `frame_too_large`（16 MiB physical frame only）, `command_too_large`（v2 business limit）, `snapshot_too_large` / `response_too_large`（outbound bound，§7.1）, `event_sequence_gap`, `request_cancelled`, `upstream_unavailable` |
 | migration | `unimplemented_route`（仅兼容层） |
 
 Gate A matrix 为每个 endpoint 标明准确 code。前端只依赖 documented stable code；不得从 message 文本匹配。
@@ -525,7 +551,8 @@ OperationRecord {
 | WS `/ws` | WS `/v2/ws` | event schema、broker routing、reconnect、owner context |
 | `POST /api/paste-offload` | `POST /v2/paste-offload` | 4 MiB+ route limit、workspace-derived temp location、expiry/cleanup |
 | `GET /api/files/raw` | `GET /v2/files/raw` | token/relative path、MIME allowlist、sandbox/nosniff/cache、abort |
-| session export path endpoint | `GET /v2/session-export/{token}` | owner/root/generation/TTL/quota binding、Content-Disposition |
+| WS command `export_html` | v2 export control + `GET /v2/session-export/{token}` download | 调用 embedded `pi --export`（`embedded-server.ts:3465`）；输出文件路径须 owner-bound；下载走 one-shot token（owner/root/generation/TTL/quota、Content-Disposition） |
+| `GET /api/sessions/:dirName/:file` | v2 session-file download/data surface（Gate A 定归属） | URL-decoded dir/file、ephemeral 404 denial、raw JSONL streaming |
 | `GET /api/files` | v2 data `list_files` | root derived from workspace ID, traversal/symlink containment |
 | `GET/PUT /api/files/content` | v2 `file_read/file_write` | editable/type/size/conflict/mtime/atomic-write semantics |
 | `GET /api/file-mentions` | v2 `file_mentions` | main runtime only, workspace race/abort/budget |
@@ -544,7 +571,16 @@ OperationRecord {
 
 ### 5.2 Existing broker controls
 
-Gate A must enumerate all registered controls, including but not limited to: session lifecycle, picker/system-open, skills/packages, session UI profile, runtime restart, updater, extension UI responses, every `ephemeral_*`, workspace transition prepare/commit/cancel, and window-close approval. A surface marked “already exists” is **not automatically migrated**: it must have a v2 mapping, authority proof and lifecycle test.
+Gate A must enumerate all registered controls, including but not limited to: session lifecycle, picker/system-open, skills/packages, session UI profile, runtime restart, updater, extension UI responses, every `ephemeral_*`, workspace transition prepare/commit/cancel, window-close approval，以及 registry 已提交的 v1 surfaces：
+
+| v1 surface | 当前 authority / required v2 terminal mapping |
+| --- | --- |
+| `workspace.list` | `MetadataStore::list_workspaces_and_prune()`；v2 app-global registry read，保留 `removed` shape 与 prune side effect |
+| `workspace.add/remove/pin` | Native owner + registry DB mutation；remove 无 FS/session 删除副作用；各自映射 v2 registry mutation |
+| `preference.get/set/delete/list` | app-global preferences；v2 preference operation；`runtime.*` 另走 Gate R protected policy，公开面必须拒绝 |
+| `registry_changed` event | Native clients registry invalidation；v2 app-global registry invalidation event，非 owner-scoped runtime event |
+
+`workspace.touch` 不进入公开 control inventory：它是内部 `touch_registered_path()` 生命周期 API。A surface marked “already exists” is **not automatically migrated**: it must have a v2 mapping, authority proof and lifecycle test.
 
 ### 5.3 Frontend audit minimum
 
@@ -569,7 +605,7 @@ The migration inventory must include callers in at least:
 
 ### P0 — Evidence and zero-behavior shared extraction
 
-**Depends on:** Gate R + Gate A + Gate C design approved.
+**Depends on:** Gate R closure（WP-R 交付）+ Gate A + Gate C design approved.
 
 - Generate/commit migration inventory and a check that detects unmatched legacy surface/caller changes.
 - Extract `pi_launch` pure helpers from legacy manager only after launch contract tells what must remain: args builder, binary resolver, safe extension path, stderr formatter/logger primitives, environment builder pieces.
@@ -599,7 +635,7 @@ The migration inventory must include callers in at least:
 - Implement Desktop capability lifecycle and `HostClientContext`.
 - Define/implement v2 canonical adapter for legacy controls, or implement v2 replacements per matrix. No implicit double-WS client.
 - Enforce target authorization on runtime request, snapshot and subscription.
-- Implement HTTP auth middleware only if a production HTTP compatibility path is needed. Otherwise P1 proxy remains internal-only.
+- Implement HTTP auth middleware only if a production HTTP compatibility path is needed. Otherwise retained HTTP compatibility surfaces remain loopback-only until the P3 adapter owns their authorization.
 - Add LAN bind/pairing implementation only after explicit product enablement; default remains loopback.
 
 **Exit:** security matrix passes: invalid/expired/cross-owner/cross-wid/revoked capabilities; remote impersonation; target subscription leak; bare loopback HTTP; LAN policy. Feature remains unavailable to normal release users.
@@ -631,6 +667,8 @@ The migration inventory must include callers in at least:
 
 ### P5 — File/config and OAuth migration
 
+**Depends on:** Gate R + Gate A + Gate B + Gate C + P3.
+
 - File list/read/write/raw; enforce relative paths, canonical containment, symlink escape prevention, MIME/type/size/conflict semantics.
 - Resource-by-resource config controls: agent settings, models, chat config, AGENTS/APPEND_SYSTEM. Define app-global vs workspace scope correctly.
 - Preserve model refresh, backup, proper lock protocol, JSON validation, atomic writes, 0600 requirements and restart messages.
@@ -641,25 +679,29 @@ The migration inventory must include callers in at least:
 
 ### P6 — Heavy integrations and HTTP binary paths
 
+**Depends on:** Gate R + Gate A + P3.
+
 - paste-offload with route-level 4 MiB minimum limit and secure lifecycle;
 - file mentions, git branch, skills endpoint removal after existing native controls satisfy contract;
-- Telegram, Super Agent, workspace info, package/ephemeral integrations per matrix;
+- Telegram, Super Agent, package/ephemeral integrations per matrix;
 - migration of all remaining non-chat `/api/*` callers.
 
 **Exit:** cancellation, source-handle expiry, token/secret redaction, external timeout and temp cleanup tests; relevant full suite.
 
 ### P7 — Chat RPC and event transport completion
 
+**Depends on:** Gate R + Gate B + P3.
+
 - Migrate every legacy `/api/rpc`, `/ws`, cross-port and Super Agent runtime command to canonical v2 request/event protocol.
 - Specify control progress ordering, max frame behavior, backpressure, abort, request cancellation and reconnect/snapshot fallback.
 - If `/v2/rpc` compatibility endpoint is approved, publish support window, usage telemetry and deprecation behavior. It must not be a hidden permanent second RPC API.
 - Remove compatibility entries only after inventory proves zero callers and parity/smoke tests pass.
 
-**Exit:** real Pi smoke: prompt → stream → steer/follow-up → abort → compact → fork/tree → reconnect/sequence gap → crash response. No production caller reaches `embedded-server` directly.
+**Exit:** real Pi smoke: prompt → stream → steer/follow-up → abort → compact → fork/tree → reconnect/sequence gap → crash response. No host-origin production caller reaches `embedded-server` directly（flag-off legacy 路径保留至 P8 条件满足）.
 
 ### P8 — Release rollout, removal and documentation
 
-**Preconditions:** flag cohort and stability criteria from §13 met; every Gate A row has deletion proof; and Gate R's schema recovery contract has a recorded real `N-1 → N → N-1` rehearsal covering DB backup/restore, session preservation, running runtime disposition, static cache and user-facing remediation.
+**Depends on:** §13 flag cohort/stability criteria met; every Gate A row has deletion proof; Gate R schema recovery contract has a recorded real `N-1 → N → N-1` rehearsal covering DB backup/restore, session preservation, running runtime disposition, static cache and user-facing remediation.
 
 - Remove proxy, legacy origin, `embedded-server.ts`, embedded server tests only after their behavior moved, `PiManager`, obsolete flags, deprecated endpoints and legacy gateway modules.
 - Remove or retain `extensions/dist` artifacts explicitly: remove `embedded-server.mjs`; retain `picot-bridge.mjs`; decide `pi-chat.mjs` based on P6 final architecture.
@@ -747,18 +789,25 @@ This migration depends on the workspace registry design but does not implement i
 Required API before host-origin routing is Gate R’s registry contract:
 
 ```text
-workspace_id_for_canonical_root(root) -> WorkspaceId
+workspace_id_for_canonical_root(root) -> WorkspaceId | not_registered
 canonical_root_for_workspace_id(wid) -> CanonicalRoot | not_registered
-owner_current_workspace(owner) -> { wid, root, generation } // atomic snapshot
+owner_current_workspace(owner) -> OwnerWorkspaceSnapshot // atomic
+
+OwnerWorkspaceSnapshot =
+  Registered { wid, root, generation }
+  | Temporary { root, generation, temporaryKind }
+  | NoWorkspace
+
 pref_get("runtime.native_origin") -> Option<bool>
 ```
 
-These APIs are external dependencies, not placeholders to be introduced during P1/P3.
+These APIs are Gate R closure deliverables implemented only by WP-R before P1/P3, not placeholders to be introduced during P1/P3. `RuntimeTarget`、production host-origin route、desktop capability route binding、OperationScope 与 v2 workspace commands must accept `Registered` only; `Temporary` has no synthetic wid and follows an explicit legacy/default-startup or ephemeral policy, otherwise fails closed.
 
 - workspace route `wid` must resolve before window navigation is authorized;
 - session switch may remain same workspace without root refresh; cross-workspace transition increments generation and invalidates capability-bound ephemeral handles/source handles/download tokens as applicable;
 - transition prepare/commit/cancel is a lifecycle protocol, not a front-end URL rewrite;
-- nonregistered/default temporary workspace behavior must be explicitly documented—no transient untrusted `wid→root` Map becomes a new authority source.
+- default startup `~/.pi/tmp` 是未注册、fresh-session、live-only root；不能 `add_workspace`、`touch_registered_path` 或跨重启保留为 wid authority。Quick Chat 使用该 root 下 tokenized 0700 child，child cleanup、symlink/root-delete guard 与 startup runtime 独立；
+- nonregistered/default temporary workspace behavior must be explicitly documented—no transient untrusted `wid→root` Map becomes a new authority source。debug native 的 `native-UUID + HashMap<wid, root>` 仅可作测试/调试证据，P1/P3 禁止采用。
 
 ---
 
@@ -815,6 +864,7 @@ Thresholds are valid only against identical baseline workload. Suggested initial
 | operation ambiguity | `operationId` cannot resolve by logical scope after instance exit/restart | block P2/P7 until Operation Registry contract passes |
 | stale abort | an abort can target a different/newer turn | block P7 and disable host-origin mutation path |
 | registry readiness | Gate R API/schema/recovery not delivered | block P1/P3; retain legacy authority |
+| rollout namespace bypass | ordinary Native owner can get/set/delete/list `runtime.*` or enable release flag | block P2/P3; add protected internal writer and fail-closed public controls |
 | performance breach | metric exceeds threshold | optimize/diagnose before next phase |
 | rollback failure | N-1 test cannot recover supported user | do not default-on or delete legacy |
 | external protocol usage | deprecated endpoint usage nonzero at removal gate | extend support window or migrate caller |
@@ -849,7 +899,8 @@ Thresholds are valid only against identical baseline workload. Suggested initial
 3. dogfood → opt-in cohort → default-on only after two stable release cycles and exit metrics;
 4. legacy remains available until P8 conditions; not merely until code compiles;
 5. remove flag only after zero supported legacy users/endpoint usage according to published support window.
-6. release flag reader is unavailable until Gate R schema/API is available; a missing/invalid preference or unsupported schema forces legacy origin and records only a redacted diagnostic code.
+6. release flag reader is unavailable until Gate R schema/API is available; a missing/invalid preference or unsupported schema forces legacy origin and records only a redacted diagnostic code;
+7. `runtime.native_origin` is internal rollout state, not a user preference: public `preference.get/set/delete/list` cannot expose or mutate any `runtime.*` key; only the rollout-authorized host path may write it.
 
 ### 13.2 Rollback
 
@@ -900,24 +951,27 @@ P8 must update:
 - 当前 RuntimeCoordinator mutation cache 是 per-instance deque；operation durability、crash/restart query 和 turn-bound abort 均由 §4.4 的新 host Operation Registry 承担，不能假定既有 cache 已满足。
 - mutation command classification migrates through `shared/mutation-types.json`; current audited baseline is 14 command types, and JSON—not parallel Rust/JS lists—is the post-P0 authority.
 - The implementation plan is a phase/work-package mapping of this specification; this specification remains contract authority. A plan must not silently settle protocol, authority, lifecycle or recovery behavior ahead of this document.
+- Registry commit `7acbc0a` is a useful Gate R input but partial delivery: it lacks the three exact read/atomic authority APIs and protected rollout preference namespace required by §3/§9; native P1/P3 remain blocked until closure.
 
 ---
 
 ## 16. Required decisions before implementation
 
-The following are implementation-blocking. Default recommendation is shown, but Dr. Lin must confirm or replace it.
+The following are implementation-blocking. D1–D7、D9 已拍板；仅 D8、D10 仍待 Gate 证据，由 Dr. Lin 在相应 Gate 评审后 confirm or replace。
 
-| ID | Decision | Default recommendation | Blocks |
-| --- | --- | --- | --- |
-| D1 | P3 UI entry and namespace | Host `/workspaces/` serves existing `index.html`/`app.js`; `/app/` stays experimental native shell | P3 onward |
-| D2 | canonical client protocol | Host WS v2; legacy broker v1 server-side adapter only during transition | P2 onward |
-| D3 | desktop capability issuer | Window lifecycle mints per-window in-memory token; never remote exchange | P2 onward |
-| D4 | LAN enablement | Loopback default; LAN is separate opt-in deployment phase | P2/P3 LAN claims |
-| D5 | workspace identity source | Gate R registry API is prerequisite; no browser-provided roots or HostDataPlane map | P1/P2/P4 |
-| D6 | settings scope | Agent root config remains app-global; workspace config only where Pi specifies | P5 |
-| D7 | paste transport | permanent HTTP endpoint with route-level >=4 MiB limit | P6 |
-| D8 | `/v2/rpc` compatibility | avoid unless external caller inventory proves need; if retained, versioned deprecation/support plan, and usage counters aggregate by anonymous client class only（禁止 per-user/per-token 维度，与 telemetry 脱敏一致） | P7/P8 |
-| D9 | Super Agent cross-runtime | canonical RuntimeTarget through v2; no direct port fetch | P6/P7 |
-| D10 | release flag storage/rollout | Gate R 交付的 `preferences.runtime.native_origin` 是唯一 release source；debug env 仅 developer override；schema-aware cohort gates | P3/P8 |
+**拍板状态（R4.3，2026-08-28）：D1–D7、D9 已由 Dr. Lin 按默认建议确认。** D2 附重开条件；D8、D10 待 Gate 证据后补拍。已拍板项在实现与 Gate 文档中直接生效，不再作为待决项讨论。
 
-> After D1–D10 are resolved, update this document’s Gate/phase sections before code starts. Do not solve a decision silently inside an implementation PR.
+| ID | Decision | 拍板 | 决议（含约束） | Blocks |
+| --- | --- | --- | --- | --- |
+| D1 | P3 UI entry and namespace | ✅ 2026-08-28 | Host `/workspaces/` serves existing `index.html`/`app.js`; `/app/` stays experimental native shell | P3 onward |
+| D2 | canonical client protocol | ✅ 2026-08-28（附重开条件） | Host WS v2; legacy broker v1 server-side adapter only during transition。**重开条件：Gate B 评审若证明 v1 adapter 成本不可接受，重新提交决策；在此之前按本决议展开 Gate B/P2** | P2 onward |
+| D3 | desktop capability issuer | ✅ 2026-08-28 | Window lifecycle mints per-window in-memory token; never remote exchange | P2 onward |
+| D4 | LAN enablement | ✅ 2026-08-28 | Loopback default; LAN is separate opt-in deployment phase | P2/P3 LAN claims |
+| D5 | workspace identity source | ✅ 2026-08-28 | Gate R registry API is prerequisite: read-only canonical inverse lookup + `not_registered` semantics + atomic `OwnerWorkspaceSnapshot` (`Registered {wid,root,generation}` / `Temporary` / `NoWorkspace`); only Registered may enter v2 target/route/capability/scope; no browser roots, synthetic tmp wid, `workspace_id_for_path()` write lookup, split owner reads or HostDataPlane map | P1/P2/P4 |
+| D6 | settings scope | ✅ 2026-08-28 | Agent root config remains app-global; workspace config only where Pi specifies | P5 |
+| D7 | paste transport | ✅ 2026-08-28 | permanent HTTP endpoint with route-level >=4 MiB limit | P6 |
+| D8 | `/v2/rpc` compatibility | ⏳ 待 Gate A | avoid unless external caller inventory proves need; if retained, versioned deprecation/support plan, and usage counters aggregate by anonymous client class only（禁止 per-user/per-token 维度，与 telemetry 脱敏一致）。**拍板依赖 Gate A 矩阵的 external caller 盘点结果** | P7/P8 |
+| D9 | Super Agent cross-runtime | ✅ 2026-08-28 | canonical RuntimeTarget through v2; no direct port fetch | P6/P7 |
+| D10 | release flag storage/rollout | ⏳ 待 Gate D | Gate R 交付的 internal `preferences.runtime.native_origin` 是唯一 release source；`runtime.*` 公开 preference controls 全拒绝，只有 rollout-authorized host writer 可变更；debug env 仅 developer override。**存储部分已随 WP-R.4 定案；cohort 门槛数值待 Gate D telemetry 方案后补拍** | P3/P8 |
+
+> A work package may start only after decisions whose **Blocks** column includes that work package are resolved, plus its explicit Gate dependencies. Do not solve a decision silently inside an implementation PR. 当前剩余未决：D8（等 Gate A，阻塞 P7/P8）、D10 cohort 门槛（等 Gate D，阻塞 P3/P8）；P0 的开工许可不依赖这两项。
