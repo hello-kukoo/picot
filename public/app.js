@@ -37,6 +37,12 @@ import { processImageFile, processImagePayload } from "./image-attachments.js";
 import { InfoPanel } from "./info-panel.js";
 import { selectModel } from "./models/selection.js";
 import { renderPackageInstallFailure } from "./packages/install-status.js";
+import {
+  createPreferencesClient,
+  PREFERENCE_KEYS,
+  reconcileRenderPreferences,
+  saveUserRenderPreference,
+} from "./preferences-client.js";
 import { QuickChatDialog } from "./quick-chat-dialog.js";
 import { getOnboardingState } from "./session/onboarding.js";
 import { resolveNewSessionLiveFile } from "./session/refresh.js";
@@ -147,6 +153,7 @@ import {
   createWorkspaceActionsController,
   populateAppLogo as sharedPopulateAppLogo,
 } from "./workspace-actions.js";
+import { registryPinsFromProjects } from "./workspace-projects.js";
 
 // Initialize locale messages before constructing components that call t().
 const savedTheme = getCurrentTheme();
@@ -316,18 +323,22 @@ function enterFocus(project) {
 
   // Asynchronously enrich the focus info card with the git repository name.
   if (project.workspaceId) {
-    fetchWorkspaceRepository(project.workspaceId).then((repository) => {
-      if (!repository || !currentFocusSidebar) return;
-      if (currentFocusProject?.path !== project.path) return;
-      currentFocusSidebar.setProjectState({
-        cardInfo: {
-          path: project.path,
-          count: Array.isArray(project.sessions) ? project.sessions.length : 0,
-          repository,
-        },
-      });
-      currentFocusSidebar.render();
-    });
+    // Registry rows carry DB uuids the DB-blind server cannot resolve;
+    // translate to the canonical-path identity it accepts.
+    fetchWorkspaceRepository(project.path ? `path:${project.path}` : project.workspaceId).then(
+      (repository) => {
+        if (!repository || !currentFocusSidebar) return;
+        if (currentFocusProject?.path !== project.path) return;
+        currentFocusSidebar.setProjectState({
+          cardInfo: {
+            path: project.path,
+            count: Array.isArray(project.sessions) ? project.sessions.length : 0,
+            repository,
+          },
+        });
+        currentFocusSidebar.render();
+      },
+    );
   }
 }
 
@@ -498,7 +509,7 @@ const onBeforeInstanceSwap = (label) => showSwapOverlay(label);
 // If the page booted into the overlay (because we just navigated from
 // a previous instance), fade it out as soon as the WebSocket reaches
 // the new pi. The post-connect wait avoids a brief flash of empty
-// chat UI before /api/sessions and get_state finish populating things.
+// chat UI before the first workspace/session data finishes populating things.
 function dismissBootSwapOverlayWhenReady() {
   if (!document.body.classList.contains("swapping-instance")) return;
   const fade = () => {
@@ -568,6 +579,8 @@ const sidebar = new SessionSidebar(
   handleSessionSelect,
   handleNewProjectChat,
   {
+    // Registry data source + workspace.* controls ride the broker transport.
+    transport,
     onOpenProject: (project) => {
       if (!project?.path) return handleOpenFolder();
       return fetch("/api/open", {
@@ -802,8 +815,11 @@ function insertTaskPrompt(task) {
   messageInput.style.height = `${Math.min(messageInput.scrollHeight, 160)}px`;
   messageInput.focus();
 }
-const openFolderBtn = document.getElementById("open-folder-btn");
-setButtonIcon(openFolderBtn, "folder-plus", { size: 16 });
+const addProjectBtn = document.getElementById("add-project-btn");
+if (addProjectBtn) {
+  setButtonIcon(addProjectBtn, "folder-plus", { size: 16 });
+  addProjectBtn.addEventListener("click", () => void sidebar.addProjectViaPicker());
+}
 const sidebarEl = document.getElementById("sidebar");
 const sidebarToggle = document.getElementById("sidebar-toggle");
 setButtonIcon(sidebarToggle, "menu", { size: 16 });
@@ -1074,10 +1090,9 @@ function hasAnySessionsLoaded() {
 
 function setWorkspaceLaunchInProgress(inProgress) {
   workspaceLaunchInProgress = inProgress;
-  if (openFolderBtn) {
-    openFolderBtn.disabled = inProgress;
-    openFolderBtn.setAttribute("aria-busy", inProgress ? "true" : "false");
-    openFolderBtn.title = inProgress ? "Opening workspace..." : "Open folder as workspace";
+  if (addProjectBtn) {
+    addProjectBtn.disabled = inProgress;
+    addProjectBtn.setAttribute("aria-busy", inProgress ? "true" : "false");
   }
 }
 
@@ -2875,12 +2890,18 @@ function handleCompactionEnd(event) {
  * Refresh the sidebar after a brand-new session's first message round-trips.
  *
  * Pi only persists a new session's .jsonl on the first message round-trip, and
- * `/api/sessions` can briefly return *successfully* without the new file yet
+ * The session surface can briefly answer *successfully* without the new file yet
  * (loadSessions' built-in retry only covers fetch failures, not "fetched but
  * the row isn't there"). So we reload, and if the freshly created session still
  * isn't in the list, retry a few times with a short backoff before giving up.
  */
 async function refreshSidebarForNewSession(event = null, attempt = 0) {
+  // Cached registry rows would mask the brand-new session file: refresh the
+  // current workspace's cache first so the reload below can observe it.
+  const workspacePath = getCurrentWorkspacePath();
+  if (workspacePath) {
+    await sidebar.refreshWorkspaceSessions(workspacePath).catch(() => {});
+  }
   const projects = await sidebar.loadSessions({ quiet: true }).catch(() => null);
 
   const liveFile = getCurrentLiveSessionFile(event);
@@ -4214,7 +4235,7 @@ refreshSessionsBtn.addEventListener("click", () => {
   refreshSessionsBtn.disabled = true;
   refreshSessionsBtn.setAttribute("aria-busy", "true");
   sidebar
-    .loadSessions()
+    .refreshAllWorkspaces()
     .then(() => {
       if (isMirrorMode) updateMirrorLiveIndicator();
     })
@@ -6009,6 +6030,12 @@ void updater.initUpdaterUI();
 // Native capabilities arrive asynchronously over the broker WS (the handshake
 // frame lands right after connect). Re-evaluate native-gated UI once it's known
 // so buttons that were hidden on first paint appear when attached to the host.
+// App-global registry changed on the host (any window or prune). Refresh the
+// sidebar everywhere so all native windows stay in sync.
+wsClient.addEventListener("registryChanged", () => {
+  void sidebar.loadSessions({ quiet: true });
+});
+
 wsClient.addEventListener("capabilities", () => {
   refreshHeaderOpenAppButton();
   void loadHeaderOpenApps();
@@ -6022,7 +6049,38 @@ wsClient.addEventListener("capabilities", () => {
     void packageManager?.refresh();
     void extensionUpdateIndicator?.refresh();
   }
+  // First capabilities frame may arrive after the initial loadSessions:
+  // switch the sidebar to its registry data source now that native is known.
+  void sidebar.loadSessions({ quiet: true });
+  void reconcilePreferencesOnce();
 });
+
+// DB is the durable preference truth; cookies are only the render cache that
+// bootstrap reads synchronously before this async reconciliation runs.
+let preferencesReconciled = false;
+// One shared client serves both the startup reconciliation and user-initiated
+// theme/locale persistence (SPEC §6.2/§6.3).
+const preferencesClient = createPreferencesClient({ transport });
+async function reconcilePreferencesOnce() {
+  if (preferencesReconciled || !nativeAvailable()) return;
+  preferencesReconciled = true;
+  const outcome = await reconcileRenderPreferences({
+    client: preferencesClient,
+    entries: [
+      {
+        key: PREFERENCE_KEYS.theme,
+        readCache: () => getCurrentTheme(),
+        apply: (value) => applyTheme(String(value)),
+      },
+      {
+        key: PREFERENCE_KEYS.locale,
+        readCache: () => getLanguagePreference(),
+        apply: (value) => void setLocale(String(value)),
+      },
+    ],
+  });
+  if (!outcome.ok) console.warn("[App] preference reconcile skipped:", outcome.reason);
+}
 
 function buildThemeGrid() {
   themeGrid.replaceChildren();
@@ -6041,7 +6099,14 @@ function buildThemeGrid() {
     }
     btn.appendChild(colors);
     btn.addEventListener("click", (event) => {
-      applyTheme(id, { origin: { x: event.clientX, y: event.clientY } });
+      // User-initiated theme change: render + cookie now, DB mirror for
+      // durability across restarts and machines (SPEC §6.2 step 3).
+      void saveUserRenderPreference({
+        client: preferencesClient,
+        key: PREFERENCE_KEYS.theme,
+        value: id,
+        apply: () => applyTheme(id, { origin: { x: event.clientX, y: event.clientY } }),
+      });
       // Re-apply the Picot theme to every live xterm instance.
       const xtermTheme = picotThemeToXterm();
       for (const entry of terminalClient.tabs.values()) {
@@ -6079,7 +6144,14 @@ function buildLanguageSelector() {
 async function handleLanguageSelectChange() {
   languageSelect.disabled = true;
   try {
-    await setLocale(languageSelect.value);
+    // User-initiated locale change: render + cookie now, DB mirror for
+    // durability across restarts and machines (SPEC §6.2 step 3).
+    await saveUserRenderPreference({
+      client: preferencesClient,
+      key: PREFERENCE_KEYS.locale,
+      value: languageSelect.value,
+      apply: (preference) => setLocale(preference),
+    });
     buildLanguageSelector();
     refreshUsageIframeLocale();
   } finally {
@@ -6454,8 +6526,6 @@ async function handleOpenFolder() {
   }
 }
 
-openFolderBtn?.addEventListener("click", handleOpenFolder);
-
 window.addEventListener("hashchange", restorePageFromHash);
 restorePageFromHash();
 
@@ -6470,9 +6540,13 @@ dismissBootSwapOverlayWhenReady();
 const cachedProjects = readCachedSidebarProjects();
 // readCachedSidebarProjects already filters to complete projects (valid
 // workspaceId + path + sessions array), so hydration never renders broken
-// rows or empty titles while /api/sessions is still loading.
+// rows or empty titles while the session list is still loading.
 if (cachedProjects) {
   sidebar.projects = cachedProjects;
+  // Hydrated registry rows already know their pinned flags; seed the pin
+  // view so the PINNED section renders instantly, then the broker list
+  // response replaces both.
+  sidebar._registryPins = registryPinsFromProjects(cachedProjects);
   sidebar.render();
 }
 

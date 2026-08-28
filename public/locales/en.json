@@ -535,7 +535,18 @@
     "deleteSessionRunning": "Cannot delete a running session",
     "deleteDisabledActive": "Cannot delete the active session",
     "deleteDisabledStreaming": "Cannot delete a streaming session",
-    "deleteDisabledRunning": "Cannot delete a running session"
+    "deleteDisabledRunning": "Cannot delete a running session",
+    "emptyRegistryTitle": "No projects yet",
+    "emptyRegistryHint": "Add a project to see its sessions here.",
+    "workspaceMissingRemoved": "Directory missing — removed from the list. Session files were kept.",
+    "addProject": "Add project",
+    "addProjectDesktopOnly": "Adding projects is available on the desktop app only.",
+    "alreadyRegistered": "This project is already in the list.",
+    "removeFromList": "Remove from list",
+    "removedFromList": "Removed from the list; directory and session files were kept.",
+    "removedFromListStillRunning": "Removed from the list; a window is still running — the row disappears once it closes.",
+    "removeDisabledCurrent": "Cannot remove the current workspace",
+    "addFailed": "Could not add project"
   },
   "sessionInfo": {
     "title": "Session info",

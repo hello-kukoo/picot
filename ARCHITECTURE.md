@@ -198,7 +198,9 @@ HTTP+WS server。该 server 是**进程作用域**的 —— 它在 `new_session
 
 该 server 暴露两类表面：
 
-- **HTTP REST** 在 `/api/*` 下 —— `/api/health`、`/api/sessions`、
+- **HTTP REST** 在 `/api/*` 下 —— `/api/health`、
+  `/api/workspace-sessions`（单个已注册工作区的会话列表；仅 loopback，
+  服务端不读注册表 DB）、
   `/api/files`（读取；workspace scope 支持条件写入，`scope=picker` 仅限
   loopback）、`/api/files/raw`（图片 / PDF）、`/api/search`、
   `/api/cost-dashboard`、`/api/lan-qr`、`/api/instances`、
@@ -408,8 +410,9 @@ Settings → Skills 固定为 **Discovered / Install / Packages**。每个页签
   monogram fallback、选择持久化、clipboard 只在此实现一次）。主聊天仅渲染
   root→leaf 的 ancestor path（`mirror_sync.leafId` 缺失时回退旧全量渲染）。
 - **侧栏 / 文件工作区** —— `sidebar/index.js`、
-  `pinned-items.js`（跨端口 Pin cookie）、`workspace-projects.js`
-  （history/live workspace 合并）、`sidebar/build-session-item.js`（普通、归档与 Focus
+  `preferences-client.js`（broker 偏好 + 渲染 cookie 双轨）、
+  `workspace-projects.js`（registry/live workspace 合并）、
+  `sidebar/build-session-item.js`（普通与 Focus
   session row 共用 DOM builder）、`sidebar/focus-state.js`（URL-scoped Focus 状态机）、
   `sidebar/workspace-focus-sidebar.js`（Focus 工作台）和
   `sidebar-workspace-group.js`（安全、可访问的 region/workspace DOM builder）；以及
@@ -530,11 +533,11 @@ Picot ↔ pi 有三条不同的通讯路径。把它们混淆是本仓库最常�
 │  app.js 等       │◄───────────────────────────────────►│  ┌──────────────────────┐   │
 │                  │   发: broker_control / ws 帧        │  │ http server :47821   │   │
 │                  │   收: broker_event / ws 帧          │  │   /api/health        │   │
-│                  │                                    │  │   /api/sessions      │   │
+│                  │                                    │  │ /api/workspace-sess. │   │
 │                  │                                    │  │   /api/files 等      │   │
 │                  │  ② http://47821/api/* (REST)       │  │   /ws  (WebSocket)   │   │
 │                  │───────────────────────────────────►│  └──────┬─────────┬──────┘   │
-│                  │   GET /api/sessions 等              │         │         │          │
+│                  │   GET /api/workspace-sessions 等    │         │         │          │
 └──────────────────┘                                    │    ┌────▼─────┐  ┌─▼────────┐ │
         ▲                                                │    │Broker-Ws │  │ pi core  │ │
         │                                                │    │port 49xxx│  │ CLI/     │ │
@@ -557,7 +560,7 @@ broker 根据 session-id → port 路由表（从上游 `sessionId` 字段学习
 
 ### 路径 ② —— WebView → embedded-server.ts HTTP REST
 
-HTTP 数据路径，包含受保护的控制端点。供 `GET /api/sessions`、
+HTTP 数据路径，包含受保护的控制端点。供 `GET /api/workspace-sessions`、
 `/api/cost-dashboard`、`/api/files`、`/api/search`、`/api/git-branch`、
 `/api/lan-qr`、`/api/instances` 以及 loopback-only 的 open、配置、写文件和
 RPC 端点使用。不经过 broker；
@@ -678,13 +681,48 @@ session 文件、不变端口。
 - **Rust 进程只派生内嵌 pi binary。** 绝不调用 `$PATH` 上的 `pi`。
 - **Pi agent root 必须唯一且 canonical。** `PiManager::spawn_with_spec_inner()` 创建并 canonicalize agent root，拒绝 `PiSpawnSpec.environment` 覆盖保留变量 `PI_CODING_AGENT_DIR`，并将该值注入每个 Pi 子进程；embedded server 优先读取同一变量。这样无参 `SessionManager.listAll()` 与 Picot 的 `sessions/<project>/*.jsonl` 使用同一树。
 - **Provider 凭证遵循 Pi 的来源优先级。** Picot 启动时通过 `fix_path_env::fix_all_vars()` 将 login shell 环境传给嵌入的 Pi，因此 `models.json` 中引用的 provider 环境变量在 Finder/Dock 启动时也可用；设置页写入/删除 API key 必须委托 Pi 0.82 的 runtime credential store，不能直接改写 `auth.json`，也不能把密钥返回或写入日志。
-- **Session name 由 Pi 管理。** `/api/sessions` 使用无参 `SessionManager.listAll()` 的 `SessionInfo.name`，Picot 只保留 120 字首条消息截断、空 session 本地化标题和短 pipe session 过滤；rename 只能通过 `SessionManager.setSessionName()` 或 `SessionManager.open(path).appendSessionInfo()` 写入。
+- **Session name 由 Pi 管理。** 会话列表（现经 `/api/workspace-sessions` 与共享的 per-project collector）使用无参 `SessionManager.listAll()` 的 `SessionInfo.name`，Picot 只保留 120 字首条消息截断、空 session 本地化标题和短 pipe session 过滤；rename 只能通过 `SessionManager.setSessionName()` 或 `SessionManager.open(path).appendSessionInfo()` 写入。
 - **Session rename 是 loopback-only。** `POST /api/sessions/rename` 必须登记在 `extensions/request-access.ts`，Node 与 Bun adapter 共用 peer-address 策略；LAN surface 仍只读。
+- **工作区注册表只有一份 Rust 持有的 SQLite。** `MetadataStore` 以
+  `Arc<Mutex<MetadataStore>>` 单实例注入 RemoteAuth（配对设备）、broker
+  control handler 与宿主生命周期 touch；任何路径都不得为注册表再开第二条
+  连接。schema v3 迁移走版本阶梯（v0→v1 建表；v1/v2→v3 对 `workspaces`
+  按 `PRAGMA table_info` 条件加列），全程单事务并只在提交后更新
+  `user_version`；迁移严格加表/加列以兼容其它分支的未知表。
+- **注册表与偏好命令是 Native-only。** `workspace.*` / `preference.*`
+  broker control 在 host handler 入口先执行 `require_native_owner(ctx)`，
+  Remote/LAN 一律得到稳定的 `native desktop owner required` 错误；成功变更
+  通过新增的 `broadcast_native_event` 投递给**全部**已鉴权 Native 窗口
+  （不复用单 owner 的 `send_owner_event`），Remote 不接收。
+- **注册表身份由宿主 canonical path 决定。** `workspace.add` 在 Rust 侧
+  canonicalize 后入库；`last_opened_at` 只能由宿主在 open/transition/switch
+  成功提交后调用 `touch_registered_path` 写入（cwd 来自 PiManager 进程记录，
+  客户端 id 无法制造或排序条目）；`list` 自动 prune 失效目录且仅删 DB 行。
+- **临时根 `~/.pi/tmp` 单入口。** `ensure_picot_tmp_root()` 是唯一负责
+  创建、强制 `0700`、canonicalize 的入口（`OnceLock` 进程内缓存一次解析，
+  免受并发 HOME 变化影响；HOME 不可用时告警回退 OS temp）。默认启动 cwd、
+  Quick Chat 子目录统一经它取根；启动不再扫描历史 session 选 cwd。
+- **性能端点不是授权边界。** `/api/workspace-sessions` 与
+  `/api/search?paths=` 为 DB-blind：embedded server 不读注册表 DB，只信任
+  调用方传入的 canonical path 作产品范围过滤；若未来要求服务端范围控制必须
+  改走 Rust owner-scoped 查询或 opaque handle，绝不能让浏览器任意路径冒充授权。
+- **偏好存 DB，cookie 只是首帧渲染缓存。** theme/locale 经
+  `preference.*` 命令持久化到 preferences 表；bootstrap 同步 cookie 保证
+  首帧无闪，broker 就绪后由 `preferences-client.js` 做"DB 缺失则种子、DB
+  更新则覆写 cookie"的一次性 reconcile；Remote 被拒时确定性地返回
+  `{ok:false}` 并记录日志。
+- **Sidebar 数据源即注册表。** 左栏直接消费 `workspace.list`（保留 SQL 排序
+  pinned DESC, last_opened_at DESC），按展开惰性加载单个工作区历史并以
+  keyed DOM 复用保持悬停/滚动/浮层稳定；浏览器/LAN 无 broker-native 时降级
+  为 live-only 视图。cookie Pin 存储（`pinned-items.js`）已删除，Pin 一律
+  落库。
 - **Rename 的路径检查不是同用户 TOCTOU 防护。** 服务端对 root、realpath、`.jsonl` 和 managed `SessionInfo.path` 做 containment 校验，阻止浏览器/LAN 的静态路径逃逸，但不声称能阻止同一 OS 用户在校验后替换文件。
 - **Sidebar rename 必须设置 mutation barrier。** 成功 rename 在乐观更新前推进 `loadInvalidatedThrough`；`loadCommitted` 只记录实际渲染的最高序列，任何 barrier 之前发出的 catalog 响应不得覆盖新名称。
 - **LAN surface 只读。** LAN/mobile 客户端可以加载静态资源并访问明确的
-  只读 REST（health、sessions、workspace files、search、cost、instances、
-  git-branch、lan-qr、workspace-info），但不能直达控制面。`/ws`、
+  只读 REST（health、workspace files、search、cost、instances、
+  git-branch、lan-qr、workspace-info），但不能直达控制面。全局会话列表已随
+  注册表退役：会话历史浏览属于桌面 Native（注册表）能力，LAN 仅保留上述
+  只读面。`/ws`、
   `POST /api/rpc`、文件写入、`/api/open`、workspace/session 控制、配置、
   Telegram（含 doctor 诊断）、Super Agent 控制、`/api/home`，以及 `scope=picker` 都必须 loopback-only。
   `extensions/request-access.ts` 通过 socket peer address 的
@@ -792,11 +830,16 @@ release workflow 以 `TAURI_SIGNING_PRIVATE_KEY` 和
   （POSIX / Windows / UNC 路径）、`public/super-agent/navigation.test.js`
   （Super Agent 导航）以及 `public/i18n-keys-completeness.test.js`（locale
   文件缺失时直接失败，不再静默跳过）。
-- 前端单元测试贴在对应模块旁。Focus/归档删除回归包括
-  `public/sidebar/focus-state.test.js`、`public/sidebar/workspace-focus-sidebar.test.js`、
-  `public/session-sidebar-focus.test.js`、`public/sidebar/archive-protection.test.js`，以及
-  `extensions/embedded-server-session-delete.test.ts` 的 containment 与 live-instance
-  拒绝验证。
+- 前端单元测试贴在对应模块旁。Sidebar/Focus/registry 回归包括
+  `public/sidebar/workspace-registry.test.js`（注册表数据源、懒加载缓存、
+  keyed 行复用、add/remove/pin 流程）、`public/session-sidebar-pinned.test.js`
+  （DB-pin 分组与折叠稳定）、`public/session-sidebar-focus.test.js`、
+  `public/sidebar/workspace-delete.test.js`,以及
+  `extensions/embedded-server-session-delete.test.ts` 的 containment 与
+  live-instance 拒绝验证。
+- 注册表 Rust 契约测试落在 `src-tauri/src/metadata_store.rs`（v3 迁移阶梯、
+  prune/touch、偏好读写）、`src-tauri/src/workspace_controls.rs`（Native 门禁
+  与命令形状）与 `src-tauri/src/broker_ws.rs`(全 Native 广播)。
 - `embedded-server` 在与框架无关的逻辑上有单元测试（搜索、session
   列表、cost-dashboard 聚合、git-branch 解析、LAN URL 构建）。
 - 没有自动化 UI 测试。仓库的规约是：每次改 Rust 后跑
@@ -828,20 +871,21 @@ release workflow 以 `TAURI_SIGNING_PRIVATE_KEY` 和
 每个 workspace 窗口加载自不同端口的 `http://localhost:<port>`，
 而 `localStorage` 按 origin（端口）隔离。需要跨所有本地 workspace
 窗口一致的浏览器侧状态，用 `Path=/` 的 cookie 持久化 —— `localhost`
-的 cookie 跨端口共享。目前三个消费者：
+的 cookie 跨端口共享。目前两个消费者：
 
 | Cookie key              | 模块                 | 用途                          |
 | ----------------------- | -------------------- | ----------------------------- |
 | `pi-studio-theme`       | `themes.js`          | 主题选择                      |
 | `picot-language`        | `i18n.js`            | 语言偏好（en / zh / system）  |
-| `picot-pinned-items`    | `pinned-items.js`    | 有序 workspace Pins |
 
-Pin cookie 使用版本化 JSON；每次变更先重读 cookie，再执行有序去重写入。编码后
-超过 3,800 字节的变更必须拒绝而不能淘汰已有 Pin；无法解析的 Pin 保留为
-unavailable。旧 session Pin、RECENT cookie 和 `pi-studio-favourites` 不再读取或迁移。
+工作区 Pin 一律持久化到注册表（`workspace.pin` broker 命令，Native-only）；
+cookie/`localStorage` Pin 存储已删除，不再读取或迁移。无法解析的历史 Pin 不
+存在——服务端 prune 已保证列表只含现存目录。
 
-`GET /api/workspace-info?workspaceId=` 只接受 `/api/sessions` 历史记录或
-运行实例登记表中已知的 `history:` / `path:` / `workspace:` ID，绝不接收任意文件系统路径。
+`GET /api/workspace-info?workspaceId=` 只接受 `path:<canonical>` 或运行实例
+登记表中已知的 `path:` / `workspace:` ID，绝不接收任意文件系统路径。
+`history:` ID 已随全局会话快照退役；registry 侧前端在调用前把 `ws:<uuid>`
+行翻译成 `path:` 身份。
 其中 `workspace:<cwd>` 是本服务 `withRouteMeta` 随 `mirror_sync` 等消息广播的路由 ID，
 解析时与 `path:` 同样仅匹配运行实例登记表中的 `cwd`。它按需以参数数组的 `execFile` 读取本地 Git 元数据：无 shell、无网络操作、
 3 秒总 deadline、64 KiB 输出上限，并固定 `GIT_OPTIONAL_LOCKS=0` 和
@@ -853,9 +897,12 @@ Focus 模式保留静态 workspace info card：显示 folder name、session thre
 header 不再绑定 hover/focus quick-info 浮窗；workspace Pin 仅通过 workspace
 操作菜单提供。卡片和所有 workspace 文本均以 `textContent` 构建。
 
-左侧栏只渲染 PINNED 与 PROJECTS 两个区域。session 不再有浏览器侧 archive
-状态；Delete 是永久删除入口，普通模式与 Focus 模式共用确认和
-`POST /api/sessions/delete-batch` 路径。
+左侧栏只渲染 PINNED 与 PROJECTS 两个区域，数据源是注册表
+`workspace.list`（保留 SQL 排序），展开行时才经 `/api/workspace-sessions`
+惰性加载该工作区历史；渲染走 keyed reconcile 以保留悬停、滚动与浮层状态。
+session 不再有浏览器侧 archive 状态；Delete 是永久删除入口，普通模式与
+Focus 模式共用确认和 `POST /api/sessions/delete-batch` 路径。「从列表移除」
+仅删注册表行，目录与会话文件不动。
 
 #### Workspace Focus 与 session 删除
 

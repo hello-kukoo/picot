@@ -806,7 +806,9 @@ mod tests {
         let public = temp.join("public");
         fs::create_dir_all(&public).unwrap();
         fs::write(public.join("index.html"), "<h1>Picot native host</h1>").unwrap();
-        let metadata = MetadataStore::open(&temp.join("picot.sqlite3")).unwrap();
+        let metadata = Arc::new(Mutex::new(
+            MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
+        ));
         let auth = Arc::new(Mutex::new(RemoteAuth::new(metadata)));
         let host = HostServer::start(public, NativePiManager::new(32), auth)
             .await
@@ -857,7 +859,9 @@ mod tests {
         )
         .unwrap();
         fs::write(public.join("native/app.js"), "export const marker = 1;").unwrap();
-        let metadata = MetadataStore::open(&temp.join("picot.sqlite3")).unwrap();
+        let metadata = Arc::new(Mutex::new(
+            MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
+        ));
         let auth = Arc::new(Mutex::new(RemoteAuth::new(metadata)));
         let host = HostServer::start(public.clone(), NativePiManager::new(32), auth)
             .await
@@ -908,7 +912,9 @@ mod tests {
         let public = temp.join("public");
         fs::create_dir_all(&public).unwrap();
         fs::write(public.join("index.html"), "Picot").unwrap();
-        let metadata = MetadataStore::open(&temp.join("picot.sqlite3")).unwrap();
+        let metadata = Arc::new(Mutex::new(
+            MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
+        ));
         let auth = Arc::new(Mutex::new(RemoteAuth::new(metadata)));
         let runtimes = NativePiManager::new(32);
         let target = RuntimeTarget::new("workspace-a", "session-a", "instance-a");
@@ -969,7 +975,9 @@ mod tests {
         let public = temp.join("public");
         fs::create_dir_all(&public).unwrap();
         fs::write(public.join("index.html"), "Picot").unwrap();
-        let metadata = MetadataStore::open(&temp.join("picot.sqlite3")).unwrap();
+        let metadata = Arc::new(Mutex::new(
+            MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
+        ));
         let auth = Arc::new(Mutex::new(RemoteAuth::new(metadata)));
         let runtimes = NativePiManager::new(32);
         let target = RuntimeTarget::new("workspace-a", "session-a", "instance-a");

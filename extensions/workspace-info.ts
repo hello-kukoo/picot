@@ -8,7 +8,6 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const MAX_BUFFER = 64 * 1024;
 const DEFAULT_TIMEOUT_MS = 3000;
-export type WorkspaceProjectRef = { dirName: string; path: string };
 export type RunningInstanceRef = { cwd: string; startedAt?: string };
 export type WorkspaceGitInfo = {
   isGit: boolean;
@@ -69,12 +68,11 @@ function normalizePath(value: string) {
 }
 export function resolveWorkspaceInfoPath(
   workspaceId: string,
-  projects: WorkspaceProjectRef[] = [],
   instances: RunningInstanceRef[] = [],
 ) {
   if (typeof workspaceId !== "string") return null;
-  if (workspaceId.startsWith("history:"))
-    return projects.find((p) => `history:${p.dirName}` === workspaceId)?.path ?? null;
+  // `history:<dirName>` ids died with the global /api/sessions snapshot:
+  // registry callers translate to `path:<canonical>` before querying.
   if (workspaceId.startsWith("path:")) {
     const requested = workspaceId.slice(5);
     return instances.find((i) => normalizePath(i.cwd) === normalizePath(requested))?.cwd ?? null;

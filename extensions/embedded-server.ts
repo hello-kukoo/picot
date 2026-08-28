@@ -104,7 +104,7 @@ import {
   type VerifiedPublicPiRuntime,
 } from "./pi-oauth-login-adapter.ts";
 import { isLoopbackAddress, isLoopbackOnlyApiRequest } from "./request-access.ts";
-import { buildProjectSearchMatch } from "./session-search";
+import { buildProjectSearchMatch, parseSearchScopePaths } from "./session-search";
 import { removeSessionFileTrashFirst } from "./session-trash.ts";
 import {
   type InstallCandidateSelection,
@@ -121,6 +121,7 @@ import {
   withSettingsLock,
   writeSettingsAtomically,
 } from "./skill-inventory.ts";
+import { createWorkspaceDirNameResolver } from "./workspace-dirnames.ts";
 import {
   inspectWorkspaceGit,
   observeWorkspaceInfoAbort,
@@ -515,9 +516,14 @@ export async function applySessionDeletions(
 
 type SessionListProject = {
   path: string;
-  dirName: string;
+  // The single-workspace endpoint emits null when a path has no history yet;
+  // the legacy full list always carries the historical directory name.
+  dirName: string | null;
   // biome-ignore lint/suspicious/noExplicitAny: session list entries are parsed from dynamic JSONL headers
   sessions: any[];
+  // Present on `mode=count` responses: on-disk session file count across all
+  // historical buckets (computed from readdir alone, no content reads).
+  sessionCount?: number;
 };
 
 type RunningInstanceInfo = {
@@ -693,6 +699,109 @@ export function markChatWorkerSessions(
   }));
 }
 
+/**
+ * Aggregate `mode=count` responses: readdir-only per-bucket counts summed
+ * across every historical bucket for one canonical path. No content reads.
+ */
+export async function countBucketSessions(options: {
+  canonicalPath: string;
+  dirNames: string[];
+  countDirSessions(dirName: string): Promise<number | null>;
+}): Promise<SessionListProject> {
+  const counts = await Promise.all(options.dirNames.map(options.countDirSessions));
+  const sessionCount = counts.reduce<number>((sum, n) => sum + (typeof n === "number" ? n : 0), 0);
+  return {
+    path: options.canonicalPath,
+    dirName: options.dirNames[0] ?? null,
+    sessions: [],
+    sessionCount,
+  };
+}
+
+/**
+ * Enumerate `<root>/<projectDir>/*.jsonl` file paths (depth: project dirs
+ * only). Unreadable subdirectories are skipped; a missing/unreadable root
+ * throws so callers can decide their own best-effort policy.
+ */
+export function enumerateProjectJsonlFilePaths(sessionsRoot: string): Set<string> {
+  const liveFiles = new Set<string>();
+  for (const dir of fs.readdirSync(sessionsRoot, { withFileTypes: true })) {
+    if (!dir.isDirectory()) continue;
+    const projectDir = path.join(sessionsRoot, dir.name);
+    let names: string[] = [];
+    try {
+      names = fs.readdirSync(projectDir);
+    } catch {
+      continue;
+    }
+    for (const fileName of names) {
+      if (fileName.endsWith(".jsonl")) liveFiles.add(path.join(projectDir, fileName));
+    }
+  }
+  return liveFiles;
+}
+
+/**
+ * Validate the `path` query for /api/workspace-sessions. Returns the trimmed
+ * path plus a stable machine-readable rejection (`error`) or null when valid.
+ */
+export function validateWorkspaceSessionsTarget(raw: string | null | undefined): {
+  path: string;
+  error: string | null;
+} {
+  const value = typeof raw === "string" ? raw.trim() : "";
+  if (!value) return { path: "", error: "path is required" };
+  if (value.length > 4096) return { path: "", error: "path too long" };
+  return { path: value, error: null };
+}
+
+/**
+ * Assemble the single-workspace sessions response for a canonical path:
+ * merge every historical dirName bucket for that path, newest first, then
+ * apply the same live-instance and chat-worker decorations as the legacy
+ * full list. Caller stays DB-blind: it passes whatever buckets it resolved.
+ */
+export async function assembleWorkspaceSessions(options: {
+  canonicalPath: string;
+  dirNames: string[];
+  loadSessionsForDir(dirName: string): Promise<Record<string, unknown>[] | null>;
+  runningInstances: RunningInstanceInfo[];
+  chatWorkerStatuses: ChatWorkerStatusInfo[];
+}): Promise<SessionListProject> {
+  const { canonicalPath, dirNames, loadSessionsForDir, runningInstances, chatWorkerStatuses } =
+    options;
+  const collected = await Promise.all(dirNames.map(loadSessionsForDir));
+  const sessions = collected
+    .filter((bundle): bundle is Record<string, unknown>[] => Array.isArray(bundle))
+    .flat()
+    .sort((a, b) => sessionActivityTime(b) - sessionActivityTime(a));
+  const project: SessionListProject = {
+    path: canonicalPath,
+    // First matched bucket keeps deterministic addressing for callers that
+    // still key by dirName even though merged content may span several.
+    dirName: dirNames[0] ?? null,
+    sessions,
+  };
+  return (
+    markChatWorkerSessions(
+      mergeLiveInstanceSessions([project], runningInstances),
+      chatWorkerStatuses,
+    ).find((candidate) => candidate.path === canonicalPath) ?? project
+  );
+}
+
+function sessionActivityTime(session: Record<string, unknown> | null | undefined): number {
+  const modified = Number(session?.mtime);
+  if (Number.isFinite(modified)) return modified;
+  const timestamp = session?.timestamp;
+  if (typeof timestamp === "string" && timestamp) {
+    const parsed = new Date(timestamp).getTime();
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  const created = Number(session?.ctime);
+  return Number.isFinite(created) ? created : 0;
+}
+
 type GitBranchContextLike = {
   sessionManager?: {
     getEntries?: () => Array<{ type?: string; cwd?: string }>;
@@ -786,16 +895,6 @@ type SessionFileCacheEntry<T> = {
   mtimeMs: number;
   size: number;
   value: T;
-};
-
-// Shape of a project entry in the `/api/sessions` response. The sessions
-// array is intentionally loosely typed because each entry is a spread of
-// the parsed JSONL header (arbitrary keys from pi's session format).
-type SessionProject = {
-  path: string;
-  dirName: string;
-  // biome-ignore lint/suspicious/noExplicitAny: session-list entries are spreads of parsed JSONL headers
-  sessions: any[];
 };
 
 // A unified handle to whichever underlying server is currently bound.
@@ -1169,7 +1268,6 @@ type EmbeddedServerGlobal = {
   // Kept across extension reloads so `/api/workspace-info` can resolve
   // `history:<dirName>` IDs even when the frontend hasn't re-fetched
   // `/api/sessions` yet (or that fetch failed).
-  lastSessionProjects: SessionProject[];
   nextGeneration: number;
   activeSessionBinding: ActiveSessionBinding | null;
   // Owner-bound OAuth login operations (Phase 1). Process-scoped: aborted on
@@ -1780,7 +1878,6 @@ function getOrCreateGlobalState(): EmbeddedServerGlobal {
       markitdownPreviewService: null,
       sessionHeaderCache: new Map<string, SessionFileCacheEntry<unknown>>(),
       sessionMetricsCache: new Map<string, SessionFileCacheEntry<unknown>>(),
-      lastSessionProjects: [] as SessionProject[],
       nextGeneration: 0,
       activeSessionBinding: null,
       oauthLoginOperations: null,
@@ -2110,9 +2207,22 @@ export default function (pi: ExtensionAPI) {
             const parentId = ctx.sessionManager.getLeafId();
             setTimeout(() => {
               try {
-                const entry = ctx.sessionManager
-                  .getChildren(parentId)
-                  .find((candidate) => candidate.type === "message" && candidate.message === msg);
+                // Upstream's ReadonlySessionManager Pick omits getChildren,
+                // but the live ctx always carries the full SessionManager.
+                // Cast via unknown: the structural shapes do not overlap
+                // enough for a direct assertion.
+                const children = (
+                  ctx.sessionManager as unknown as {
+                    getChildren(parentId: string): Array<{
+                      type: string;
+                      message?: unknown;
+                      id?: string;
+                    }>;
+                  }
+                ).getChildren(parentId);
+                const entry = children.find(
+                  (candidate) => candidate.type === "message" && candidate.message === msg,
+                );
                 if (entry) (event as Record<string, unknown>).entryId = entry.id;
               } catch {
                 // Stale ctx during session replacement — skip enrichment.
@@ -3709,12 +3819,73 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    if (urlPath === "/api/sessions" && req.method === "GET") {
+    // Single-workspace session list for the registry sidebar. Loopback-only;
+    // DB-blind by design — scope comes from the caller's canonical path.
+    if (urlPath === "/api/workspace-sessions" || urlPath.startsWith("/api/workspace-sessions?")) {
+      if (req.method !== "GET") {
+        res.writeHead(405, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Method not allowed" }));
+        return;
+      }
+      const requestUrl = tryParseUrl(`http://localhost${req.url || urlPath}`);
+      const target = validateWorkspaceSessionsTarget(requestUrl?.searchParams.get("path") ?? null);
+      if (target.error !== null) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: target.error }));
+        return;
+      }
       if (EPHEMERAL_ENV) {
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ projects: [] }));
-      } else {
-        serveSessionsList(res);
+        res.end(JSON.stringify({ path: target.path, dirName: null, sessions: [] }));
+        return;
+      }
+      try {
+        pruneSessionCachesForRoot();
+        const canonicalTarget = await resolveCanonicalWorkspaceTarget(target.path);
+        const resolver = buildWorkspaceDirNameResolver();
+        const dirNames = await resolver.dirNamesForPath(canonicalTarget);
+        const countOnly = requestUrl?.searchParams.get("mode") === "count";
+
+        const countDirSessions = async (dirName: string): Promise<number | null> => {
+          try {
+            const projectDir = path.join(SESSIONS_DIR, dirName);
+            return fs.readdirSync(projectDir).filter((f) => f.endsWith(".jsonl")).length;
+          } catch {
+            return null;
+          }
+        };
+
+        // Full mode reads only bounded headers of this workspace's buckets
+        // (mtime/size cached); count mode is readdir-only. Neither performs a
+        // full-catalog scan.
+        const response = countOnly
+          ? await countBucketSessions({
+              canonicalPath: canonicalTarget,
+              dirNames,
+              countDirSessions,
+            })
+          : await assembleWorkspaceSessions({
+              canonicalPath: canonicalTarget,
+              dirNames,
+              loadSessionsForDir: async (dirName) => {
+                const projectDir = path.join(SESSIONS_DIR, dirName);
+                let files: string[] = [];
+                try {
+                  files = fs.readdirSync(projectDir).filter((f) => f.endsWith(".jsonl"));
+                } catch {
+                  return null;
+                }
+                const readline = await import("node:readline");
+                return collectProjectSessionsForDir(projectDir, files, readline);
+              },
+              runningInstances: getRunningInstances(),
+              chatWorkerStatuses: getChatWorkerStatuses(),
+            });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(response));
+      } catch (e: unknown) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: errMessage(e) }));
       }
       return;
     }
@@ -3746,11 +3917,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       const workspaceId = requestUrl.searchParams.get("workspaceId") || "";
-      const workspacePath = resolveWorkspaceInfoPath(
-        workspaceId,
-        globalState.lastSessionProjects,
-        getRunningInstances(),
-      );
+      const workspacePath = resolveWorkspaceInfoPath(workspaceId, getRunningInstances());
       if (!workspacePath) {
         res.writeHead(404, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Unknown workspace" }));
@@ -3830,7 +3997,36 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       const q = searchUrl.searchParams.get("q") || "";
-      serveSearch(res, q);
+      // Registry scope (`paths`): product-surface filter only — never an
+      // authorization boundary. Bounded input per ARCHITECTURE.md contract.
+      if (Buffer.byteLength(req.url || urlPath, "utf8") > 8192) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "request URL too long" }));
+        return;
+      }
+      const scope = parseSearchScopePaths(searchUrl.searchParams.get("paths"));
+      if (scope.error !== null) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: scope.error }));
+        return;
+      }
+      if (scope.paths !== null && scope.paths.length === 0) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ results: [] }));
+        return;
+      }
+      let allowedDirNames: Set<string> | null = null;
+      if (scope.paths !== null) {
+        allowedDirNames = new Set<string>();
+        const resolver = buildWorkspaceDirNameResolver();
+        for (const requested of scope.paths) {
+          const canonicalTarget = await resolveCanonicalWorkspaceTarget(requested);
+          for (const dirName of await resolver.dirNamesForPath(canonicalTarget)) {
+            allowedDirNames.add(dirName);
+          }
+        }
+      }
+      serveSearch(res, q, allowedDirNames === null ? undefined : { allowedDirNames });
       return;
     }
 
@@ -4989,6 +5185,56 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  // Root directory names are needed by several cooperating paths (resolver
+  // inventory, prune walk). One readdir, memoized briefly, keeps them all off
+  // the hot path.
+  const ROOT_SCAN_TTL_MS = 5000;
+  let rootScan: { at: number; names: string[] } | null = null;
+  function sessionsRootDirNames(): string[] {
+    if (rootScan && Date.now() - rootScan.at < ROOT_SCAN_TTL_MS) return rootScan.names;
+    let names: string[] = [];
+    try {
+      names = fs
+        .readdirSync(SESSIONS_DIR, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name);
+    } catch {
+      names = [];
+    }
+    rootScan = { at: Date.now(), names };
+    return names;
+  }
+  let lastPruneAt = 0;
+
+  // Cache-bounding walk used by the single-workspace endpoint: enumerate the
+  // sessions root once per request so archived/deleted files stop holding
+  // cache slots even though the full-list path no longer exists.
+  function pruneSessionCachesForRoot() {
+    // Bounded staleness window: repeated expands within the TTL skip the
+    // walk entirely; cache entries for removed files simply linger briefly.
+    if (Date.now() - lastPruneAt < ROOT_SCAN_TTL_MS) return;
+    lastPruneAt = Date.now();
+    try {
+      const dirNames = sessionsRootDirNames();
+      const liveFiles = new Set<string>();
+      for (const dirName of dirNames) {
+        const projectDir = path.join(SESSIONS_DIR, dirName);
+        let names: string[] = [];
+        try {
+          names = fs.readdirSync(projectDir);
+        } catch {
+          continue;
+        }
+        for (const fileName of names) {
+          if (fileName.endsWith(".jsonl")) liveFiles.add(path.join(projectDir, fileName));
+        }
+      }
+      pruneSessionCaches(liveFiles);
+    } catch {
+      return; // enumeration is best-effort; caching tolerates staleness
+    }
+  }
+
   // Bounded async map to avoid EMFILE when users have many session files.
   async function mapWithConcurrencyLimit<T, R>(
     items: T[],
@@ -5011,134 +5257,126 @@ export default function (pi: ExtensionAPI) {
     return results;
   }
 
-  function sessionActivityTime(session: Record<string, unknown> | null | undefined) {
-    const modified = Number(session?.mtime);
-    if (Number.isFinite(modified)) return modified;
-    const timestamp = session?.timestamp;
-    if (typeof timestamp === "string" && timestamp) {
-      const parsed = new Date(timestamp).getTime();
-      if (Number.isFinite(parsed)) return parsed;
+  // Shared per-project session row collection for the single-workspace
+  // endpoint. Reads only the bounded header region of each file (mtime/size
+  // cached), so expansion cost is O(header bytes of this workspace) — never a
+  // full-message scan.
+  async function collectProjectSessionsForDir(
+    projectDir: string,
+    files: string[],
+    readline: typeof import("node:readline"),
+  ): Promise<Record<string, unknown>[] | null> {
+    const sessions: Record<string, unknown>[] = [];
+    const results = await mapWithConcurrencyLimit(files, 24, async (file) => {
+      const filePath = path.join(projectDir, file);
+      try {
+        const result = await parseSessionFileCached(filePath, readline);
+        if (!result?.parsed) return null;
+        return {
+          ...(result.parsed as Record<string, unknown>),
+          file,
+          filePath,
+          mtime: result.stat.mtimeMs,
+          ctime: result.stat.birthtimeMs,
+        };
+      } catch {
+        return null;
+      }
+    });
+    for (const r of results) {
+      if (r) sessions.push(r);
     }
-    const created = Number(session?.ctime);
-    return Number.isFinite(created) ? created : 0;
+    if (sessions.length === 0) return null;
+    sessions.sort((a, b) => sessionActivityTime(b) - sessionActivityTime(a));
+    return sessions;
   }
 
-  async function serveSessionsList(res: http.ServerResponse) {
+  // Bounded header sampling for one historical dirName: newest up-to-three
+  // session headers vote for the recorded cwd (majority wins).
+  async function sampleProjectCwdFromHeaders(projectDirName: string): Promise<string | null> {
+    const projectDir = path.join(SESSIONS_DIR, projectDirName);
+    let candidates: { filePath: string; mtimeMs: number }[] = [];
     try {
-      if (!fs.existsSync(SESSIONS_DIR)) {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ projects: [] }));
-        return;
+      candidates = fs
+        .readdirSync(projectDir)
+        .filter((f) => f.endsWith(".jsonl"))
+        .map((f) => {
+          try {
+            return {
+              filePath: path.join(projectDir, f),
+              mtimeMs: fs.statSync(path.join(projectDir, f)).mtimeMs,
+            };
+          } catch {
+            return { filePath: path.join(projectDir, f), mtimeMs: 0 };
+          }
+        })
+        .sort((a, b) => b.mtimeMs - a.mtimeMs)
+        .slice(0, 3);
+    } catch {
+      return null;
+    }
+    const readline = await import("node:readline");
+    const cwds = await mapWithConcurrencyLimit(candidates, 3, async ({ filePath }) => {
+      try {
+        const result = await parseSessionFileCached(filePath, readline);
+        const cwd =
+          result?.parsed && typeof result.parsed === "object"
+            ? (result.parsed as Record<string, unknown>).cwd
+            : undefined;
+        return typeof cwd === "string" ? cwd : null;
+      } catch {
+        return null;
       }
-
-      const readline = await import("node:readline");
-      const infos = await SessionManager.listAll();
-      const infosByCanonicalPath = new Map<string, SessionInfo>();
-      for (const info of infos) {
-        try {
-          infosByCanonicalPath.set(fs.realpathSync.native(info.path), info);
-        } catch {
-          // Ignore sessions removed while the catalog is being read.
-        }
+    });
+    const usable = cwds.filter((value): value is string => Boolean(value));
+    if (usable.length === 0) return null;
+    // Inline majority over a small fixed-size sample.
+    const counts = new Map<string, number>();
+    for (const value of usable) counts.set(value, (counts.get(value) ?? 0) + 1);
+    let best: string | null = null;
+    let bestCount = 0;
+    for (const [value, count] of counts) {
+      if (count > bestCount) {
+        best = value;
+        bestCount = count;
       }
-      const dirEntries = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true });
-      const liveFiles = new Set<string>();
+    }
+    return best;
+  }
 
-      // Walk the tree first to build the (dir, files) work list and the
-      // live-file set used for cache pruning. Parsing then happens in
-      // parallel per project — most cost is fs.read on cold cache, and
-      // bun + node handle a few hundred concurrent stream reads cheaply.
-      const projectWork: {
-        dirName: string;
-        projectDir: string;
-        files: string[];
-        decodedPath: string;
-      }[] = [];
-      for (const dir of dirEntries) {
-        if (!dir.isDirectory()) continue;
-        const projectDir = path.join(SESSIONS_DIR, dir.name);
-        let files: string[] = [];
-        try {
-          files = fs.readdirSync(projectDir).filter((f) => f.endsWith(".jsonl"));
-        } catch {
-          // Ignore inaccessible/removed project directories while listing.
-          continue;
-        }
-        const decodedPath = dir.name.replace(/^--/, "/").replace(/--$/, "").replace(/-/g, "/");
-        for (const f of files) liveFiles.add(path.join(projectDir, f));
-        projectWork.push({ dirName: dir.name, projectDir, files, decodedPath });
-      }
-
-      pruneSessionCaches(liveFiles);
-
-      const parsedProjects = (
-        await mapWithConcurrencyLimit(
-          projectWork,
-          8,
-          async ({ dirName, projectDir, files, decodedPath }) => {
-            // biome-ignore lint/suspicious/noExplicitAny: dynamic session-list entries built by spreading parsed JSONL headers
-            const sessions: any[] = [];
-            const results = await mapWithConcurrencyLimit(files, 24, async (file) => {
-              const filePath = path.join(projectDir, file);
-              try {
-                const result = await parseSessionFileCached(filePath, readline);
-                if (!result?.parsed) return null;
-                const canonicalFilePath = fs.realpathSync.native(filePath);
-                const info = infosByCanonicalPath.get(canonicalFilePath);
-                return {
-                  ...(result.parsed as Record<string, unknown>),
-                  name: info?.name,
-                  file,
-                  filePath,
-                  mtime: result.stat.mtimeMs,
-                  ctime: result.stat.birthtimeMs,
-                };
-              } catch {
-                return null;
-              }
-            });
-            for (const r of results) {
-              if (r) sessions.push(r);
+  function buildWorkspaceDirNameResolver() {
+    return createWorkspaceDirNameResolver({
+      sessionsDirKey: SESSIONS_DIR,
+      listDirNames: () => sessionsRootDirNames(),
+      sampleProjectPath: sampleProjectCwdFromHeaders,
+      // Pi encodes path.resolve(cwd), NOT realpath. A registry path whose
+      // symlinks were canonicalized (/tmp → /private/tmp) must also try its
+      // de-canonicalized ancestor spellings or the session directory is missed.
+      alternateSpellings: (canonicalPath) => {
+        const spellings: string[] = [];
+        const segments = canonicalPath.split(path.sep);
+        for (let depth = 2; depth < segments.length; depth += 1) {
+          const ancestor = segments.slice(0, depth).join(path.sep) || path.sep;
+          try {
+            const real = fs.realpathSync.native(ancestor);
+            if (real !== ancestor) {
+              const alternate = canonicalPath.replace(ancestor, real);
+              if (alternate !== canonicalPath) spellings.push(alternate);
             }
+          } catch {
+            // Unresolvable ancestor: skip that spelling, keep going.
+          }
+        }
+        return spellings;
+      },
+    });
+  }
 
-            sessions.sort((a, b) => sessionActivityTime(b) - sessionActivityTime(a));
-
-            if (sessions.length === 0) return null;
-
-            // Directory-name decoding is lossy for paths containing "-" (e.g. "pi-mono").
-            // Prefer the real cwd recorded in session headers when available.
-            const cwdCounts = new Map<string, number>();
-            for (const s of sessions) {
-              if (!s.cwd) continue;
-              cwdCounts.set(s.cwd, (cwdCounts.get(s.cwd) || 0) + 1);
-            }
-            const inferredPath =
-              Array.from(cwdCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || decodedPath;
-
-            return { path: inferredPath, dirName, sessions };
-          },
-        )
-      ).filter(
-        // biome-ignore lint/suspicious/noExplicitAny: dynamic session-list entries
-        (p): p is { path: string; dirName: string; sessions: any[] } => p !== null,
-      );
-      const projects = markChatWorkerSessions(
-        mergeLiveInstanceSessions(parsedProjects, getRunningInstances()),
-        getChatWorkerStatuses(),
-      );
-
-      projects.sort((a, b) => {
-        const aSession = a.sessions[0];
-        const bSession = b.sessions[0];
-        return sessionActivityTime(bSession) - sessionActivityTime(aSession);
-      });
-      globalState.lastSessionProjects = projects;
-
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ projects }));
-    } catch (e: unknown) {
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: errMessage(e) }));
+  async function resolveCanonicalWorkspaceTarget(target: string): Promise<string> {
+    try {
+      return fs.realpathSync.native(target);
+    } catch {
+      return target;
     }
   }
 
@@ -5474,6 +5712,7 @@ export default function (pi: ExtensionAPI) {
     const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
     let header: { id?: string; timestamp?: string; cwd?: string } | null = null;
+    let sessionName: string | null = null;
     let firstMessage: string | null = null;
     let userMessageCount = 0;
     let lineCount = 0;
@@ -5485,7 +5724,11 @@ export default function (pi: ExtensionAPI) {
       try {
         const entry = JSON.parse(line);
         if (entry.type === "session") header = entry;
-        else if (entry.type === "message" && entry.message?.role === "user") {
+        else if (entry.type === "session_info" && entry.name) {
+          // User-set display name; written right after the session header,
+          // so capturing it here almost never costs an extra read.
+          if (!sessionName) sessionName = String(entry.name);
+        } else if (entry.type === "message" && entry.message?.role === "user") {
           userMessageCount++;
           if (!firstMessage) {
             const content = entry.message.content;
@@ -5500,7 +5743,7 @@ export default function (pi: ExtensionAPI) {
         /* skip */
       }
 
-      if (lineCount > 50 && firstMessage) break;
+      if (lineCount > 50 && firstMessage && sessionName) break;
     }
 
     rl.close();
@@ -5516,6 +5759,7 @@ export default function (pi: ExtensionAPI) {
     return {
       id: header.id,
       timestamp: header.timestamp || "",
+      name: sessionName,
       firstMessage,
       cwd: header.cwd || null,
     };
@@ -5582,7 +5826,11 @@ export default function (pi: ExtensionAPI) {
   // Full-text search
   // ═══════════════════════════════════════
 
-  async function serveSearch(res: http.ServerResponse, query: string) {
+  async function serveSearch(
+    res: http.ServerResponse,
+    query: string,
+    scope?: { allowedDirNames: Set<string> },
+  ) {
     try {
       if (!query || query.length < 2) {
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -5608,6 +5856,7 @@ export default function (pi: ExtensionAPI) {
         if (!dir.isDirectory()) continue;
         if (results.length >= MAX_RESULTS) break;
 
+        if (scope && !scope.allowedDirNames.has(dir.name)) continue;
         const projectDir = path.join(SESSIONS_DIR, dir.name);
         const decodedPath = dir.name.replace(/^--/, "/").replace(/--$/, "").replace(/-/g, "/");
         const files = fs.readdirSync(projectDir).filter((f) => f.endsWith(".jsonl"));

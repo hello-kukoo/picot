@@ -7,13 +7,17 @@
 
 import { onLocaleChange, t } from "../i18n.js";
 import { createIcon } from "../icons.js";
-import { createPinnedItemsStore } from "../pinned-items.js";
 import { buildSidebarSection, buildSidebarWorkspaceGroup } from "../sidebar-workspace-group.js";
 import { getSuperAgentProject, isSuperAgentProjectPath } from "../super-agent/session.js";
 import { isSuperAgentEnabled } from "../super-agent/settings.js";
 import { cacheSidebarProjects } from "../workspace/nav-state-cache.js";
 import { basenameLocalPath } from "../workspace/path-utils.js";
-import { mergeWorkspaceProjects, resolvePinnedWorkspaceGroups } from "../workspace-projects.js";
+import {
+  mergeRegistryWorkspaces,
+  registryPinsFromProjects,
+  resolvePinnedWorkspaceGroups,
+  workspacePathKey,
+} from "../workspace-projects.js";
 import {
   buildSessionItem as buildSessionItemNode,
   formatSessionTime,
@@ -81,22 +85,16 @@ export class SessionSidebar {
     this.projectsCollapsed = false;
     this.searchQuery = "";
     this.unread = new Set(readJsonArray("pi-studio-unread"));
-    this.pinStore = options.pinStore || createPinnedItemsStore();
-    this.lastPinnedWorkspaceIds = this.snapshotPinnedWorkspaceIds();
-    this.unsubscribePinStore =
-      this.pinStore.subscribe?.((next) => {
-        // Auto-expand any workspace that was just pinned (regardless of entry
-        // point: context menu, quick-info card, or any future caller) without
-        // touching the expansion state of existing pinned workspaces.
-        const nextIds = new Set(
-          (next?.workspaces || []).map((workspace) => workspace?.id).filter(Boolean),
-        );
-        for (const id of nextIds) {
-          if (!this.lastPinnedWorkspaceIds.has(id)) this.expandedWorkspaces.add(id);
-        }
-        this.lastPinnedWorkspaceIds = nextIds;
-        this.render();
-      }) || null;
+    this.transport = options.transport || null;
+    // Per-workspace lazy session cache keyed by canonical path; invalidated
+    // by local session mutations and refreshed per workspace on demand.
+    this.workspaceSessionsCache = new Map();
+    this._registryBusyRows = new Set();
+    // Keyed-DOM row caches so routine refreshes reuse unchanged nodes
+    // (hover/scroll/overlays survive) instead of rebuilding the whole tree.
+    this._projectRowCache = new Map();
+    this._pinnedSectionCache = null;
+    this._registryPins = null;
     this.streamingFiles = new Set();
     this.projectVisibleSessionCounts = new Map();
     this.contextMenu = null;
@@ -214,6 +212,14 @@ export class SessionSidebar {
       return false;
     }
     if (!deleted) return false;
+    // The owning registry row may serve its session list from the lazy cache;
+    // drop that entry so the reload below cannot resurrect the deleted file.
+    const owner = this.projects.find(
+      (project) =>
+        Array.isArray(project.sessions) &&
+        project.sessions.some((session) => session?.filePath === filePath),
+    );
+    if (owner?.source === "registry") this.invalidateWorkspaceSessions(owner.path);
     await this.loadSessions();
     return true;
   }
@@ -355,93 +361,252 @@ export class SessionSidebar {
     });
   }
 
-  async loadSessions({ retries = 4, retryDelayMs = 250, quiet = false } = {}) {
-    const seq = ++this.loadSeq;
-    if (!quiet) {
-      this.container.replaceChildren();
-      for (let index = 0; index < 6; index += 1) {
-        const skeleton = document.createElement("div");
-        skeleton.className = "session-skeleton";
-        const title = document.createElement("div");
-        title.className = "session-skeleton-title";
-        const meta = document.createElement("div");
-        meta.className = "session-skeleton-meta";
-        skeleton.append(title, meta);
-        this.container.appendChild(skeleton);
+  isRegistryAvailable() {
+    return Boolean(
+      this.transport?.available &&
+        this.transport.capabilities?.native &&
+        typeof this.transport.listWorkspaces === "function",
+    );
+  }
+
+  async loadRegistryProjects(seq) {
+    const [listResult, instances] = await Promise.all([
+      this.transport.listWorkspaces(),
+      this.fetchLiveInstances(),
+    ]);
+    if (seq <= this.loadInvalidatedThrough || seq < this.loadCommitted) return this.projects;
+    const rows = Array.isArray(listResult?.workspaces) ? listResult.workspaces : [];
+    const removedRows = Array.isArray(listResult?.removed) ? listResult.removed : [];
+    const merged = mergeRegistryWorkspaces(rows, instances, this.projects);
+
+    for (const reconciliation of merged.reconciliations) {
+      if (this.expandedWorkspaces.delete(reconciliation.fromId)) {
+        this.expandedWorkspaces.add(reconciliation.toId);
       }
     }
+    // Lazy cache survives refreshes; attach cached sessions immediately so
+    // expanded rows do not flash empty while the network round-trip runs.
+    for (const project of merged.projects) {
+      if (project.source !== "registry") continue;
+      const cached = this.workspaceSessionsCache.get(workspacePathKey(project.path));
+      if (cached) project.sessions = cached;
+    }
 
-    let lastError = null;
-    for (let attempt = 0; attempt <= retries; attempt++) {
+    this._registryPins = registryPinsFromProjects(merged.projects);
+    this.loadCommitted = seq;
+    this.projects = merged.projects;
+
+    if (removedRows.length > 0) {
+      this.onSessionNotice?.(t("sidebar.workspaceMissingRemoved"));
+    }
+
+    this.render();
+    try {
+      cacheSidebarProjects(this.projects);
+    } catch {
+      /* caching is best-effort */
+    }
+
+    // Refresh sessions for every currently expanded registry row.
+    for (const project of this.projects) {
+      if (
+        project.source === "registry" &&
+        this.isWorkspaceExpanded(project) &&
+        !this._registryBusyRows.has(project.workspaceId) &&
+        !this.workspaceSessionsCache.has(workspacePathKey(project.path))
+      ) {
+        void this.ensureWorkspaceSessions(project);
+      }
+    }
+    this.scheduleRegistryWarmup();
+    return this.projects;
+  }
+
+  /**
+   * Idle-time warmup for the most recently used registry rows so the first
+   * expansion rarely waits on a cold cache. Strictly best-effort: failures
+   * and busy-row contention are ignored.
+   */
+  scheduleRegistryWarmup() {
+    // Every registered workspace gets warmed: counts first (readdir-only),
+    // then full details row-by-row (serial, so server IO stays bounded).
+    // Cached rows and busy rows are skipped naturally by the helpers.
+    const warm = async () => {
+      const registryRows = this.projects.filter((project) => project.source === "registry");
+      await Promise.all(
+        registryRows.map((project) => this.ensureWorkspaceSessions(project, { countOnly: true })),
+      );
+      for (const project of registryRows) {
+        if (this._registryBusyRows.has(project.workspaceId)) continue;
+        if (this.workspaceSessionsCache.has(workspacePathKey(project.path))) continue;
+        await this.ensureWorkspaceSessions(project);
+      }
+    };
+    if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(() => warm());
+    } else {
+      setTimeout(() => warm(), 800);
+    }
+  }
+
+  /**
+   * Lazily load one registry workspace's sessions on first expand.
+   * Cache key is the canonical path; invalidation clears exactly that path.
+   */
+  async ensureWorkspaceSessions(project, { force = false, countOnly = false } = {}) {
+    if (project?.source !== "registry") return;
+    const cacheKey = workspacePathKey(project.path);
+    if (!cacheKey) return;
+    // Count mode: readdir-only header badge refresh; full mode: lazy history.
+    if (countOnly) {
+      if (project.sessionCount !== undefined && !force) return;
+      if (this._registryBusyRows.has(project.workspaceId)) return;
+      this._registryBusyRows.add(project.workspaceId);
       try {
-        const res = await fetch("/api/sessions");
+        const res = await fetch(
+          `/api/workspace-sessions?mode=count&path=${encodeURIComponent(project.path)}`,
+        );
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        const historyProjects = Array.isArray(data.projects) ? data.projects : [];
-        let instances = [];
-        try {
-          const instancesRes = await fetch("/api/instances");
-          if (instancesRes.ok) {
-            const instancesData = await instancesRes.json();
-            instances = Array.isArray(instancesData.instances) ? instancesData.instances : [];
-          }
-        } catch {
-          // History still receives stable workspace IDs when live-instance lookup fails.
-        }
-        const merged = mergeWorkspaceProjects(historyProjects, instances, this.projects);
-        const projects = merged.projects;
-        if (seq <= this.loadInvalidatedThrough || seq < this.loadCommitted) return this.projects;
-        for (const reconciliation of merged.reconciliations) {
-          this.pinStore.reconcileWorkspace?.(reconciliation);
-          // A live workspace's provisional `path:` id resolves to its stable
-          // `history:` id on this load; carry over any expansion the user
-          // already set so it does not snap back to collapsed after render.
-          if (this.expandedWorkspaces.delete(reconciliation.fromId)) {
-            this.expandedWorkspaces.add(reconciliation.toId);
-          }
-        }
-        this.loadCommitted = seq;
-        this.projects = projects;
+        project.sessionCount = Number(data?.sessionCount) || 0;
         this.render();
-        // Cache the resolved project tree so the next cross-port navigation
-        // can render the sidebar instantly from cache before /api/sessions
-        // responds. Best-effort; failures are swallowed by the helper.
-        try {
-          cacheSidebarProjects(projects);
-        } catch {
-          /* caching is best-effort */
-        }
-        return this.projects;
       } catch (error) {
-        lastError = error;
-        if (attempt < retries) {
-          await new Promise((resolve) => setTimeout(resolve, retryDelayMs * (attempt + 1)));
-        }
+        console.error("[Sidebar] workspace count refresh failed:", error);
+      } finally {
+        this._registryBusyRows.delete(project.workspaceId);
+      }
+      return;
+    }
+    if (this._registryBusyRows.has(project.workspaceId)) return;
+    if (!force && this.workspaceSessionsCache.has(cacheKey)) {
+      project.sessions = this.workspaceSessionsCache.get(cacheKey);
+      this.render();
+      return;
+    }
+    this._registryBusyRows.add(project.workspaceId);
+    try {
+      const res = await fetch(`/api/workspace-sessions?path=${encodeURIComponent(project.path)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
+      this.workspaceSessionsCache.set(cacheKey, sessions);
+      project.dirName = data?.dirName ?? null;
+      project.sessionCount =
+        typeof data?.sessionCount === "number" ? data.sessionCount : sessions.length;
+      project.sessions = sessions;
+      this.render();
+    } catch (error) {
+      console.error("[Sidebar] workspace session load failed:", error);
+    } finally {
+      this._registryBusyRows.delete(project.workspaceId);
+    }
+  }
+
+  /** Drop the cached history of one workspace; next expand refetches it. */
+  invalidateWorkspaceSessions(path) {
+    const key = workspacePathKey(path);
+    if (key) this.workspaceSessionsCache.delete(key);
+    for (const project of this.projects) {
+      if (project.source === "registry" && workspacePathKey(project.path) === key) {
+        project.sessions = [];
       }
     }
+  }
 
-    console.error("[Sidebar] Failed to load sessions:", lastError);
+  /**
+   * Invalidate one workspace's cache and refetch it immediately when its row
+   * is expanded, so callers that need the fresh list (new-session refresh)
+   * observe the update without racing the lazy reload. Collapsed rows only
+   * drop their cache; the next expansion fetches fresh data (SPEC §8.1).
+   */
+  async refreshWorkspaceSessions(path) {
+    this.invalidateWorkspaceSessions(path);
+    const key = workspacePathKey(path);
+    if (!key) return;
+    const project = this.projects.find(
+      (candidate) => candidate.source === "registry" && workspacePathKey(candidate.path) === key,
+    );
+    if (project && this.isWorkspaceExpanded(project)) {
+      await this.ensureWorkspaceSessions(project);
+    }
+  }
+
+  /**
+   * Global refresh entry: registry rows reload and every expanded row's
+   * session cache is dropped so the reload refetches exactly those rows.
+   * Collapsed rows keep their cache — expansion serves it instantly, and a
+   * row's own session mutations invalidate their own entry (SPEC §8.1).
+   */
+  async refreshAllWorkspaces() {
+    for (const project of this.projects) {
+      if (project.source === "registry" && this.isWorkspaceExpanded(project)) {
+        this.workspaceSessionsCache.delete(workspacePathKey(project.path));
+      }
+    }
+    return this.loadSessions();
+  }
+
+  async fetchLiveInstances() {
+    try {
+      const res = await fetch("/api/instances");
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data.instances) ? data.instances : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Load (or reload) the session list. On native desktops the source is the
+   * DB registry via broker `workspace.list`. Browser/LAN surfaces fall back
+   * to live-instance visibility only; history browsing is desktop-native.
+   */
+  async loadSessions({ retries = 4, retryDelayMs = 250, quiet = false } = {}) {
+    void retries;
+    void retryDelayMs;
+    const seq = ++this.loadSeq;
+    try {
+      if (this.isRegistryAvailable()) {
+        return await this.loadRegistryProjects(seq);
+      }
+    } catch (error) {
+      console.error("[Sidebar] registry load failed:", error);
+    }
+    // Browser/LAN surface: no broker-native access. Live windows stay visible;
+    // history browsing requires the desktop registry by design.
+    return this.loadLiveOnlySessions(seq, { quiet });
+  }
+
+  async loadLiveOnlySessions(seq, { quiet = false } = {}) {
+    if (!quiet) this.renderSkeleton();
+    const instances = await this.fetchLiveInstances();
     if (seq <= this.loadInvalidatedThrough || seq < this.loadCommitted) return this.projects;
-    const reason = String(lastError?.message || lastError || "").toLowerCase();
-    const likelyRuntimeDown =
-      reason.includes("failed to fetch") ||
-      reason.includes("networkerror") ||
-      reason.includes("load failed");
-    const message = likelyRuntimeDown
-      ? t("sidebar.failedToLoadSessionsRuntime")
-      : t("sidebar.failedToLoadSessions");
+    const merged = mergeRegistryWorkspaces([], instances, this.projects);
+    for (const reconciliation of merged.reconciliations) {
+      if (this.expandedWorkspaces.delete(reconciliation.fromId)) {
+        this.expandedWorkspaces.add(reconciliation.toId);
+      }
+    }
+    this._registryPins = null;
+    this.loadCommitted = seq;
+    this.projects = merged.projects;
+    this.render();
+    return this.projects;
+  }
+
+  renderSkeleton() {
     this.container.replaceChildren();
-    const loading = document.createElement("div");
-    loading.className = "session-loading";
-    loading.textContent = message;
-    const retryBtn = document.createElement("button");
-    retryBtn.type = "button";
-    retryBtn.className = "retry-link";
-    retryBtn.id = "retry-load-sessions";
-    retryBtn.textContent = t("sidebar.retry");
-    retryBtn.addEventListener("click", () => this.loadSessions());
-    loading.append(" ", retryBtn);
-    this.container.appendChild(loading);
+    for (let index = 0; index < 6; index += 1) {
+      const skeleton = document.createElement("div");
+      skeleton.className = "session-skeleton";
+      const title = document.createElement("div");
+      title.className = "session-skeleton-title";
+      const meta = document.createElement("div");
+      title.textContent = "";
+      skeleton.append(title, meta);
+      this.container.appendChild(skeleton);
+    }
   }
 
   invalidateSessionLoads() {
@@ -474,7 +639,17 @@ export class SessionSidebar {
     if (query !== this.searchQuery) return;
 
     try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+      // Scope full-text search to the currently listed project paths so the
+      // result surface matches what the sidebar shows.
+      const scopePaths = this.projects
+        .filter(
+          (project) => !isSuperAgentProjectPath(project.path, this.superAgentPath) && project.path,
+        )
+        .map((project) => project.path)
+        .slice(0, 100);
+      const suffix =
+        scopePaths.length > 0 ? `&paths=${encodeURIComponent(JSON.stringify(scopePaths))}` : "";
+      const res = await fetch(`/api/search?q=${encodeURIComponent(query)}${suffix}`);
       const data = await res.json();
       if (query !== this.searchQuery) return; // stale
 
@@ -663,21 +838,39 @@ export class SessionSidebar {
     event.preventDefault();
     this.closeContextMenu();
 
-    const isPinned = this.pinStore.isWorkspacePinned(workspace.workspaceId);
+    const registryRow = workspace?.source === "registry";
+    const isPinned = Boolean(registryRow && workspace.pinned);
     const items = [
-      {
-        iconKind: "pin",
-        label: isPinned ? t("sidebar.unpinWorkspace") : t("sidebar.pinWorkspace"),
-        action: () => {
-          if (isPinned) this.pinStore.unpinWorkspace(workspace.workspaceId);
-          else this.pinStore.pinWorkspace(workspace.workspaceId, workspace.path);
-        },
-      },
+      ...(registryRow && this.isRegistryAvailable()
+        ? [
+            {
+              iconKind: "pin",
+              label: isPinned ? t("sidebar.unpinWorkspace") : t("sidebar.pinWorkspace"),
+              action: () => void this.toggleWorkspacePin(workspace, isPinned),
+            },
+          ]
+        : []),
       {
         iconKind: "folder",
         label: t("sidebar.openInFinder"),
         action: () => this.onOpenProject?.(workspace),
       },
+      // Registry rows offer list-removal without touching the directory or
+      // its session files — unlike the destructive batch delete below. The
+      // current workspace itself is never removable: its window cannot be
+      // closed, so un-registering it would strand a live row permanently.
+      ...(registryRow && this.isRegistryAvailable()
+        ? [
+            {
+              iconKind: "x",
+              label: t("sidebar.removeFromList"),
+              disabledReason: this.isCurrentWorkspace?.(workspace)
+                ? t("sidebar.removeDisabledCurrent")
+                : null,
+              action: () => void this.removeFromList(workspace),
+            },
+          ]
+        : []),
       {
         iconKind: "trash-2",
         label: t("sidebar.deleteWorkspaceSessions"),
@@ -704,6 +897,11 @@ export class SessionSidebar {
       const label = document.createElement("span");
       label.textContent = item.label;
       row.append(icon, label);
+      if (item.disabledReason) {
+        row.disabled = true;
+        row.title = item.disabledReason;
+        row.setAttribute("aria-label", item.disabledReason);
+      }
       row.addEventListener("click", (clickEvent) => {
         clickEvent.stopPropagation();
         this.closeContextMenu();
@@ -721,6 +919,93 @@ export class SessionSidebar {
     menu.style.left = `${x}px`;
     menu.style.top = `${y}px`;
     this.contextMenu = menu;
+  }
+
+  /**
+   * DB pin/unpin for registry rows; cookie store stays the browser fallback.
+   * Refresh reloads server-side ordering (pinned DESC, last_opened DESC).
+   */
+  async toggleWorkspacePin(workspace, currentlyPinned) {
+    if (workspace?.source !== "registry" || !this.isRegistryAvailable()) return;
+    try {
+      await this.transport.setWorkspacePinned(workspace.registryId, !currentlyPinned);
+    } catch (error) {
+      console.error("[Sidebar] workspace pin failed:", error);
+      return;
+    }
+    await this.loadSessions({ quiet: true });
+  }
+
+  /** Remove a registry row only; directories and session files untouched. */
+  async removeFromList(workspace) {
+    if (workspace?.source !== "registry" || !this.isRegistryAvailable()) return;
+    // The current workspace's window cannot be closed; refuse the
+    // un-registration rather than stranding a live row the user cannot
+    // dismiss (mirrors the delete-disabled protections on sessions).
+    if (this.isCurrentWorkspace?.(workspace)) {
+      this.onSessionNotice?.(t("sidebar.removeDisabledCurrent"));
+      return;
+    }
+    let removed = false;
+    try {
+      await this.transport.removeWorkspace(workspace.registryId);
+      this.invalidateWorkspaceSessions(workspace.path);
+      this.expandedWorkspaces.delete(workspace.workspaceId);
+      this._projectRowCache.delete(workspace.workspaceId);
+      removed = true;
+    } catch (error) {
+      console.error("[Sidebar] remove from list failed:", error);
+    } finally {
+      await this.loadSessions({ quiet: true });
+    }
+    if (!removed) return;
+    // After the reload a still-running window keeps a temporary live row;
+    // say so instead of implying the workspace vanished entirely.
+    const key = workspacePathKey(workspace.path);
+    const stillRunning = this.projects.some(
+      (project) => project.source === "live" && workspacePathKey(project.path) === key,
+    );
+    this.onSessionNotice?.(
+      t(stillRunning ? "sidebar.removedFromListStillRunning" : "sidebar.removedFromList"),
+    );
+  }
+
+  /** Toolbar entry: pick a folder via broker, register it, expand the row. */
+  async addProjectViaPicker() {
+    if (!this.isRegistryAvailable()) {
+      this.onSessionNotice?.(t("sidebar.addProjectDesktopOnly"));
+      return;
+    }
+    let pickedPath = "";
+    try {
+      const picked = await this.transport.pickFolder();
+      pickedPath = typeof picked === "string" ? picked : (picked?.path ?? "");
+    } catch {
+      return; // user cancelled or picker unavailable
+    }
+    if (!pickedPath) return;
+    let result;
+    try {
+      result = await this.transport.addWorkspace(pickedPath);
+    } catch (error) {
+      this.onSessionNotice?.(`${t("sidebar.addFailed")}: ${String(error?.message || error)}`);
+      return;
+    }
+    const added = result?.added !== false;
+    if (!added) {
+      this.onSessionNotice?.(t("sidebar.alreadyRegistered"));
+    }
+    await this.loadSessions({ quiet: true });
+    if (added && result?.workspace?.workspaceId) {
+      const project = this.projects.find(
+        (candidate) =>
+          candidate.source === "registry" && candidate.registryId === result.workspace.workspaceId,
+      );
+      if (project) {
+        this.expandedWorkspaces.add(project.workspaceId);
+        await this.ensureWorkspaceSessions(project);
+      }
+    }
   }
 
   deletionBlockedReason(filePath) {
@@ -762,10 +1047,6 @@ export class SessionSidebar {
         body: JSON.stringify({ filePaths }),
       });
       const data = await res.json();
-      const blocked = new Set([...(data.running || []), ...(data.errors || [])]);
-      for (const filePath of filePaths) {
-        if (blocked.has(filePath)) continue;
-      }
       if ((data.running || []).length > 0) {
         this.onSessionNotice?.(t("sidebar.deleteSessionRunning"));
       }
@@ -773,6 +1054,9 @@ export class SessionSidebar {
       console.error("[Sidebar] deleteWorkspaceSessions failed:", err);
     }
 
+    // Batch deletes must invalidate this workspace's cache or the reload
+    // below would restore the deleted sessions from it (ghost entries).
+    this.invalidateWorkspaceSessions(workspace?.path);
     await this.loadSessions();
   }
 
@@ -1041,13 +1325,22 @@ export class SessionSidebar {
     return project?.path || project?.dirName || "";
   }
 
+  /**
+   * Unified pinned-workspace render state: cookie pins (legacy browser
+   * surface) plus DB registry pins on native desktops.
+   */
+  getRenderablePinState() {
+    // Pinned-workspace render state now comes solely from DB registry rows.
+    return { workspaces: this._registryPins ?? [] };
+  }
+
   // Snapshot of pinned workspace IDs, used to detect newly-pinned workspaces
   // across pin-store notifications. Falls back to getRenderableState for stubs
   // that do not expose getState.
   snapshotPinnedWorkspaceIds() {
-    const state = (typeof this.pinStore.getState === "function" && this.pinStore.getState()) ||
-      this.pinStore.getRenderableState?.() || { workspaces: [] };
-    return new Set((state.workspaces || []).map((workspace) => workspace?.id).filter(Boolean));
+    return new Set(
+      (this.getRenderablePinState().workspaces || []).map((w) => w?.id).filter(Boolean),
+    );
   }
 
   // Stable expansion key for a workspace record. Prefers the canonical
@@ -1065,8 +1358,13 @@ export class SessionSidebar {
   setWorkspaceExpanded(workspace, expanded) {
     const key = this.getWorkspaceExpansionKey(workspace);
     if (!key) return;
-    if (expanded) this.expandedWorkspaces.add(key);
-    else this.expandedWorkspaces.delete(key);
+    if (expanded) {
+      this.expandedWorkspaces.add(key);
+      // Registry rows load their history lazily on first expansion.
+      void this.ensureWorkspaceSessions(workspace);
+    } else {
+      this.expandedWorkspaces.delete(key);
+    }
   }
 
   getProjectVisibleSessionCount(project, sessionCount) {
@@ -1127,7 +1425,7 @@ export class SessionSidebar {
     return toggleRow;
   }
   renderPinnedSection() {
-    const state = this.pinStore.getRenderableState();
+    const state = this.getRenderablePinState();
     const pinnedGroups = resolvePinnedWorkspaceGroups({
       pinState: state,
       projects: this.projects,
@@ -1184,13 +1482,10 @@ export class SessionSidebar {
                   workspacePath || unavailableFilePath || t("sidebar.unavailable");
                 container.appendChild(unavailable);
 
-                const unpin = document.createElement("button");
-                unpin.type = "button";
-                unpin.textContent = t("sidebar.unpinWorkspace");
-                unpin.addEventListener("click", () => {
-                  this.pinStore.unpinWorkspace(workspace.workspaceId);
-                });
-                container.appendChild(unpin);
+                const staleHint = document.createElement("div");
+                staleHint.className = "pinned-unavailable";
+                staleHint.textContent = t("sidebar.removedFromList");
+                container.appendChild(staleHint);
                 return;
               }
 
@@ -1221,6 +1516,92 @@ export class SessionSidebar {
     });
     section.className = `pinned-group ${section.className}`;
     this.container.appendChild(section);
+  }
+
+  /**
+   * Build-or-reuse one workspace row keyed by workspaceId. A matching
+   * signature returns the previous DOM node so hover state, scroll position
+   * inside long lists, and quick-info overlays survive routine refreshes.
+   */
+  projectRowNode(project, pinnedSessionFile) {
+    const visibleSessions = (project.sessions || []).filter(
+      (session) => session.filePath !== pinnedSessionFile,
+    );
+    // Pagination ("show more") mutates only the visible slice; include it in
+    // the signature so those clicks still rebuild/reuse the correct DOM.
+    const visibleCount = this.getProjectVisibleSessionCount(project, visibleSessions.length);
+    const signature = JSON.stringify([
+      project.workspaceId,
+      project.folderName || "",
+      project.path || "",
+      this.isWorkspaceExpanded(project),
+      visibleCount,
+      project.sessionCount ?? null,
+      (project.sessions || []).map((session) => [
+        session.filePath,
+        session.name ?? null,
+        Number(session.mtime) || 0,
+        Boolean(session.isRunning),
+        session.port ?? null,
+        this.unread.has(session.filePath),
+        this.streamingFiles?.has(session.filePath) || false,
+        session.filePath === this.activeSessionFile,
+      ]),
+      this.searchQuery ? "searching" : "browse",
+      project.workspaceId === "" ? String(Math.random()) : "stable", // live rows always rebuild
+    ]);
+    const cached = this._projectRowCache.get(project.workspaceId);
+    if (cached && cached.signature === signature) return cached;
+
+    const sessionsToRender = this.searchQuery
+      ? visibleSessions
+      : visibleSessions.slice(0, visibleCount);
+    const projectActive = Array.isArray(project.sessions)
+      ? project.sessions.some((s) => s?.filePath === this.activeSessionFile)
+      : false;
+    const { group } = buildSidebarWorkspaceGroup({
+      workspaceId: project.workspaceId,
+      folderName:
+        project.folderName ||
+        basenameLocalPath(project.path) ||
+        project.path ||
+        t("sidebar.unavailable"),
+      workspacePath: project.path,
+      // Collapsed rows that have not loaded details yet show the cheap
+      // readdir count; expanded rows show the precise loaded-session count.
+      // Running-instance rows always count so a live window never shows 0.
+      sessionCount: Math.max(project.sessionCount ?? 0, visibleSessions.length),
+      expanded: this.isWorkspaceExpanded(project),
+      onToggle: (expanded) => this.setWorkspaceExpanded(project, expanded),
+      onNewChat: this.onNewChat ? () => this.onNewChat(project) : null,
+      onContextMenu: (event) => this.showWorkspaceContextMenu(event, project),
+      onMoreActions: (event) => this.showWorkspaceContextMenu(event, project),
+      focusEnabled:
+        (projectActive || this.isCurrentWorkspace?.(project)) && !!this.onWorkspaceFocus,
+      onFocus:
+        projectActive || this.isCurrentWorkspace?.(project)
+          ? () => this.onWorkspaceFocus?.(project)
+          : null,
+      renderSessions: (sessionsDiv) => {
+        for (const session of sessionsToRender) {
+          sessionsDiv.appendChild(
+            this.buildSessionItem(session, project, { showDeleteButton: true }),
+          );
+        }
+        if (!this.searchQuery) {
+          const toggleRow = this.buildProjectSessionsToggleRow(
+            project,
+            sessionsToRender.length,
+            visibleSessions.length,
+          );
+          if (toggleRow) sessionsDiv.appendChild(toggleRow);
+        }
+      },
+    });
+    group.dataset.projectSearchText = this.getProjectSearchText(project);
+    const entry = { signature, group };
+    this._projectRowCache.set(project.workspaceId, entry);
+    return entry;
   }
 
   render() {
@@ -1255,69 +1636,36 @@ export class SessionSidebar {
       },
     });
     projectsSection.className = `projects-group ${projectsSection.className}`;
+    const seenRowKeys = new Set();
     for (const project of this.projects) {
       if (isSuperAgentProjectPath(project.path, this.superAgentPath)) continue;
-      const visibleSessions = (project.sessions || []).filter(
-        (session) => session.filePath !== pinnedSessionFile,
-      );
-      const visibleCount = this.getProjectVisibleSessionCount(project, visibleSessions.length);
-      const sessionsToRender = this.searchQuery
-        ? visibleSessions
-        : visibleSessions.slice(0, visibleCount);
-      const projectActive = Array.isArray(project.sessions)
-        ? project.sessions.some((s) => s?.filePath === this.activeSessionFile)
-        : false;
-      const { group } = buildSidebarWorkspaceGroup({
-        workspaceId: project.workspaceId,
-        folderName:
-          project.folderName ||
-          basenameLocalPath(project.path) ||
-          project.path ||
-          t("sidebar.unavailable"),
-        workspacePath: project.path,
-        sessionCount: visibleSessions.length,
-        expanded: this.isWorkspaceExpanded(project),
-        onToggle: (expanded) => this.setWorkspaceExpanded(project, expanded),
-        onNewChat: this.onNewChat ? () => this.onNewChat(project) : null,
-        onContextMenu: (event) => this.showWorkspaceContextMenu(event, project),
-        onMoreActions: (event) => this.showWorkspaceContextMenu(event, project),
-        focusEnabled:
-          (projectActive || this.isCurrentWorkspace?.(project)) && !!this.onWorkspaceFocus,
-        onFocus:
-          projectActive || this.isCurrentWorkspace?.(project)
-            ? () => this.onWorkspaceFocus?.(project)
-            : null,
-        renderSessions: (sessionsDiv) => {
-          for (const session of sessionsToRender) {
-            sessionsDiv.appendChild(
-              this.buildSessionItem(session, project, { showDeleteButton: true }),
-            );
-          }
-          if (!this.searchQuery) {
-            const toggleRow = this.buildProjectSessionsToggleRow(
-              project,
-              sessionsToRender.length,
-              visibleSessions.length,
-            );
-            if (toggleRow) sessionsDiv.appendChild(toggleRow);
-          }
-        },
-      });
-      group.dataset.projectSearchText = this.getProjectSearchText(project);
+      seenRowKeys.add(project.workspaceId);
+      const { group } = this.projectRowNode(project, pinnedSessionFile);
       projectsGroup.appendChild(group);
+    }
+    // Drop cached nodes for rows that disappeared (removed live rows, etc.)
+    for (const cacheKey of [...this._projectRowCache.keys()]) {
+      if (!seenRowKeys.has(cacheKey)) this._projectRowCache.delete(cacheKey);
     }
     this.container.appendChild(projectsSection);
 
     const nonSuperAgentProjects = this.projects.filter(
       (project) => !isSuperAgentProjectPath(project.path, this.superAgentPath),
     );
-    const pinState = this.pinStore.getRenderableState();
+    const pinState = this.getRenderablePinState();
     if (
       !pinnedSuperAgent &&
       nonSuperAgentProjects.length === 0 &&
       pinState.workspaces.length === 0
     ) {
       this.renderEmptyState({ append: true });
+    }
+    for (const [cacheKey, cached] of this._projectRowCache) {
+      if (!this.projects.some((project) => project.workspaceId === cacheKey)) {
+        this._projectRowCache.delete(cacheKey);
+      } else if (cached) {
+        void cached;
+      }
     }
 
     if (this.searchQuery) this.applySearch();
@@ -1326,6 +1674,14 @@ export class SessionSidebar {
   renderEmptyState({ append = false } = {}) {
     const empty = document.createElement("div");
     empty.className = "session-empty-state";
+    const title = document.createElement("div");
+    title.className = "session-empty-title";
+    title.textContent = t("sidebar.emptyRegistryTitle");
+    empty.appendChild(title);
+    const hint = document.createElement("div");
+    hint.className = "session-empty-hint";
+    hint.textContent = t("sidebar.emptyRegistryHint");
+    empty.appendChild(hint);
     const openButton = document.createElement("button");
     openButton.type = "button";
     openButton.className = "session-empty-open-project";

@@ -134,9 +134,9 @@ describe("SessionSidebar workspace focus affordance", () => {
     });
     const projects = createProjects();
     sidebar.projects = projects;
-    // Pin the alpha workspace using the real store, then make it active so
-    // its pinned group qualifies for the focus affordance.
-    sidebar.pinStore.pinWorkspace("history:alpha", "/work/alpha");
+    // Registry pins are now DB rows surfaced through _registryPins; seed one
+    // for alpha so its pinned group qualifies for the focus affordance.
+    sidebar._registryPins = [{ id: "history:alpha", path: "/work/alpha" }];
     sidebar.setActive("/sessions/alpha.jsonl");
     sidebar.render();
 

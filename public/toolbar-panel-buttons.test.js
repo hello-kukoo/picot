@@ -34,10 +34,10 @@ test("Side Chat mirrors Terminal's active panel toggle contract", () => {
 });
 
 test("sidebar action buttons share the main panel toggle visual contract", () => {
-  for (const id of ["open-folder-btn", "quick-chat-btn", "refresh-sessions-btn"]) {
+  for (const id of ["add-project-btn", "quick-chat-btn", "refresh-sessions-btn"]) {
     expect(document.querySelector(`#${id}`)?.classList.contains("panel-toggle-btn")).toBe(true);
   }
-  expect(appJs).toContain('setButtonIcon(openFolderBtn, "folder-plus", { size: 16 });');
+  expect(appJs).toContain('setButtonIcon(addProjectBtn, "folder-plus", { size: 16 });');
   expect(appJs).toContain('setButtonIcon(refreshSessionsBtn, "refresh-cw", { size: 16 });');
   expect(appJs).toContain(
     'setButtonIcon(document.getElementById("quick-chat-btn"), "message-circle", { size: 16 });',

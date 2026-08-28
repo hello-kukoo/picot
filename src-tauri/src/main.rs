@@ -20,7 +20,6 @@ mod pi_rpc_bridge;
 mod remote_auth;
 mod runtime_coordinator;
 mod session_ui_profile_store;
-mod settings_store;
 mod skill_source_registry;
 mod terminal_manager;
 mod terminal_output;
@@ -28,6 +27,7 @@ mod terminal_profiles;
 mod terminal_registry;
 mod terminal_state_store;
 mod window_owner;
+mod workspace_controls;
 
 use broker_ws::BrokerWs;
 use ephemeral_registry::{
@@ -36,7 +36,7 @@ use ephemeral_registry::{
 };
 use git_service::GitService;
 use host_server::HostServer;
-use metadata_store::MetadataStore;
+use metadata_store::{MetadataStore, SharedMetadataStore};
 use native_pi_manager::NativePiManager;
 use pi_manager::{
     build_ephemeral_environment, canonical_temp_root, cleanup_quick_chat_dir,
@@ -924,40 +924,84 @@ fn find_static_dir(app: &tauri::App) -> PathBuf {
     )
 }
 
-fn list_session_files(root: &PathBuf) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    let Ok(entries) = fs::read_dir(root) else {
-        return files;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            let Ok(inner_entries) = fs::read_dir(path) else {
-                continue;
-            };
-            for inner in inner_entries.flatten() {
-                let session_path = inner.path();
-                if session_path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
-                    files.push(session_path);
-                }
-            }
-        }
-    }
-
-    files
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         image_mime_from_path, navigate_tree_message, resolve_static_dir,
-        side_chat_startup_rpc_commands,
+        side_chat_startup_rpc_commands, touch_registered_workspace,
     };
+    use crate::metadata_store::{MetadataStore, SharedMetadataStore};
     use serde_json::json;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TOUCH_TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    fn shared_test_metadata(label: &str) -> (SharedMetadataStore, PathBuf) {
+        // Sequence + pid keeps parallel tests from sharing one database file.
+        let sequence = TOUCH_TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!(
+            "pi-studio-{label}-{}-{sequence}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&temp).unwrap();
+        (
+            Arc::new(Mutex::new(
+                MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
+            )),
+            temp,
+        )
+    }
+
+    #[test]
+    fn registry_touch_uses_host_recorded_cwd_and_never_creates_rows() {
+        let (metadata, temp) = shared_test_metadata("touch");
+        let project = temp.join("project");
+        fs::create_dir_all(&project).unwrap();
+        let row = metadata.lock().unwrap().add_workspace(&project).unwrap().0;
+
+        // Host-recorded spelling differs from the registered canonical path;
+        // canonicalization inside the store must still match it.
+        let recorded = temp.join(".").join("project");
+        assert!(touch_registered_workspace(
+            &metadata,
+            Some(recorded.to_string_lossy().to_string())
+        ));
+        let touched = metadata
+            .lock()
+            .unwrap()
+            .get_workspace(&row.workspace_id)
+            .unwrap()
+            .unwrap();
+        assert!(touched.last_opened_at.is_some());
+
+        // Unregistered cwd (e.g. default ~/.pi/tmp or ephemeral dirs): no
+        // touch, and crucially no phantom registry row.
+        let ghost = temp.join("ghost");
+        fs::create_dir_all(&ghost).unwrap();
+        assert!(!touch_registered_workspace(
+            &metadata,
+            Some(ghost.to_string_lossy().to_string())
+        ));
+
+        // Unknown port record (None) is a silent no-op.
+        assert!(!touch_registered_workspace(&metadata, None));
+
+        let rows = metadata
+            .lock()
+            .unwrap()
+            .list_workspaces_and_prune()
+            .unwrap()
+            .0;
+        assert_eq!(rows.len(), 1, "touch must never grow the registry");
+    }
 
     fn unique_temp_dir(label: &str) -> PathBuf {
         let suffix = SystemTime::now()
@@ -1116,41 +1160,6 @@ fn extract_session_cwd(session_path: &PathBuf) -> Option<String> {
     None
 }
 
-fn find_latest_session_boot_target() -> Option<(String, String)> {
-    let sessions_root = dirs::home_dir()?.join(".pi/agent/sessions");
-    if !sessions_root.exists() {
-        log::info!(
-            "[pi-desktop] startup resume skipped: sessions dir not found at {}",
-            sessions_root.display()
-        );
-        return None;
-    }
-
-    let session_files = list_session_files(&sessions_root);
-    let latest = session_files
-        .into_iter()
-        .filter_map(|path| {
-            let mtime = fs::metadata(&path).ok()?.modified().ok()?;
-            Some((mtime, path))
-        })
-        .max_by_key(|(mtime, _)| *mtime)?;
-
-    let session_path = latest.1;
-    let cwd = extract_session_cwd(&session_path)?;
-    Some((cwd, session_path.to_string_lossy().to_string()))
-}
-
-fn select_fresh_startup_target(
-    home_cwd: String,
-    latest_session: Option<(String, String)>,
-) -> (String, Option<String>) {
-    let cwd = latest_session
-        .map(|(session_cwd, _session_path)| session_cwd)
-        .filter(|cwd| PathBuf::from(cwd).is_dir())
-        .unwrap_or(home_cwd);
-    (cwd, None)
-}
-
 fn is_invalid_working_directory_error(error: &str) -> bool {
     error.contains("(os error 267)")
 }
@@ -1161,19 +1170,23 @@ fn native_runtime_enabled() -> bool {
 }
 
 fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(), String> {
-    let home_cwd = dirs::home_dir()
-        .unwrap_or_default()
+    // Startup always opens the default `~/.pi/tmp` workspace with a fresh
+    // session; historical sessions are reachable through the sidebar registry.
+    let cwd = pi_manager::ensure_picot_tmp_root()?
         .to_string_lossy()
-        .into_owned();
-    let (cwd, session_path) =
-        select_fresh_startup_target(home_cwd, find_latest_session_boot_target());
+        .to_string();
+    let session_path: Option<String> = None;
     let metadata_path = app
         .path()
         .app_data_dir()
         .map_err(|error| format!("Cannot resolve Picot app data directory: {error}"))?
         .join("picot.sqlite3");
-    let mut metadata = MetadataStore::open(&metadata_path)?;
-    let workspace_id = metadata.workspace_id_for_path(std::path::Path::new(&cwd))?;
+    let shared_metadata = Arc::new(Mutex::new(MetadataStore::open(&metadata_path)?));
+    // SPEC §5.3: the default ~/.pi/tmp workspace is never auto-registered, so
+    // a fresh install keeps an empty registry. The RuntimeTarget only needs an
+    // in-memory identifier and HostServer's cwd map is RAM-only as well — mint
+    // one without writing a registry row.
+    let workspace_id = format!("native-{}", uuid::Uuid::new_v4().simple());
     let session_id = format!("temporary-{}", uuid::Uuid::new_v4().simple());
     let target = RuntimeTarget::new(
         workspace_id,
@@ -1183,7 +1196,7 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
     let resolver = PiManager::new(static_dir.clone());
     let launch = resolver.native_launch_spec(&cwd, session_path.as_deref())?;
     let runtimes = NativePiManager::new(256);
-    let remote_auth = Arc::new(Mutex::new(RemoteAuth::new(metadata)));
+    let remote_auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&shared_metadata))));
     let host = tauri::async_runtime::block_on(HostServer::start_with_workspaces(
         static_dir,
         runtimes.clone(),
@@ -1212,12 +1225,10 @@ async fn cmd_retry_startup(
     manager: State<'_, PiManagerState>,
     broker: State<'_, BrokerWsState>,
 ) -> Result<u16, String> {
-    let home_cwd = dirs::home_dir()
-        .unwrap_or_default()
+    let cwd = pi_manager::ensure_picot_tmp_root()?
         .to_string_lossy()
         .to_string();
-    let (cwd, session_path) =
-        select_fresh_startup_target(home_cwd, find_latest_session_boot_target());
+    let session_path: Option<String> = None;
     // Mirror the main setup hook: never adopt a port we don't own. Always
     // claim a fresh one so the resulting pi is driveable via our PiManager.
     let initial_port = manager.next_port();
@@ -1301,10 +1312,39 @@ async fn download_and_install_update_core(
 // ─── Broker control handler ──────────────────────────────────────────────────
 
 fn require_native_owner(ctx: &broker_ws::VerifiedClientContext) -> Result<(), String> {
-    if ctx.class == broker_ws::ClientClass::Native && ctx.owner_id.is_some() {
-        Ok(())
-    } else {
-        Err("native desktop owner required".to_string())
+    workspace_controls::require_native_owner(ctx).map(|_| ())
+}
+
+/// Record a successful workspace open/switch in the registry. Identity is the
+/// cwd Pi was actually spawned with (host record, never client-supplied),
+/// canonicalized identically to how `add_workspace` stores rows. Unregistered
+/// paths — the default `~/.pi/tmp`, ephemeral temp dirs — return false and
+/// never create registry rows.
+fn touch_registered_workspace(metadata: &SharedMetadataStore, host_cwd: Option<String>) -> bool {
+    let Some(cwd) = host_cwd else {
+        return false;
+    };
+    // Apply the same canonicalization as registration so identity matches
+    // byte-for-byte even when the recorded cwd spelled the directory
+    // differently (symlinks, "." components, /tmp → /private/tmp).
+    let canonical = std::path::Path::new(&cwd)
+        .canonicalize()
+        .unwrap_or_else(|_| std::path::PathBuf::from(&cwd));
+    match metadata.lock() {
+        Ok(mut store) => match store.touch_registered_path(&canonical) {
+            Ok(touched) => touched,
+            Err(error) => {
+                log::warn!(
+                    "[pi-desktop] registry touch failed for {}: {error}",
+                    canonical.display()
+                );
+                false
+            }
+        },
+        Err(_) => {
+            log::warn!("[pi-desktop] metadata lock poisoned during registry touch");
+            false
+        }
     }
 }
 
@@ -1534,6 +1574,7 @@ fn install_control_handler(
     owner_registry: Arc<WindowOwnerRegistry>,
     ephemeral_registry: Arc<EphemeralRegistry>,
     session_ui_profiles: Arc<SessionUiProfileStore>,
+    metadata: SharedMetadataStore,
     app: AppHandle,
 ) {
     let broker_for_handler = broker.clone();
@@ -1547,6 +1588,7 @@ fn install_control_handler(
             let owner_registry = owner_registry.clone();
             let ephemeral_registry = ephemeral_registry.clone();
             let session_ui_profiles = session_ui_profiles.clone();
+            let metadata = metadata.clone();
             let app = app.clone();
             Box::pin(async move {
                 let arg = |key: &str| args.get(key).cloned().unwrap_or(Value::Null);
@@ -1557,6 +1599,22 @@ fn install_control_handler(
                         .and_then(|n| u16::try_from(n).ok())
                 };
                 let arg_bool = |key: &str| args.get(key).and_then(Value::as_bool);
+
+                // App-global registry and preferences: strictly Native desktop
+                // owners; every successful mutation broadcasts to ALL native
+                // clients so other windows stay in sync.
+                if command.starts_with("workspace.") || command.starts_with("preference.") {
+                    workspace_controls::require_native_owner(&ctx)?;
+                    let (result, change) =
+                        workspace_controls::handle_control(&command, &args, &metadata)?;
+                    if let Some(change) = change {
+                        broker.broadcast_native_event(serde_json::json!({
+                            "type": "registry_changed",
+                            "reason": change.reason(),
+                        }));
+                    }
+                    return Ok(result);
+                }
 
                 match command.as_str() {
                     "open_workspace" => {
@@ -1576,6 +1634,9 @@ fn install_control_handler(
                         .await?;
                         warm_side_chat_standby(manager.clone(), PathBuf::from(&cwd));
                         warm_quick_chat_standby(manager.clone());
+                        // Spawn+health+window all succeeded above; the process
+                        // record now holds the authoritative spawn cwd.
+                        touch_registered_workspace(&metadata, manager.cwd_for_port(port));
                         Ok(Value::from(port))
                     }
                     "new_session" => {
@@ -1588,6 +1649,7 @@ fn install_control_handler(
                             arg_str("sessionPath").ok_or("sessionPath is required")?;
                         let port = resolve_control_port(arg_u16("port"), &broker)?;
                         switch_session_core(port, &session_path, &manager, &broker)?;
+                        touch_registered_workspace(&metadata, manager.cwd_for_port(port));
                         Ok(Value::Null)
                     }
                     "fork" => {
@@ -1945,6 +2007,7 @@ fn install_control_handler(
                         )
                         .await?;
                         stop_instance_core(old_port, &manager, &broker);
+                        touch_registered_workspace(&metadata, manager.cwd_for_port(new_port));
                         owner_registry.replace_primary_port(owner, new_port)?;
                         Ok(serde_json::json!({ "instanceId": new_port.to_string() }))
                     }
@@ -2940,12 +3003,24 @@ fn main() {
                 .map_err(|error| format!("Cannot resolve Picot app data directory: {error}"))?
                 .join("session-ui-profiles.json");
             let session_ui_profiles = Arc::new(SessionUiProfileStore::open(profile_path)?);
+            let metadata_path = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("Cannot resolve Picot app data directory: {error}"))?
+                .join("picot.sqlite3");
+            let shared_metadata: SharedMetadataStore =
+                Arc::new(Mutex::new(MetadataStore::open(&metadata_path)?));
+            log::info!(
+                "[pi-desktop] metadata store ready at {}",
+                metadata_path.display()
+            );
             install_control_handler(
                 &broker,
                 manager.clone(),
                 owner_registry.clone(),
                 ephemeral_registry.clone(),
                 session_ui_profiles.clone(),
+                shared_metadata,
                 app.handle().clone(),
             );
 
@@ -3045,14 +3120,15 @@ fn main() {
                 }
             });
 
-            let home_cwd = dirs::home_dir()
-                .unwrap_or_default()
+            // Fresh startup always lands in the private ~/.pi/tmp root with a
+            // brand-new session. History remains available via the registry.
+            let home_cwd = pi_manager::ensure_picot_tmp_root()?
                 .to_string_lossy()
                 .to_string();
-            let (mut cwd, mut session_path) =
-                select_fresh_startup_target(home_cwd.clone(), find_latest_session_boot_target());
+            let mut cwd = home_cwd.clone();
+            let mut session_path: Option<String> = None;
             log::info!(
-                "[pi-desktop] fresh startup session selected for cwd={}",
+                "[pi-desktop] fresh startup workspace selected: cwd={}",
                 cwd
             );
 
@@ -3195,13 +3271,43 @@ fn main() {
 
 #[cfg(test)]
 mod startup_tests {
-    use super::{
-        is_invalid_working_directory_error, select_fresh_startup_target,
-        startup_health_failure_message,
-    };
+    use super::{is_invalid_working_directory_error, startup_health_failure_message};
+    use crate::pi_manager::{create_quick_chat_temp_dir_in, ensure_picot_tmp_root_in};
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn picot_tmp_root_is_created_canonical_and_forced_owner_only() {
+        let home = unique_temp_dir("tmp-root-home");
+        fs::create_dir_all(&home).unwrap();
+        let loose = home.join(".pi").join("tmp");
+        fs::create_dir_all(&loose).unwrap();
+        // A previous run may have left the root world-readable; ensure must heal it.
+        fs::set_permissions(&loose, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let root = ensure_picot_tmp_root_in(&home).expect("tmp root");
+        assert!(root.is_absolute());
+        assert_eq!(root.file_name().and_then(|n| n.to_str()), Some("tmp"));
+        let mode = fs::metadata(&root).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "root must be owner-only");
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn quick_chat_children_live_private_under_the_picot_root() {
+        let home = unique_temp_dir("tmp-root-home2");
+        fs::create_dir_all(&home).unwrap();
+        let root = ensure_picot_tmp_root_in(&home).expect("tmp root");
+
+        let (dir, token) = create_quick_chat_temp_dir_in(&root).expect("chat dir");
+        assert!(dir.starts_with(&root));
+        assert!(dir.to_string_lossy().contains(&token));
+        let mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "chat dir must be owner-only");
+        let _ = fs::remove_dir_all(home);
+    }
 
     fn unique_temp_dir(label: &str) -> PathBuf {
         let suffix = SystemTime::now()
@@ -3229,43 +3335,5 @@ mod startup_tests {
         assert!(message.contains("Timed out waiting for /api/health on port 47821"));
         assert!(message.contains("Picot log"));
         assert!(message.contains("embedded Pi"));
-    }
-
-    #[test]
-    fn keeps_an_existing_latest_workspace_but_never_resumes_its_session_on_app_start() {
-        let home = unique_temp_dir("startup-home");
-        let workspace = unique_temp_dir("startup-workspace");
-        fs::create_dir_all(&home).unwrap();
-        fs::create_dir_all(&workspace).unwrap();
-
-        let selected = select_fresh_startup_target(
-            home.to_string_lossy().into_owned(),
-            Some((
-                workspace.to_string_lossy().into_owned(),
-                "/sessions/old-session.jsonl".to_string(),
-            )),
-        );
-
-        assert_eq!(selected, (workspace.to_string_lossy().into_owned(), None));
-        let _ = fs::remove_dir_all(home);
-        let _ = fs::remove_dir_all(workspace);
-    }
-
-    #[test]
-    fn falls_back_to_home_when_latest_workspace_no_longer_exists() {
-        let home = unique_temp_dir("startup-home");
-        fs::create_dir_all(&home).unwrap();
-        let missing_workspace = home.join("deleted-workspace");
-
-        let selected = select_fresh_startup_target(
-            home.to_string_lossy().into_owned(),
-            Some((
-                missing_workspace.to_string_lossy().into_owned(),
-                "/sessions/old-session.jsonl".to_string(),
-            )),
-        );
-
-        assert_eq!(selected, (home.to_string_lossy().into_owned(), None));
-        let _ = fs::remove_dir_all(home);
     }
 }

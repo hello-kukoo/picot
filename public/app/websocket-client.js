@@ -465,6 +465,13 @@ export class WebSocketClient extends EventTarget {
       return;
     }
 
+    // App-global registry mutated by ANY native window (or host prune).
+    // Every authenticated native client refreshes its sidebar.
+    if (message.type === "registry_changed") {
+      this.dispatchEvent(new CustomEvent("registryChanged", { detail: message }));
+      return;
+    }
+
     if (message.type === "git_status" || message.type === "git_diff") {
       this.dispatchEvent(
         new CustomEvent(message.type === "git_status" ? "gitStatus" : "gitDiff", {

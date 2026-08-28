@@ -164,7 +164,6 @@ describe("JS t() literal key references", () => {
     "cost.js",
     "cost/dashboard.js",
     "cost/infobar.js",
-    "pinned-items.js",
     "sidebar-workspace-group.js",
     "workspace-projects.js",
     "ephemeral-chat-view.js",

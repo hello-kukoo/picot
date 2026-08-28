@@ -1,38 +1,9 @@
-// ABOUTME: Verifies SessionSidebar renders and manipulates Pins through the real sidebar path.
-// ABOUTME: Covers region order, unavailable Pins, live zero-session workspaces, and quick-info binding.
+// ABOUTME: Verifies SessionSidebar PINNED/registry rendering through the real sidebar path.
+// ABOUTME: Covers region order, DB-pin groups, context-menu actions, and fold stability.
 import { JSDOM } from "jsdom";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { initI18n } from "./i18n.js";
 import { SessionSidebar } from "./sidebar/index.js";
-
-function makePinStore(initial = { workspaces: [] }) {
-  const state = structuredClone(initial);
-  const listeners = new Set();
-  const notify = () => {
-    listeners.forEach((listener) => {
-      listener(state);
-    });
-  };
-  return {
-    getRenderableState: () => structuredClone(state),
-    isWorkspacePinned: (id) => state.workspaces.some((item) => item.id === id),
-    pinWorkspace: vi.fn((id, path) => {
-      state.workspaces = [{ id, path }, ...state.workspaces.filter((item) => item.id !== id)];
-      notify();
-      return { ok: true };
-    }),
-    unpinWorkspace: vi.fn((id) => {
-      state.workspaces = state.workspaces.filter((item) => item.id !== id);
-      notify();
-      return { ok: true };
-    }),
-    subscribe: (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    reconcileWorkspace: vi.fn(() => ({ ok: true })),
-  };
-}
 
 function makeQuickInfo() {
   return {
@@ -41,23 +12,116 @@ function makeQuickInfo() {
   };
 }
 
-function createProjects() {
-  return [
-    {
-      workspaceId: "history:alpha",
-      path: "/work/alpha",
-      dirName: "alpha",
-      sessions: [{ filePath: "/sessions/alpha.jsonl", name: "Alpha" }],
-    },
-    {
-      workspaceId: "path:/work/live",
-      path: "/work/live",
-      dirName: "",
-      isProvisional: true,
-      sessions: [],
-    },
-  ];
+const REG_ALPHA_SESSIONS = [{ filePath: "/sessions/alpha.jsonl", name: "Alpha" }];
+const ROW_ALPHA = {
+  workspaceId: "ws:uuid-alpha",
+  path: "/work/alpha",
+  dirName: null,
+  source: "registry",
+  registryId: "uuid-alpha",
+  pinned: true,
+  sessions: REG_ALPHA_SESSIONS,
+};
+const ROW_BETA = {
+  workspaceId: "ws:uuid-beta",
+  path: "/work/beta",
+  dirName: null,
+  source: "registry",
+  registryId: "uuid-beta",
+  pinned: false,
+  sessions: [{ filePath: "/sessions/beta.jsonl", name: "Beta" }],
+};
+const LIVE_ROW = {
+  workspaceId: "path:/work/live",
+  path: "/work/live",
+  dirName: "",
+  isProvisional: true,
+  source: "live",
+  sessions: [],
+};
+
+// Raw workspace.list rows (DB shape) for transport-level fixtures.
+const DB_ROWS = [
+  {
+    workspaceId: "uuid-alpha",
+    canonicalPath: "/work/alpha",
+    displayName: "alpha",
+    pinned: true,
+    lastOpenedAt: null,
+  },
+  {
+    workspaceId: "uuid-beta",
+    canonicalPath: "/work/beta",
+    displayName: "beta",
+    pinned: false,
+    lastOpenedAt: null,
+  },
+];
+
+function localeStub() {
+  return {
+    ok: true,
+    json: async () => ({
+      sidebar: {
+        pinned: "PINNED",
+        projects: "PROJECTS",
+        unavailable: "Unavailable",
+        pinWorkspace: "Pin workspace",
+        unpinWorkspace: "Unpin workspace",
+        removeFromList: "Remove from list",
+        removedFromList: "Removed from the list; directory and session files were kept.",
+        openInFinder: "Open in Finder",
+        deleteWorkspaceSessions: "Delete all sessions",
+        workspaceActions: "Workspace actions",
+        showMore: "Show more",
+        showLess: "Show less",
+        openProject: "Open project",
+        emptySession: "Empty session",
+        deleteSession: "Delete",
+        newChat: "New chat in {path}",
+        justNow: "Just now",
+      },
+    }),
+  };
 }
+
+function makeTransport({ rows = DB_ROWS, removed = [] } = {}) {
+  return {
+    available: true,
+    capabilities: { native: true },
+    listWorkspaces: vi.fn(async () => ({ workspaces: rows, removed })),
+    addWorkspace: vi.fn(async () => ({ added: true })),
+    removeWorkspace: vi.fn(async () => ({ removed: true })),
+    setWorkspacePinned: vi.fn(async () => ({})),
+    getPreference: vi.fn(async () => ({ value: null })),
+    setPreference: vi.fn(async () => ({})),
+    listPreferences: vi.fn(async () => ({ preferences: {} })),
+  };
+}
+
+function makeRegistrySidebar({ transport, onSessionSelect, onNewChat, options = {} } = {}) {
+  const sidebar = new SessionSidebar(
+    document.getElementById("sessions"),
+    onSessionSelect ?? vi.fn(),
+    onNewChat ?? vi.fn(),
+    {
+      quickInfo: makeQuickInfo(),
+      transport,
+      ...options,
+    },
+  );
+  return sidebar;
+}
+
+// Directly install a registry dataset without the async loader; several tests
+// target pure render semantics, not data fetching.
+function seedProjects(sidebar, projects, pins) {
+  sidebar.projects = projects;
+  sidebar._registryPins = pins;
+  sidebar.render();
+}
+
+const RENDER_SET = [ROW_ALPHA, LIVE_ROW];
 
 function workspaceExpanded(workspaceId) {
   const header = document.querySelector(
@@ -72,41 +136,12 @@ beforeEach(async () => {
   globalThis.localStorage = dom.window.localStorage;
   globalThis.CSS = dom.window.CSS || { escape: String };
   global.fetch = vi.fn(async (url) => {
-    if (String(url).includes("/locales/en.json")) {
-      return {
-        ok: true,
-        json: async () => ({
-          sidebar: {
-            pinned: "PINNED",
-            projects: "PROJECTS",
-            unavailable: "Unavailable",
-            pinWorkspace: "Pin workspace",
-            unpinWorkspace: "Unpin workspace",
-            openInFinder: "Open in Finder",
-            deleteWorkspaceSessions: "Delete all sessions",
-            workspaceActions: "Workspace actions",
-            showMore: "Show more",
-            showLess: "Show less",
-            openProject: "Open project",
-            emptySession: "Empty session",
-            deleteSession: "Delete",
-            deleteSessionRunning: "Cannot delete a running session",
-            newChat: "New chat in {path}",
-            justNow: "Just now",
-            minutesAgo: "{minutes}m ago",
-            hoursAgo: "{hours}h ago",
-            yesterday: "Yesterday",
-            rename: "Rename",
-            renameSessionAriaLabel: "Rename session",
-            renameInputPlaceholder: "Session name",
-            renameErrorInvalid: "Enter a name",
-            renameErrorNotFound: "Session unavailable",
-            renameErrorTooLarge: "Request too large",
-            renameErrorServer: "Rename failed",
-            renameRetry: "Retry",
-          },
-        }),
-      };
+    if (String(url).includes("/locales/en.json")) return localeStub();
+    if (String(url).startsWith("/api/instances")) {
+      return { ok: true, json: async () => ({ instances: [] }) };
+    }
+    if (String(url).startsWith("/api/workspace-sessions")) {
+      return { ok: true, json: async () => ({ path: "", dirName: null, sessions: [] }) };
     }
     return { ok: false, json: async () => ({}) };
   });
@@ -115,18 +150,10 @@ beforeEach(async () => {
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("SessionSidebar PINNED integration", () => {
-  test("renders fixed region order, unresolved Pins, and a live zero-session workspace", () => {
-    const pinStore = makePinStore({
-      workspaces: [{ id: "history:alpha", path: "/work/alpha" }],
-    });
-    const quickInfo = makeQuickInfo();
-    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
-      pinStore,
-      quickInfo,
-    });
-    sidebar.projects = createProjects();
-    sidebar.render();
+describe("SessionSidebar regions", () => {
+  test("renders fixed region order and keeps live zero-session workspaces", () => {
+    const sidebar = makeRegistrySidebar({ transport: makeTransport() });
+    seedProjects(sidebar, structuredClone(RENDER_SET), []);
 
     const regions = Array.from(document.querySelectorAll(".pinned-group, .projects-group"));
     expect(regions.map((region) => region.className.split(" ")[0])).toEqual([
@@ -139,132 +166,155 @@ describe("SessionSidebar PINNED integration", () => {
     expect(document.querySelector(".projects-group .sidebar-section-header").textContent).toContain(
       "PROJECTS",
     );
-    expect(quickInfo.bindHeader).not.toHaveBeenCalled();
   });
 
-  test("session rows do not expose Pin controls", () => {
-    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
-      pinStore: makePinStore(),
-    });
-    sidebar.projects = createProjects();
-    sidebar.render();
+  test("session rows never expose pin controls", () => {
+    const sidebar = makeRegistrySidebar({ transport: makeTransport() });
+    seedProjects(sidebar, structuredClone(RENDER_SET), []);
     const item = document.querySelector('.session-item[data-file-path="/sessions/alpha.jsonl"]');
     expect(item.querySelector(".session-pin-btn")).toBeNull();
     expect(item.querySelector(".session-delete-btn")).not.toBeNull();
   });
 
-  test("opens the same workspace actions from an ellipsis button and right click", () => {
-    const pinStore = makePinStore();
-    const onOpenProject = vi.fn();
-    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
-      pinStore,
-      quickInfo: makeQuickInfo(),
-      onOpenProject,
+  test("all section headers share the chevron and no folder icon", () => {
+    const sidebar = makeRegistrySidebar({ transport: makeTransport() });
+    seedProjects(sidebar, structuredClone(RENDER_SET), [
+      { id: "ws:uuid-alpha", path: "/work/alpha" },
+    ]);
+    const headers = document.querySelectorAll(".sidebar-section-header");
+    expect(headers.length).toBe(2);
+    headers.forEach((header) => {
+      expect(header.querySelector(".section-chevron")).not.toBeNull();
+      expect(header.querySelector(".folder-icon")).toBeNull();
     });
-    sidebar.projects = createProjects();
-    sidebar.render();
+  });
+});
+
+describe("SessionSidebar context menu", () => {
+  test("registry rows expose pin, finder, remove-from-list, and delete-all", () => {
+    const onOpenProject = vi.fn();
+    const sidebar = makeRegistrySidebar({
+      transport: makeTransport(),
+      options: { onOpenProject },
+    });
+    seedProjects(sidebar, structuredClone(RENDER_SET), []);
 
     const header = document.querySelector(".projects-group .workspace-header");
-    const more = header.querySelector(".workspace-more-actions-btn");
-    expect(more).not.toBeNull();
-    more.click();
-    expect(document.querySelector(".sidebar-context-menu").textContent).toContain("Pin workspace");
-    expect(document.querySelector(".sidebar-context-menu").textContent).toContain("Open in Finder");
-    expect(document.querySelector(".sidebar-context-menu").textContent).toContain(
-      "Delete all sessions",
-    );
-    expect(document.querySelector(".sidebar-context-menu").textContent).not.toContain(
-      "Archive sessions",
-    );
+    header.querySelector(".workspace-more-actions-btn").click();
+    const menu = document.querySelector(".sidebar-context-menu").textContent;
+    // Fixture row is pinned; toggle renders its inverse action.
+    expect(menu).toContain("Unpin workspace");
+    expect(menu).toContain("Open in Finder");
+    expect(menu).toContain("Remove from list");
+    expect(menu).toContain("Delete all sessions");
 
+    // Second item opens Finder with the whole row object.
     document.querySelector(".sidebar-context-menu .context-menu-item:nth-child(2)").click();
     expect(onOpenProject).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceId: "history:alpha", path: "/work/alpha" }),
+      expect.objectContaining({ workspaceId: "ws:uuid-alpha", path: "/work/alpha" }),
     );
-
-    header.dispatchEvent(
-      new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }),
-    );
-    document.querySelector(".sidebar-context-menu .context-menu-item:first-child").click();
-    expect(pinStore.pinWorkspace).toHaveBeenCalledWith("history:alpha", "/work/alpha");
   });
 
-  test("uses the shared disclosure builder for PINNED workspace groups", () => {
-    const pinStore = makePinStore({
-      workspaces: [{ id: "history:alpha", path: "/work/alpha" }],
-      sessions: [],
+  test("live-only rows keep destructive ops but no registry pin/remove entries", () => {
+    const sidebar = makeRegistrySidebar({
+      transport: makeTransport(),
+      options: { onOpenProject: vi.fn() },
     });
-    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
-      pinStore,
-      quickInfo: makeQuickInfo(),
+    seedProjects(sidebar, [structuredClone(LIVE_ROW)], []);
+
+    document
+      .querySelector(".projects-group .workspace-header")
+      .querySelector(".workspace-more-actions-btn")
+      .click();
+    const menu = document.querySelector(".sidebar-context-menu").textContent;
+    expect(menu).not.toContain("Pin workspace");
+    expect(menu).not.toContain("Remove from list");
+    expect(menu).toContain("Delete all sessions");
+  });
+
+  test("pin action goes through the broker", async () => {
+    const transport = makeTransport();
+    const sidebar = makeRegistrySidebar({ transport });
+    // Seed a beta-only view: an unpinned registry row exercises the pin flip.
+    seedProjects(sidebar, [structuredClone(ROW_BETA), structuredClone(LIVE_ROW)], []);
+    const betaHeader = document.querySelector(
+      '.projects-group .workspace-group[data-workspace-id="ws:uuid-beta"] .workspace-more-actions-btn',
+    );
+    expect(betaHeader).not.toBeNull();
+
+    await sidebar.toggleWorkspacePin(sidebar.projects[0], false);
+    expect(transport.setWorkspacePinned).toHaveBeenCalledWith("uuid-beta", true);
+  });
+
+  test("remove-from-list deletes only the registry row via transport", async () => {
+    const transport = makeTransport();
+    const spyDeleteBatch = vi.fn();
+    global.fetch.mockImplementation(async (url) => {
+      if (String(url).includes("delete-batch")) {
+        spyDeleteBatch();
+        return { ok: true, json: async () => ({}) };
+      }
+      if (String(url).includes("/locales/en.json")) return localeStub();
+      if (String(url).startsWith("/api/instances")) {
+        return { ok: true, json: async () => ({ instances: [] }) };
+      }
+      return { ok: false, json: async () => ({}) };
     });
-    sidebar.projects = createProjects();
-    sidebar.render();
+    const sidebar = makeRegistrySidebar({ transport });
+    await sidebar.loadSessions({ quiet: true });
+    const beta = sidebar.projects.find((project) => project.workspaceId === "ws:uuid-beta");
+    transport.listWorkspaces.mockImplementation(async () => ({
+      workspaces: [ROW_ALPHA],
+      removed: [],
+    }));
+
+    await sidebar.removeFromList(beta);
+
+    expect(transport.removeWorkspace).toHaveBeenCalledWith("uuid-beta");
+    expect(spyDeleteBatch).not.toHaveBeenCalled();
+    expect(sidebar.projects.some((project) => project.workspaceId === "ws:uuid-beta")).toBe(false);
+  });
+});
+
+describe("SessionSidebar PINNED section", () => {
+  test("renders registry-pinned groups through the shared disclosure builder", () => {
+    const sidebar = makeRegistrySidebar({ transport: makeTransport() });
+    seedProjects(sidebar, structuredClone(RENDER_SET), [
+      { id: "ws:uuid-alpha", path: "/work/alpha" },
+    ]);
 
     const header = document.querySelector(".pinned-group .sidebar-section-header");
     const body = document.querySelector(".pinned-group .sidebar-section-sessions");
     expect(header.getAttribute("role")).toBe("button");
     expect(header.getAttribute("aria-expanded")).toBe("true");
     expect(document.querySelector(".pinned-group .workspace-group")).not.toBeNull();
-    expect(document.querySelector(".pinned-workspace-unpin")).toBeNull();
 
     header.dispatchEvent(new KeyboardEvent("keydown", { key: " " }));
     expect(header.getAttribute("aria-expanded")).toBe("false");
     expect(body.classList.contains("collapsed")).toBe(true);
   });
 
-  test("reconciles a provisional pinned workspace when session history supplies its ID", async () => {
-    const pinStore = makePinStore({
-      workspaces: [{ id: "path:/work/live", path: "/work/live" }],
-      sessions: [],
+  test("PINNED workspace new-chat passes the workspace object with its path", () => {
+    const onNewChat = vi.fn();
+    const sidebar = makeRegistrySidebar({
+      transport: makeTransport(),
+      onNewChat,
     });
-    global.fetch = vi.fn(async (url) => {
-      if (url === "/api/sessions")
-        return {
-          ok: true,
-          json: async () => ({
-            projects: [
-              {
-                dirName: "live",
-                path: "/work/live",
-                sessions: [{ filePath: "/sessions/live.jsonl", name: "Live" }],
-              },
-            ],
-          }),
-        };
-      if (url === "/api/instances") return { ok: true, json: async () => ({ instances: [] }) };
-      return { ok: false, json: async () => ({}) };
-    });
-    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
-      pinStore,
-      quickInfo: makeQuickInfo(),
-    });
-    sidebar.projects = [createProjects()[1]];
+    seedProjects(sidebar, structuredClone(RENDER_SET), [
+      { id: "ws:uuid-alpha", path: "/work/alpha" },
+    ]);
 
-    await sidebar.loadSessions({ retries: 0 });
-
-    expect(pinStore.reconcileWorkspace).toHaveBeenCalledWith({
-      fromId: "path:/work/live",
-      toId: "history:live",
-      path: "/work/live",
-    });
+    document.querySelector(".pinned-group .workspace-new-chat-btn").click();
+    expect(onNewChat).toHaveBeenCalledWith(expect.objectContaining({ path: "/work/alpha" }));
   });
 });
 
 describe("SessionSidebar fold-state stability", () => {
   test("workspaces start collapsed and sections start expanded on first render", () => {
-    const pinStore = makePinStore({
-      workspaces: [{ id: "history:alpha", path: "/work/alpha" }],
-      sessions: [],
-    });
-    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
-      pinStore,
-      quickInfo: makeQuickInfo(),
-    });
-    sidebar.projects = createProjects();
-    sidebar.render();
+    const sidebar = makeRegistrySidebar({ transport: makeTransport() });
+    seedProjects(sidebar, structuredClone(RENDER_SET), []);
 
-    expect(workspaceExpanded("history:alpha")).toBe(false);
+    expect(workspaceExpanded("ws:uuid-alpha")).toBe(false);
     expect(workspaceExpanded("path:/work/live")).toBe(false);
     expect(
       document.querySelector(".pinned-group .sidebar-section-header").getAttribute("aria-expanded"),
@@ -276,177 +326,51 @@ describe("SessionSidebar fold-state stability", () => {
     ).toBe("true");
   });
 
-  test("sidebar has no legacy hidden-session section or collapse state", () => {
-    const pinStore = makePinStore({ workspaces: [], sessions: [] });
-    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
-      pinStore,
-      quickInfo: makeQuickInfo(),
-    });
-    sidebar.projects = createProjects();
+  test("rebuilding preserves expansion; no legacy archived state exists", () => {
+    const sidebar = makeRegistrySidebar({ transport: makeTransport() });
+    seedProjects(sidebar, structuredClone(RENDER_SET), []);
+
+    document
+      .querySelector(
+        '.projects-group .workspace-group[data-workspace-id="ws:uuid-alpha"] .workspace-header',
+      )
+      .click();
+    expect(workspaceExpanded("ws:uuid-alpha")).toBe(true);
+    expect(workspaceExpanded("path:/work/live")).toBe(false);
+
     sidebar.render();
 
+    expect(workspaceExpanded("ws:uuid-alpha")).toBe(true);
+    expect(workspaceExpanded("path:/work/live")).toBe(false);
     expect(document.querySelector(".archived-group")).toBeNull();
     expect("archivedCollapsed" in sidebar).toBe(false);
   });
 
-  test("rebuilding the sidebar preserves workspace expansion state", () => {
-    const pinStore = makePinStore({ workspaces: [], sessions: [] });
-    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
-      pinStore,
-      quickInfo: makeQuickInfo(),
+  test("carries expansion across provisional-to-registered reconciliation", async () => {
+    let rows = [];
+    const transport = makeTransport({ rows });
+    Object.defineProperty(transport, "listWorkspaces", {
+      value: vi.fn(async () => ({ workspaces: rows, removed: [] })),
     });
-    sidebar.projects = createProjects();
-    sidebar.render();
+    const sidebar = makeRegistrySidebar({ transport });
 
-    document
-      .querySelector(
-        '.projects-group .workspace-group[data-workspace-id="history:alpha"] .workspace-header',
-      )
-      .click();
-    expect(workspaceExpanded("history:alpha")).toBe(true);
-    expect(workspaceExpanded("path:/work/live")).toBe(false);
-
-    // Simulate the full rebuild triggered by refresh / + new session / pin.
-    sidebar.render();
-
-    expect(workspaceExpanded("history:alpha")).toBe(true);
-    expect(workspaceExpanded("path:/work/live")).toBe(false);
-  });
-
-  test("PINNED workspace new-chat passes the workspace object (with path) to onNewChat", () => {
-    const pinStore = makePinStore({
-      workspaces: [{ id: "history:alpha", path: "/work/alpha" }],
-      sessions: [],
-    });
-    const onNewChat = vi.fn();
-    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), onNewChat, {
-      pinStore,
-      quickInfo: makeQuickInfo(),
-    });
-    sidebar.projects = createProjects();
-    sidebar.render();
-
-    document.querySelector(".pinned-group .workspace-new-chat-btn").click();
-
-    expect(onNewChat).toHaveBeenCalledWith(expect.objectContaining({ path: "/work/alpha" }));
-  });
-
-  test("pinning a workspace via its context menu auto-expands it in PINNED", () => {
-    const pinStore = makePinStore({ workspaces: [], sessions: [] });
-    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
-      pinStore,
-      quickInfo: makeQuickInfo(),
-    });
-    sidebar.projects = createProjects();
-    sidebar.render();
-
-    document
-      .querySelector(
-        '.projects-group .workspace-group[data-workspace-id="history:alpha"] .workspace-header',
-      )
-      .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }));
-    document.querySelector(".sidebar-context-menu .context-menu-item:first-child").click();
-
-    expect(workspaceExpanded("history:alpha")).toBe(true);
-  });
-
-  test("pinning a workspace (any source) preserves the expansion of existing pinned ones", () => {
-    const pinStore = makePinStore({
-      workspaces: [{ id: "history:alpha", path: "/work/alpha" }],
-      sessions: [],
-    });
-    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
-      pinStore,
-      quickInfo: makeQuickInfo(),
-    });
-    sidebar.projects = [
-      ...createProjects(),
-      {
-        workspaceId: "history:beta",
-        path: "/work/beta",
-        dirName: "beta",
-        sessions: [{ filePath: "/sessions/beta.jsonl", name: "Beta" }],
-      },
-    ];
-    sidebar.render();
-
-    document
-      .querySelector(
-        '.pinned-group .workspace-group[data-workspace-id="history:alpha"] .workspace-header',
-      )
-      .click();
-    expect(workspaceExpanded("history:alpha")).toBe(true);
-
-    // Pin beta directly through the store — this is the path quick-info and any
-    // future caller share; the subscribe diff must catch it.
-    pinStore.pinWorkspace("history:beta", "/work/beta");
-
-    expect(workspaceExpanded("history:beta")).toBe(true);
-    expect(workspaceExpanded("history:alpha")).toBe(true);
-  });
-
-  test("carries workspace expansion across a provisional to history id reconciliation", async () => {
-    const pinStore = makePinStore({
-      workspaces: [{ id: "path:/work/live", path: "/work/live" }],
-      sessions: [],
-    });
-    global.fetch = vi.fn(async (url) => {
-      if (url === "/api/sessions")
-        return {
-          ok: true,
-          json: async () => ({
-            projects: [
-              {
-                dirName: "live",
-                path: "/work/live",
-                sessions: [{ filePath: "/sessions/live.jsonl", name: "Live" }],
-              },
-            ],
-          }),
-        };
-      if (url === "/api/instances") return { ok: true, json: async () => ({ instances: [] }) };
-      return { ok: false, json: async () => ({}) };
-    });
-    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
-      pinStore,
-      quickInfo: makeQuickInfo(),
-    });
-    sidebar.projects = [
-      {
-        workspaceId: "path:/work/live",
-        path: "/work/live",
-        dirName: "",
-        isProvisional: true,
-        sessions: [],
-      },
-    ];
+    sidebar.projects = [structuredClone(LIVE_ROW)];
     sidebar.render();
     sidebar.setWorkspaceExpanded({ workspaceId: "path:/work/live" }, true);
     expect(sidebar.isWorkspaceExpanded({ workspaceId: "path:/work/live" })).toBe(true);
 
-    await sidebar.loadSessions({ retries: 0 });
+    rows = [
+      {
+        workspaceId: "uuid-live",
+        canonicalPath: "/work/live",
+        displayName: "live",
+        pinned: false,
+        lastOpenedAt: null,
+      },
+    ];
+    await sidebar.loadSessions({ quiet: true });
 
-    expect(sidebar.isWorkspaceExpanded({ workspaceId: "history:live" })).toBe(true);
+    expect(sidebar.isWorkspaceExpanded({ workspaceId: "ws:uuid-live" })).toBe(true);
     expect(sidebar.isWorkspaceExpanded({ workspaceId: "path:/work/live" })).toBe(false);
-  });
-
-  test("all section headers share the section chevron and no folder icon", () => {
-    const pinStore = makePinStore({
-      workspaces: [{ id: "history:alpha", path: "/work/alpha" }],
-      sessions: [],
-    });
-    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
-      pinStore,
-      quickInfo: makeQuickInfo(),
-    });
-    sidebar.projects = createProjects();
-    sidebar.render();
-
-    const headers = document.querySelectorAll(".sidebar-section-header");
-    expect(headers.length).toBe(2);
-    headers.forEach((header) => {
-      expect(header.querySelector(".section-chevron")).not.toBeNull();
-      expect(header.querySelector(".folder-icon")).toBeNull();
-    });
   });
 });

@@ -66,6 +66,8 @@ struct PiProcess {
     stdin: ChildStdin,
     pid: u32,
     identity: u64,
+    /// cwd Pi was spawned with; host-authoritative source for registry touch.
+    cwd: PathBuf,
 }
 
 pub struct PiManager {
@@ -990,6 +992,7 @@ impl PiManager {
                     stdin,
                     pid,
                     identity,
+                    cwd: spec.cwd.clone(),
                 },
             );
         }
@@ -1078,6 +1081,14 @@ impl PiManager {
     }
 
     /// Whether this manager owns a live process at the given port.
+    /// Host-known spawn cwd for a live process. Returns None for unknown or
+    /// already-exited ports so callers never invent a workspace identity.
+    pub fn cwd_for_port(&self, port: u16) -> Option<String> {
+        let lock = self.processes.lock().ok()?;
+        lock.get(&port)
+            .map(|process| process.cwd.to_string_lossy().to_string())
+    }
+
     pub fn owns_process(&self, port: u16) -> bool {
         self.processes.lock().unwrap().contains_key(&port)
     }
@@ -1773,10 +1784,55 @@ pub fn build_ephemeral_environment(
     ]
 }
 
+/// Ensure Picot's private temp root exists beneath `home`, is forced to
+/// owner-only permissions even when a previous run left it loose, and comes
+/// back canonicalized so symlinked homes cannot split cleanup predicates.
+/// Single creation/permission/canonicalization entry point shared by the
+/// default startup workspace and Quick Chat roots.
+pub fn ensure_picot_tmp_root_in(home: &Path) -> Result<PathBuf, String> {
+    let dir = home.join(".pi").join("tmp");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Cannot create {}: {}", e, dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Forced, not umask-dependent: an earlier loose 0o755 directory must
+        // never survive as the parent of owner-private chat directories.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("Cannot restrict {}: {}", e, dir.display()))?;
+    }
+    dir.canonicalize()
+        .map_err(|e| format!("Cannot resolve {}: {}", e, dir.display()))
+}
+
+/// Home-anchored variant of [`ensure_picot_tmp_root_in`]; falls back to the
+/// OS temp dir (with a warning) when $HOME cannot be resolved.
+///
+/// The resolved root is cached for the process lifetime: create/cleanup pairs
+/// must always observe one identical root even though $HOME is process-global
+/// state that other threads (tests) may briefly repoint elsewhere.
+pub fn ensure_picot_tmp_root() -> Result<PathBuf, String> {
+    static PICOT_TMP_ROOT: std::sync::OnceLock<Result<PathBuf, String>> =
+        std::sync::OnceLock::new();
+    PICOT_TMP_ROOT
+        .get_or_init(|| match dirs::home_dir() {
+            Some(home) => ensure_picot_tmp_root_in(&home),
+            None => {
+                log::warn!("[pi-desktop] HOME unavailable; falling back to OS temp root");
+                std::env::temp_dir()
+                    .canonicalize()
+                    .or(Ok(std::env::temp_dir()))
+            }
+        })
+        .clone()
+}
+
+/// Legacy alias kept for the many Quick Chat call sites; now anchored at
+/// `~/.pi/tmp` instead of the OS temp dir.
 pub fn canonical_temp_root() -> PathBuf {
-    std::env::temp_dir()
-        .canonicalize()
-        .unwrap_or_else(|_| std::env::temp_dir())
+    ensure_picot_tmp_root().unwrap_or_else(|error| {
+        log::warn!("[pi-desktop] tmp root unavailable ({error}); using OS temp dir");
+        std::env::temp_dir()
+    })
 }
 
 /// Create a unique owner-private directory for a Quick Chat under the OS temp
@@ -1785,7 +1841,11 @@ pub fn canonical_temp_root() -> PathBuf {
 /// startup; only the live in-memory record can request cleanup.
 #[allow(dead_code)]
 pub fn create_quick_chat_temp_dir() -> Result<(PathBuf, String), String> {
-    let root = canonical_temp_root();
+    create_quick_chat_temp_dir_in(&canonical_temp_root())
+}
+
+#[allow(dead_code)]
+pub fn create_quick_chat_temp_dir_in(root: &Path) -> Result<(PathBuf, String), String> {
     loop {
         let token = random_hex_token();
         let candidate = root.join(format!("{QUICK_CHAT_TEMP_PREFIX}{token}"));

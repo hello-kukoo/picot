@@ -535,7 +535,18 @@
     "deleteSessionRunning": "実行中のセッションは削除できません",
     "deleteDisabledActive": "アクティブなセッションは削除できません",
     "deleteDisabledStreaming": "ストリーミング中のセッションは削除できません",
-    "deleteDisabledRunning": "実行中のセッションは削除できません"
+    "deleteDisabledRunning": "実行中のセッションは削除できません",
+    "emptyRegistryTitle": "プロジェクトはまだありません",
+    "emptyRegistryHint": "プロジェクトを追加すると、ここにセッションが表示されます。",
+    "workspaceMissingRemoved": "ディレクトリが見つからないため一覧から削除しました。セッションファイルは残っています。",
+    "addProject": "プロジェクトを追加",
+    "addProjectDesktopOnly": "プロジェクトの追加はデスクトップアプリでのみ利用できます。",
+    "alreadyRegistered": "このプロジェクトは既に一覧にあります。",
+    "removeFromList": "一覧から削除",
+    "removedFromList": "一覧から削除しました。ディレクトリとセッションファイルは変更されていません。",
+    "removedFromListStillRunning": "一覧から削除しました。ウィンドウが実行中のため、閉じるとこの行は消えます。",
+    "removeDisabledCurrent": "現在のワークスペースは削除できません",
+    "addFailed": "プロジェクトを追加できませんでした"
   },
   "sessionInfo": {
     "title": "セッション情報",

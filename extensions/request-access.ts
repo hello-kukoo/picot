@@ -28,6 +28,10 @@ const LOOPBACK_ONLY_ROUTES = new Set([
   "GET /api/super-agent/projects",
   "GET /api/home",
   "GET /api/file-mentions",
+  // Single-workspace lazy session loading for the registry sidebar. The
+  // embedded server cannot verify registry membership (it has no DB), so this
+  // is a performance surface, NOT an authorization boundary.
+  "GET /api/workspace-sessions",
   // Skills install transport is host-to-primary only: it scans arbitrary
   // local directories and writes settings, so it must never be reachable
   // from the LAN surface. The Bearer secret is a defense-in-depth second

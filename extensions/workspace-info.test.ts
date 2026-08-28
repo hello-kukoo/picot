@@ -10,24 +10,22 @@ import {
 } from "./workspace-info.ts";
 
 describe("workspace info", () => {
-  it("resolves only known IDs", () => {
-    expect(resolveWorkspaceInfoPath("history:a", [{ dirName: "a", path: "/work/a" }], [])).toBe(
-      "/work/a",
-    );
-    expect(resolveWorkspaceInfoPath("path:/work/live", [], [{ cwd: "/work/live" }])).toBe(
-      "/work/live",
-    );
-    expect(resolveWorkspaceInfoPath("/etc", [], [])).toBeNull();
+  it("resolves path ids against running instances", () => {
+    expect(resolveWorkspaceInfoPath("path:/work/live", [{ cwd: "/work/live" }])).toBe("/work/live");
+    expect(resolveWorkspaceInfoPath("path:/etc", [])).toBeNull();
+  });
+  it("retired history ids never resolve after the global snapshot removal", () => {
+    expect(resolveWorkspaceInfoPath("history:a", [])).toBeNull();
   });
   it("resolves the server-broadcast workspace: id against running instances", () => {
     // mirror_sync payloads carry `workspace:<cwd>` (embedded-server withRouteMeta);
     // /api/workspace-info must resolve its own broadcast ids or the frontend
     // Git-entry probe 404s and never hides the tab proactively.
-    expect(resolveWorkspaceInfoPath("workspace:/work/live", [], [{ cwd: "/work/live" }])).toBe(
+    expect(resolveWorkspaceInfoPath("workspace:/work/live", [{ cwd: "/work/live" }])).toBe(
       "/work/live",
     );
     // Same guard as path:: only registered instance cwds resolve.
-    expect(resolveWorkspaceInfoPath("workspace:/etc", [], [{ cwd: "/work/live" }])).toBeNull();
+    expect(resolveWorkspaceInfoPath("workspace:/etc", [{ cwd: "/work/live" }])).toBeNull();
   });
   it("parses supported remotes", () => {
     expect(parseRepositoryName("https://github.com/owner/repo.git", "/work/repo")).toBe(

@@ -162,6 +162,40 @@ export class WsTransport {
 
   // ── Native-only ops (need an OS host; reject when capabilities.native=false) ─
 
+  // ── Workspace registry & app preferences (app-global, Native-only) ────────
+
+  listWorkspaces() {
+    return this._control("workspace.list", {});
+  }
+
+  addWorkspace(path) {
+    return this._control("workspace.add", { path });
+  }
+
+  removeWorkspace(workspaceId) {
+    return this._control("workspace.remove", { workspaceId });
+  }
+
+  setWorkspacePinned(workspaceId, pinned) {
+    return this._control("workspace.pin", { workspaceId, pinned });
+  }
+
+  getPreference(key) {
+    return this._control("preference.get", { key });
+  }
+
+  setPreference(key, value) {
+    return this._control("preference.set", { key, value });
+  }
+
+  deletePreference(key) {
+    return this._control("preference.delete", { key });
+  }
+
+  listPreferences(prefix = "") {
+    return this._control("preference.list", { prefix });
+  }
+
   pickFolder() {
     return this._control("pick_folder", {}, { timeoutMs: NO_TIMEOUT });
   }

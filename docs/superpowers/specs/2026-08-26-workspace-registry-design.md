@@ -363,8 +363,12 @@ snapshot、`globalState` 相关缓存键。`/api/sessions/:dirName/:file`
 - 不传 → 维持现状扫全部（过渡期兼容；P7 后 Native 前端一律传）。
 - 契约：`paths` 必须为 JSON string array；限制 URL ≤ 8 KiB、数组 ≤ 100 项、
   单项 ≤ 4 KiB。畸形 JSON、非 string 项、超限或空字符串稳定返回 400 JSON
-  error；空数组返回正常空结果。路径按字符串 canonical identity 比较，不在
-  extension 内再 canonicalize。Node 与 Bun adapter 共用同一 parser/错误形状。
+  error；空数组返回正常空结果。实现（实现超集，已按实际行为回标）：
+  extension 对请求中的 `path`/`paths` 先经 `fs.realpathSync.native`
+  canonicalize（`resolveCanonicalWorkspaceTarget`，失败回退原字符串）再
+  与 dirName 解析结果比较——比纯字符串比较更鲁棒（容忍非 canonical
+  拼写），非授权边界，canonical 失败不拒请求。Node 与 Bun adapter 共用
+  同一 parser/错误形状。
 - 左栏内嵌搜索与全局搜索对话框（`session-search-dialog`）都改为传
   registry path 集。
 

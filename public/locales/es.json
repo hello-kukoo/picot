@@ -535,7 +535,18 @@
     "deleteSessionRunning": "No se puede eliminar una sesión en ejecución",
     "deleteDisabledActive": "No se puede eliminar la sesión activa",
     "deleteDisabledStreaming": "No se puede eliminar una sesión en streaming",
-    "deleteDisabledRunning": "No se puede eliminar una sesión en ejecución"
+    "deleteDisabledRunning": "No se puede eliminar una sesión en ejecución",
+    "emptyRegistryTitle": "Aún no hay proyectos",
+    "emptyRegistryHint": "Añade un proyecto para ver sus sesiones aquí.",
+    "workspaceMissingRemoved": "Directorio inexistente: se quitó de la lista. Los archivos de sesión se conservaron.",
+    "addProject": "Añadir proyecto",
+    "addProjectDesktopOnly": "Añadir proyectos solo está disponible en la app de escritorio.",
+    "alreadyRegistered": "Este proyecto ya está en la lista.",
+    "removeFromList": "Quitar de la lista",
+    "removedFromList": "Se quitó de la lista; el directorio y los archivos de sesión no cambiaron.",
+    "removedFromListStillRunning": "Se quitó de la lista; ese espacio aún tiene una ventana en ejecución: la fila desaparecerá al cerrarla.",
+    "removeDisabledCurrent": "No se puede quitar el espacio de trabajo actual",
+    "addFailed": "No se pudo añadir el proyecto"
   },
   "sessionInfo": {
     "title": "Información de sesión",

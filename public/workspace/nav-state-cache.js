@@ -111,7 +111,7 @@ export function consumeNavState(maxAgeMs = 60_000) {
 
 // ── Sidebar cache ────────────────────────────────────────────────────────────
 // The resolved project tree is cached so the *next* page boot can render the
-// sidebar instantly before `/api/sessions` responds. The projection preserves
+// sidebar instantly before the registry list responds. The projection preserves
 // every field `SessionSidebar.render()` / `buildSessionItem` reads; sessions
 // that lack a filePath (would break row rendering) are dropped, and projects
 // without identity/path are dropped too.
@@ -132,7 +132,10 @@ function toProjectCache(p) {
     workspaceId: typeof p.workspaceId === "string" ? p.workspaceId : null,
     path: typeof p.path === "string" ? p.path : null,
     folderName: typeof p.folderName === "string" ? p.folderName : null,
-    dirName: typeof p.dirName === "string" ? p.dirName : "",
+    // Registry rows carry null until their first lazy load; keep the null so
+    // hydrated rows match live objects instead of drifting to "".
+    dirName: typeof p.dirName === "string" ? p.dirName : null,
+    pinned: Boolean(p.pinned),
     isProvisional: Boolean(p.isProvisional),
     source: typeof p.source === "string" ? p.source : "",
     activityAt: typeof p.activityAt === "number" ? p.activityAt : 0,
@@ -167,7 +170,7 @@ function clearSidebarCache() {
 
 /**
  * Cache the sidebar's resolved project/session tree so the *next* page boot
- * can render it instantly before `/api/sessions` responds. Called after
+ * can render it instantly before the registry list responds. Called after
  * every successful `loadSessions`.
  */
 export function cacheSidebarProjects(projects) {

@@ -400,6 +400,26 @@ impl BrokerWs {
         delivered
     }
 
+    /// Deliver an app-global event frame (e.g. `registry_changed`) to every
+    /// authenticated NATIVE client across all owners. The registry is
+    /// process-global, so single-owner routing would leave other windows
+    /// stale; Remote mirrors never receive this channel.
+    /// Returns the number of clients the frame was queued for.
+    pub fn broadcast_native_event(&self, value: Value) -> usize {
+        let message = value.to_string();
+        let mut delivered = 0;
+        let clients = self.inner.ui_clients.lock().unwrap();
+        for client in clients.values() {
+            if client.authed
+                && client.class == ClientClass::Native
+                && client.tx.send(message.clone()).is_ok()
+            {
+                delivered += 1;
+            }
+        }
+        delivered
+    }
+
     /// Classify a `client_hello` frame. A valid capability authenticates as the
     /// bound owner; absence of a capability is a remote client; an invalid or
     /// malformed hello is rejected and must never downgrade to remote.
@@ -2034,6 +2054,70 @@ mod tests {
     }
 
     // ─── Task 5: capability handshake + owner-scoped ephemeral routing ────
+
+    /// Insert a fake authenticated client directly into the connection map.
+    /// Returns (client_id, receiver) for drain assertions.
+    fn insert_fake_client(
+        broker: &BrokerWs,
+        class: ClientClass,
+        owner: Option<OwnerId>,
+        authed: bool,
+    ) -> (u64, mpsc::UnboundedReceiver<String>) {
+        let client_id = broker.inner.next_client_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = mpsc::unbounded_channel::<String>();
+        broker.inner.ui_clients.lock().unwrap().insert(
+            client_id,
+            UiClient {
+                tx,
+                class,
+                owner_id: owner,
+                authed,
+            },
+        );
+        (client_id, rx)
+    }
+
+    fn drain(rx: &mut mpsc::UnboundedReceiver<String>) -> Vec<Value> {
+        let mut frames = Vec::new();
+        while let Ok(text) = rx.try_recv() {
+            frames.push(serde_json::from_str(&text).expect("frame json"));
+        }
+        frames
+    }
+
+    #[test]
+    fn registry_changed_reaches_every_native_owner_but_never_remote() {
+        let (broker, registry) = broker_with_registry();
+        let owner_a = test_owner("window-a");
+        let owner_b = test_owner("window-b");
+        let _ = &registry;
+
+        let (_id_a, mut rx_a) =
+            insert_fake_client(&broker, ClientClass::Native, Some(owner_a.clone()), true);
+        let (_id_b, mut rx_b) =
+            insert_fake_client(&broker, ClientClass::Native, Some(owner_b.clone()), true);
+        let (_id_remote, mut rx_remote) =
+            insert_fake_client(&broker, ClientClass::Remote, None, true);
+        // Unauthenticated socket must not observe app-global events either.
+        let (_id_unauth, mut rx_unauth) =
+            insert_fake_client(&broker, ClientClass::Native, Some(owner_a.clone()), false);
+
+        let delivered = broker.broadcast_native_event(json!({
+            "type": "registry_changed",
+            "reason": "added",
+        }));
+
+        assert_eq!(delivered, 2, "only the two authed native clients");
+        let frames_a = drain(&mut rx_a);
+        let frames_b = drain(&mut rx_b);
+        assert_eq!(frames_a.len(), 1);
+        assert_eq!(frames_a[0]["type"], "registry_changed");
+        assert_eq!(frames_a[0]["reason"], "added");
+        assert_eq!(frames_b.len(), 1);
+        assert_eq!(frames_b[0]["type"], "registry_changed");
+        assert!(drain(&mut rx_remote).is_empty(), "remote never receives");
+        assert!(drain(&mut rx_unauth).is_empty(), "unauthed never receives");
+    }
 
     fn broker_with_registry() -> (BrokerWs, Arc<WindowOwnerRegistry>) {
         let broker = BrokerWs {

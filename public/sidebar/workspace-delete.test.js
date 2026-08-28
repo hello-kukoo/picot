@@ -226,7 +226,8 @@ describe("SessionSidebar workspace deletion", () => {
 
   test("workspace context menu renders the delete-all entry", () => {
     const sidebar = makeSidebar();
-    sidebar.pinStore.getRenderableState = () => ({ workspaces: [] });
+    // Cookie pin store is retired; empty registry pins keep the menu lean.
+    sidebar._registryPins = [];
     const event = new window.MouseEvent("contextmenu", { bubbles: true });
     Object.defineProperty(event, "preventDefault", { value: vi.fn() });
 

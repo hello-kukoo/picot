@@ -86,12 +86,13 @@ describe("SessionSidebar onboarding empty state", () => {
     expect(onOpenProject).toHaveBeenCalledTimes(1);
   });
 
-  test("keeps the newest session list when overlapping refreshes resolve out of order", async () => {
+  test("keeps the newest registry rows when overlapping refreshes resolve out of order", async () => {
     const dom = new JSDOM('<div id="sessions"></div>', { url: "http://localhost" });
     globalThis.document = dom.window.document;
     globalThis.localStorage = dom.window.localStorage;
     globalThis.CSS = dom.window.CSS;
 
+    // Registry data source: the sequence guard lives around workspace.list.
     let resolveFirst;
     let resolveSecond;
     const first = new Promise((resolve) => {
@@ -100,31 +101,54 @@ describe("SessionSidebar onboarding empty state", () => {
     const second = new Promise((resolve) => {
       resolveSecond = resolve;
     });
-    globalThis.fetch = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const transport = {
+      available: true,
+      capabilities: { native: true },
+      getPreference: vi.fn(async () => ({ value: null })),
+      setPreference: vi.fn(async () => ({})),
+      listPreferences: vi.fn(async () => ({ preferences: {} })),
+      listWorkspaces: vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second),
+    };
 
-    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn());
+    const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
+      transport,
+    });
 
     const firstLoad = sidebar.loadSessions({ quiet: true });
     const secondLoad = sidebar.loadSessions({ quiet: true });
 
     resolveSecond({
-      ok: true,
-      json: async () => ({
-        projects: [{ path: "/work", dirName: "--work", sessions: [{ filePath: "new.jsonl" }] }],
-      }),
+      workspaces: [
+        {
+          workspaceId: "uuid-new",
+          canonicalPath: "/work/new",
+          displayName: "new",
+          pinned: false,
+          lastOpenedAt: null,
+        },
+      ],
+      removed: [],
     });
     await secondLoad;
-    expect(sidebar.projects[0].sessions[0].filePath).toBe("new.jsonl");
+    expect(sidebar.projects.some((project) => project.workspaceId === "ws:uuid-new")).toBe(true);
 
+    // The stale first response must never clobber the newer commit.
     resolveFirst({
-      ok: true,
-      json: async () => ({
-        projects: [{ path: "/work", dirName: "--work", sessions: [{ filePath: "old.jsonl" }] }],
-      }),
+      workspaces: [
+        {
+          workspaceId: "uuid-old",
+          canonicalPath: "/work/old",
+          displayName: "old",
+          pinned: false,
+          lastOpenedAt: null,
+        },
+      ],
+      removed: [],
     });
     await firstLoad;
 
-    expect(sidebar.projects[0].sessions[0].filePath).toBe("new.jsonl");
+    expect(sidebar.projects.some((project) => project.workspaceId === "ws:uuid-old")).toBe(false);
+    expect(sidebar.projects.some((project) => project.workspaceId === "ws:uuid-new")).toBe(true);
   });
 
   test("filters project groups by project name", () => {

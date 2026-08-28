@@ -521,6 +521,15 @@ export async function openFolderAsWorkspace({
     const selectedPath = await transport.pickFolder();
     if (!selectedPath) return false;
 
+    // Register (idempotently) before attaching so the sidebar row exists even
+    // if the attach is cancelled midway. Best-effort: opening proceeds even
+    // when the registry rejects (e.g. transient broker state).
+    try {
+      await transport.addWorkspace?.(selectedPath);
+    } catch {
+      // Registry registration is optional for opening a workspace.
+    }
+
     const result = await attachToWorkspace({
       targetCwd: selectedPath,
       transport,
