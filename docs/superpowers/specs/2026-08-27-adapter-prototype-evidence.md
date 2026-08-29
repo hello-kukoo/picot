@@ -36,7 +36,7 @@
 | 4 Auth substrate | **未就绪**——capability 校验/HostClientContext/Registered-only 接线为 B-GAP-01/02/04（P1/P2），原型以 in-test v2-core 替身 | 0（归 P1/P2，非 P3） |
 | 5 Static/origin | brokerWs 移除策略 4 测试绿；`/workspaces/` 路由与 fingerprint base 待真实浏览器（D-GAP-06/07） | 2–3 |
 | 6 Parity execution | 37 项契约测试；real Pi/browser E2E 未做（D-GAP-02/06/07/08 维持） | E2E/parity harness 5–8 |
-| 7 Retained legacy | compat middleware 机制成立（token+401/403/404 可见拒绝）；保留范围待 D8/CP2 | per-route 矩阵 3–5 |
+| 7 Retained legacy | compat middleware 机制成立（token+401/403/404 可见拒绝）；保留范围已决（D8 2026-08-29：不保留永久 `/v2/rpc`） | per-route 矩阵 3–5 |
 | 8 Release/rollback | 不变（Gate R rehearsal 已按 R4.11 deferred） | 0（另计发布周期） |
 
 **P3 coding 重估：19–29 人日**（不含 P1/P2 substrate 与 dogfood 观察窗口）。取代旧"5 人日"占位。

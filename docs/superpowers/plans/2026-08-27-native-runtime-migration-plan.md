@@ -355,6 +355,8 @@ OperationRecord(Pending | Completed | Indeterminate | Expired | Revoked)
 
 状态（R4.3）：**D1–D7、D9 已于 2026-08-28 由 Dr. Lin 按默认拍板**并回填 spec §16；D2 附 Gate B 重开条件。已拍板项不再重议，除非触发重开条件。
 
+**状态（R4.13，2026-08-29）：本会议按 R4.4 per-Blocks 规则解散，不再作为独立排期项。** D1–D7、D9 已拍板（08-28）；D8 已于 08-29 依 Gate A external caller 盘点拍板（不保留永久 `/v2/rpc`，删除前置见 spec §16）；残项仅 D10 cohort 门槛——触发条件 = Gate D telemetry 方案就绪，期限 = P3/P8 开工前，不阻塞 P0/P1/P2。
+
 输入：Gate R、A–D 产物及 R4.5 spec §16。会议纪要确认 Gate evidence；各 work package 开工许可按其 explicit Gate dependencies + §16 Blocks 列判定：D8 仅阻塞 P7/P8、D10 仅阻塞 P3/P8（spec §16 Blocks）；其余 work package 不因这两项待决而 blocked。D8 不在本会议拍板，等待 Gate A external caller 盘点；D10 不在本会议拍板，等待 Gate D telemetry 方案；两项均在其 Blocks 所指 phase 启动前补拍。
 
 若 Gate R 的 API/schema/recovery 仍未通过，决策会不得将“后补”写成例外；P1/P2/P3 保持 blocked。
@@ -535,7 +537,7 @@ Exit：`bun run test`、`bun run check`、`bun run check:rust`、`bun run build:
 | --- | --- | --- |
 | CP0 | Gate R（WP-R 完成后） | **已关闭（2026-08-29，Dr. Lin 签署）**：六项 exit criteria 逐条验证（criterion 1 admission 边界修正见 spec R4.12）；WP-R.1–R.6 全部交付；P0/P1 解锁 |
 | CP1 | Gate A–D | 分场：**Gate B-design + Gate C-design + Gate A 已于 2026-08-29 关闭**（Dr. Lin 签署；B/C 见 `2026-08-29-cp1-review.md`；Gate A 人审裁决：A-HTTP-37 直接 retire、A-HTTP-25/D8 边界、高危行终态认可，含两条安全修复）；Gate D（adapter 原型在途）另行关闭 |
-| CP2 | 决策会 | D1–D10 开工许可 |
+| CP2 | 决策会 | **已重构关闭（2026-08-29，Dr. Lin）**：单一会议按 R4.4 per-Blocks 规则解散；D1–D9 全部拍板（D8 见 spec §16 R4.13）；残项 D10 cohort 门槛由「Gate D telemetry 就绪后、P3/P8 开工前补拍」接管，不阻塞 P0/P1/P2 |
 | CP3 | P1 完 | lifecycle、Operation Registry、turn abort、runtime smoke |
 | CP4 | P2 完 | capability/authorization/limit matrix |
 | CP5 | P3 完 | dogfood go/no-go、P3 performance/parity |

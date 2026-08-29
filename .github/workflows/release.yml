@@ -92,6 +92,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Verify migration inventory
+        run: bun run check:inventory
+
       # Cache embedded release assets. Lockfile changes invalidate the cache so
       # a build never silently ships a stale Pi binary or terminal font.
       - name: Cache embedded release downloads

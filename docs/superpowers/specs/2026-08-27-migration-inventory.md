@@ -94,7 +94,7 @@ Repository search found no separate external client package, LAN/mobile source, 
 
 **External scan（2026-08-29，`context/d8-external-evidence-2026-08-29T02-44-01.md`）**：五渠道均零外部 caller——(1) GitHub forks（本仓 0 fork；上游 20 forks 无 API 消费者，最活跃者为独立产品）；(2) 公开代码特征串（`/api/workspace-sessions`、`brokerWs`、`47821` 等）无命中；(3) 分发渠道：本仓无 release；上游 `shixin-guo/picot`（本仓之源，picotlabs.com）有签名 Releases，**其 v0.3.x 存量携带同构 API，但 v0.4 已无兼容层地完成同一场退役**，且 v0.4.2 六天 2218 次更新器拉取表明存量已被批量推过断裂；(4) 社区 registry 3207 包 `search=picot` 零命中；(5) npm 无 picot 客户端包。
 
-**D8 evidence is complete; decision pending CP2.** 证据支撑默认决议「不保留永久 `/v2/rpc`」；剩余不可知项为 v0.3.x 用户私写脚本（无 telemetry）。删除前置：一个过渡版本在旧路由挂 410 Gone + 匿名 client-class hit 计数，把不可知变可测；release notes 显式声明移除。若 CP2 改判保留，仍需 versioned deprecation header、匿名计数、N-1 support window、removal notice。
+**D8 decided（2026-08-29，Dr. Lin）：不保留永久 `/v2/rpc`。** 证据（五渠道零外部 caller；上游 v0.3.x 存量已被 v0.4 无兼容退役置换）支撑该决议；不可知项（v0.3.x 用户私写脚本，无 telemetry）由删除前置变为可测：一个过渡版本在旧路由挂 410 Gone + 匿名 client-class hit 计数（仅发布期验证），release notes 显式声明移除。
 
 Classification complete（2026-08-29 预审，原 Uncovered 清单全部关闭）：
 

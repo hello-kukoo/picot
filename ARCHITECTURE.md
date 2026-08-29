@@ -73,7 +73,8 @@ export default function (pi: ExtensionAPI) {
 `pi` 有多种运行模式。正常模式在终端跑 TUI；**`--mode rpc` 让 pi 无头
 （headless）运行** —— 不开 TUI，全部能力通过 API 暴露出来等待调用。
 Rust 宿主正是用这两个参数一起派生 pi
-（`src-tauri/src/pi_manager.rs::spawn`，约第 514 行）：
+（`src-tauri/src/pi_manager.rs::spawn_with_spec`，约第 493 行；参数组装在
+`src-tauri/src/pi_launch.rs::build_pi_args`）：
 
 ```rust
 let mut args = vec![
@@ -174,7 +175,13 @@ Rust 一侧掌管 OS 进程。三个模块分工清晰：
 - `src-tauri/src/pi_manager.rs` —— 派生并管理 `pi` 子进程
   （每个工作区一个，每个 session 额外的专用进程）。掌管从 `47821`
   开始的端口分配策略、向子进程注入的 `PI_STUDIO_*` 环境变量、
-  以及 `kill_all` 关闭路径。要改 pi 进程的派生/杀死/路由方式时从这里读起。
+  以及 `kill_all` 关闭路径；启动输入组装（参数/环境/二进制定位）
+  委托给 `pi_launch`。要改 pi 进程的派生/杀死/路由方式时从这里读起。
+- `src-tauri/src/pi_launch.rs` —— pi 启动契约的共享基底：CLI 参数
+  （`build_pi_args`）、环境与 PATH 组装（`build_spawn_environment`、
+  `build_augmented_path`）、二进制定位（`resolve_bundled_pi`）与
+  Windows 启动怪癖（`\\?\` 前缀剥离、空格路径镜像、无窗口标志）。
+  legacy 与 native 启动路径共用；要改 pi 的启动输入时从这里读起。
 - `src-tauri/src/broker_ws.rs` —— 独立的 WebSocket server，绑在
   `49xxx` 段端口。WebView 连到它；它把帧转发到 embedded-server.ts 的
   WebSocket，把上游消息包成 `broker_event` 信封，运行 `broker_control`
@@ -1207,7 +1214,9 @@ Quick Chat 与 Side Chat 是隔离的、**不持久化**的临时 Pi 会话进�
 ### 临时进程身份与路由
 
 - `ephemeral_registry.rs`：按 owner 分区，单 owner 临界区管理配额/替换/关闭/退出转换；记录以 `(owner, instanceId, generation)` 标识，绝不按 port 单独标识。`EphemeralDescriptor` redact 掉 capability/cwd/port/pid/参数/temp 路径。
-- `pi_manager.rs`：`spawn_with_spec` 泛化 spawn（`PiSpawnSpec`，环境标记含 kind/instanceId/generation 但不含 capability/token）；per-(port,pid) exit watcher 仅对精确进程 emit 一次 `ProcessExit`，忽略端口复用的不同进程；安全 Quick Chat 临时目录创建/精确删除（拒 root/越界/symlink/token 不匹配，无启动扫描）。
+- `pi_manager.rs`：`spawn_with_spec` 泛化 spawn（`PiSpawnSpec` 定义于
+  `pi_launch.rs`，环境标记含 kind/instanceId/generation 但不含 capability/token，装配见
+  `pi_launch::build_spawn_environment`）；per-(port,pid) exit watcher 仅对精确进程 emit 一次 `ProcessExit`，忽略端口复用的不同进程；安全 Quick Chat 临时目录创建/精确删除（拒 root/越界/symlink/token 不匹配，无启动扫描）。
 - `broker_ws.rs`：`client_hello` 能力握手（native/remote 分类，5s 超时，重连取代旧连接）；`VerifiedClientContext` 携带 class/owner，控制 handler 与路由均从 ctx 派生 owner，**忽略 payload 里的 owner/cwd/port 字段**；`ephemeral_command` 信封按 `(owner, instanceId, generation)` 解析路由 + 命令策略校验，**不改 `active_port`**；ephemeral 上游事件仅投递给该 owner 的当前认证 client（不广播）。
 
 ### 嵌入式运行时（embedded-server.ts）
@@ -1280,10 +1289,11 @@ Quick Chat 与 Side Chat 是隔离的、**不持久化**的临时 Pi 会话进�
   开始。无需改 broker；如果端点改变状态、写入文件或控制进程，必须同步在
   `extensions/request-access.ts` 登记 loopback-only 策略并补测试。
 - 要改**窗口本身**，从 `src-tauri/src/main.rs::open_workspace_window` 开始。
-- 要改**工作区恢复逻辑**，从 `src-tauri/src/main.rs::setup`（约 line 940
-  的 `setup` 闭包）开始。
-- 要改**pi 启动方式**，从 `src-tauri/src/pi_manager.rs::spawn`
-  （约 line 540）开始。
+- 要改**工作区恢复逻辑**，从 `src-tauri/src/main.rs` 的 `.setup` 闭包
+  （约 line 2986）开始。
+- 要改**pi 启动方式**（参数、环境、二进制定位、Windows 兼容），从
+  `src-tauri/src/pi_launch.rs` 开始；进程编排见
+  `src-tauri/src/pi_manager.rs::spawn_with_spec`（约 line 493）。
 - 要加一个**新的 UI 面板**，照着 `public/cost-infobar.js` /
   `public/session-sidebar.js` 的模式来：一个 `public/foo.js` 文件加
   旁边的测试，再从 `app.js` import。
