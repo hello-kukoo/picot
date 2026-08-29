@@ -122,7 +122,7 @@ Generated counts: HTTP 37, commands 43, callers 139, broker controls 6, host fra
 - A-CALLER-023 `public/app.js:586` — return fetch("/api/open", {
 - A-CALLER-024 `public/app.js:649` — const res = await fetch("/api/home");
 - A-CALLER-025 `public/app.js:801` — const response = await fetch(
-- A-CALLER-026 `public/app.js:1027` — const res = await fetch(`/api/git-branch${params.size ?`?${params.toString()}`: ""}`);
+- A-CALLER-026 `public/app.js:1027` — const res = await fetch(`/api/git-branch${params.size ? `?${params.toString()}` : ""}`);
 - A-CALLER-027 `public/app.js:1191` — fetch("/api/open", {
 - A-CALLER-028 `public/app.js:1836` — const res = await fetch(`/api/workspace-info?${params.toString()}`);
 - A-CALLER-029 `public/app.js:1899` — fetch("/api/open", {
