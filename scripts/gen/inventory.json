@@ -1,0 +1,816 @@
+{
+  "version": 1,
+  "generatedBy": "scripts/migration-inventory.mjs",
+  "surfaces": {
+    "embeddedHttp": [
+      "/api/",
+      "/api/agent-config",
+      "/api/chat-config",
+      "/api/chat-telegram/bind",
+      "/api/chat-telegram/doctor",
+      "/api/chat-telegram/validate",
+      "/api/cost-dashboard",
+      "/api/file-mentions",
+      "/api/file-mentions?",
+      "/api/files",
+      "/api/files/content",
+      "/api/files/content?",
+      "/api/files/raw",
+      "/api/files/raw?",
+      "/api/files?",
+      "/api/git-branch",
+      "/api/health",
+      "/api/home",
+      "/api/instances",
+      "/api/lan-qr",
+      "/api/models-config",
+      "/api/open",
+      "/api/paste-offload",
+      "/api/pi-version",
+      "/api/rpc",
+      "/api/search",
+      "/api/sessions/delete-batch",
+      "/api/sessions/rename",
+      "/api/sessions/switch",
+      "/api/skill-install-links",
+      "/api/skill-install-scan",
+      "/api/super-agent/projects",
+      "/api/super-agent/tasks",
+      "/api/workspace-info",
+      "/api/workspace-sessions",
+      "/api/workspace-sessions?",
+      "/api/workspace/open"
+    ],
+    "embeddedCommands": [
+      "abort",
+      "cancel_oauth_login",
+      "check_model_health",
+      "compact",
+      "cycle_model",
+      "cycle_thinking_level",
+      "ephemeral_snapshot_request",
+      "export_html",
+      "extension_ui_response",
+      "follow_up",
+      "get_auth",
+      "get_available_models",
+      "get_available_thinking_levels",
+      "get_fork_messages",
+      "get_messages",
+      "get_oauth_login_capabilities",
+      "get_oauth_login_status",
+      "get_pi_version",
+      "get_session_stats",
+      "get_session_tree",
+      "get_state",
+      "list_auth_status",
+      "list_model_catalog",
+      "list_package_skill_inventory",
+      "list_skill_inventory",
+      "list_skills",
+      "logout_oauth_login",
+      "mirror_sync_request",
+      "new_session",
+      "prompt",
+      "remove_api_key",
+      "set_api_key",
+      "set_auth",
+      "set_auto_compaction",
+      "set_default_thinking_level",
+      "set_model",
+      "set_model_visibility",
+      "set_session_name",
+      "set_skill_enabled",
+      "set_thinking_level",
+      "start_oauth_login",
+      "steer",
+      "switch_session"
+    ],
+    "websocket": [
+      "/ws",
+      "browser connection",
+      "extension_ui_response",
+      "OAuth commands"
+    ],
+    "brokerControls": [
+      "commit",
+      "commit_diff",
+      "diff",
+      "log",
+      "log_detail",
+      "status"
+    ],
+    "hostFrames": [
+      "hello",
+      "host_request",
+      "runtime_capabilities_request",
+      "runtime_request",
+      "runtime_snapshot_request",
+      "runtime_subscribe"
+    ]
+  },
+  "callers": [
+    {
+      "file": "extensions/dist/embedded-server.mjs",
+      "line": 8725,
+      "text": "fetch(t, e = {}) {"
+    },
+    {
+      "file": "extensions/dist/embedded-server.mjs",
+      "line": 8761,
+      "text": "if (i === void 0) throw new Error(\"fetch() returned undefined\");"
+    },
+    {
+      "file": "extensions/dist/embedded-server.mjs",
+      "line": 19465,
+      "text": "n7 && (n7 = false, Fe(\"AbortController is not defined. If using lru-cache in node 14, load an AbortController polyfill from the `node-abort-controller` package. A minimal polyfill is provided for use by LRUCache.fetch(), but it should not be relied upon in other contexts (eg, passing it to other APIs that use AbortController/AbortSignal might have undesirable effects). You may disable this with LRU_CACHE_IGNORE_AC_WARNING=1 in the env.\", \"NO_ABORT_CONTROLLER\", \"ENOTSUP\", t));"
+    },
+    {
+      "file": "extensions/dist/embedded-server.mjs",
+      "line": 19878,
+      "text": "async fetch(t, e = {}) {"
+    },
+    {
+      "file": "extensions/dist/embedded-server.mjs",
+      "line": 19899,
+      "text": "let s = await this.fetch(t, e);"
+    },
+    {
+      "file": "extensions/dist/embedded-server.mjs",
+      "line": 19900,
+      "text": "if (s === void 0) throw new Error(\"fetch() returned undefined\");"
+    },
+    {
+      "file": "extensions/dist/embedded-server.mjs",
+      "line": 24986,
+      "text": "const response = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {"
+    },
+    {
+      "file": "extensions/dist/pi-chat.mjs",
+      "line": 1035,
+      "text": "const response = await fetch(url, { headers });"
+    },
+    {
+      "file": "extensions/dist/pi-chat.mjs",
+      "line": 1042,
+      "text": "const response = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {"
+    },
+    {
+      "file": "extensions/dist/pi-chat.mjs",
+      "line": 1353,
+      "text": "const firstResponse = await fetch("
+    },
+    {
+      "file": "extensions/dist/pi-chat.mjs",
+      "line": 1372,
+      "text": "const response = await fetch(`https://api.telegram.org/bot${account.botToken}/${method}`, {"
+    },
+    {
+      "file": "extensions/dist/pi-chat.mjs",
+      "line": 2201,
+      "text": "const response = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {"
+    },
+    {
+      "file": "extensions/embedded-server.ts",
+      "line": 6195,
+      "text": "// Bun's `fetch(Request) => Response` shape. The WS upgrade has to"
+    },
+    {
+      "file": "extensions/pi-chat-setup.ts",
+      "line": 161,
+      "text": "const response = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {"
+    },
+    {
+      "file": "extensions/pi-chat-src/live/common.ts",
+      "line": 83,
+      "text": "const response = await fetch(url, { headers });"
+    },
+    {
+      "file": "extensions/pi-chat-src/live/telegram.ts",
+      "line": 75,
+      "text": "const response = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {"
+    },
+    {
+      "file": "extensions/pi-chat-src/live/telegram.ts",
+      "line": 422,
+      "text": "const firstResponse = await fetch("
+    },
+    {
+      "file": "extensions/pi-chat-src/live/telegram.ts",
+      "line": 441,
+      "text": "const response = await fetch(`https://api.telegram.org/bot${account.botToken}/${method}`, {"
+    },
+    {
+      "file": "extensions/pi-chat-src/tui/telegram-setup.ts",
+      "line": 91,
+      "text": "const response = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {"
+    },
+    {
+      "file": "public/app.js",
+      "line": 165,
+      "text": "const res = await fetch(\"/api/instances\");"
+    },
+    {
+      "file": "public/app.js",
+      "line": 406,
+      "text": "const res = await fetch(`/api/workspace-info?${params}`);"
+    },
+    {
+      "file": "public/app.js",
+      "line": 544,
+      "text": "// through the broker WebSocket (broker_control). No Tauri IPC hooks — the"
+    },
+    {
+      "file": "public/app.js",
+      "line": 586,
+      "text": "return fetch(\"/api/open\", {"
+    },
+    {
+      "file": "public/app.js",
+      "line": 649,
+      "text": "const res = await fetch(\"/api/home\");"
+    },
+    {
+      "file": "public/app.js",
+      "line": 801,
+      "text": "const response = await fetch("
+    },
+    {
+      "file": "public/app.js",
+      "line": 1027,
+      "text": "const res = await fetch(`/api/git-branch${params.size ? `?${params.toString()}` : \"\"}`);"
+    },
+    {
+      "file": "public/app.js",
+      "line": 1191,
+      "text": "fetch(\"/api/open\", {"
+    },
+    {
+      "file": "public/app.js",
+      "line": 1836,
+      "text": "const res = await fetch(`/api/workspace-info?${params.toString()}`);"
+    },
+    {
+      "file": "public/app.js",
+      "line": 1899,
+      "text": "fetch(\"/api/open\", {"
+    },
+    {
+      "file": "public/app.js",
+      "line": 2793,
+      "text": "await fetch(`http://localhost:${port}/api/rpc`, {"
+    },
+    {
+      "file": "public/app.js",
+      "line": 2811,
+      "text": "await fetch(`http://localhost:${port}/api/rpc`, {"
+    },
+    {
+      "file": "public/app.js",
+      "line": 2845,
+      "text": "const res = await fetch(`http://localhost:${port}/api/super-agent/tasks`);"
+    },
+    {
+      "file": "public/app.js",
+      "line": 2852,
+      "text": "await fetch(`http://localhost:${port}/api/super-agent/tasks`, {"
+    },
+    {
+      "file": "public/app.js",
+      "line": 3455,
+      "text": "const response = await fetch(\"/api/paste-offload\", {"
+    },
+    {
+      "file": "public/app.js",
+      "line": 3720,
+      "text": "const resp = await fetch(\"/api/rpc\", {"
+    },
+    {
+      "file": "public/app.js",
+      "line": 3861,
+      "text": "fetch(\"/api/rpc\", {"
+    },
+    {
+      "file": "public/app.js",
+      "line": 3866,
+      "text": "fetch(\"/api/rpc\", {"
+    },
+    {
+      "file": "public/app.js",
+      "line": 4957,
+      "text": "const res = await fetch(url);"
+    },
+    {
+      "file": "public/app.js",
+      "line": 5000,
+      "text": "const res = await fetch("
+    },
+    {
+      "file": "public/app.js",
+      "line": 5047,
+      "text": "const res = await fetch(\"/api/sessions/switch\", {"
+    },
+    {
+      "file": "public/app.js",
+      "line": 5297,
+      "text": "const res = await fetch(\"/api/instances\");"
+    },
+    {
+      "file": "public/app.js",
+      "line": 5739,
+      "text": "const res = await fetch(\"/api/lan-qr\");"
+    },
+    {
+      "file": "public/app.js",
+      "line": 5775,
+      "text": "const res = await fetch(\"/api/health\");"
+    },
+    {
+      "file": "public/app.js",
+      "line": 6224,
+      "text": "const resp = await fetch(\"/api/rpc\", {"
+    },
+    {
+      "file": "public/app/transport.js",
+      "line": 12,
+      "text": "* Now there is ONE transport: every op is a `broker_control` request sent over"
+    },
+    {
+      "file": "public/app/transport.js",
+      "line": 57,
+      "text": "return this.wsClient.sendControl(command, args, options);"
+    },
+    {
+      "file": "public/app/websocket-client.js",
+      "line": 68,
+      "text": "// the promise returned by sendControl() when a matching control_response"
+    },
+    {
+      "file": "public/app/websocket-client.js",
+      "line": 321,
+      "text": "sendControl(command, args = {}, options = {}) {"
+    },
+    {
+      "file": "public/app/websocket-client.js",
+      "line": 348,
+      "text": "type: \"broker_control\","
+    },
+    {
+      "file": "public/app/websocket-client.js",
+      "line": 422,
+      "text": "// Broker reply for a broker_control we sent (requestId-keyed)."
+    },
+    {
+      "file": "public/app/websocket-client.js",
+      "line": 437,
+      "text": "// Streamed progress for an in-flight broker_control (e.g. updater download)."
+    },
+    {
+      "file": "public/app/websocket-client.test.js",
+      "line": 68,
+      "text": "test(\"sendControl emits a broker_control envelope and resolves on control_response\", async () => {"
+    },
+    {
+      "file": "public/app/websocket-client.test.js",
+      "line": 70,
+      "text": "const result = client.sendControl(\"get_pi_version\", {});"
+    },
+    {
+      "file": "public/app/websocket-client.test.js",
+      "line": 73,
+      "text": "type: \"broker_control\","
+    },
+    {
+      "file": "public/app/websocket-client.test.js",
+      "line": 89,
+      "text": "const result = client.sendControl(\"new_session\", {});"
+    },
+    {
+      "file": "public/app/websocket-client.test.js",
+      "line": 102,
+      "text": "const result = client.sendControl("
+    },
+    {
+      "file": "public/app/websocket-client.test.js",
+      "line": 208,
+      "text": "const result = client.sendControl(\"get_pi_version\", {});"
+    },
+    {
+      "file": "public/components/chat-settings-panel.js",
+      "line": 116,
+      "text": "const res = await fetch(\"/api/chat-config\");"
+    },
+    {
+      "file": "public/components/chat-settings-panel.js",
+      "line": 137,
+      "text": "const res = await fetch(\"/api/chat-config\", {"
+    },
+    {
+      "file": "public/components/chat-settings-panel.js",
+      "line": 219,
+      "text": "const res = await fetch(\"/api/chat-config\", {"
+    },
+    {
+      "file": "public/components/chat-settings-panel.js",
+      "line": 242,
+      "text": "const res = await fetch(\"/api/chat-telegram/doctor\");"
+    },
+    {
+      "file": "public/components/chat-settings-panel.js",
+      "line": 369,
+      "text": "const res = await fetch(url, {"
+    },
+    {
+      "file": "public/components/sa-chat-header.js",
+      "line": 112,
+      "text": "const res = await fetch(\"/api/chat-config\");"
+    },
+    {
+      "file": "public/components/super-agent-runtime.js",
+      "line": 166,
+      "text": "const res = await fetch(\"/api/super-agent/tasks\");"
+    },
+    {
+      "file": "public/components/super-agent-runtime.js",
+      "line": 185,
+      "text": "const res = await fetch(\"/api/super-agent/projects\");"
+    },
+    {
+      "file": "public/components/super-agent-runtime.js",
+      "line": 209,
+      "text": "await fetch(\"/api/super-agent/tasks\", {"
+    },
+    {
+      "file": "public/cost/dashboard.js",
+      "line": 205,
+      "text": "const request = fetch(`/api/cost-dashboard?${query}`)"
+    },
+    {
+      "file": "public/ephemeral-chat-view.js",
+      "line": 42,
+      "text": "const response = await fetch("
+    },
+    {
+      "file": "public/ephemeral-chat-view.js",
+      "line": 189,
+      "text": "const response = await fetch(\"/api/paste-offload\", {"
+    },
+    {
+      "file": "public/file-preview-panel.js",
+      "line": 886,
+      "text": "const res = await fetch(`/api/files/content?path=${encodeURIComponent(tab.filePath)}`, {"
+    },
+    {
+      "file": "public/file-preview-panel.js",
+      "line": 1159,
+      "text": "const res = await fetch(\"/api/files/content\", {"
+    },
+    {
+      "file": "public/i18n.js",
+      "line": 108,
+      "text": "const res = await fetch(`/locales/${locale}.json`, { cache: \"no-store\" });"
+    },
+    {
+      "file": "public/native/app.js",
+      "line": 102,
+      "text": "const response = await fetch(`/v2/bootstrap?${query}`);"
+    },
+    {
+      "file": "public/settings/config-gateway-legacy.js",
+      "line": 6,
+      "text": "async function postRpc(operation, params) {"
+    },
+    {
+      "file": "public/settings/config-gateway-legacy.js",
+      "line": 7,
+      "text": "const resp = await fetch(\"/api/rpc\", {"
+    },
+    {
+      "file": "public/settings/config-gateway-legacy.js",
+      "line": 30,
+      "text": "const resp = await withTimeout(postRpc(operation), timeoutMs, operation);"
+    },
+    {
+      "file": "public/settings/config-gateway-legacy.js",
+      "line": 38,
+      "text": "const resp = await withTimeout(fetch(\"/api/models-config\"), timeoutMs, operation);"
+    },
+    {
+      "file": "public/settings/config-gateway-legacy.js",
+      "line": 48,
+      "text": "fetch(\"/api/models-config\", {"
+    },
+    {
+      "file": "public/settings/config-gateway-legacy.js",
+      "line": 61,
+      "text": "const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);"
+    },
+    {
+      "file": "public/settings/config-gateway-legacy.js",
+      "line": 66,
+      "text": "const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);"
+    },
+    {
+      "file": "public/settings/config-gateway-legacy.js",
+      "line": 71,
+      "text": "const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);"
+    },
+    {
+      "file": "public/settings/config-gateway-legacy.js",
+      "line": 79,
+      "text": "const resp = await withTimeout(postRpc(operation), timeoutMs, operation);"
+    },
+    {
+      "file": "public/settings/config-gateway-legacy.js",
+      "line": 87,
+      "text": "const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);"
+    },
+    {
+      "file": "public/settings/config-gateway-legacy.js",
+      "line": 92,
+      "text": "const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);"
+    },
+    {
+      "file": "public/settings/config-gateway-legacy.js",
+      "line": 97,
+      "text": "const resp = await withTimeout(fetch(\"/api/agent-config\"), timeoutMs, operation);"
+    },
+    {
+      "file": "public/settings/config-gateway-legacy.js",
+      "line": 107,
+      "text": "fetch(\"/api/agent-config\", {"
+    },
+    {
+      "file": "public/settings/config-gateway-legacy.js",
+      "line": 120,
+      "text": "const resp = await withTimeout(fetch(\"/api/agents-md\"), timeoutMs, operation);"
+    },
+    {
+      "file": "public/settings/config-gateway-legacy.js",
+      "line": 133,
+      "text": "fetch(\"/api/agents-md\", {"
+    },
+    {
+      "file": "public/settings/config-gateway-legacy.js",
+      "line": 146,
+      "text": "const resp = await withTimeout(fetch(\"/api/append-system-md\"), timeoutMs, operation);"
+    },
+    {
+      "file": "public/settings/config-gateway-legacy.js",
+      "line": 159,
+      "text": "fetch(\"/api/append-system-md\", {"
+    },
+    {
+      "file": "public/settings/config-gateway-legacy.js",
+      "line": 173,
+      "text": "fetch(\"/api/open\", {"
+    },
+    {
+      "file": "public/settings/package-browse.js",
+      "line": 84,
+      "text": "const res = await fetch(PKG_CATALOG_URL, { headers: { Accept: \"application/json\" } });"
+    },
+    {
+      "file": "public/sidebar/index.js",
+      "line": 197,
+      "text": "const res = await fetch(\"/api/sessions/delete-batch\", {"
+    },
+    {
+      "file": "public/sidebar/index.js",
+      "line": 466,
+      "text": "const res = await fetch("
+    },
+    {
+      "file": "public/sidebar/index.js",
+      "line": 488,
+      "text": "const res = await fetch(`/api/workspace-sessions?path=${encodeURIComponent(project.path)}`);"
+    },
+    {
+      "file": "public/sidebar/index.js",
+      "line": 551,
+      "text": "const res = await fetch(\"/api/instances\");"
+    },
+    {
+      "file": "public/sidebar/index.js",
+      "line": 652,
+      "text": "const res = await fetch(`/api/search?q=${encodeURIComponent(query)}${suffix}`);"
+    },
+    {
+      "file": "public/sidebar/index.js",
+      "line": 1044,
+      "text": "const res = await fetch(\"/api/sessions/delete-batch\", {"
+    },
+    {
+      "file": "public/sidebar/index.js",
+      "line": 1167,
+      "text": "const response = await fetch(\"/api/sessions/rename\", {"
+    },
+    {
+      "file": "public/sidebar/index.js",
+      "line": 1243,
+      "text": "await fetch(\"/api/rpc\", {"
+    },
+    {
+      "file": "public/vendor/pdf.js",
+      "line": 4653,
+      "text": "const response = await fetch(url);"
+    },
+    {
+      "file": "public/vendor/pdf.js",
+      "line": 9784,
+      "text": "async fetch({"
+    },
+    {
+      "file": "public/vendor/pdf.js",
+      "line": 10151,
+      "text": "async fetch({"
+    },
+    {
+      "file": "public/vendor/pdf.js",
+      "line": 13780,
+      "text": "fetch(url, createFetchOptions(headers, this._withCredentials, this._abortController)).then((response) => {"
+    },
+    {
+      "file": "public/vendor/pdf.js",
+      "line": 13861,
+      "text": "fetch(url, createFetchOptions(headers, this._withCredentials, this._abortController)).then((response) => {"
+    },
+    {
+      "file": "public/vendor/pdf.js",
+      "line": 16423,
+      "text": "return this.cMapReaderFactory.fetch(data);"
+    },
+    {
+      "file": "public/vendor/pdf.js",
+      "line": 16432,
+      "text": "return this.standardFontDataFactory.fetch(data);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 4418,
+      "text": "return this.xref.fetch(value, this.suppressEncryption);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 4444,
+      "text": "value = this.xref.fetch(value, this.suppressEncryption);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 4450,
+      "text": "value[i] = this.xref.fetch(value[i], this.suppressEncryption);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 4473,
+      "text": "yield [key, value instanceof Ref && this.xref ? this.xref.fetch(value, this.suppressEncryption) : value];"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 4804,
+      "text": "dict = xref.fetch(ref);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 4909,
+      "text": "entry = xref.fetch(entry);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 5801,
+      "text": "cacheKey = xref.fetch(cacheKey);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 5820,
+      "text": "cacheKey = xref.fetch(cacheKey);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 11307,
+      "text": "readAsync = (url) => fetch(url, {"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 30135,
+      "text": "fn: fn instanceof Ref ? this.xref.fetch(fn) : fn"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 30148,
+      "text": "fnObj: fnObj instanceof Ref ? this.xref.fetch(fnObj) : fnObj"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 33523,
+      "text": "graphicState = xref.fetch(graphicState);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 33562,
+      "text": "xObject = xref.fetch(xObject);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 33594,
+      "text": "const response = await fetch(url);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 34588,
+      "text": "xobj = xref.fetch(xobj);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 35610,
+      "text": "xobj = xref.fetch(xobj);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 38626,
+      "text": "parentTree = xref.fetch(parentTreeRef);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 38638,
+      "text": "nums = xref.fetch(numsRef);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 38709,
+      "text": "const tagDict2 = xref.fetch(objRef).clone();"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 38813,
+      "text": "const pageKid = xref.fetch(kidRef);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 38935,
+      "text": "kidDict = this.dict.xref.fetch(kid);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 39041,
+      "text": "this.addNode(this.rootDict.xref.fetch(ref), map);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 39337,
+      "text": "const stream = this.xref.fetch(streamRef, !this.xref.encrypt?.encryptMetadata);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 39572,
+      "text": "const group = this.xref.fetch(groupRef);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 40664,
+      "text": "currentNode = this.xref.fetch(currentNode);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 56447,
+      "text": "obj = this.fetch(ref);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 56540,
+      "text": "return this.fetch(obj, suppressEncryption);"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 56544,
+      "text": "fetch(ref, suppressEncryption = false) {"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 56621,
+      "text": "const stream = this.fetch(Ref.get(tableOffset, 0));"
+    },
+    {
+      "file": "public/vendor/pdf.worker.js",
+      "line": 56685,
+      "text": "return this.fetch(ref, suppressEncryption);"
+    },
+    {
+      "file": "public/workspace/file-browser.js",
+      "line": 68,
+      "text": "const res = await fetch(url);"
+    },
+    {
+      "file": "public/workspace/file-browser.js",
+      "line": 318,
+      "text": "await fetch(\"/api/open\", {"
+    }
+  ],
+  "counts": {
+    "embeddedHttp": 37,
+    "embeddedCommands": 43,
+    "callers": 139,
+    "brokerControls": 6,
+    "hostFrames": 6
+  }
+}
