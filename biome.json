@@ -14,6 +14,7 @@
       "!.worktrees",
       "!node_modules",
       "!public/vendor",
+      "!community-extensions.json",
       "!coverage",
       "!skill-install-prototype.html"
     ]

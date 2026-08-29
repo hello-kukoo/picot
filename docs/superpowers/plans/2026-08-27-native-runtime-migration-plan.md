@@ -114,6 +114,8 @@ Foundation F0（只读工具/测试基建）
 
 ### WP0.4 性能基线 harness（0.5 人日）
 
+**重定域（2026-08-29，Dr. Lin）：自动基线不跑**；性能改为手工 e2e 时人工判断（P3 dogfood/parity 阶段执行）。`scripts/perf-baseline.mjs` 保留为可选工具（需运行中 legacy server，`PICOT_BASE_URL` 指向；已含 rpc/files 两项自动采样与 prompt/session/cost 的 manual 占位）。原验收「跑通一次并落盘」由本决定替代，报告文件不再作为 F0 交付物。
+
 新建 `scripts/perf-baseline.mjs`，对运行中 legacy embedded-server 记录：
 
 - `/api/rpc get_state` P50/P95（至少 100 样本）；
@@ -125,6 +127,8 @@ Foundation F0（只读工具/测试基建）
 输出 `docs/superpowers/specs/2026-08-27-perf-baseline.md`。数值不在 Phase 0 判定，通过后作为 P3+ 性能门槛基线。
 
 **Foundation F0 exit：**工具及测试合入；`bun run test`、`bun run check`、`bun run check:rust` 绿；无 production path diff。
+
+> **状态（2026-08-29）：exit 达成。** 三支柱当日全绿（`bun run check` 456 文件含 design-css 通过；`bun run test` 全量；`bun run check:rust`）。既有欠账清偿：style.css 13 项 noDescendingSpecificity 以整体搬移修复（纯重排，行集合守恒验证，计算样式不变）；`community-extensions.json` 按「Picot 为 consumer、不负责生成/上传」原则（Dr. Lin 2026-08-29）自 biome 排除；`scripts/gen/inventory.json` 格式归一。WP0.4 按同日决定重定域为手工 e2e。生产路径零 diff（本阶段改动均为文档/工具/既有欠账）。
 
 ---
 
