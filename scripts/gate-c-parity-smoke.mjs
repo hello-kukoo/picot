@@ -1,12 +1,13 @@
 #!/usr/bin/env node
+
 // ABOUTME: Runs isolated Gate C extension precedence/trust/collision evidence fixtures.
 // ABOUTME: Uses only the pinned embedded Pi binary and never mutates production paths.
 
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { spawn } from "node:child_process";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const PI = join(

@@ -10,6 +10,8 @@
 > 修订 R4.7（2026-08-29）：Gate C 同样拆分 design/implementation——Gate C exit criteria 改为 design closure 语义（逆向取证 + 契约表 + 测试矩阵定稿）；C-GAP-01–11 按 Gate C 文档 §16 owner 归属随 P1/P2/P3/P5/P8 exit 关闭；C-GAP-12（extension precedence 抽取）为逆向取证完整性缺口，阻塞 design closure、不 defer；P1 依赖行限定 Gate C（design closure）。
 > 修订 R4.8（2026-08-29）：C-GAP-12 语义精化——§14.1 源码抽取完成，runtime evidence 作为 design-closure prerequisite 明确记录。
 > 修订 R4.9（2026-08-29）：C-GAP-12 closure——pinned embedded Pi `0.84.2` precedence/trust/collision smoke `EXECUTED_PASS`；Gate C 文档、spec、plan 已同步，C-GAP-01–11 仍归 implementation phase closure。
+> 修订 R4.10（2026-08-29）：Gate R 两项拍板（Dr. Lin）——(1) R-03 首迁移窗口语义（选项 A）：`0.3.5`（registry-less）↔ 首个 registry release 为合法 rehearsal 对，`user_version` 拒启由 component 测试覆盖，真实 schema-aware N-1 自 v3→v4 起存在；(2) Windows 平台边界（选项 a）：Gate R 以 macOS 证据关闭，Windows 硬证据顺延至 P8 release validation。详见 §13.2 与 rehearsal 报告。
+> 修订 R4.11（2026-08-29，Dr. Lin）：首迁移窗口恢复策略重定——DB 内仅 workspaces/paired_devices/preferences（可重建，session 数据在磁盘 JSONL 不在 DB），且无装机量跨 schema 边界；Gate R closure 要求改为 component 测试（已 PASS）+ DB graceful degradation（open 失败/损坏→隔离重建+脱敏日志，WP-R.6）+ runbook 手动恢复；version-matched restore tool 与真实 artifact N-1 演练 **deferred 且强制于首个有真实用户的 schema 升级窗口（v3→v4）**。
 >
 > **开工门槛：** Gate R（指 closure：WP-R.1–R.5 交付且 exit criteria 评审通过）、Gate A–D 全部通过、且 §16 **Blocks** 列指向该 work package 的决策已落定前，禁止开始任何会改变生产启动路径、WebView origin、认证链、spawn 路径或路由行为的实现。允许做仅验证现状的只读盘点与测试基建（即 implementation plan 的 Foundation F0）；另允许 **WP-R**（Gate R closure 专属工作包）：仅限 additive 只读 authority API 与 `runtime.*` fail-closed 守卫，不改变上述任何路径。
 >
@@ -179,7 +181,7 @@ OwnerWorkspaceSnapshot =
 - HostDataPlane adapter、P1 target resolver 和 host flag reader 可仅以这些 API 表达，不需要裸 root map、URL path 或浏览器路径；
 - 公开 `preference.*` 对 `runtime.*` 保留 namespace 的 get/set/delete/list 全部 fail closed；普通 Native owner 无法自行 enable、disable、枚举或读取 rollout flag；
 - 未注册 temporary runtime 的 identity、visibility 与 recovery policy 已定义并测试（default startup tmp 与 Quick Chat child 分别覆盖）；
-- N-1 schema compatibility/backup/recovery 方案已演练；
+- DB graceful degradation 已实现并测试（R4.11）：`MetadataStore` open 失败/损坏 → 自动隔离（改名留存）+ 重建 + 脱敏日志；runbook 记录手动恢复（删除 `picot.sqlite3` 重建）；component 级 schema 测试保持全绿。真实 artifact N-1 演练与 version-matched restore tool deferred 至首个有真实用户的 schema 升级窗口（v3→v4，§13.2 recovery posture）；
 - P1、P3 的 dependency 列显式引用 Gate R。
 
 ### Gate A — 权威 surface / caller 迁移矩阵
@@ -915,6 +917,9 @@ For every phase answer before release:
 - whether DB/settings are forward-compatible; if not, backup/restore tool and user warning;
 - registry schema coordination: 08-26 registry v3 may cause an N-1 binary with lower `user_version` support to refuse startup. Before automatic upgrade, detect and record the N-1 compatibility decision. If incompatible, create and verify a pre-upgrade DB backup, ship a version-matched controlled restore/downgrade tool, preserve session files, and define recovery UX for restore failure, missing workspace and missing directory. A Git checkout is not a user recovery path;
 - release rollout requires a recorded real `N-1 → N → N-1` rehearsal of that path before default-on or P8 deletion; generic upgrade smoke does not satisfy this requirement;
+- first-migration-window N-1 semantics（R4.10 选项 A，Dr. Lin 2026-08-29）：现存唯一 N-1（`0.3.5`）早于 registry，不含 schema 感知代码；本窗口回退语义为 registry-less 二进制忽略 DB（不损坏、不拒启），`user_version` 拒启语义由 component 测试覆盖，真实 schema-aware N-1 自 v3→v4 升级起存在。rehearsal 合法对 = `0.3.5` ↔ 首个 registry release；
+- recovery posture by window（R4.11，Dr. Lin 2026-08-29）：首迁移窗口（无装机、registry 首版本、DB 仅含可重建数据）以 component 测试 + DB graceful degradation（open 失败/损坏→隔离重建+脱敏日志）+ runbook 手动恢复（删 `picot.sqlite3` 重建）为恢复策略；version-matched controlled restore/downgrade tool 与真实 artifact `N-1 → N → N-1` 演练 **deferred 且强制于首个有真实用户的 schema 升级发布（v3→v4）**，届时作为该 release 的 rollout 前置；
+- platform boundary（R4.10 选项 a，Dr. Lin 2026-08-29）：Gate R closure 以 macOS 证据判定；Windows artifact/run 硬证据为 P8 release validation 强制项，不得提前宣称。平台差异风险由 Gate C 契约（Job Object/process group）与 P1.7 平台测试承接；
 - whether static assets cache safely after binary downgrade;
 - which release artifacts remain downloadable;
 - what user-visible remediation is shown if auto rollback cannot preserve a session.
@@ -956,6 +961,8 @@ P8 must update:
 - mutation command classification migrates through `shared/mutation-types.json`; current audited baseline is 14 command types, and JSON—not parallel Rust/JS lists—is the post-P0 authority.
 - The implementation plan is a phase/work-package mapping of this specification; this specification remains contract authority. A plan must not silently settle protocol, authority, lifecycle or recovery behavior ahead of this document.
 - Registry commit `7acbc0a` is a useful Gate R input but partial delivery: it lacks the three exact read/atomic authority APIs and protected rollout preference namespace required by §3/§9; native P1/P3 remain blocked until closure.
+- Lineage（2026-08-29 核实）：本仓库是 `shixin-guo/picot`（258 星、picotlabs.com、签名 Releases）的零分发特性 fork；上游 v0.4 已完成同一场 embedded-server 退役（Rust HostServer `/v2/sessions`+`/v2/ws`+`/v2/auth/exchange`），两仓 main 已于 2026-08-28 同步。
+- 路线决策（2026-08-29，Dr. Lin）：**维持本分支按本 spec 执行，不 port 上游**；上游 v0.4 实现仅作设计对照与风险预警（对照点：v2 wire/限额/capability 语义、launch/lifecycle、静态/路由方案），不作为实现依赖或合并目标。
 
 ---
 
@@ -974,8 +981,8 @@ The following are implementation-blocking. D1–D7、D9 已拍板；仅 D8、D10
 | D5 | workspace identity source | ✅ 2026-08-28 | Gate R registry API is prerequisite: read-only canonical inverse lookup + `not_registered` semantics + atomic `OwnerWorkspaceSnapshot` (`Registered {wid,root,generation}` / `Temporary` / `NoWorkspace`); only Registered may enter v2 target/route/capability/scope; no browser roots, synthetic tmp wid, `workspace_id_for_path()` write lookup, split owner reads or HostDataPlane map | P1/P2/P4 |
 | D6 | settings scope | ✅ 2026-08-28 | Agent root config remains app-global; workspace config only where Pi specifies | P5 |
 | D7 | paste transport | ✅ 2026-08-28 | permanent HTTP endpoint with route-level >=4 MiB limit | P6 |
-| D8 | `/v2/rpc` compatibility | ⏳ 待 Gate A | avoid unless external caller inventory proves need; if retained, versioned deprecation/support plan, and usage counters aggregate by anonymous client class only（禁止 per-user/per-token 维度，与 telemetry 脱敏一致）。**拍板依赖 Gate A 矩阵的 external caller 盘点结果** | P7/P8 |
+| D8 | `/v2/rpc` compatibility | ⏳ 证据已齐，待 CP2 拍板 | avoid unless external caller inventory proves need; if retained, versioned deprecation/support plan, and usage counters aggregate by anonymous client class only（禁止 per-user/per-token 维度，与 telemetry 脱敏一致）。**external caller 盘点已完成（2026-08-29，见 Gate A inventory §5 与 `context/d8-external-evidence-2026-08-29T02-44-01.md`）：五渠道零外部 caller，上游 v0.3.x 存量已被 v0.4 无兼容退役置换；剩余不可知项为私写脚本，建议的删除前置是一个过渡版本旧路由 410 Gone + 匿名 hit 计数** | P7/P8 |
 | D9 | Super Agent cross-runtime | ✅ 2026-08-28 | canonical RuntimeTarget through v2; no direct port fetch | P6/P7 |
 | D10 | release flag storage/rollout | ⏳ 待 Gate D | Gate R 交付的 internal `preferences.runtime.native_origin` 是唯一 release source；`runtime.*` 公开 preference controls 全拒绝，只有 rollout-authorized host writer 可变更；debug env 仅 developer override。**存储部分已随 WP-R.4 定案；cohort 门槛数值待 Gate D telemetry 方案后补拍** | P3/P8 |
 
-> A work package may start only after decisions whose **Blocks** column includes that work package are resolved, plus its explicit Gate dependencies. Do not solve a decision silently inside an implementation PR. 当前剩余未决：D8（等 Gate A，阻塞 P7/P8）、D10 cohort 门槛（等 Gate D，阻塞 P3/P8）；P0 的开工许可不依赖这两项。
+> A work package may start only after decisions whose **Blocks** column includes that work package are resolved, plus its explicit Gate dependencies. Do not solve a decision silently inside an implementation PR. 当前剩余未决：D8（证据已齐，待 CP2 拍板，阻塞 P7/P8）、D10 cohort 门槛（等 Gate D，阻塞 P3/P8）；P0 的开工许可不依赖这两项。

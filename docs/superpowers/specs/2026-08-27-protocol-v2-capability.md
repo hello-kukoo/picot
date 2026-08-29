@@ -1,6 +1,7 @@
 # Gate B：Protocol v2、Capability、Target 与 LAN Contract
 
 > 状态：evidence-based Gate B contract。本文只记录仓库已实现事实、已批准决策、迁移期约束与证据缺口；不把设计目标写成当前实现。
+> **Gate B-design：CLOSED at CP1（2026-08-29，Dr. Lin 签署；纪要 `2026-08-29-cp1-review.md`）。** 关闭仅固化设计为实现输入；B-GAP-01–14 全部保持 mandatory implementation acceptance，随归属 phase exit 关闭（§13/§14）。
 >
 > 证据快照：2026-08-28。主要来源：`docs/superpowers/specs/2026-08-27-native-runtime-migration-design.md`（Gate B、§4、§7–§10、D2/D4）、`2026-08-27-migration-inventory.md`、`2026-08-27-launch-contract.md`、`src-tauri/src/host_router.rs`、`host_server.rs`、`broker_ws.rs`、`native_pi_manager.rs`、`runtime_coordinator.rs`、`command_policy.rs`、`window_owner.rs`、`metadata_store.rs`、`remote_auth.rs`、`main.rs` 及其测试。
 
@@ -493,7 +494,7 @@ B-GAP-01–14 remain mandatory implementation/acceptance items. Each gap closes 
 
 | Phase / gate | Required B-GAP closure inputs |
 | --- | --- |
-| Gate R | B-GAP-04: registry authority and Registered-only lookup input |
+| Gate R | B-GAP-04（Gate R 半边：仅 WP-R.1/.2 registry authority 与 Registered-only lookup 输入；其 P1.8–P1.9 wiring 半边归 P1 exit，不作 Gate R 前置，与 §13 表 owner 一致） |
 | P1 | B-GAP-05–07: temporary admission, Operation Registry, crash/turn safety |
 | P2 | B-GAP-01–03, 08, 10–12: capability/context, target authorization, limits/backpressure, adapter feasibility, LAN policy, redaction |
 | P5 | B-GAP-13 and any file/config/OAuth redaction dependencies |

@@ -1,6 +1,7 @@
 # Gate C：Pi 启动与生命周期契约（逆向证据稿）
 
 > 状态：evidence-based reverse engineering。本文只记录当前仓库可验证行为与明确缺口，**不是终态实现设计**。
+> **Gate C-design：CLOSED at CP1（2026-08-29，Dr. Lin 签署；纪要 `2026-08-29-cp1-review.md`）。** 关闭仅固化契约表与测试矩阵为实现输入；C-GAP-01–11 全部保持 mandatory implementation acceptance（§16）；C-GAP-12 为 recorded regression fixture（`bun run smoke:gate-c`）。
 > 盘点日期：2026-08-28。证据来源：`src-tauri/src/pi_manager.rs`、`native_pi_manager.rs`、`runtime_coordinator.rs`、`pi_rpc_bridge.rs`、`main.rs`、`ephemeral_registry.rs`、相关单元测试，以及 Gate C 设计（`docs/superpowers/specs/2026-08-27-native-runtime-migration-design.md` §3 Gate C）。
 >
 > 结论先行：legacy `PiManager` 才是当前完整启动/清理契约；`NativePiManager` 只实现最小 RPC 子进程路径。不能把两者视为等价实现。当前 native runtime 仅 `cfg!(debug_assertions) && PICOT_RUNTIME=native` 可达，release 仍走 legacy 路径（`main.rs::native_runtime_enabled`）。
@@ -438,6 +439,7 @@ Scope: public symbols in `src-tauri/src/pi_manager.rs` that callers/tests must a
 | `begin_standby_warm`, `cancel_standby_warm_for_cwd`, `cancel_standby_warm`, `spawn_standby`, `take_standby`, `kill_standby_for_cwd`, `kill_quick_standby`, `cleanup_exited_standby`, `kill_all_standby` | standby pool lifecycle | Replace with typed temporary runtime pool; native equivalent absent (C-GAP-04) |
 | `cleanup_exited_standby` | exact standby exit cleanup | Covered by replacement standby registry event; not implemented |
 | `insert_standby_for_test` | `cfg(test)` standby fixture seam | Preserve or replace with deterministic native temporary-runtime fixture; not production API |
+| `native_launch_spec`（impl 方法，`pi_manager.rs:538`） | 当前 native debug 路径的 launch 解析入口（本文 §2.1/§3.1 依赖它） | 归入 P1 统一 `LaunchDescription`/native launch service（§13.1/§13.2）；删除需待 C-GAP-01–04 关闭后随 legacy manager 一并处置 |
 | `spawn_session_dedicated`, `kill_workspace_dedicated` | dedicated session process map | Replace with native session runtime registry; native equivalent absent (C-GAP-04) |
 | `next_port` | reserve legacy server port | No replacement if native stdio; retain only legacy until route cutover |
 | `run_pi_command`, `run_pi_command_at` | package management child command | Not runtime launch; retain or move to package service; deletion disposition not approved |

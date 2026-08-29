@@ -1,7 +1,7 @@
 # Picot Native Runtime 迁移实施计划
 
 > 依据：`docs/superpowers/specs/2026-08-27-native-runtime-migration-design.md`（**R4.5**）。
-> 同步记录：R4 已核验已提交 workspace registry（`7acbc0a`）并标记 Gate R 为 partial；R4.1 收尾 P5/P6/P7 依赖与 endpoint 归属；R4.2 将 Gate R 改为 migration-owned **WP-R.1–R.5**；R4.4 收敛 tmp snapshot、`runtime.*` ingress guard、Foundation/P0 分名与 decision gate 规则；R4.5 双文档评审收尾（Gate B exit D8 修正、Gate D 任务改 GD 命名、P4 依赖对齐 spec、§19 补 3 条停止条件、R2 补拒启场景、WP-R 单包估算、CP 增 P4/P6）；R4.6 锁定 Gate B-design 交接语义（B-GAP owner 归属随 phase exit 关闭，Gate B 文档 §13/§14；spec P1 依赖限定 design closure）；R4.7 同构拆分 Gate C（C-GAP-01–11 随 phase exit 关闭、C-GAP-12 阻塞 design closure，Gate C 文档 §15/§16；spec P1 依赖限定）；R4.8 C-GAP-12 语义精化——源码抽取完成，阻塞项转为 embedded Pi `0.84.2` parity/trust/collision runtime 证据。
+> 同步记录：R4 已核验已提交 workspace registry（`7acbc0a`）并标记 Gate R 为 partial；R4.1 收尾 P5/P6/P7 依赖与 endpoint 归属；R4.2 将 Gate R 改为 migration-owned **WP-R.1–R.5**；R4.4 收敛 tmp snapshot、`runtime.*` ingress guard、Foundation/P0 分名与 decision gate 规则；R4.5 双文档评审收尾（Gate B exit D8 修正、Gate D 任务改 GD 命名、P4 依赖对齐 spec、§19 补 3 条停止条件、R2 补拒启场景、WP-R 单包估算、CP 增 P4/P6）；R4.6 锁定 Gate B-design 交接语义（B-GAP owner 归属随 phase exit 关闭，Gate B 文档 §13/§14；spec P1 依赖限定 design closure）；R4.7 同构拆分 Gate C（C-GAP-01–11 随 phase exit 关闭、C-GAP-12 阻塞 design closure，Gate C 文档 §15/§16；spec P1 依赖限定）；R4.8 C-GAP-12 语义精化——源码抽取完成，阻塞项转为 embedded Pi `0.84.2` parity/trust/collision runtime 证据；R4.11 首窗口恢复策略重定（component 测试 + WP-R.6 graceful degradation + runbook；artifact 演练/restore tool deferred v3→v4）。
 > 开工门槛（不可协商）：任何改变生产启动路径、WebView origin、认证链、spawn 路径或路由行为的 work package，必须先通过其显式 Gate dependencies，并取得 spec §16 **Blocks** 列指向该 work package 的全部决策。WP-R（§3）仅限 additive authority API 与 `runtime.*` fail-closed 守卫；Foundation F0（§2）仅限只读盘点、测试基建和性能测量；二者不触碰上述生产路径。
 > 所有生产迁移 work package 必须以本计划和 R4.4 spec 的较严要求为准。估算基准：1 名熟悉本仓库的工程师全职、每工作包至少一次评审。P3 在 Gate D 完成 adapter prototype 前**不作固定人日承诺**。总排期须在 Gate R/A–D 后重估，且包含至少两个稳定 release 周期。
 
@@ -154,11 +154,12 @@ debug native path 的随机 `native-UUID + HashMap<wid, root>` 与 `HostDataPlan
 | WP-R.3 | `OwnerRecord` 增持 `workspace_id: Option<WorkspaceId>`；新增单锁 `owner_current_workspace(&self, owner) -> OwnerWorkspaceSnapshot` 判别联合：`Registered {wid,root,generation}`、`Temporary {root,generation,temporaryKind}`、`NoWorkspace`。unregistered tmp 仅可为 Temporary，不能伪造 wid；v2 target/route/capability/OperationScope 仅接受 Registered | `window_owner.rs`（`create_owner` 与 transition commit 同步维护 wid；调用方 `main.rs`/`broker_ws.rs`/`ephemeral_registry.rs`/`terminal_*` 适配） | variant 三字段同锁一致；transition 不返回混合态；Temporary 无 wid 且 v2 admission fail closed；旧拆分读取等价迁移测试 |
 | WP-R.4a | storage/internal rollout authority：`runtime.*` 保留 namespace；新增仅 rollout-authorized internal reader/writer（如 `runtime_pref_get/set("runtime.native_origin")`），reader 的 read/schema/value failure → legacy；writer 记录不含 key/value 的脱敏审计 | `metadata_store.rs` | internal reader/writer authorization；fail closed；审计事件无 key/value |
 | WP-R.4b | public ingress closure：以 Foundation F0 / Gate A inventory 列出的**全部** `preference.*` public ingress 为输入，在 dispatch boundary 拒绝 `runtime.*` key、`runtime` 前缀变体、prefix enumeration；未完成 inventory 前不得宣称 namespace exit 达成 | 每个 inventory 命中的 preference control/HTTP/WS adapter；不得只假定 `workspace_controls.rs` | 每个 ingress × get/set/delete/list × `runtime.*`/`runtime` 前缀全拒绝；普通 Native owner 无法读/枚举/写/删；无未盘点 ingress |
-| WP-R.5 | Gate R release must-run 演练：fresh DB、旧 DB 升级、缺 workspace、目录消失、未注册 tmp workspace、N→N-1 恢复；输出记录作为 Gate R 评审输入 | `scripts/` + 手工矩阵 | 每场景有记录与预期结果 |
+| WP-R.5 | R4.11 重定域：component 级 schema/恢复测试保持全绿（`scripts/recovery-rehearsal.mjs` 已有 component 部分）；artifact N-1 演练 deferred 至 v3→v4 窗口（spec §13.2 recovery posture） | `scripts/recovery-rehearsal.mjs`（component）+ 未来窗口 artifact 对 | component 案例全绿；未来窗口义务在案 |
+| WP-R.6（R4.11 新增） | DB graceful degradation：`MetadataStore::open` 失败/损坏 → 自动隔离（改名留存）+ 重建 + 脱敏日志；runbook 记录手动恢复路径（删 `picot.sqlite3` 重建） | `metadata_store.rs` | 损坏文件/open 失败注入测试：隔离文件存在、新 DB 创建、app 可启动、日志无敏感内容 |
 
 **WP-R exit = Gate R exit criteria**（spec §3）：四 authority API 可用、无第二 authority、`runtime.*` fail closed、tmp 策略测试齐、N-1 演练记录归档；评审通过后 P1/P3 dependency 解锁。
 
-单包估算：WP-R.1 0.5 / WP-R.2 0.5 / WP-R.3 1–1.5（含 5 处调用方适配）/ WP-R.4 1 / WP-R.5 1（人日），合计 4–5 人日（§1.3）。
+单包估算：WP-R.1 0.5 / WP-R.2 0.5 / WP-R.3 1–1.5（含 5 处调用方适配）/ WP-R.4 1 / WP-R.5 1 / WP-R.6 0.5–1（R4.11 新增）（人日），合计 4.5–5.5 人日（§1.3）。
 
 ### R1 必须可用的 authority API
 
@@ -187,7 +188,7 @@ pref_get("runtime.native_origin") -> Option<bool>
 ### R2 schema 与 N-1 recovery contract
 
 - 明确 registry schema/version 与 N-1 binary 的 compatibility policy；
-- 覆盖 spec §13.2 拒启场景：registry v3 升级后，较低 `user_version` 支持的 N-1 binary 拒绝启动——自动升级前检测并记录 N-1 兼容判定，演练必须包含该场景及其恢复路径；
+- 覆盖 spec §13.2 拒启场景：registry v3 升级后，较低 `user_version` 支持的 N-1 binary 拒绝启动——自动升级前检测并记录 N-1 兼容判定，演练必须包含该场景及其恢复路径（R4.10 首窗口语义：N-1=`0.3.5` 为 registry-less，拒启由 component 测试覆盖；见 spec §13.2）；
 - 若 N-1 不兼容，自动升级前必须创建可验证 pre-upgrade DB backup；
 - 发布 version-matched controlled restore/downgrade tool；禁止以 git tag/source checkout 充当用户恢复；
 - preserve session files，定义 DB restore 失败、目录丢失、缺 workspace 时 recovery UX；
@@ -199,7 +200,7 @@ pref_get("runtime.native_origin") -> Option<bool>
 - [ ] HostDataPlane adapter、P1 target resolver、P3 flag reader 可只用该 contract 表达；
 - [ ] 无裸 root map、URL path 或 browser root authority 回退；
 - [ ] fresh DB、old DB upgrade、schema mismatch、missing workspace、missing directory、unregistered tmp covered；
-- [ ] N-1 schema compatibility 或 backup/restore/recovery UX 已真实演练；
+- [ ] DB graceful degradation 实现并测试；runbook 手动恢复路径已记录（R4.11；artifact 演练 deferred 至 v3→v4 窗口）；
 - [ ] P1/P2/P3 dependency 已锁定 Gate R。
 
 ---
@@ -400,7 +401,7 @@ Exit：所有 runtime type 可经 test/developer path 启停；Operation Registr
 | --- | --- | --- |
 | P2.1 | `host_capability.rs` mint/validate/revoke；per-window memory lifecycle | B6 capability matrix |
 | P2.2 | v2 hello → `HostClientContext`：desktop capability / remote device token / unpaired 分支 | valid/invalid hello × client class |
-| P2.3 | runtime request/response/event 接入 P1 registry：四种 acceptance、operationId、turnId、per-target sequence | in-memory replay/event sequence |
+| P2.3 | runtime request/response/event 接入 P1 registry：三种 mutation acceptance（`accepted_pending`/`duplicate_pending`/`duplicate_completed`，与 spec §4.1 一致）、operationId、turnId、per-target sequence | in-memory replay/event sequence |
 | P2.4 | `operation_status_request`、snapshot、subscription 全部执行 owner/wid/generation authorization | cross-owner/cross-wid/subscription leak |
 | P2.5 | v1 control adapter（Gate B map）在 server 内转换；每 control 有 mapping/retirement proof | adapter contract map |
 | P2.6 | extension UI response 与 remote/class policy | dialog owner and class tests |
@@ -529,7 +530,7 @@ Exit：`bun run test`、`bun run check`、`bun run check:rust`、`bun run build:
 | # | 时点 | 内容 |
 | --- | --- | --- |
 | CP0 | Gate R（WP-R 完成后） | authority API、`runtime.*` 守卫、schema/N-1 演练、readiness 终审 |
-| CP1 | Gate A–D | 四份产物 + adapter prototype 终审（Gate B/C 按 design closure 关闭；B-GAP/C-GAP-01–11 随归属 phase exit 关闭；C-GAP-12 runtime evidence 已闭合） |
+| CP1 | Gate A–D | 分场：**Gate B-design + Gate C-design + Gate A 已于 2026-08-29 关闭**（Dr. Lin 签署；B/C 见 `2026-08-29-cp1-review.md`；Gate A 人审裁决：A-HTTP-37 直接 retire、A-HTTP-25/D8 边界、高危行终态认可，含两条安全修复）；Gate D（adapter 原型在途）另行关闭 |
 | CP2 | 决策会 | D1–D10 开工许可 |
 | CP3 | P1 完 | lifecycle、Operation Registry、turn abort、runtime smoke |
 | CP4 | P2 完 | capability/authorization/limit matrix |
@@ -565,9 +566,13 @@ Exit：`bun run test`、`bun run check`、`bun run check:rust`、`bun run build:
 | N-1 schema/recovery 失败 | 不 default-on，不删 legacy |
 | endpoint deletion proof/usage 不为零 | 延长支持窗口或迁 caller |
 
+> 平台边界（R4.10，2026-08-29，Dr. Lin）：Gate R closure 以 macOS 证据判定；Windows 硬证据为 P8 release validation 强制项，不得提前宣称。R-03 首迁移窗口语义：`0.3.5`（registry-less）↔ `0.3.6` 为合法 rehearsal 对，拒启语义由 component 测试覆盖（spec §13.2）。
+
 ---
 
 ## 20. 计划维护
+
+- 上游对照决策（2026-08-29，Dr. Lin）：本仓库为 `shixin-guo/picot` 的特性 fork，上游 v0.4 已完成同类 embedded-server 退役；**维持本分支按 spec 执行，不 port**，上游实现仅作设计对照与风险预警（详见 spec §15 Lineage 条目）。
 
 - 本文件已 rebase 至 R4；任何 Gate 产物与 spec（R4）冲突时，spec 为准，计划同 PR 修订；
 - P3 起每阶段完成后发布本计划 R+n：已完成项、actual effort、下阶段细化、未决风险；
