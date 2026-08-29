@@ -112,6 +112,32 @@ pub type SharedMetadataStore = std::sync::Arc<std::sync::Mutex<MetadataStore>>;
 
 impl MetadataStore {
     pub fn open(path: &Path) -> Result<Self, String> {
+        match Self::open_without_recovery(path) {
+            Ok(store) => Ok(store),
+            Err(first) => {
+                // R4.11 graceful degradation: only corruption-class failures
+                // (unreadable header / integrity check) quarantine the file
+                // and retry once. Newer-schema rejection, busy/locked,
+                // permission and IO errors keep their original semantics —
+                // a healthy database is never quarantined.
+                if !Self::file_reports_corruption(path) {
+                    return Err(first);
+                }
+                let Some(quarantine_name) = Self::quarantine_database_file(path) else {
+                    return Err(first);
+                };
+                log::warn!(
+                    "[picot] metadata database quarantined as {quarantine_name} and recreated; \
+                     registry/preferences rebuild on demand (sessions are unaffected)"
+                );
+                Self::open_without_recovery(path).map_err(|retry| {
+                    format!("Picot metadata recovery failed after quarantine: {retry}")
+                })
+            }
+        }
+    }
+
+    fn open_without_recovery(path: &Path) -> Result<Self, String> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| {
                 format!(
@@ -134,6 +160,46 @@ impl MetadataStore {
         store.migrate()?;
         store.restrict_permissions()?;
         Ok(store)
+    }
+
+    /// True when the file at `path` fails SQLite's own integrity probe with a
+    /// corruption-class error. Used only on the failure path of `open` so
+    /// busy/locked, permission, IO and newer-schema rejections are never
+    /// misclassified as corruption.
+    fn file_reports_corruption(path: &Path) -> bool {
+        if !path.is_file() {
+            return false;
+        }
+        let Ok(connection) = Connection::open(path) else {
+            return false;
+        };
+        match connection.query_row("PRAGMA quick_check(1)", [], |row| row.get::<_, String>(0)) {
+            Ok(_) => false,
+            Err(rusqlite::Error::SqliteFailure(failure, _)) => {
+                // SQLITE_CORRUPT (11) and SQLITE_NOTADB (26) are stable
+                // primary codes; both families signal a damaged file.
+                matches!(failure.extended_code, 11 | 26)
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Renames a corrupt database next to itself (bytes retained) and returns
+    /// the quarantine file name for a redacted log line. Returns `None` when
+    /// the rename fails — user data is then left untouched and the original
+    /// error propagates.
+    fn quarantine_database_file(path: &Path) -> Option<String> {
+        let file_name = path.file_name()?.to_string_lossy().into_owned();
+        let parent = path.parent()?;
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos();
+        let quarantine = parent.join(format!("{file_name}.corrupt-{nanos}"));
+        std::fs::rename(path, &quarantine).ok()?;
+        quarantine
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
     }
 
     fn migrate(&mut self) -> Result<(), String> {
@@ -856,6 +922,68 @@ mod tests {
             Ok(_) => panic!("expected open to reject newer schema"),
         };
         assert!(error.contains("newer than supported"), "{error}");
+    }
+
+    #[test]
+    fn corrupt_database_is_quarantined_and_recreated() {
+        let temp = temp_dir();
+        let _guard = tempdir_guard::TempDirGuard(temp.clone());
+        let database = temp.join("picot.sqlite3");
+        fs::write(&database, b"this is definitely not a sqlite database").unwrap();
+
+        // R4.11 graceful degradation: a corrupt database is quarantined
+        // (renamed, bytes retained) and a fresh store is created, so the app
+        // keeps starting without user intervention.
+        let store = MetadataStore::open(&database).unwrap();
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+
+        let quarantined = quarantine_files(&temp);
+        assert_eq!(quarantined.len(), 1, "exactly one quarantine file");
+        assert_eq!(
+            fs::read(temp.join(&quarantined[0])).unwrap(),
+            b"this is definitely not a sqlite database",
+            "quarantine retains the original bytes"
+        );
+
+        // The recreated store is fully functional.
+        let project = temp.join("project");
+        fs::create_dir_all(&project).unwrap();
+        let (row, added) = store.add_workspace(&project).unwrap();
+        assert!(added);
+        assert_eq!(row.display_name.as_deref(), Some("project"));
+    }
+
+    #[test]
+    fn fresh_and_valid_reopens_create_no_quarantine_files() {
+        let temp = temp_dir();
+        let _guard = tempdir_guard::TempDirGuard(temp.clone());
+        let database = temp.join("picot.sqlite3");
+        {
+            let store = MetadataStore::open(&database).unwrap();
+            assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+        }
+
+        // Reopen a healthy database with data; no quarantine may appear.
+        let reopened = MetadataStore::open(&database).unwrap();
+        let project = temp.join("project");
+        fs::create_dir_all(&project).unwrap();
+        let (row, added) = reopened.add_workspace(&project).unwrap();
+        assert!(added);
+        assert_eq!(row.display_name.as_deref(), Some("project"));
+        assert!(database.exists());
+        assert!(
+            quarantine_files(&temp).is_empty(),
+            "unexpected quarantine files"
+        );
+    }
+
+    fn quarantine_files(dir: &Path) -> Vec<String> {
+        fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".corrupt-"))
+            .collect()
     }
 
     #[test]
