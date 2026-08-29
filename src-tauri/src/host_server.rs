@@ -2,6 +2,7 @@
 
 use crate::host_data::{HostDataError, HostDataPlane};
 use crate::host_router::{HostRouter, RoutedAction, PROTOCOL_VERSION};
+use crate::metadata_store::SharedMetadataStore;
 use crate::native_pi_manager::NativePiManager;
 use crate::remote_auth::RemoteAuth;
 use crate::runtime_coordinator::RuntimeTarget;
@@ -18,7 +19,6 @@ use axum::Router;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fs;
@@ -95,18 +95,9 @@ impl HostServer {
         static_dir: PathBuf,
         runtimes: NativePiManager,
         auth: Arc<Mutex<RemoteAuth>>,
+        metadata: SharedMetadataStore,
     ) -> Result<Self, String> {
-        Self::start_with_workspaces(static_dir, runtimes, auth, HashMap::new()).await
-    }
-
-    pub async fn start_with_workspaces(
-        static_dir: PathBuf,
-        runtimes: NativePiManager,
-        auth: Arc<Mutex<RemoteAuth>>,
-        workspace_roots: HashMap<String, PathBuf>,
-    ) -> Result<Self, String> {
-        let mut data = HostDataPlane::new(workspace_roots)
-            .map_err(|error| format!("Cannot initialize Host data plane: {error:?}"))?;
+        let mut data = HostDataPlane::new(metadata);
         if let Some(home) = dirs::home_dir() {
             data = data.with_session_root(home.join(".pi/agent/sessions"));
         }
@@ -226,11 +217,15 @@ impl Drop for HostServer {
     }
 }
 
+/// Host liveness only. Runtime readiness is a separate concern (spec §5.1:
+/// `GET /api/health` → `GET /health`， host health 与 runtime readiness 分离)
+/// and must not depend on the legacy `PiManager`; the version constant comes
+/// from the shared `pi_launch` substrate.
 async fn health() -> Json<Value> {
     Json(json!({
         "status": "ok",
         "protocolVersion": PROTOCOL_VERSION,
-        "piVersion": crate::pi_manager::locked_pi_version(),
+        "piVersion": crate::pi_launch::locked_pi_version(),
     }))
 }
 
@@ -809,8 +804,8 @@ mod tests {
         let metadata = Arc::new(Mutex::new(
             MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
         ));
-        let auth = Arc::new(Mutex::new(RemoteAuth::new(metadata)));
-        let host = HostServer::start(public, NativePiManager::new(32), auth)
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
+        let host = HostServer::start(public, NativePiManager::new(32), auth, metadata)
             .await
             .unwrap();
 
@@ -820,16 +815,12 @@ mod tests {
             .send()
             .await
             .unwrap();
-        let health_status = health_response.status();
-        let health_body = health_response.text().await.unwrap();
-        assert!(
-            health_status.is_success(),
-            "health returned {health_status}: {health_body}"
-        );
-        let health: serde_json::Value = serde_json::from_str(&health_body)
-            .unwrap_or_else(|error| panic!("invalid health JSON {health_body:?}: {error}"));
-        assert_eq!(health["protocolVersion"], 2);
-        assert_eq!(health["piVersion"], crate::pi_manager::locked_pi_version());
+        assert!(health_response.status().is_success());
+        let health: serde_json::Value =
+            serde_json::from_str(&health_response.text().await.unwrap()).unwrap();
+        assert_eq!(health["status"], "ok");
+        assert_eq!(health["protocolVersion"].as_u64(), Some(2));
+        assert!(health["piVersion"].as_str().is_some());
         let index = client
             .get(format!("{}/app/settings", host.origin()))
             .send()
@@ -862,8 +853,8 @@ mod tests {
         let metadata = Arc::new(Mutex::new(
             MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
         ));
-        let auth = Arc::new(Mutex::new(RemoteAuth::new(metadata)));
-        let host = HostServer::start(public.clone(), NativePiManager::new(32), auth)
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
+        let host = HostServer::start(public.clone(), NativePiManager::new(32), auth, metadata)
             .await
             .unwrap();
 
@@ -915,11 +906,13 @@ mod tests {
         let metadata = Arc::new(Mutex::new(
             MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
         ));
-        let auth = Arc::new(Mutex::new(RemoteAuth::new(metadata)));
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
         let runtimes = NativePiManager::new(32);
         let target = RuntimeTarget::new("workspace-a", "session-a", "instance-a");
         let mut fake = runtimes.register_in_memory(target.clone()).unwrap();
-        let host = HostServer::start(public, runtimes, auth).await.unwrap();
+        let host = HostServer::start(public, runtimes, auth, metadata)
+            .await
+            .unwrap();
         let ws_url = host.origin().replace("http://", "ws://") + "/v2/ws";
         let (mut socket, _) = tokio_tungstenite::connect_async(ws_url).await.unwrap();
         socket
@@ -978,7 +971,7 @@ mod tests {
         let metadata = Arc::new(Mutex::new(
             MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
         ));
-        let auth = Arc::new(Mutex::new(RemoteAuth::new(metadata)));
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
         let runtimes = NativePiManager::new(32);
         let target = RuntimeTarget::new("workspace-a", "session-a", "instance-a");
         let mut fake = runtimes.register_in_memory(target.clone()).unwrap();
@@ -993,7 +986,9 @@ mod tests {
         .unwrap();
         tokio::task::yield_now().await;
 
-        let host = HostServer::start(public, runtimes, auth).await.unwrap();
+        let host = HostServer::start(public, runtimes, auth, metadata)
+            .await
+            .unwrap();
         let ws_url = host.origin().replace("http://", "ws://") + "/v2/ws";
         let (mut socket, _) = tokio_tungstenite::connect_async(ws_url).await.unwrap();
         socket

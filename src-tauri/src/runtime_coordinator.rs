@@ -78,8 +78,16 @@ struct RuntimeRecord {
     state: RuntimeState,
     sequence: u64,
     mutations: VecDeque<MutationRecord>,
+    active_turn: Option<ActiveTurn>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActiveTurn {
+    turn_id: String,
+    operation_id: String,
+}
+
+#[allow(dead_code)]
 struct MutationRecord {
     key: String,
     result: Option<Value>,
@@ -119,6 +127,7 @@ impl RuntimeCoordinator {
                 state,
                 sequence: 0,
                 mutations: VecDeque::new(),
+                active_turn: None,
             },
         );
         Ok(())
@@ -147,6 +156,15 @@ impl RuntimeCoordinator {
             .ok_or(CoordinatorError::InvalidCommand)?;
         if matches!(command_type, "new_session" | "switch_session") {
             return Err(CoordinatorError::ForbiddenIdentityReplacement);
+        }
+        if command_type == "abort"
+            && command
+                .get("turnId")
+                .and_then(serde_json::Value::as_str)
+                .filter(|turn_id| !turn_id.is_empty())
+                .is_none()
+        {
+            return Err(CoordinatorError::InvalidCommand);
         }
         Ok(())
     }
@@ -178,6 +196,7 @@ impl RuntimeCoordinator {
         Ok(MutationAcceptance::Accepted)
     }
 
+    #[allow(dead_code)]
     pub fn complete_mutation(
         &mut self,
         target: &RuntimeTarget,
@@ -195,6 +214,7 @@ impl RuntimeCoordinator {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn mutation_result(
         &self,
         target: &RuntimeTarget,
@@ -242,7 +262,70 @@ impl RuntimeCoordinator {
         state: RuntimeState,
     ) -> Result<(), CoordinatorError> {
         self.validate(target)?;
-        self.instances.get_mut(&target.instance_id).unwrap().state = state;
+        let record = self.instances.get_mut(&target.instance_id).unwrap();
+        record.state = state;
+        if matches!(
+            state,
+            RuntimeState::Idle | RuntimeState::Crashed | RuntimeState::Stopped
+        ) {
+            record.active_turn = None;
+        }
+        Ok(())
+    }
+
+    pub fn bind_turn(
+        &mut self,
+        target: &RuntimeTarget,
+        turn_id: impl Into<String>,
+        operation_id: impl Into<String>,
+    ) -> Result<(), CoordinatorError> {
+        self.validate(target)?;
+        let turn_id = turn_id.into();
+        if turn_id.is_empty() {
+            return Err(CoordinatorError::InvalidCommand);
+        }
+        let record = self.instances.get_mut(&target.instance_id).unwrap();
+        if record.state != RuntimeState::Working {
+            return Err(CoordinatorError::InvalidState);
+        }
+        record.active_turn = Some(ActiveTurn {
+            turn_id,
+            operation_id: operation_id.into(),
+        });
+        Ok(())
+    }
+
+    pub fn active_turn_operation(
+        &self,
+        target: &RuntimeTarget,
+        turn_id: &str,
+    ) -> Result<Option<String>, CoordinatorError> {
+        self.validate(target)?;
+        let record = self.instances.get(&target.instance_id).unwrap();
+        if record.state != RuntimeState::Working {
+            return Ok(None);
+        }
+        Ok(record
+            .active_turn
+            .as_ref()
+            .and_then(|turn| (turn.turn_id == turn_id).then(|| turn.operation_id.clone())))
+    }
+
+    #[allow(dead_code)]
+    pub fn end_turn(
+        &mut self,
+        target: &RuntimeTarget,
+        turn_id: &str,
+    ) -> Result<(), CoordinatorError> {
+        self.validate(target)?;
+        let record = self.instances.get_mut(&target.instance_id).unwrap();
+        if record
+            .active_turn
+            .as_ref()
+            .is_some_and(|turn| turn.turn_id == turn_id)
+        {
+            record.active_turn = None;
+        }
         Ok(())
     }
 
@@ -408,6 +491,67 @@ mod tests {
             coordinator.snapshot(&resumed).unwrap().state,
             RuntimeState::Starting
         );
+    }
+
+    #[test]
+    fn turn_binding_is_current_only_and_clears_on_idle() {
+        let mut coordinator = RuntimeCoordinator::new(8);
+        let active = target("instance-a");
+        coordinator
+            .register(active.clone(), RuntimeState::Working)
+            .unwrap();
+        coordinator.bind_turn(&active, "turn-a", "op-a").unwrap();
+        assert_eq!(
+            coordinator
+                .active_turn_operation(&active, "turn-a")
+                .unwrap(),
+            Some("op-a".into())
+        );
+        assert_eq!(
+            coordinator
+                .active_turn_operation(&active, "turn-old")
+                .unwrap(),
+            None
+        );
+        coordinator.set_state(&active, RuntimeState::Idle).unwrap();
+        assert_eq!(
+            coordinator
+                .active_turn_operation(&active, "turn-a")
+                .unwrap(),
+            None
+        );
+        coordinator
+            .set_state(&active, RuntimeState::Working)
+            .unwrap();
+        coordinator.bind_turn(&active, "turn-b", "op-b").unwrap();
+        assert_eq!(
+            coordinator
+                .active_turn_operation(&active, "turn-a")
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            coordinator
+                .active_turn_operation(&active, "turn-b")
+                .unwrap(),
+            Some("op-b".into())
+        );
+    }
+
+    #[test]
+    fn abort_command_requires_turn_id() {
+        let mut coordinator = RuntimeCoordinator::new(8);
+        let active = target("instance-a");
+        coordinator
+            .register(active.clone(), RuntimeState::Working)
+            .unwrap();
+        assert_eq!(
+            coordinator.validate_command(&active, &json!({ "type": "abort" })),
+            Err(super::CoordinatorError::InvalidCommand)
+        );
+        assert!(coordinator
+            .validate_command(&active, &json!({ "type": "abort", "turnId": "turn-a" }))
+            .is_ok());
     }
 
     #[test]

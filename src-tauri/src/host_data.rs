@@ -1,3 +1,5 @@
+// ABOUTME: Host data-plane reads for registry-authorized workspaces.
+// ABOUTME: Resolves workspace roots through shared MetadataStore authority.
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
@@ -111,25 +113,26 @@ pub enum HostDataError {
     Io(String),
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct HostDataPlane {
-    workspace_roots: HashMap<String, PathBuf>,
+    metadata: crate::metadata_store::SharedMetadataStore,
     session_root: Option<PathBuf>,
 }
 
 impl HostDataPlane {
-    pub fn new(workspace_roots: HashMap<String, PathBuf>) -> Result<Self, HostDataError> {
-        let mut canonical = HashMap::new();
-        for (workspace_id, root) in workspace_roots {
-            let root = root
-                .canonicalize()
-                .map_err(|error| HostDataError::Io(error.to_string()))?;
-            canonical.insert(workspace_id, root);
-        }
-        Ok(Self {
-            workspace_roots: canonical,
+    pub fn new(metadata: crate::metadata_store::SharedMetadataStore) -> Self {
+        Self {
+            metadata,
             session_root: None,
-        })
+        }
+    }
+
+    fn workspace_root(&self, workspace_id: &str) -> Result<PathBuf, HostDataError> {
+        self.metadata
+            .lock()
+            .map_err(|_| HostDataError::UnknownWorkspace)?
+            .canonical_root_for_workspace_id(workspace_id)
+            .map_err(|_| HostDataError::UnknownWorkspace)
     }
 
     pub fn with_session_root(mut self, session_root: PathBuf) -> Self {
@@ -142,11 +145,8 @@ impl HostDataPlane {
         workspace_id: &str,
         relative_path: &str,
     ) -> Result<Vec<FileEntry>, HostDataError> {
-        let root = self
-            .workspace_roots
-            .get(workspace_id)
-            .ok_or(HostDataError::UnknownWorkspace)?;
-        let requested = safe_join(root, relative_path)?;
+        let root = self.workspace_root(workspace_id)?;
+        let requested = safe_join(&root, relative_path)?;
         if !requested.is_dir() {
             return Err(HostDataError::NotDirectory);
         }
@@ -163,7 +163,7 @@ impl HostDataPlane {
                     return None;
                 };
                 let path = entry.path();
-                let relative = path.strip_prefix(root).ok()?;
+                let relative = path.strip_prefix(&root).ok()?;
                 Some(FileEntry {
                     name: entry.file_name().to_string_lossy().into_owned(),
                     relative_path: relative.to_string_lossy().replace('\\', "/"),
@@ -182,10 +182,7 @@ impl HostDataPlane {
     }
 
     pub fn list_sessions(&self, workspace_id: &str) -> Result<Vec<SessionSummary>, HostDataError> {
-        let workspace = self
-            .workspace_roots
-            .get(workspace_id)
-            .ok_or(HostDataError::UnknownWorkspace)?;
+        let workspace = self.workspace_root(workspace_id)?;
         let Some(session_root) = &self.session_root else {
             return Ok(Vec::new());
         };
@@ -208,7 +205,7 @@ impl HostDataPlane {
                 if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
                     continue;
                 }
-                if let Some(summary) = parse_session_summary(&path, workspace_id, workspace)? {
+                if let Some(summary) = parse_session_summary(&path, workspace_id, &workspace)? {
                     sessions.push(summary);
                 }
             }
@@ -223,10 +220,7 @@ impl HostDataPlane {
         query: &str,
     ) -> Result<Vec<SessionSearchResult>, HostDataError> {
         const MAX_RESULTS: usize = 30;
-        let workspace = self
-            .workspace_roots
-            .get(workspace_id)
-            .ok_or(HostDataError::UnknownWorkspace)?;
+        let workspace = self.workspace_root(workspace_id)?;
         let Some(session_root) = &self.session_root else {
             return Ok(Vec::new());
         };
@@ -253,7 +247,7 @@ impl HostDataPlane {
                 if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
                     continue;
                 }
-                if let Some(result) = search_session_file(&path, workspace, &query)? {
+                if let Some(result) = search_session_file(&path, &workspace, &query)? {
                     results.push(result);
                 }
             }
@@ -262,10 +256,7 @@ impl HostDataPlane {
     }
 
     pub fn cost_dashboard(&self, workspace_id: &str) -> Result<CostDashboard, HostDataError> {
-        let workspace = self
-            .workspace_roots
-            .get(workspace_id)
-            .ok_or(HostDataError::UnknownWorkspace)?;
+        let workspace = self.workspace_root(workspace_id)?;
         let Some(session_root) = &self.session_root else {
             return Ok(CostDashboard::default());
         };
@@ -288,7 +279,7 @@ impl HostDataPlane {
                 if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
                     continue;
                 }
-                if let Some(metrics) = parse_session_metrics(&path, workspace)? {
+                if let Some(metrics) = parse_session_metrics(&path, &workspace)? {
                     sessions.push(metrics);
                 }
             }
@@ -719,9 +710,17 @@ fn safe_join(root: &Path, relative_path: &str) -> Result<PathBuf, HostDataError>
 #[cfg(test)]
 mod tests {
     use super::{FileKind, HostDataError, HostDataPlane};
-    use std::collections::HashMap;
+    use crate::metadata_store::MetadataStore;
     use std::fs;
+    use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_data(workspace: &std::path::Path) -> (HostDataPlane, String) {
+        let db = std::env::temp_dir().join(format!("picot-host-data-db-{}", uuid::Uuid::new_v4()));
+        let store = Arc::new(Mutex::new(MetadataStore::open(&db).unwrap()));
+        let (row, _) = store.lock().unwrap().add_workspace(workspace).unwrap();
+        (HostDataPlane::new(store), row.workspace_id)
+    }
 
     #[test]
     fn lists_registered_workspace_files_and_rejects_escape_paths() {
@@ -734,15 +733,14 @@ mod tests {
         fs::create_dir_all(workspace.join("src")).unwrap();
         fs::write(workspace.join("README.md"), "read me").unwrap();
         fs::write(temp.join("secret.txt"), "secret").unwrap();
-        let data =
-            HostDataPlane::new(HashMap::from([("workspace-a".into(), workspace.clone())])).unwrap();
+        let (data, workspace_id) = test_data(&workspace);
 
-        let entries = data.list_files("workspace-a", "").unwrap();
+        let entries = data.list_files(&workspace_id, "").unwrap();
         assert_eq!(entries[0].name, "src");
         assert_eq!(entries[0].kind, FileKind::Directory);
         assert_eq!(entries[1].relative_path, "README.md");
         assert_eq!(
-            data.list_files("workspace-a", "../"),
+            data.list_files(&workspace_id, "../"),
             Err(HostDataError::InvalidRelativePath)
         );
         assert_eq!(
@@ -766,9 +764,9 @@ mod tests {
         fs::create_dir_all(&workspace).unwrap();
         fs::create_dir_all(&outside).unwrap();
         symlink(&outside, workspace.join("escape")).unwrap();
-        let data = HostDataPlane::new(HashMap::from([("workspace-a".into(), workspace)])).unwrap();
+        let (data, workspace_id) = test_data(&workspace);
         assert_eq!(
-            data.list_files("workspace-a", "escape"),
+            data.list_files(&workspace_id, "escape"),
             Err(HostDataError::OutsideWorkspace)
         );
         fs::remove_dir_all(temp).unwrap();
@@ -803,11 +801,10 @@ mod tests {
             ),
         )
         .unwrap();
-        let data = HostDataPlane::new(HashMap::from([("workspace-a".into(), workspace)]))
-            .unwrap()
-            .with_session_root(temp.join("sessions"));
+        let (data, workspace_id) = test_data(&workspace);
+        let data = data.with_session_root(temp.join("sessions"));
 
-        let listed = data.list_sessions("workspace-a").unwrap();
+        let listed = data.list_sessions(&workspace_id).unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, "session-a");
         assert_eq!(
@@ -846,17 +843,16 @@ mod tests {
             ),
         )
         .unwrap();
-        let data = HostDataPlane::new(HashMap::from([("workspace-a".into(), workspace)]))
-            .unwrap()
-            .with_session_root(temp.join("sessions"));
+        let (data, workspace_id) = test_data(&workspace);
+        let data = data.with_session_root(temp.join("sessions"));
 
-        let results = data.search_sessions("workspace-a", "widget").unwrap();
+        let results = data.search_sessions(&workspace_id, "widget").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].session_id, "session-a");
         assert!(results[0].matches[0].snippet.contains("widget"));
 
         assert!(
-            data.search_sessions("workspace-a", "refactor")
+            data.search_sessions(&workspace_id, "refactor")
                 .unwrap()
                 .len()
                 == 1
@@ -894,11 +890,10 @@ mod tests {
             ),
         )
         .unwrap();
-        let data = HostDataPlane::new(HashMap::from([("workspace-a".into(), workspace)]))
-            .unwrap()
-            .with_session_root(temp.join("sessions"));
+        let (data, workspace_id) = test_data(&workspace);
+        let data = data.with_session_root(temp.join("sessions"));
 
-        let dashboard = data.cost_dashboard("workspace-a").unwrap();
+        let dashboard = data.cost_dashboard(&workspace_id).unwrap();
         assert_eq!(dashboard.summary.session_count, 1);
         assert_eq!(dashboard.summary.total_cost, 0.5);
         assert_eq!(dashboard.summary.total_tokens, 30);

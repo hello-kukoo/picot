@@ -9,6 +9,7 @@ mod host_server;
 mod metadata_store;
 mod mutation_types;
 mod native_pi_manager;
+mod operation_registry;
 mod package_manager;
 // Public API staged for the broker (Task 5) and host lifecycle (Task 7a).
 #[allow(dead_code)]
@@ -16,6 +17,7 @@ mod command_policy;
 mod ephemeral_registry;
 mod git_pi_runner;
 mod git_service;
+mod pi_launch;
 mod pi_manager;
 mod pi_rpc_bridge;
 mod remote_auth;
@@ -39,10 +41,11 @@ use git_service::GitService;
 use host_server::HostServer;
 use metadata_store::{MetadataStore, SharedMetadataStore};
 use native_pi_manager::NativePiManager;
+use pi_launch::{locked_pi_version, PiSpawnSpec};
 use pi_manager::{
     build_ephemeral_environment, canonical_temp_root, cleanup_quick_chat_dir,
-    create_quick_chat_temp_dir, locked_pi_version, wait_for_endpoint,
-    wait_for_health as wait_for_pi_health, PiManager, PiSpawnSpec,
+    create_quick_chat_temp_dir, wait_for_endpoint, wait_for_health as wait_for_pi_health,
+    PiManager,
 };
 use remote_auth::RemoteAuth;
 use runtime_coordinator::RuntimeTarget;
@@ -1197,10 +1200,9 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
         .map_err(|error| format!("Cannot resolve Picot app data directory: {error}"))?
         .join("picot.sqlite3");
     let shared_metadata = Arc::new(Mutex::new(MetadataStore::open(&metadata_path)?));
-    // SPEC §5.3: the default ~/.pi/tmp workspace is never auto-registered, so
-    // a fresh install keeps an empty registry. The RuntimeTarget only needs an
-    // in-memory identifier and HostServer's cwd map is RAM-only as well — mint
-    // one without writing a registry row.
+    // SPEC §5.3: default ~/.pi/tmp stays temporary and is never auto-registered.
+    // Native data-plane lookup therefore rejects this target until a registered
+    // workspace is opened through the registry.
     let workspace_id = format!("native-{}", uuid::Uuid::new_v4().simple());
     let session_id = format!("temporary-{}", uuid::Uuid::new_v4().simple());
     let target = RuntimeTarget::new(
@@ -1208,15 +1210,14 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
         session_id,
         format!("instance-{}", uuid::Uuid::new_v4().simple()),
     );
-    let resolver = PiManager::new(static_dir.clone());
-    let launch = resolver.native_launch_spec(&cwd, session_path.as_deref())?;
+    let launch = pi_launch::native_launch_spec(&static_dir, &cwd, session_path.as_deref())?;
     let runtimes = NativePiManager::new(256);
     let remote_auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&shared_metadata))));
-    let host = tauri::async_runtime::block_on(HostServer::start_with_workspaces(
+    let host = tauri::async_runtime::block_on(HostServer::start(
         static_dir,
         runtimes.clone(),
         remote_auth,
-        std::collections::HashMap::from([(target.workspace_id.clone(), PathBuf::from(&cwd))]),
+        shared_metadata,
     ))?;
     runtimes.spawn(target.clone(), launch)?;
     if let Err(error) = open_native_workspace_window(app.handle(), host.origin(), &target) {
