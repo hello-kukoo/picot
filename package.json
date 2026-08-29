@@ -23,6 +23,7 @@
     "fetch:terminal-font": "bun run scripts/fetch-terminal-font.js",
     "fetch:cjk-font": "bun run scripts/fetch-cjk-font.js",
     "smoke:pi-rpc": "bun run scripts/smoke-pi-rpc.js",
+    "smoke:gate-c": "bun run scripts/gate-c-parity-smoke.mjs",
     "build:extensions": "bun run scripts/build-extensions.js",
     "sign:pi": "bash scripts/sign-pi-resources.sh",
     "build:frontend": "node scripts/build-frontend.js",

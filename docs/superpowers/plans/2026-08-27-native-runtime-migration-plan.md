@@ -1,7 +1,7 @@
 # Picot Native Runtime 迁移实施计划
 
 > 依据：`docs/superpowers/specs/2026-08-27-native-runtime-migration-design.md`（**R4.5**）。
-> 同步记录：R4 已核验已提交 workspace registry（`7acbc0a`）并标记 Gate R 为 partial；R4.1 收尾 P5/P6/P7 依赖与 endpoint 归属；R4.2 将 Gate R 改为 migration-owned **WP-R.1–R.5**；R4.4 收敛 tmp snapshot、`runtime.*` ingress guard、Foundation/P0 分名与 decision gate 规则；R4.5 双文档评审收尾（Gate B exit D8 修正、Gate D 任务改 GD 命名、P4 依赖对齐 spec、§19 补 3 条停止条件、R2 补拒启场景、WP-R 单包估算、CP 增 P4/P6）；R4.6 锁定 Gate B-design 交接语义（B-GAP owner 归属随 phase exit 关闭，Gate B 文档 §13/§14；spec P1 依赖限定 design closure）。
+> 同步记录：R4 已核验已提交 workspace registry（`7acbc0a`）并标记 Gate R 为 partial；R4.1 收尾 P5/P6/P7 依赖与 endpoint 归属；R4.2 将 Gate R 改为 migration-owned **WP-R.1–R.5**；R4.4 收敛 tmp snapshot、`runtime.*` ingress guard、Foundation/P0 分名与 decision gate 规则；R4.5 双文档评审收尾（Gate B exit D8 修正、Gate D 任务改 GD 命名、P4 依赖对齐 spec、§19 补 3 条停止条件、R2 补拒启场景、WP-R 单包估算、CP 增 P4/P6）；R4.6 锁定 Gate B-design 交接语义（B-GAP owner 归属随 phase exit 关闭，Gate B 文档 §13/§14；spec P1 依赖限定 design closure）；R4.7 同构拆分 Gate C（C-GAP-01–11 随 phase exit 关闭、C-GAP-12 阻塞 design closure，Gate C 文档 §15/§16；spec P1 依赖限定）；R4.8 C-GAP-12 语义精化——源码抽取完成，阻塞项转为 embedded Pi `0.84.2` parity/trust/collision runtime 证据。
 > 开工门槛（不可协商）：任何改变生产启动路径、WebView origin、认证链、spawn 路径或路由行为的 work package，必须先通过其显式 Gate dependencies，并取得 spec §16 **Blocks** 列指向该 work package 的全部决策。WP-R（§3）仅限 additive authority API 与 `runtime.*` fail-closed 守卫；Foundation F0（§2）仅限只读盘点、测试基建和性能测量；二者不触碰上述生产路径。
 > 所有生产迁移 work package 必须以本计划和 R4.4 spec 的较严要求为准。估算基准：1 名熟悉本仓库的工程师全职、每工作包至少一次评审。P3 在 Gate D 完成 adapter prototype 前**不作固定人日承诺**。总排期须在 Gate R/A–D 后重估，且包含至少两个稳定 release 周期。
 
@@ -302,7 +302,7 @@ OperationRecord(Pending | Completed | Indeterminate | Expired | Revoked)
 - 环境 owner：`PI_CODING_AGENT_DIR`、skill-install secret、static assets、PATH、embedded Pi version；
 - `pi_manager.rs` 所有 pub symbol → native replacement / new module / explicit deletion + test 的 P8 table。
 
-**Gate C exit：**每 spawn 调用点归入一项 contract；无未定义 state transition；P8 symbol map 覆盖全部 pub symbol。
+**Gate C exit：**每 spawn 调用点归入一项 contract；无未定义 state transition；P8 symbol map 覆盖全部 pub symbol；C-GAP-01–11 按 Gate C 文档 §16 owner 归属转 P1/P2/P3/P5/P8 验收（与 B-GAP 同源项合并追踪），不在本 Gate 关闭；C-GAP-12 的源码抽取与 embedded Pi `0.84.2` parity/trust/collision runtime evidence 已通过 `bun run smoke:gate-c`，不再阻塞 Gate C-design。
 
 ---
 
@@ -529,7 +529,7 @@ Exit：`bun run test`、`bun run check`、`bun run check:rust`、`bun run build:
 | # | 时点 | 内容 |
 | --- | --- | --- |
 | CP0 | Gate R（WP-R 完成后） | authority API、`runtime.*` 守卫、schema/N-1 演练、readiness 终审 |
-| CP1 | Gate A–D | 四份产物 + adapter prototype 终审 |
+| CP1 | Gate A–D | 四份产物 + adapter prototype 终审（Gate B/C 按 design closure 关闭；B-GAP/C-GAP-01–11 随归属 phase exit 关闭；C-GAP-12 runtime evidence 已闭合） |
 | CP2 | 决策会 | D1–D10 开工许可 |
 | CP3 | P1 完 | lifecycle、Operation Registry、turn abort、runtime smoke |
 | CP4 | P2 完 | capability/authorization/limit matrix |

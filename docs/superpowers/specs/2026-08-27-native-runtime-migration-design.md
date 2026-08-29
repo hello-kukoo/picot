@@ -7,6 +7,9 @@
 > 修订 R4.3（2026-08-28）：D1–D7、D9 已由 Dr. Lin 按默认建议拍板，§16 表回填决议与日期；D2 附 Gate B 重开条件；D8 待 Gate A external caller 盘点、D10 cohort 门槛待 Gate D telemetry 方案后补拍。
 > 修订 R4.4（2026-08-28）：收敛 Gate R review 歧义——`OwnerWorkspaceSnapshot` 改为 Registered/Temporary/NoWorkspace 判别联合，Temporary 禁入 v2 workspace target/route/capability；§9 同步 WP-R migration-owned 定位；`runtime.*` ingress guard 与 internal storage/writer 分层；Foundation F0 与迁移 P0 分名；决策门槛按各 work package 的 §16 Blocks 列执行。
 > 修订 R4.5（2026-08-28）：双文档评审收尾——开工门槛改按 §16 Blocks 列执行并定义 Gate R=closure；Gate B/D 决策标题标注已拍板；implementation plan 引用补显式路径；Gate R 标题去 external 残留；§1.5 lookup 措辞对齐 WP-R；P7 exit 限定 host-origin；P8 统一 Depends on；Gate B capability 列表重编号；`snapshot_too_large`/`response_too_large` 补入 §4.2。
+> 修订 R4.7（2026-08-29）：Gate C 同样拆分 design/implementation——Gate C exit criteria 改为 design closure 语义（逆向取证 + 契约表 + 测试矩阵定稿）；C-GAP-01–11 按 Gate C 文档 §16 owner 归属随 P1/P2/P3/P5/P8 exit 关闭；C-GAP-12（extension precedence 抽取）为逆向取证完整性缺口，阻塞 design closure、不 defer；P1 依赖行限定 Gate C（design closure）。
+> 修订 R4.8（2026-08-29）：C-GAP-12 语义精化——§14.1 源码抽取完成，runtime evidence 作为 design-closure prerequisite 明确记录。
+> 修订 R4.9（2026-08-29）：C-GAP-12 closure——pinned embedded Pi `0.84.2` precedence/trust/collision smoke `EXECUTED_PASS`；Gate C 文档、spec、plan 已同步，C-GAP-01–11 仍归 implementation phase closure。
 >
 > **开工门槛：** Gate R（指 closure：WP-R.1–R.5 交付且 exit criteria 评审通过）、Gate A–D 全部通过、且 §16 **Blocks** 列指向该 work package 的决策已落定前，禁止开始任何会改变生产启动路径、WebView origin、认证链、spawn 路径或路由行为的实现。允许做仅验证现状的只读盘点与测试基建（即 implementation plan 的 Foundation F0）；另允许 **WP-R**（Gate R closure 专属工作包）：仅限 additive 只读 authority API 与 `runtime.*` fail-closed 守卫，不改变上述任何路径。
 >
@@ -337,13 +340,14 @@ HostServer 当前只能 bind `127.0.0.1:0`。在 release 启用 LAN 前，必须
 - Windows 必须定义 process-group/Job Object；Unix 必须定义 process group 与 kill escalation；
 - launch description tests 固定 args/env；真实 Pi smoke 覆盖每个 runtime type。
 
-#### Gate C exit criteria
+#### Gate C exit criteria（design closure）
 
-- 所有现有 `PiManager` spawn/call sites 归入一条 launch contract；
-- native manager 有不依赖 legacy manager 的 launch description；
-- child exit、crash、cleanup、Windows path、ephemeral replacement 都有 tests；
-- `PI_CODING_AGENT_DIR`、skill-install secret、static assets、PATH、Pi version 等环境变量均有明确终态 owner；
-- P8 删除 `PiManager` 的每个 symbol 有替代项和测试。
+- 所有现有 `PiManager` spawn/call sites 经逆向取证归入 launch contract；逆向证据必须完整，含 user/project extension loading precedence（源码抽取与 embedded Pi `0.84.2` parity/trust/collision runtime 证据均已完成，见 Gate C 文档 C-GAP-12）；
+- launch contract（含 restart policy）、八态 transition table、四类 stop ordering 以不依赖 legacy manager 的契约形式定义；实现归 P1.4–P1.7；
+- child exit、crash、cleanup、Windows path、ephemeral replacement 的测试矩阵已定义并列为必做；实现与通过归 P1.5–P1.7/P1.11 及各自 phase exit；
+- `PI_CODING_AGENT_DIR`、skill-install secret、static assets、PATH、Pi version 等环境变量均有明确终态 owner（design）；
+- P8 删除 `PiManager` 的每个 symbol 有替代项映射；实现与测试证据随 P8 deletion proof；
+- C-GAP-01–11 按 Gate C 文档 §16 的 owner 归属随各 phase exit 关闭；Gate C-design 关闭不豁免、不合并、不降级任何 C-GAP。
 
 ### Gate D — UI parity、origin 与发布策略
 
@@ -616,7 +620,7 @@ The migration inventory must include callers in at least:
 
 ### P1 — Native lifecycle and operation substrate, still dark
 
-**Depends on:** Gate R + Gate B（design closure，见 Gate B 文档 §14；B-GAP 实现缺口随归属 phase exit 关闭）+ Gate C.
+**Depends on:** Gate R + Gate B（design closure，见 Gate B 文档 §14；B-GAP 实现缺口随归属 phase exit 关闭）+ Gate C（design closure，见 Gate C 文档 §16；C-GAP-01–11 随归属 phase exit 关闭，C-GAP-12 已由 §14.1 runtime evidence closure）。
 
 - Expand `NativeLaunchSpec`/manager to express full launch contract; no production routing yet.
 - Add child exit observer, crash state/event, pending request failure, stop ordering, Windows process policy. EOF, child exit, writer failure and fatal protocol error must atomically set `Crashed`, mark in-flight operations `Indeterminate`, reject pending bridge requests and emit a sequenced crash/snapshot-required event.
