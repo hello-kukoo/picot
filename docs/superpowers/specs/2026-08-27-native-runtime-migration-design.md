@@ -12,6 +12,7 @@
 > 修订 R4.9（2026-08-29）：C-GAP-12 closure——pinned embedded Pi `0.84.2` precedence/trust/collision smoke `EXECUTED_PASS`；Gate C 文档、spec、plan 已同步，C-GAP-01–11 仍归 implementation phase closure。
 > 修订 R4.10（2026-08-29）：Gate R 两项拍板（Dr. Lin）——(1) R-03 首迁移窗口语义（选项 A）：`0.3.5`（registry-less）↔ 首个 registry release 为合法 rehearsal 对，`user_version` 拒启由 component 测试覆盖，真实 schema-aware N-1 自 v3→v4 起存在；(2) Windows 平台边界（选项 a）：Gate R 以 macOS 证据关闭，Windows 硬证据顺延至 P8 release validation。详见 §13.2 与 rehearsal 报告。
 > 修订 R4.11（2026-08-29，Dr. Lin）：首迁移窗口恢复策略重定——DB 内仅 workspaces/paired_devices/preferences（可重建，session 数据在磁盘 JSONL 不在 DB），且无装机量跨 schema 边界；Gate R closure 要求改为 component 测试（已 PASS）+ DB graceful degradation（open 失败/损坏→隔离重建+脱敏日志，WP-R.6）+ runbook 手动恢复；version-matched restore tool 与真实 artifact N-1 演练 **deferred 且强制于首个有真实用户的 schema 升级窗口（v3→v4）**。
+> 修订 R4.12（2026-08-29）：**Gate R：CLOSED at CP0（Dr. Lin 签署）**——六项 exit criteria 逐条验证通过（criterion 1 admission 验收边界同日修正：注册侧结构性保证已测，host 侧 wiring 归 B-GAP-04/05）；WP-R.1–R.6 全部交付，cargo 299/299。P0/P1 依赖自此只剩本 Gate 已满足，两者解锁。
 >
 > **开工门槛：** Gate R（指 closure：WP-R.1–R.5 交付且 exit criteria 评审通过）、Gate A–D 全部通过、且 §16 **Blocks** 列指向该 work package 的决策已落定前，禁止开始任何会改变生产启动路径、WebView origin、认证链、spawn 路径或路由行为的实现。允许做仅验证现状的只读盘点与测试基建（即 implementation plan 的 Foundation F0）；另允许 **WP-R**（Gate R closure 专属工作包）：仅限 additive 只读 authority API 与 `runtime.*` fail-closed 守卫，不改变上述任何路径。
 >
@@ -177,7 +178,7 @@ OwnerWorkspaceSnapshot =
 
 #### Gate R exit criteria
 
-- WP-R.1–R.5 已交付并通过测试（当前 `7acbc0a` 的 `workspace_id_for_path`、`get_workspace`、拆分 owner reads 不计入 authority API 完成证明）；`OwnerWorkspaceSnapshot` 三个 variant 与 Registered-only v2 admission 均须测试；
+- WP-R.1–R.5 已交付并通过测试（当前 `7acbc0a` 的 `workspace_id_for_path`、`get_workspace`、拆分 owner reads 不计入 authority API 完成证明）；`OwnerWorkspaceSnapshot` 三个 variant 与 Temporary-无-wid 结构性保证均须测试（host 侧 Registered-only admission wiring 随 B-GAP-04/05 于 P1.8–P1.9/P2.4 验收）；
 - HostDataPlane adapter、P1 target resolver 和 host flag reader 可仅以这些 API 表达，不需要裸 root map、URL path 或浏览器路径；
 - 公开 `preference.*` 对 `runtime.*` 保留 namespace 的 get/set/delete/list 全部 fail closed；普通 Native owner 无法自行 enable、disable、枚举或读取 rollout flag；
 - 未注册 temporary runtime 的 identity、visibility 与 recovery policy 已定义并测试（default startup tmp 与 Quick Chat child 分别覆盖）；

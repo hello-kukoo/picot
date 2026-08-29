@@ -529,7 +529,7 @@ Exit：`bun run test`、`bun run check`、`bun run check:rust`、`bun run build:
 
 | # | 时点 | 内容 |
 | --- | --- | --- |
-| CP0 | Gate R（WP-R 完成后） | authority API、`runtime.*` 守卫、schema/N-1 演练、readiness 终审 |
+| CP0 | Gate R（WP-R 完成后） | **已关闭（2026-08-29，Dr. Lin 签署）**：六项 exit criteria 逐条验证（criterion 1 admission 边界修正见 spec R4.12）；WP-R.1–R.6 全部交付；P0/P1 解锁 |
 | CP1 | Gate A–D | 分场：**Gate B-design + Gate C-design + Gate A 已于 2026-08-29 关闭**（Dr. Lin 签署；B/C 见 `2026-08-29-cp1-review.md`；Gate A 人审裁决：A-HTTP-37 直接 retire、A-HTTP-25/D8 边界、高危行终态认可，含两条安全修复）；Gate D（adapter 原型在途）另行关闭 |
 | CP2 | 决策会 | D1–D10 开工许可 |
 | CP3 | P1 完 | lifecycle、Operation Registry、turn abort、runtime smoke |
