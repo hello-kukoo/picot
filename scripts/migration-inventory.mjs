@@ -34,7 +34,12 @@ for (const file of files.sort()) {
   const source = await readFile(resolve(root, file), "utf8");
   for (const [lineNumber, line] of source.split("\n").entries()) {
     if (/\bfetch\s*\(|\bsendControl\s*\(|\bpostRpc\s*\(|\bbroker_control\b/.test(line)) {
-      callers.push({ file, line: lineNumber + 1, text: line.trim() });
+      callers.push({
+        id: `${file}:${lineNumber + 1}`,
+        file,
+        line: lineNumber + 1,
+        text: line.trim(),
+      });
     }
   }
 }
@@ -78,9 +83,10 @@ const inventory = {
 
 const outputPath =
   process.env.MIGRATION_INVENTORY_OUTPUT ?? resolve(root, "scripts/gen/inventory.json");
+// Generated report goes to gen/ only — the curated Gate A document under
+// docs/ is human-maintained and must never be overwritten by the generator.
 const docPath =
-  process.env.MIGRATION_INVENTORY_DOC ??
-  resolve(root, "docs/superpowers/specs/2026-08-27-migration-inventory.md");
+  process.env.MIGRATION_INVENTORY_DOC ?? resolve(root, "scripts/gen/inventory-report.md");
 await mkdir(resolve(root, "scripts/gen"), { recursive: true });
 await mkdir(resolve(root, "docs/superpowers/specs"), { recursive: true });
 await writeFile(outputPath, `${JSON.stringify(inventory, null, 2)}\n`);
@@ -116,6 +122,7 @@ const lines = [
   "## Review notes",
   "",
   "- Extraction is syntax-oriented and intentionally does not decide migration ownership or deletion eligibility.",
+  "- A-CALLER-NNN are sorted positions and drift on insertion; stable references use the caller `id` (`file:line`) field.",
   "- `startsWith` route matches are retained as normalized route prefixes; route counts are generated, not hard-coded.",
   "- Review `dispatch_control`, OAuth, extension UI, static assets, and binary/download paths against source before Gate A approval.",
 ];
