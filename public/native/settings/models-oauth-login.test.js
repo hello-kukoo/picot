@@ -89,6 +89,65 @@ describe("createModelsOAuthLoginDialog", () => {
     expect(document.querySelector('[data-action="oauth-retry"]')).not.toBeNull();
   });
 
+  it("rewrites self-signed TLS failures into a proxy CA hint", async () => {
+    const { dialog, emit } = createHarness();
+    void dialog.start();
+    await Promise.resolve();
+    emit({
+      type: "failed",
+      message: "Error: self signed certificate in certificate chain",
+    });
+    expect(document.querySelector(".oauth-login-dialog-status").textContent).toBe(
+      "settings.models.oauth.tlsUntrusted",
+    );
+  });
+
+  it("shows preparing immediately while the start command is pending", async () => {
+    let resolveCommand;
+    const commandMock = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveCommand = resolve;
+        }),
+    );
+    const { dialog } = createHarness({ command: commandMock });
+    void dialog.start();
+    await Promise.resolve();
+
+    expect(document.querySelector(".oauth-login-dialog-title").textContent).toBe(
+      "settings.models.oauth.preparing",
+    );
+    expect(document.querySelector('[data-action="oauth-cancel"]')).not.toBeNull();
+
+    resolveCommand({ success: true, data: { operationId: "op-1" } });
+    await Promise.resolve();
+    expect(document.querySelector(".oauth-login-dialog-title").textContent).toBe(
+      "settings.models.oauth.preparing",
+    );
+  });
+
+  it("accepts a device_code event that arrives before start resolves", async () => {
+    let resolveCommand;
+    const commandMock = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveCommand = resolve;
+        }),
+    );
+    const { dialog, emit } = createHarness({ command: commandMock });
+    void dialog.start();
+    await Promise.resolve();
+
+    emit({
+      type: "device_code",
+      verificationUri: "https://example.com/activate",
+      userCode: "EARLY-1",
+    });
+    expect(document.querySelector(".oauth-login-dialog-code").textContent).toBe("EARLY-1");
+
+    resolveCommand({ success: true, data: { operationId: "op-1" } });
+  });
+
   it("sends cancel for the active operation", async () => {
     const commandMock = vi.fn((frame) => {
       if (frame.type === "cancel_oauth_login") {
@@ -106,6 +165,28 @@ describe("createModelsOAuthLoginDialog", () => {
     });
 
     document.querySelector('[data-action="oauth-cancel"]').click();
+
+    const cancelFrame = cmd.mock.calls.find(([frame]) => frame.type === "cancel_oauth_login");
+    expect(cancelFrame[0].operationId).toBe("op-1");
+  });
+
+  it("cancels on Escape while the device-code dialog is open", async () => {
+    const commandMock = vi.fn((frame) => {
+      if (frame.type === "cancel_oauth_login") {
+        return Promise.resolve({ success: true, data: { operationId: frame.operationId } });
+      }
+      return Promise.resolve({ success: true, data: { operationId: "op-1" } });
+    });
+    const { dialog, commandMock: cmd, emit } = createHarness({ command: commandMock });
+    void dialog.start();
+    await Promise.resolve();
+    emit({
+      type: "device_code",
+      verificationUri: "https://example.com/activate",
+      userCode: "A1",
+    });
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 
     const cancelFrame = cmd.mock.calls.find(([frame]) => frame.type === "cancel_oauth_login");
     expect(cancelFrame[0].operationId).toBe("op-1");

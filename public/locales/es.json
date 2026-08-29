@@ -88,9 +88,9 @@
     "output": "output",
     "cache": "cache",
     "costTitle": "costTitle",
-    "summary": "In {in} · Out {out} · Cache {cache}",
-    "inputSummary": "In {in}",
-    "outputSummary": "Out {out}",
+    "summary": "↓ {in} · ↑ {out} · Cache {cache}",
+    "inputSummary": "↓ {in}",
+    "outputSummary": "↑ {out}",
     "sessionUsageTitle": "Session tokens (input / output / cache)"
   },
   "sessionInfo": {
@@ -650,9 +650,13 @@
     "requireLogin": "Requerir inicio de sesión",
     "agentConfigFile": "Archivo de configuración del agente",
     "agentsMd": "AGENTS.md",
-    "agentsContextFile": "Archivo de contexto del agente (AGENTS.md)",
+    "agentsContextFile": "Contexto del agente",
+    "agentsMdHelp": "Notas de trabajo para el agente (preferencias, convenciones, comandos). Opcional. Aquí se edita el archivo global para todos los proyectos; las reglas de un repositorio van en el AGENTS.md de ese repo.",
+    "agentsMdPlaceholder": "p. ej. Responde en español. Lee los archivos relacionados antes de editar.",
     "appendSystemMd": "APPEND_SYSTEM.md",
-    "appendSystemPromptFile": "Archivo de anexo al prompt del sistema (APPEND_SYSTEM.md)",
+    "appendSystemPromptFile": "Añadir al prompt del sistema",
+    "appendSystemMdHelp": "Se añade al prompt del sistema sin reemplazar el de Pi. Para reglas de comportamiento permanentes. Opcional; déjalo vacío para conservar el comportamiento por defecto.",
+    "appendSystemMdPlaceholder": "p. ej. Sé conciso. Explica ediciones arriesgadas antes de ejecutarlas.",
     "providersFile": "Archivo de proveedores",
     "llmProviders": "Proveedores LLM",
     "browseCommunityPackages": "Explorar paquetes de la comunidad",
@@ -711,6 +715,7 @@
         "cancelled": "Inicio de sesión con ChatGPT cancelado.",
         "expired": "Este código de dispositivo ha caducado. Empieza de nuevo.",
         "failed": "Error al iniciar sesión con ChatGPT.",
+        "tlsUntrusted": "Falló la verificación del certificado TLS. Un proxy HTTPS local (Clash, Surge o VPN) probablemente está interceptando OpenAI. Confía en la CA de ese proxy o desactiva la inspección HTTPS para OpenAI y vuelve a intentarlo.",
         "retry": "Reintentar"
       }
     },

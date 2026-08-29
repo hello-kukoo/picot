@@ -64,4 +64,16 @@ describe("app keyboard shortcuts", () => {
 
     expect(abort).not.toHaveBeenCalled();
   });
+
+  it("does not abort Escape when a modal overlay is open", () => {
+    const overlay = document.createElement("div");
+    overlay.className = "ui-overlay";
+    document.body.append(overlay);
+    const abort = vi.fn();
+    setupAppKeyboardShortcuts({ input, abort, isWorking: () => true });
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
+
+    expect(abort).not.toHaveBeenCalled();
+  });
 });

@@ -1,4 +1,5 @@
 import { t } from "../../i18n.js";
+import { bindDialogEscape } from "../../ui/dialog-escape.js";
 import { createLoadingPlaceholder } from "../../ui/loading-placeholder.js";
 
 const SEARCH_DEBOUNCE_MS = 300;
@@ -288,11 +289,10 @@ export function setupSessionSearchDialog({
       } else {
         open();
       }
-      return;
     }
-    if (dialog.classList.contains("hidden") || event.key !== "Escape") return;
-    event.preventDefault();
-    close();
+  });
+  bindDialogEscape(() => close(), {
+    isActive: () => dialog.isConnected && !dialog.classList.contains("hidden"),
   });
   input.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {

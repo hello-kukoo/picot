@@ -3,6 +3,7 @@
 import { expect, test } from "vitest";
 import {
   basenameLocalPath,
+  compactWorkspaceLabel,
   displayLocalPath,
   normalizeLocalPath,
   parentLocalPath,
@@ -46,4 +47,11 @@ test("formats relative paths with a leading slash for sidebar display", () => {
   expect(displayLocalPath("Users/Lin/project")).toBe("/Users/Lin/project");
   expect(displayLocalPath("/Users/Lin/project")).toBe("/Users/Lin/project");
   expect(displayLocalPath("C:/Users/Lin/project")).toBe("C:/Users/Lin/project");
+});
+
+test("compacts a workspace path to the distinctive folder name", () => {
+  expect(compactWorkspaceLabel("/Users/ShixinGuo/code/pi/trustMRR")).toBe("trustMRR");
+  expect(compactWorkspaceLabel("C:\\Users\\Lin\\code\\pi\\picot")).toBe("picot");
+  expect(compactWorkspaceLabel("/")).toBe("/");
+  expect(compactWorkspaceLabel("")).toBe("");
 });

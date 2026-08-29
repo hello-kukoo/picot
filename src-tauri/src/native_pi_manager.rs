@@ -123,6 +123,7 @@ impl NativePiManager {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        crate::pi_tls::apply_runtime_tls_env(&mut command);
         let child = command
             .spawn()
             .map_err(|error| format!("Cannot start embedded Pi native RPC process: {error}"))?;

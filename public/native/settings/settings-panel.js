@@ -1,6 +1,7 @@
 import { t } from "../../i18n.js";
 import { applyTheme, getCurrentTheme, themes } from "../../themes.js";
 import { applyLoadingPlaceholder, clearLoadingPlaceholder } from "../../ui/loading-placeholder.js";
+import { setupRemoteAccessHeader } from "../workspace/remote-access-header.js";
 import { setupUpdateIndicator } from "../workspace/update-indicator.js";
 import { loadCostDashboard } from "./cost-dashboard.js";
 import { setupLanguageSelector } from "./language-selector.js";
@@ -39,6 +40,7 @@ export function setupSettingsPanel({
   notify,
   onRestarted,
   onThinkingLevelChanged,
+  desktopClient = false,
 } = {}) {
   const panel = document.getElementById("settings-panel");
   const openBtn = document.getElementById("settings-btn");
@@ -70,6 +72,11 @@ export function setupSettingsPanel({
   const updateIndicator = setupUpdateIndicator({
     buttonEl: document.getElementById("package-update-indicator"),
     onOpen: () => openSettings("extensions"),
+  });
+  setupRemoteAccessHeader({
+    buttonEl: document.getElementById("remote-access-header-btn"),
+    onOpen: () => openSettings("remote-access"),
+    visible: desktopClient,
   });
   const packageManager = setupPackageManager({
     control,
@@ -360,7 +367,9 @@ export function setupSettingsPanel({
     });
   }
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !panel.classList.contains("hidden")) closeSettings();
+    if (event.key !== "Escape" || panel.classList.contains("hidden")) return;
+    if (event.defaultPrevented) return;
+    closeSettings();
   });
   window.addEventListener("hashchange", restoreFromHash);
   restoreFromHash();

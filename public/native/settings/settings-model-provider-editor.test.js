@@ -263,9 +263,60 @@ describe("models provider editor", () => {
     const sections = [...dialog.querySelectorAll(".provider-picker-section-title")].map(
       (el) => el.dataset.section,
     );
-    expect(sections[0]).toBe("builtIn");
-    expect(sections.at(-1)).toBe("custom");
-    expect(dialog.querySelector('[data-section="builtIn"]').textContent).not.toMatch(/API key/i);
+    expect(sections).toEqual(["apiKey"]);
+    expect(dialog.querySelector(".provider-picker-toolbar .provider-picker-search")).not.toBeNull();
+    expect(dialog.querySelector(".provider-picker-body")).not.toBeNull();
+    expect(dialog.querySelector(".provider-picker-featured .provider-picker-card")).not.toBeNull();
+    expect(
+      dialog.querySelector(".provider-picker-grid .provider-picker-card").textContent,
+    ).toContain("1 model");
+    expect(
+      dialog.querySelector(".provider-picker-grid .provider-picker-card").textContent,
+    ).not.toContain("0 models");
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(document.querySelector(".provider-picker-dialog")).toBeNull();
+  });
+
+  test("add-provider catalog cards hide empty model counts", async () => {
+    call.mockImplementation(async (operation) => {
+      if (operation === "list_model_catalog") {
+        return {
+          ok: true,
+          data: {
+            providers: [
+              {
+                provider: "amazon-bedrock",
+                displayName: "Amazon Bedrock",
+                configured: false,
+                source: "stored",
+                models: [],
+              },
+              {
+                provider: "anthropic",
+                displayName: "Anthropic",
+                configured: true,
+                source: "stored",
+                models: [{ id: "claude-sonnet" }, { id: "claude-opus" }],
+              },
+            ],
+          },
+        };
+      }
+      if (operation === "read_models_config") {
+        return { ok: true, data: { path: "/home/.pi/agent/models.json", content: "{}" } };
+      }
+      throw new Error(`Unexpected operation: ${operation}`);
+    });
+    const editor = setupModelsPage({ configGateway: { call } });
+    await editor.loadApiKeysPanel();
+    document.querySelector(".models-provider-add").click();
+    const cards = [...document.querySelectorAll(".provider-picker-grid .provider-picker-card")].map(
+      (card) => card.textContent,
+    );
+    expect(cards.find((text) => text.includes("Amazon Bedrock"))).not.toContain("Needs API key");
+    expect(cards.find((text) => text.includes("Amazon Bedrock"))).not.toContain("0 models");
+    expect(cards.find((text) => text.includes("Anthropic"))).toContain("2 models");
   });
 });
 
@@ -283,6 +334,14 @@ test("provider picker dialog does not fall back to a light-theme surface", () =>
   const css = readFileSync("public/native/settings/settings-config.css", "utf8");
   expect(css).not.toMatch(/--bg-primary/);
   expect(css).toMatch(/\.provider-picker-dialog[\s\S]*?color:\s*var\(--text-primary\)/);
+  expect(css).toMatch(/\.provider-picker-dialog[\s\S]*?overflow:\s*hidden/);
+  const toolbarRule = css.match(/\.provider-picker-toolbar\s*\{(?<declarations>[^}]*)\}/);
+  expect(toolbarRule?.groups?.declarations).not.toMatch(/background/);
+  expect(css).toMatch(/\.provider-picker-body[\s\S]*?overflow:\s*auto/);
+  expect(css).toMatch(/\.provider-picker-card[\s\S]*?background:\s*var\(--bg-glass\)/);
+  expect(css).toMatch(
+    /\.provider-picker-featured[\s\S]*?grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/,
+  );
 });
 
 test("does not draw a curved inset border on the selected provider or model", () => {

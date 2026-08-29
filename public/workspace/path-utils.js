@@ -60,6 +60,15 @@ export function basenameLocalPath(value) {
   return normalized.slice(normalized.lastIndexOf("/") + 1);
 }
 
+/**
+ * Compact label for a workspace path: the folder name, omitting the home /
+ * drive prefix that is the same on every typical project. Hover/title should
+ * still carry the full path when those prefixes differ.
+ */
+export function compactWorkspaceLabel(value) {
+  return basenameLocalPath(value) || displayLocalPath(value);
+}
+
 export function parentLocalPath(value) {
   const normalized = normalizeLocalPath(value);
   if (!normalized || normalized === "/" || /^[A-Za-z]:\/$/.test(normalized)) return normalized;

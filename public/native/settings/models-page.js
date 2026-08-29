@@ -6,6 +6,8 @@
 // access still happens inside pi via the bridge — this module only renders.
 
 import { onLocaleChange, t } from "../../i18n.js";
+import { bindDialogEscape } from "../../ui/dialog-escape.js";
+import { createModelsOAuthLoginDialog } from "./models-oauth-login.js";
 import { openCustomProviderEditor } from "./settings-custom-provider.js";
 import {
   clearSettingsSaveMessage,
@@ -234,7 +236,9 @@ export function setupModelsPage({ configGateway, oauthGateway, onModelConfigurat
       },
       onTerminal: () => {},
     });
-    void oauthDialog.start().catch(() => {});
+    void oauthDialog.start().catch((error) => {
+      console.warn("[models-page] OAuth login failed to start:", error);
+    });
   }
 
   async function logoutCodex() {
@@ -267,16 +271,93 @@ export function setupModelsPage({ configGateway, oauthGateway, onModelConfigurat
     close.setAttribute("aria-label", "Close");
     close.textContent = "×";
     head.appendChild(close);
-    dialog.appendChild(head);
     const search = document.createElement("input");
     search.className = "ui-input provider-picker-search";
     search.placeholder = "Search providers…";
-    dialog.appendChild(search);
-    const grid = document.createElement("div");
-    grid.className = "provider-picker-grid";
-    dialog.appendChild(grid);
+    const toolbar = document.createElement("div");
+    toolbar.className = "provider-picker-toolbar";
+    toolbar.append(head, search);
+    const body = document.createElement("div");
+    body.className = "provider-picker-body";
+    dialog.append(toolbar, body);
+
+    const pickerSubtitle = (section, p) => {
+      if (section === "custom") return "Custom endpoint";
+      if (section === "subscriptions") return "OAuth";
+      const count = Array.isArray(p.models) ? p.models.length : 0;
+      if (count <= 0) return "";
+      return count === 1 ? "1 model" : `${count} models`;
+    };
+
+    const appendPickerCard = (parent, p, section) => {
+      const card = document.createElement("button");
+      card.className = "provider-picker-card";
+      card.type = "button";
+      card.dataset.section = section;
+      const logo = providerIcon(p.provider);
+      const text = document.createElement("span");
+      const strong = document.createElement("strong");
+      strong.textContent = p.displayName || p.provider;
+      text.append(strong);
+      const subtitle = pickerSubtitle(section, p);
+      if (subtitle) {
+        const small = document.createElement("small");
+        small.textContent = subtitle;
+        text.append(small);
+      }
+      card.append(logo, text);
+      card.addEventListener("click", () => {
+        backdrop.remove();
+        if (p.custom) {
+          openCustomProviderEditor({
+            call,
+            setupDialog,
+            onSaved: async (providerId) => {
+              if (providerId) {
+                selectedModelsConfigItem = { type: "provider", provider: providerId };
+              }
+              await loadInlineModelsEditor();
+              await loadApiKeysPanel();
+            },
+          });
+          return;
+        }
+        if (section === "subscriptions") {
+          openSubscriptionSetup(p);
+          return;
+        }
+        let row = apiKeysContainer.querySelector(
+          `[data-provider="${escapeSelectorValue(p.provider)}"]`,
+        );
+        if (!row) {
+          row = buildApiKeyRow(p);
+          const detail = apiKeysContainer.querySelector(".models-config-main");
+          detail?.replaceChildren(row);
+        }
+        openApiKeyEditor(row, p);
+      });
+      parent.appendChild(card);
+    };
+
+    const appendPickerSection = (label, section, items) => {
+      if (!items.length) return;
+      const group = document.createElement("section");
+      group.className = "provider-picker-section";
+      const heading = document.createElement("h3");
+      heading.className = "provider-picker-section-title";
+      heading.dataset.section = section;
+      heading.textContent = label;
+      const wrap = document.createElement("div");
+      wrap.className = "provider-picker-grid";
+      for (const p of items) {
+        appendPickerCard(wrap, p, section);
+      }
+      group.append(heading, wrap);
+      body.appendChild(group);
+    };
+
     const render = () => {
-      grid.replaceChildren();
+      body.replaceChildren();
       const q = search.value.toLowerCase();
       const matches = providers.filter((p) =>
         (p.displayName || p.provider).toLowerCase().includes(q),
@@ -286,92 +367,47 @@ export function setupModelsPage({ configGateway, oauthGateway, onModelConfigurat
         displayName: "OpenAI / Anthropic compatible",
         custom: true,
       };
-      const groups = [
-        [
-          "Custom",
-          !q || "custom openai-compatible anthropic-compatible".includes(q)
-            ? [custom]
-            : matches.filter((p) => p.custom || p.provider === "custom"),
-        ],
-        [
-          "Subscriptions",
-          matches.filter(
-            (p) =>
-              !p.custom &&
-              (p.authType === "oauth" ||
-                p.source === "oauth" ||
-                p.source === "subscription" ||
-                (isCodexProvider(p) && Boolean(oauthGateway))),
-          ),
-        ],
-        [
-          "API key",
-          matches.filter(
-            (p) =>
-              !p.custom &&
-              !(isCodexProvider(p) && Boolean(oauthGateway)) &&
-              p.authType !== "oauth" &&
-              p.source !== "oauth" &&
-              p.source !== "subscription",
-          ),
-        ],
+      const customItems =
+        !q || "custom openai-compatible anthropic-compatible".includes(q)
+          ? [custom]
+          : matches.filter((p) => p.custom || p.provider === "custom");
+      const subscriptionItems = matches.filter(
+        (p) =>
+          !p.custom &&
+          (p.authType === "oauth" ||
+            p.source === "oauth" ||
+            p.source === "subscription" ||
+            (isCodexProvider(p) && Boolean(oauthGateway))),
+      );
+      const featuredItems = [
+        ...customItems.map((p) => ({ p, section: "custom" })),
+        ...subscriptionItems.map((p) => ({ p, section: "subscriptions" })),
       ];
-      for (const [label, items] of groups) {
-        if (!items.length) continue;
-        const heading = document.createElement("div");
-        heading.className = "provider-picker-section-title";
-        heading.textContent = label;
-        grid.appendChild(heading);
-        for (const p of items) {
-          const card = document.createElement("button");
-          card.className = "provider-picker-card";
-          card.type = "button";
-          const logo = providerIcon(p.provider);
-          const text = document.createElement("span");
-          const strong = document.createElement("strong");
-          strong.textContent = p.displayName || p.provider;
-          const small = document.createElement("small");
-          small.textContent =
-            label === "Subscriptions"
-              ? "OAuth"
-              : label === "Custom"
-                ? "Custom endpoint format"
-                : `${Array.isArray(p.models) ? p.models.length : 0} models`;
-          text.append(strong, small);
-          card.append(logo, text);
-          card.addEventListener("click", () => {
-            backdrop.remove();
-            if (p.custom) {
-              openCustomProviderEditor({
-                call,
-                setupDialog,
-                onSaved: async (providerId) => {
-                  if (providerId) {
-                    selectedModelsConfigItem = { type: "provider", provider: providerId };
-                  }
-                  await loadInlineModelsEditor();
-                  await loadApiKeysPanel();
-                },
-              });
-              return;
-            }
-            if (label === "Subscriptions") {
-              openSubscriptionSetup(p);
-              return;
-            }
-            let row = apiKeysContainer.querySelector(
-              `[data-provider="${escapeSelectorValue(p.provider)}"]`,
-            );
-            if (!row) {
-              row = buildApiKeyRow(p);
-              const detail = apiKeysContainer.querySelector(".models-config-main");
-              detail?.replaceChildren(row);
-            }
-            openApiKeyEditor(row, p);
-          });
-          grid.appendChild(card);
+      if (featuredItems.length) {
+        const group = document.createElement("section");
+        group.className = "provider-picker-section";
+        group.setAttribute("aria-label", "Custom and subscriptions");
+        const wrap = document.createElement("div");
+        wrap.className = "provider-picker-featured";
+        wrap.dataset.section = "featured";
+        for (const { p, section } of featuredItems) {
+          appendPickerCard(wrap, p, section);
         }
+        group.appendChild(wrap);
+        body.appendChild(group);
       }
+      appendPickerSection(
+        "API key",
+        "apiKey",
+        matches.filter(
+          (p) =>
+            !p.custom &&
+            !(isCodexProvider(p) && Boolean(oauthGateway)) &&
+            p.authType !== "oauth" &&
+            p.source !== "oauth" &&
+            p.source !== "subscription",
+        ),
+      );
     };
     search.addEventListener("input", render);
     close.addEventListener("click", () => backdrop.remove());
@@ -380,6 +416,7 @@ export function setupModelsPage({ configGateway, oauthGateway, onModelConfigurat
     });
     backdrop.appendChild(dialog);
     document.body.appendChild(backdrop);
+    dismissOnEscape(backdrop);
     render();
     search.focus();
   }
@@ -409,32 +446,31 @@ export function setupModelsPage({ configGateway, oauthGateway, onModelConfigurat
     dialog.appendChild(head);
     backdrop.appendChild(dialog);
     document.body.appendChild(backdrop);
+    dismissOnEscape(backdrop);
     return { backdrop, dialog };
+  }
+
+  function dismissOnEscape(backdrop) {
+    const unbind = bindDialogEscape(() => backdrop.remove(), {
+      isActive: () => backdrop.isConnected && !backdrop.classList.contains("hidden"),
+    });
+    const nativeRemove = backdrop.remove.bind(backdrop);
+    backdrop.remove = () => {
+      unbind();
+      nativeRemove();
+    };
   }
 
   function openSubscriptionSetup(p) {
     const isCodex = oauthGateway && isCodexProvider(p);
-    if (isCodex && codexOAuthCapability && !codexOAuthCapability.configured) {
+    if (isCodex) {
+      if (codexOAuthCapability?.configured) {
+        void logoutCodex();
+        return;
+      }
+      // Do not wait for the capability probe: a pending/failed probe used to
+      // close the picker and then sit idle, which looks like a dead click.
       startOAuthLogin();
-      return;
-    }
-    if (isCodex && codexOAuthCapability?.configured) {
-      const ok = confirm(t("settings.models.oauth.logoutConfirm", { provider: "OpenAI Codex" }));
-      if (!ok) return;
-      void logoutCodex();
-      return;
-    }
-    if (isCodex && !codexOAuthCapability) {
-      // Capability not loaded yet: probe once, then re-route. If the probe
-      // yields nothing (unsupported/unavailable), degrade to the terminal
-      // instructions instead of recursing.
-      void loadOAuthCapability().then(() => {
-        if (!codexOAuthCapability) {
-          showTerminalLoginDialog(p);
-          return;
-        }
-        openSubscriptionSetup(p);
-      });
       return;
     }
     showTerminalLoginDialog(p);
@@ -1084,8 +1120,8 @@ export function setupModelsPage({ configGateway, oauthGateway, onModelConfigurat
       sourceDialog.addEventListener("click", (event) => {
         if (event.target === sourceDialog) closeSourceDialog();
       });
-      sourceDialog.addEventListener("keydown", (event) => {
-        if (event.key === "Escape") closeSourceDialog();
+      bindDialogEscape(closeSourceDialog, {
+        isActive: () => sourceDialog.isConnected && !sourceDialog.classList.contains("hidden"),
       });
       inlineModelsTextarea.addEventListener("change", renderModelsConfigLayout);
 

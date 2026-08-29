@@ -4,6 +4,7 @@
 import { createFileTypeIcon } from "./file-type-icons.js";
 import { t } from "./i18n.js";
 import { createIcon, setButtonIcon } from "./icons.js";
+import { bindDialogEscape } from "./ui/dialog-escape.js";
 
 function createSectionChevron() {
   const chevron = document.createElement("span");
@@ -114,18 +115,10 @@ export class GitPanel {
       const cancel = document.createElement("button");
       cancel.type = "button";
       cancel.textContent = t("git.cancel");
-      cancel.addEventListener("click", () => {
-        overlay.remove();
-        resolve(false);
-      });
       const confirm = document.createElement("button");
       confirm.type = "button";
       confirm.textContent = t("git.discard");
       confirm.className = "git-confirm-discard";
-      confirm.addEventListener("click", () => {
-        overlay.remove();
-        resolve(true);
-      });
       actions.append(cancel, confirm);
       dialog.append(actions);
       overlay.append(dialog);
@@ -133,6 +126,15 @@ export class GitPanel {
         // Modal: do not close on overlay click. The user must explicitly
         // cancel or confirm.
       });
+      let unbindEscape = () => {};
+      const finish = (result) => {
+        unbindEscape();
+        overlay.remove();
+        resolve(result);
+      };
+      unbindEscape = bindDialogEscape(() => finish(false));
+      cancel.addEventListener("click", () => finish(false));
+      confirm.addEventListener("click", () => finish(true));
       document.body.append(overlay);
       confirm.focus();
     });
@@ -243,12 +245,18 @@ export class GitPanel {
       // must explicitly cancel or submit.
     });
     document.body.append(overlay);
-    this.commitDialog = { overlay, textarea, submit };
+    this.commitDialog = {
+      overlay,
+      textarea,
+      submit,
+      unbindEscape: bindDialogEscape(() => this.closeCommitDialog()),
+    };
     textarea.focus();
     this.updateCommitDialogState();
   }
   closeCommitDialog() {
     if (!this.commitDialog) return;
+    this.commitDialog.unbindEscape?.();
     this.commitDialog.overlay.remove();
     this.commitDialog = null;
   }

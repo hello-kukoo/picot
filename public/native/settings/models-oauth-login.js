@@ -2,6 +2,7 @@
 // ABOUTME: Shows only Pi-provided non-secret device-code events and never handles OAuth credentials.
 
 import { t } from "../../i18n.js";
+import { bindDialogEscape } from "../../ui/dialog-escape.js";
 
 const DIALOG_CLASS = "oauth-login-dialog";
 
@@ -25,6 +26,7 @@ export function createModelsOAuthLoginDialog({
   let backdrop = null;
   let unsubscribe = null;
   let countdownTimer = null;
+  let unbindEscape = null;
 
   function ensureBackdrop() {
     if (!backdrop) {
@@ -189,7 +191,7 @@ export function createModelsOAuthLoginDialog({
       button("oauth-close", t("actions.close")),
     ]);
     panel.querySelector(`.${DIALOG_CLASS}-title`).textContent = t("settings.models.oauth.failed");
-    status.textContent = sanitizeDialogMessage(message);
+    status.textContent = humanizeOauthFailure(message);
     panel.querySelector('[data-action="oauth-retry"]').addEventListener("click", retry);
     panel.querySelector('[data-action="oauth-close"]').addEventListener("click", destroy);
   }
@@ -219,14 +221,44 @@ export function createModelsOAuthLoginDialog({
     await start();
   }
 
+  function renderPreparing() {
+    const { panel } = renderBase([button("oauth-cancel", t("settings.models.oauth.cancel"))]);
+    panel.querySelector(`.${DIALOG_CLASS}-title`).textContent = t(
+      "settings.models.oauth.preparing",
+    );
+    panel.querySelector('[data-action="oauth-cancel"]').addEventListener("click", cancel);
+  }
+
   function cancel() {
-    if (!operationId) return;
     const cancelBtn = backdrop?.querySelector('[data-action="oauth-cancel"]');
     if (cancelBtn) cancelBtn.disabled = true;
+    if (!operationId) {
+      destroy();
+      return;
+    }
     void command({ type: "cancel_oauth_login", operationId });
   }
 
+  function onEscape() {
+    if (backdrop?.querySelector('[data-action="oauth-cancel"]:not([disabled])')) {
+      cancel();
+      return;
+    }
+    destroy();
+  }
+
   async function start() {
+    // Subscribe and show the preparing dialog before the round-trip so a
+    // slow start command cannot look like a dead click, and so a device
+    // code that arrives immediately is not dropped (no activeHandler).
+    unsubscribe?.();
+    unsubscribe = subscribe(handleEvent);
+    if (!unbindEscape) {
+      unbindEscape = bindDialogEscape(onEscape, {
+        isActive: () => Boolean(backdrop?.isConnected),
+      });
+    }
+    renderPreparing();
     let resp;
     try {
       resp = await command({
@@ -242,18 +274,14 @@ export function createModelsOAuthLoginDialog({
     }
     if (resp?.success && resp.data?.operationId) {
       operationId = resp.data.operationId;
-      const { panel } = renderBase([button("oauth-cancel", t("settings.models.oauth.cancel"))]);
-      panel.querySelector(`.${DIALOG_CLASS}-title`).textContent = t(
-        "settings.models.oauth.preparing",
-      );
-      panel.querySelector('[data-action="oauth-cancel"]').addEventListener("click", cancel);
-      unsubscribe = subscribe(handleEvent);
     } else {
       renderFailure(resp?.error || t("settings.models.oauth.failed"));
     }
   }
 
   function destroy() {
+    unbindEscape?.();
+    unbindEscape = null;
     unsubscribe?.();
     unsubscribe = null;
     operationId = null;
@@ -270,6 +298,17 @@ export function createModelsOAuthLoginDialog({
  * sanitizes, but the dialog never trusts a raw message that could carry a
  * token-like fragment into the DOM.
  */
+function humanizeOauthFailure(raw) {
+  const text = String(raw ?? "");
+  if (
+    /self.?signed certificate in certificate chain/i.test(text) ||
+    /unable to verify the first certificate/i.test(text)
+  ) {
+    return t("settings.models.oauth.tlsUntrusted");
+  }
+  return sanitizeDialogMessage(raw);
+}
+
 function sanitizeDialogMessage(raw) {
   const collapsed = String(raw ?? "")
     .replace(/\s+/g, " ")

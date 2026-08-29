@@ -15,6 +15,7 @@ import { createFileRenderer } from "./file-preview-renderers.js";
 import { FileTabState } from "./file-tab-state.js";
 import { createGitDiffRenderer } from "./git-diff-renderer.js";
 import { onLocaleChange, t } from "./i18n.js";
+import { bindDialogEscape } from "./ui/dialog-escape.js";
 import { createLoadingPlaceholder } from "./ui/loading-placeholder.js";
 import { normalizeLocalPath } from "./workspace/path-utils.js";
 
@@ -1457,18 +1458,16 @@ export class FilePreviewPanel {
       document.body.appendChild(overlay);
 
       let settled = false;
+      let unbindEscape = () => {};
       const finish = (action) => {
         if (settled) return;
         settled = true;
-        document.removeEventListener("keydown", onKeyDown);
+        unbindEscape();
         overlay.remove();
         this.activeDialogCancel = null;
         resolve(action);
       };
-      function onKeyDown(event) {
-        if (event.key === "Escape") finish(cancelAction);
-      }
-      document.addEventListener("keydown", onKeyDown);
+      unbindEscape = bindDialogEscape(() => finish(cancelAction));
 
       for (const choice of choices) {
         const button = document.createElement("button");

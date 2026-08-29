@@ -1,3 +1,5 @@
+import { dialogOwnsEscape } from "../../ui/dialog-escape.js";
+
 function isEditableElement(element) {
   const tag = element?.tagName;
   return tag === "INPUT" || tag === "TEXTAREA" || element?.isContentEditable;
@@ -9,9 +11,20 @@ function isVisible(element) {
 
 function overlayOwnsEscape() {
   return (
+    dialogOwnsEscape() ||
     isVisible(document.getElementById("settings-panel")) ||
     isVisible(document.getElementById("model-dropdown-menu")) ||
-    document.querySelector(".image-lightbox.open")
+    isVisible(document.getElementById("session-search-dialog")) ||
+    isVisible(document.getElementById("command-palette")) ||
+    isVisible(document.getElementById("dialog-container")) ||
+    document.querySelector(".image-lightbox.open") ||
+    document.querySelector(".ui-overlay") ||
+    document.querySelector(".oauth-login-dialog-backdrop") ||
+    document.querySelector(".git-confirm-dialog-overlay") ||
+    document.querySelector(".git-commit-dialog-overlay") ||
+    document.querySelector(".file-preview-dialog-overlay") ||
+    document.querySelector(".sidebar-confirm-overlay") ||
+    document.querySelector(".models-json-dialog-backdrop:not(.hidden)")
   );
 }
 

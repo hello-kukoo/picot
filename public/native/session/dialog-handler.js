@@ -2,6 +2,7 @@
 // ABOUTME: Routes responses through the injected owner-scoped transport callback.
 
 import { onLocaleChange, t } from "../../i18n.js";
+import { bindDialogEscape } from "../../ui/dialog-escape.js";
 
 export class DialogHandler {
   constructor({ container, notificationContainer = null, send = null }) {
@@ -10,6 +11,7 @@ export class DialogHandler {
     this.send = send;
     this.timeoutId = null;
     this._destroyed = false;
+    this._unbindEscape = null;
     this.unsubscribeLocaleChange = onLocaleChange(() => {
       if (!this.currentDialog) return;
       const updateBtn = (selector, key) => {
@@ -128,6 +130,10 @@ export class DialogHandler {
     this.currentDialog = dialogElement;
     this.container?.replaceChildren(dialogElement);
     this.container?.classList.remove("hidden");
+    this._unbindEscape?.();
+    this._unbindEscape = bindDialogEscape(() => {
+      if (requestId) this.respond(requestId, { cancelled: true });
+    });
     if (timeout) {
       this.timeoutId = setTimeout(() => {
         this.respond(requestId, { cancelled: true });
@@ -140,6 +146,8 @@ export class DialogHandler {
       clearTimeout(this.timeoutId);
       this.timeoutId = null;
     }
+    this._unbindEscape?.();
+    this._unbindEscape = null;
     this.container?.replaceChildren();
     this.container?.classList.add("hidden");
     this.currentDialog = null;

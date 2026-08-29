@@ -27,7 +27,9 @@ describe("sa-chat-header", () => {
     expect(header.textContent).toContain("Telegram");
     expect(header.querySelector('[data-action="simulate"]')).toBeNull();
     expect(header.querySelector('[data-action="lan-qr"]')).toBeNull();
-    expect(header.querySelector(".lan-qr-btn")).toBeNull();
+    const remoteAccess = header.querySelector('[data-action="remote-access"]');
+    expect(remoteAccess).not.toBeNull();
+    expect(remoteAccess.classList.contains("hidden")).toBe(true);
 
     const taskToggle = header.querySelector('[data-action="runtime"]');
     expect(taskToggle).not.toBeNull();
@@ -37,6 +39,31 @@ describe("sa-chat-header", () => {
     expect(document.querySelector("super-agent-runtime").classList.contains("collapsed")).toBe(
       false,
     );
+  });
+
+  it("mirrors the desktop remote-access header shortcut", async () => {
+    const source = document.createElement("button");
+    source.id = "remote-access-header-btn";
+    source.className = "hidden";
+    let clicked = false;
+    source.addEventListener("click", () => {
+      clicked = true;
+    });
+    document.body.appendChild(source);
+
+    const Header = customElements.get("sa-chat-header");
+    const header = new Header();
+    document.body.appendChild(header);
+
+    const remoteAccess = header.querySelector('[data-action="remote-access"]');
+    expect(remoteAccess.classList.contains("hidden")).toBe(true);
+
+    source.classList.remove("hidden");
+    await Promise.resolve();
+    expect(remoteAccess.classList.contains("hidden")).toBe(false);
+
+    remoteAccess.click();
+    expect(clicked).toBe(true);
   });
 
   it("disables service pills until matching chat accounts are configured", async () => {

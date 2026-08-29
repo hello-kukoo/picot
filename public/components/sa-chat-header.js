@@ -22,6 +22,12 @@ class SAChatHeader extends HTMLElement {
             <line x1="3" y1="18" x2="21" y2="18"/>
           </svg>
         </button>
+        <button class="icon-btn remote-access-header-btn hidden" data-action="remote-access" title="Remote Access" data-i18n-title="settings.remoteAccess" aria-label="Remote Access" data-i18n-aria-label="settings.remoteAccess">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
+            <line x1="12" y1="18" x2="12.01" y2="18"/>
+          </svg>
+        </button>
         <div class="status">
           <span class="status-indicator connected" id="sa-status-indicator"></span>
           <span class="status-text" id="sa-status-text" data-i18n="inbox.listening">Listening</span>
@@ -54,9 +60,12 @@ class SAChatHeader extends HTMLElement {
       if (!btn) return;
       if (btn.disabled) return;
       const action = btn.dataset.action;
+      if (action === "remote-access") document.getElementById("remote-access-header-btn")?.click();
       if (action === "telegram") window.__saOpenSettings?.(action);
       if (action === "runtime") this._toggleRuntime(btn);
     });
+
+    this._syncRemoteAccessButton();
 
     this._handleChatConfigUpdated = () => this._loadServiceStatus();
     this._handleConfigGatewayReady = () => this._loadServiceStatus();
@@ -68,12 +77,29 @@ class SAChatHeader extends HTMLElement {
 
   disconnectedCallback() {
     this._unsubscribeLocale?.();
+    this._remoteAccessObserver?.disconnect();
     if (this._handleChatConfigUpdated) {
       window.removeEventListener("picot-chat-config-updated", this._handleChatConfigUpdated);
     }
     if (this._handleConfigGatewayReady) {
       window.removeEventListener("picot-config-gateway-ready", this._handleConfigGatewayReady);
     }
+  }
+
+  _syncRemoteAccessButton() {
+    const source = document.getElementById("remote-access-header-btn");
+    const target = this.querySelector('[data-action="remote-access"]');
+    if (!source || !target) return;
+
+    const sync = () => target.classList.toggle("hidden", source.classList.contains("hidden"));
+    sync();
+
+    this._remoteAccessObserver?.disconnect();
+    this._remoteAccessObserver = new MutationObserver(sync);
+    this._remoteAccessObserver.observe(source, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
   }
 
   async _loadServiceStatus() {

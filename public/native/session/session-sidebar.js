@@ -3,6 +3,7 @@ import { createIcon } from "../../icons.js";
 import { buildSidebarSection, buildSidebarWorkspaceGroup } from "../../sidebar-workspace-group.js";
 import { isSuperAgentProjectPath } from "../../super-agent/session.js";
 import { isSuperAgentEnabled } from "../../super-agent/settings.js";
+import { bindDialogEscape } from "../../ui/dialog-escape.js";
 import { createLoadingPlaceholder } from "../../ui/loading-placeholder.js";
 import { basenameLocalPath } from "../../workspace/path-utils.js";
 import { randomId } from "../utils/random-id.js";
@@ -449,20 +450,18 @@ export class SessionSidebar {
       actions.append(noBtn, yesBtn);
       dialog.appendChild(actions);
       overlay.appendChild(dialog);
-      function onKeyDown(event) {
-        if (event.key === "Escape") cleanup(false);
-      }
+      let unbindEscape = () => {};
       function cleanup(result) {
-        document.removeEventListener("keydown", onKeyDown);
+        unbindEscape();
         overlay.remove();
         resolve(result);
       }
+      unbindEscape = bindDialogEscape(() => cleanup(false));
       overlay.addEventListener("click", (event) => {
         if (event.target === overlay) cleanup(false);
       });
       overlay.querySelector(".sidebar-confirm-no").addEventListener("click", () => cleanup(false));
       overlay.querySelector(".sidebar-confirm-yes").addEventListener("click", () => cleanup(true));
-      document.addEventListener("keydown", onKeyDown);
       document.body.appendChild(overlay);
     });
   }

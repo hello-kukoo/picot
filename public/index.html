@@ -369,6 +369,30 @@
                 <line x1="3" y1="18" x2="21" y2="18" />
               </svg>
             </button>
+            <button
+              type="button"
+              class="ui-icon-button ui-icon-button--sm ui-icon-button--ghost icon-btn remote-access-header-btn"
+              id="remote-access-header-btn"
+              title="Remote Access"
+              data-i18n-title="settings.remoteAccess"
+              aria-label="Remote Access"
+              data-i18n-aria-label="settings.remoteAccess"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
+                <line x1="12" y1="18" x2="12.01" y2="18" />
+              </svg>
+            </button>
             <span class="session-info-anchor">
               <button
                 type="button"
@@ -2317,11 +2341,16 @@
               <div class="settings-section-title" data-i18n="settings.agentsMd">
                 AGENTS.md
               </div>
+              <p class="settings-help" data-i18n="settings.agentsMdHelp">
+                Working notes for the agent (preferences, conventions, commands).
+                Optional. This edits the global file for all projects; put
+                repo-specific rules in that repo's AGENTS.md.
+              </p>
               <div class="settings-config-meta">
                 <span
                   class="settings-label"
                   data-i18n="settings.agentsContextFile"
-                  >Agent context file (AGENTS.md)</span
+                  >Agent context</span
                 >
                 <span
                   class="settings-static-value"
@@ -2336,6 +2365,7 @@
                 autocomplete="off"
                 autocorrect="off"
                 autocapitalize="off"
+                data-i18n-ph="settings.agentsMdPlaceholder"
               ></textarea>
               <div class="settings-config-actions">
                 <div
@@ -2362,11 +2392,16 @@
               >
                 APPEND_SYSTEM.md
               </div>
+              <p class="settings-help" data-i18n="settings.appendSystemMdHelp">
+                Appended to the system prompt without replacing Pi's defaults. Use
+                for always-on behavioral rules. Optional; leave empty to keep the
+                default behavior.
+              </p>
               <div class="settings-config-meta">
                 <span
                   class="settings-label"
                   data-i18n="settings.appendSystemPromptFile"
-                  >Append system prompt file (APPEND_SYSTEM.md)</span
+                  >Append to system prompt</span
                 >
                 <span
                   class="settings-static-value"
@@ -2381,6 +2416,7 @@
                 autocomplete="off"
                 autocorrect="off"
                 autocapitalize="off"
+                data-i18n-ph="settings.appendSystemMdPlaceholder"
               ></textarea>
               <div class="settings-config-actions">
                 <div

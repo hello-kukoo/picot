@@ -4,6 +4,7 @@ import { setupSettingsPanel } from "./settings-panel.js";
 function renderSettingsDom() {
   document.body.innerHTML = `
     <button id="settings-btn"></button>
+    <button id="remote-access-header-btn" class="hidden"></button>
     <button id="sidebar-extensions-btn"></button>
     <button id="sidebar-skills-btn"></button>
     <div class="settings-overlay hidden" id="settings-overlay"></div>
@@ -49,6 +50,19 @@ describe("settings panel hash routing", () => {
 
     expect(window.location.hash).toBe("#/settings/usage");
     expect(document.getElementById("settings-panel").classList.contains("hidden")).toBe(false);
+  });
+
+  it("opens the Remote Access tab from the desktop header shortcut", () => {
+    setupSettingsPanel({ desktopClient: true });
+    const headerBtn = document.getElementById("remote-access-header-btn");
+
+    expect(headerBtn.classList.contains("hidden")).toBe(false);
+    headerBtn.click();
+
+    expect(
+      document.querySelector('[data-settings-tab="remote-access"]').classList.contains("active"),
+    ).toBe(true);
+    expect(window.location.hash).toBe("#/settings/remote-access");
   });
 
   it("opens the Remote Access tab through the settings composition root", () => {

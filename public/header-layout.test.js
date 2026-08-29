@@ -23,4 +23,10 @@ describe("workspace header layout", () => {
     expect(ruleBody(".header-left")).toContain("min-width: max-content");
     expect(styleCss).toMatch(/\.header-right\s*\{[^}]*justify-content:\s*flex-end/s);
   });
+
+  test("keeps the remote access shortcut in the non-scrolling header left", () => {
+    const html = readFileSync(resolve("public/index.html"), "utf8");
+    const left = html.match(/<div class="header-left">([\s\S]*?)<div class="header-right">/)?.[1];
+    expect(left).toContain('id="remote-access-header-btn"');
+  });
 });

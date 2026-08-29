@@ -1,4 +1,5 @@
 import { onLocaleChange, t } from "../../i18n.js";
+import { bindDialogEscape } from "../../ui/dialog-escape.js";
 
 const POLL_INTERVAL_MS = 2000;
 const MAX_DEVICE_LABEL_LENGTH = 128;
@@ -62,7 +63,8 @@ export function setupRemoteAccessApproval({
   const closeModal = (requestId, { restore = true } = {}) => {
     const request = requests.get(requestId);
     if (!request?.entry) return;
-    const { modal, restoreElement } = request.entry;
+    const { modal, restoreElement, unbindEscape } = request.entry;
+    unbindEscape?.();
     modal.remove();
     request.entry = null;
     if (activeRequestId === requestId) {
@@ -143,13 +145,6 @@ export function setupRemoteAccessApproval({
       }
     };
     const trapFocus = (event) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closeModal(request.requestId);
-        requests.delete(request.requestId);
-        renderNextModal();
-        return;
-      }
       if (event.key !== "Tab") return;
       const focusable = [approve, deny].filter((control) => !control.disabled);
       if (!focusable.length) return;
@@ -162,6 +157,11 @@ export function setupRemoteAccessApproval({
     deny.addEventListener("click", () => void decide("deny"));
     approve.addEventListener("click", () => void decide("approve"));
     modal.addEventListener("keydown", trapFocus);
+    request.entry.unbindEscape = bindDialogEscape(() => {
+      closeModal(request.requestId);
+      requests.delete(request.requestId);
+      renderNextModal();
+    });
     approve.focus();
   };
   const reconcileRequests = (list) => {

@@ -88,9 +88,9 @@
     "output": "output",
     "cache": "cache",
     "costTitle": "costTitle",
-    "summary": "In {in} · Out {out} · Cache {cache}",
-    "inputSummary": "In {in}",
-    "outputSummary": "Out {out}",
+    "summary": "↓ {in} · ↑ {out} · Cache {cache}",
+    "inputSummary": "↓ {in}",
+    "outputSummary": "↑ {out}",
     "sessionUsageTitle": "Session tokens (input / output / cache)"
   },
   "sessionInfo": {
@@ -650,9 +650,13 @@
     "requireLogin": "ログインを要求",
     "agentConfigFile": "エージェント設定ファイル",
     "agentsMd": "AGENTS.md",
-    "agentsContextFile": "エージェントコンテキストファイル（AGENTS.md）",
+    "agentsContextFile": "エージェントの文脈",
+    "agentsMdHelp": "エージェント向けの作業メモ（好み、慣習、よく使うコマンド）。任意。ここは全プロジェクト共通のグローバルファイルです。リポジトリ固有のルールはそのリポジトリの AGENTS.md に書いてください。",
+    "agentsMdPlaceholder": "例：日本語で答える。編集前に関連ファイルを読む。",
     "appendSystemMd": "APPEND_SYSTEM.md",
-    "appendSystemPromptFile": "システムプロンプト追記ファイル（APPEND_SYSTEM.md）",
+    "appendSystemPromptFile": "システムプロンプトへの追記",
+    "appendSystemMdHelp": "Pi のデフォルトを置き換えずに、システムプロンプト末尾へ追記します。常に守ってほしい行動ルール向け。任意。空ならデフォルトのままです。",
+    "appendSystemMdPlaceholder": "例：簡潔に答える。危険な操作の前に説明する。",
     "providersFile": "プロバイダーファイル",
     "llmProviders": "LLMプロバイダー",
     "browseCommunityPackages": "コミュニティパッケージを閲覧",
@@ -711,6 +715,7 @@
         "cancelled": "ChatGPT サインインをキャンセルしました。",
         "expired": "このデバイスコードは期限切れです。もう一度開始してください。",
         "failed": "ChatGPT サインインに失敗しました。",
+        "tlsUntrusted": "TLS 証明書の検証に失敗しました。ローカルの HTTPS プロキシ（Clash / Surge / VPN）が OpenAI を傍受している可能性があります。そのプロキシの CA を信頼するか、OpenAI の HTTPS 検査を無効にしてから再試行してください。",
         "retry": "再試行"
       }
     },
