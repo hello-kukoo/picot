@@ -1935,6 +1935,8 @@ async function handleRuntimeEvent(event) {
           convNav.notifyNewMessage();
         }
         showProviderErrorIfNeeded(event);
+        // A finished turn may have persisted new entries: refresh the Info
+        // panel's tree when it is open so branches stay current.
         if (infoSidebar && !infoSidebar.classList.contains("collapsed")) {
           void refreshInfoPanel();
         }
