@@ -1,7 +1,33 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n } from "../../i18n.js";
 import englishMessages from "../../locales/en.json";
-import { setupSessionInfo } from "./session-info.js";
+import { describeSessionFile, describeSessionId, setupSessionInfo } from "./session-info.js";
+
+describe("session info display", () => {
+  it("shows the file basename and keeps the full path for copy and hover", () => {
+    expect(describeSessionFile("/sessions/a.jsonl", "In memory")).toEqual({
+      text: "a.jsonl",
+      title: "/sessions/a.jsonl",
+      copyValue: "/sessions/a.jsonl",
+    });
+  });
+
+  it("uses the in-memory label when no file exists", () => {
+    expect(describeSessionFile("", "In memory")).toEqual({
+      text: "In memory",
+      title: "",
+      copyValue: "In memory",
+    });
+  });
+
+  it("keeps the full session id for display, hover, and copy", () => {
+    expect(describeSessionId("session-a", "Unavailable")).toEqual({
+      text: "session-a",
+      title: "session-a",
+      copyValue: "session-a",
+    });
+  });
+});
 
 describe("session info", () => {
   beforeAll(async () => {
@@ -31,7 +57,8 @@ describe("session info", () => {
 
     document.getElementById("toggle").click();
 
-    expect(document.getElementById("file").textContent).toBe("/sessions/a.jsonl");
+    expect(document.getElementById("file").textContent).toBe("a.jsonl");
+    expect(document.getElementById("file").getAttribute("title")).toBe("/sessions/a.jsonl");
     expect(document.getElementById("id").textContent).toBe("session-a");
     expect(document.getElementById("toggle").getAttribute("aria-expanded")).toBe("true");
     expect(document.getElementById("panel").parentElement).toBe(document.body);

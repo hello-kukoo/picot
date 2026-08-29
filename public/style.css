@@ -677,7 +677,7 @@ body.is-resizing-side-panel {
 }
 
 .file-sidebar-path {
-  padding: var(--space-2) var(--space-3) var(--space-2);
+  padding: var(--space-2) var(--space-1) var(--space-2);
   font-size: var(--font-size-sm);
   white-space: nowrap;
   overflow: hidden;

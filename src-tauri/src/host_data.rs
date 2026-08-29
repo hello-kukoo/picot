@@ -275,7 +275,8 @@ pub struct HostDataPlane {
 }
 
 fn message_with_entry_id(mut message: serde_json::Value, entry_id: &str) -> serde_json::Value {
-    if message.get("role").and_then(serde_json::Value::as_str) != Some("user") {
+    let role = message.get("role").and_then(serde_json::Value::as_str);
+    if role != Some("user") && role != Some("assistant") {
         return message;
     }
     if let Some(object) = message.as_object_mut() {
@@ -2434,7 +2435,7 @@ mod tests {
     }
 
     #[test]
-    fn read_session_messages_preserves_user_entry_ids() {
+    fn read_session_messages_preserves_user_and_assistant_entry_ids() {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -2466,7 +2467,7 @@ mod tests {
             messages,
             vec![
                 json!({ "role": "user", "content": "hello", "entryId": "user-1" }),
-                json!({ "role": "assistant", "content": [{ "type": "text", "text": "hi" }] }),
+                json!({ "role": "assistant", "content": [{ "type": "text", "text": "hi" }], "entryId": "assistant-1" }),
             ]
         );
         fs::remove_dir_all(temp).unwrap();

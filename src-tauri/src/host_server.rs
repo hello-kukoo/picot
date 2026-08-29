@@ -1254,7 +1254,8 @@ fn messages_from_entries_response(response: &Value) -> Value {
 }
 
 fn message_with_entry_id(mut message: Value, entry_id: Option<&str>) -> Value {
-    if message.get("role").and_then(Value::as_str) != Some("user") {
+    let role = message.get("role").and_then(Value::as_str);
+    if role != Some("user") && role != Some("assistant") {
         return message;
     }
     let Some(entry_id) = entry_id else {
@@ -2653,7 +2654,7 @@ mod tests {
     }
 
     #[test]
-    fn derives_active_branch_messages_with_user_entry_ids_from_entries() {
+    fn derives_active_branch_messages_with_user_and_assistant_entry_ids_from_entries() {
         let response = json!({
             "type": "response",
             "command": "get_entries",
@@ -2701,9 +2702,9 @@ mod tests {
             messages,
             json!([
                 { "role": "user", "content": "first", "entryId": "user-1" },
-                { "role": "assistant", "content": [{ "type": "text", "text": "old" }] },
+                { "role": "assistant", "content": [{ "type": "text", "text": "old" }], "entryId": "assistant-1" },
                 { "role": "user", "content": "current", "entryId": "user-2" },
-                { "role": "assistant", "content": [{ "type": "text", "text": "new" }] }
+                { "role": "assistant", "content": [{ "type": "text", "text": "new" }], "entryId": "assistant-2" }
             ])
         );
     }

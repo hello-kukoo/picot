@@ -4,7 +4,7 @@
 // @vitest-environment node
 
 import { describe, expect, it, vi } from "vitest";
-import { createOAuthLoginOperationManager, sanitizeOAuthError } from "./oauth-login-operations";
+import { createOAuthLoginOperationManager } from "./oauth-login-operations";
 import { createPiOAuthLoginAdapter } from "./pi-oauth-login-adapter";
 
 describe("createOAuthLoginOperationManager", () => {

@@ -57,7 +57,7 @@ import {
 } from "./notifications/task-completion-notifications.js";
 import { extractAssistantError, extractRuntimeEventError } from "./session/assistant-error.js";
 import { InfoPanel } from "./session/info-panel.js";
-import { setupSessionInfo } from "./session/session-info.js";
+import { activeSession, setupSessionInfo } from "./session/session-info.js";
 import { createSessionSelectionHandler } from "./session/session-navigation.js";
 import { setupSessionSearchDialog } from "./session/session-search-dialog.js";
 import { SessionSidebar } from "./session/session-sidebar.js";
@@ -279,6 +279,14 @@ const sessionInfo = setupSessionInfo({
   getTarget: () => target,
   getSessions: () => sidebar?.sessions ?? [],
 });
+function syncSessionInfo() {
+  sessionInfo.refresh();
+  const { id, session } = activeSession(
+    () => target,
+    () => sidebar?.sessions ?? [],
+  );
+  infoPanel?.updateSessionInfo({ filePath: session?.filePath || "", sessionId: id });
+}
 let activeSearchQuery = "";
 // Auto-launch guard. Stored in sessionStorage (not a module variable) so it
 // survives same-window `window.navigate()` reloads: when the user selects
@@ -391,10 +399,6 @@ const infoSidebar = document.getElementById("info-sidebar");
 const infoAppActions = createWorkspaceAppActions({
   control,
   getWorkspacePath: () => infoPanel?.workspacePath || "",
-  // The app list arrives async: re-resolve the Info panel's app rows the
-  // moment the probe completes, otherwise they stay hidden until the next
-  // updateWorkspace call.
-  onAppsLoaded: () => infoPanel?.refreshApps(),
 });
 const infoPanel = infoSidebar
   ? new InfoPanel({
@@ -407,8 +411,6 @@ const infoPanel = infoSidebar
   : null;
 
 let infoTreeSeq = 0;
-// Workspace path the app list was last probed for (loadApps force guard).
-let infoPanelWorkspacePath = "";
 async function refreshInfoPanel({ refreshWorkspace = false } = {}) {
   if (!infoPanel || !infoSidebar || infoSidebar.classList.contains("collapsed")) return;
   // Sequence guard: a session switch while a fetch is in flight must not let
@@ -418,14 +420,11 @@ async function refreshInfoPanel({ refreshWorkspace = false } = {}) {
     try {
       const response = await data.workspaceInfo(target.workspaceId);
       infoPanel.updateWorkspace(response?.info?.path ?? "");
-      // A workspace switch can change which apps apply: force a re-probe only
-      // on that path; same-workspace re-opens reuse the cached list.
-      await infoAppActions.loadApps({ force: response?.info?.path !== infoPanelWorkspacePath });
-      infoPanelWorkspacePath = response?.info?.path ?? "";
     } catch {
-      // Workspace actions degrade to hidden rows; the tree still loads.
+      // Workspace path stays at the last known value; the tree still loads.
     }
   }
+  syncSessionInfo();
   try {
     // Pi owns active leaf state. Prefer its live get_entries snapshot over the
     // disk fallback so Resume reflects branch navigation immediately.
@@ -1429,7 +1428,7 @@ async function openSessionInProject(session) {
 }
 
 function subscribeToLiveSessions(sessions) {
-  sessionInfo.refresh();
+  syncSessionInfo();
   for (const session of sessions ?? []) {
     const liveTarget = session?.target;
     if (liveTarget?.workspaceId && liveTarget?.sessionId && liveTarget?.instanceId) {
@@ -1935,8 +1934,6 @@ async function handleRuntimeEvent(event) {
           convNav.notifyNewMessage();
         }
         showProviderErrorIfNeeded(event);
-        // A finished turn may have persisted new entries: refresh the Info
-        // panel's tree when it is open so branches stay current.
         if (infoSidebar && !infoSidebar.classList.contains("collapsed")) {
           void refreshInfoPanel();
         }
@@ -2058,7 +2055,7 @@ async function adoptTarget(nextTarget, { updateRoute = true } = {}) {
       refreshWorkspace: nextTarget.workspaceId !== previousTarget.workspaceId,
     });
   }
-  sessionInfo.refresh();
+  syncSessionInfo();
   headerStatusBar?.reset?.();
   // Re-hydrate the aggregate stats for the new session.
   hydrateHeaderSessionStats();
@@ -2225,7 +2222,12 @@ function renderHistory(messages) {
           const leadingText = processBlocks.filter((b) => b.type === "text");
           if (leadingText.length > 0) {
             messageRenderer.renderAssistantMessage(
-              { content: leadingText, usage: message.usage, timestamp: message.timestamp },
+              {
+                content: leadingText,
+                usage: message.usage,
+                timestamp: message.timestamp,
+                entryId: message.entryId,
+              },
               false,
               true,
             );
@@ -2263,7 +2265,12 @@ function renderHistory(messages) {
         }
         if (answerBlocks.length > 0) {
           messageRenderer.renderAssistantMessage(
-            { content: answerBlocks, usage: message.usage, timestamp: message.timestamp },
+            {
+              content: answerBlocks,
+              usage: message.usage,
+              timestamp: message.timestamp,
+              entryId: message.entryId,
+            },
             false,
             true,
           );

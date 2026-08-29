@@ -22,7 +22,15 @@ const t = (key, params = {}) => {
     "infoPanel.imageMessage": "Image",
     "infoPanel.resumeBranch": "Resume branch",
     "infoPanel.resumeStreamingBlocked": "Resume unavailable while streaming",
-    "nav.openInApp": "Open in {app}",
+    "sessionInfo.heading": "Session Info",
+    "sessionInfo.file": "File",
+    "sessionInfo.id": "ID",
+    "sessionInfo.inMemory": "In memory (not saved yet)",
+    "sessionInfo.unavailable": "Unavailable",
+    "sessionInfo.copyFile": "Copy file path",
+    "sessionInfo.copyId": "Copy session ID",
+    "sessionInfo.copied": "Copied",
+    "sessionInfo.copyFailed": "Copy failed",
   };
   let out = dict[key] ?? key;
   for (const [name, value] of Object.entries(params)) {
@@ -46,13 +54,7 @@ function a(id, parentId, content) {
 function makePanel(overrides = {}) {
   const panel = document.createElement("aside");
   const actions = {
-    apps: [
-      { id: "vscode", label: "VS Code" },
-      { id: "zed", label: "Zed" },
-      { id: "terminal", label: "Terminal" },
-    ],
     copyWorkspacePath: vi.fn(async () => "/wsp/path"),
-    openWorkspaceInApp: vi.fn(async () => {}),
   };
   const options = {
     panel,
@@ -65,32 +67,32 @@ function makePanel(overrides = {}) {
 }
 
 describe("InfoPanel workspace section", () => {
-  test("renders copy row plus one row per installed design app", () => {
+  test("renders copy icon and Session Info without open-in-app links", () => {
     const { panel } = makePanel();
-    const rows = [...panel.querySelectorAll(".info-panel-link")];
-    expect(rows.map((r) => r.textContent.trim())).toEqual([
-      "Copy path",
-      "Open in VS Code",
-      "Open in Zed",
-      "Open in Terminal",
-    ]);
+    const copy = panel.querySelector(".info-panel-copy-path");
+    expect(copy).not.toBeNull();
+    expect(copy.getAttribute("aria-label")).toBe("Copy path");
+    expect(copy.textContent).not.toContain("Copy path");
+    expect(panel.querySelector(".info-panel-link")).toBeNull();
+    expect(panel.querySelector(".info-panel-link-app")).toBeNull();
+    expect(panel.querySelector("#info-panel-session-heading").textContent).toBe("Session Info");
+    expect(panel.querySelector('[data-session-field="file"]').textContent).toContain(
+      "not saved yet",
+    );
+    expect(panel.querySelector('[data-session-field="id"]').textContent).toBe("Unavailable");
   });
 
-  test("hides app rows that are not installed", () => {
-    const { panel } = makePanel();
-    const info = new InfoPanel({
-      panel: panel.cloneNode(false),
-      actions: {
-        apps: [{ id: "vscode", label: "VS Code" }],
-        copyWorkspacePath: async () => "",
-        openWorkspaceInApp: async () => {},
-      },
-      t,
+  test("updateSessionInfo paints file path and session id", () => {
+    const { info, panel } = makePanel();
+    info.updateSessionInfo({
+      filePath: "/sessions/a.jsonl",
+      sessionId: "session-a",
     });
-    const labels = [...info.panel.querySelectorAll(".info-panel-link:not(.hidden)")].map((r) =>
-      r.textContent.trim(),
+    expect(panel.querySelector('[data-session-field="file"]').textContent).toBe("a.jsonl");
+    expect(panel.querySelector('[data-session-field="file"]').getAttribute("title")).toBe(
+      "/sessions/a.jsonl",
     );
-    expect(labels).toEqual(["Copy path", "Open in VS Code"]);
+    expect(panel.querySelector('[data-session-field="id"]').textContent).toBe("session-a");
   });
 
   test("updateWorkspace updates the path text and title", () => {
@@ -101,30 +103,53 @@ describe("InfoPanel workspace section", () => {
     expect(path.title).toBe("/tmp/alpha/beta");
   });
 
-  test("copy row swaps to Copied and reverts", async () => {
+  test("copy icon swaps aria-label to Copied and reverts", async () => {
     vi.useFakeTimers();
     try {
       const { panel, actions } = makePanel();
-      panel.querySelector(".info-panel-link").click();
+      const copy = panel.querySelector(".info-panel-copy-path");
+      copy.click();
       // The click handler awaits the clipboard write; flush microtasks.
       await Promise.resolve();
       await Promise.resolve();
       expect(actions.copyWorkspacePath).toHaveBeenCalled();
-      expect(panel.querySelector(".info-panel-link").textContent.trim()).toBe("Copied");
+      expect(copy.getAttribute("aria-label")).toBe("Copied");
+      expect(copy.title).toBe("Copied");
       vi.advanceTimersByTime(1300);
-      expect(panel.querySelector(".info-panel-link").textContent.trim()).toBe("Copy path");
+      expect(copy.getAttribute("aria-label")).toBe("Copy path");
+      expect(copy.title).toBe("Copy path");
     } finally {
       vi.useRealTimers();
     }
   });
 
-  test("app rows launch through the shared controller", () => {
-    const { panel, actions } = makePanel();
-    const zedRow = [...panel.querySelectorAll(".info-panel-link-app")].find((r) =>
-      r.textContent.includes("Zed"),
+  test("session info copy buttons write the painted fields", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const { info, panel } = makePanel({ writeText });
+    info.updateSessionInfo({ filePath: "/sessions/a.jsonl", sessionId: "session-a" });
+    panel.querySelector('[data-copy-session-field="file"]').click();
+    panel.querySelector('[data-copy-session-field="id"]').click();
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
+    expect(writeText).toHaveBeenNthCalledWith(1, "/sessions/a.jsonl");
+    expect(writeText).toHaveBeenNthCalledWith(2, "session-a");
+  });
+
+  test("session file row shows the basename and copies the full path", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const { info, panel } = makePanel({ writeText });
+    const filePath =
+      "/Users/ShixinGuo/.pi/agent/sessions/picot/2026-08-28T06-21-25-01a04707-0620-750f-a29a-5bc353f97d06.jsonl";
+    const sessionId = "01a04707-0620-750f-a29a-5bc353f97d06";
+    info.updateSessionInfo({ filePath, sessionId });
+    const fileEl = panel.querySelector('[data-session-field="file"]');
+    const idEl = panel.querySelector('[data-session-field="id"]');
+    expect(fileEl.textContent).toBe(
+      "2026-08-28T06-21-25-01a04707-0620-750f-a29a-5bc353f97d06.jsonl",
     );
-    zedRow.click();
-    expect(actions.openWorkspaceInApp).toHaveBeenCalledWith({ id: "zed", label: "Zed" });
+    expect(fileEl.getAttribute("title")).toBe(filePath);
+    expect(idEl.getAttribute("title")).toBe(sessionId);
+    panel.querySelector('[data-copy-session-field="file"]').click();
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(filePath));
   });
 });
 
@@ -142,7 +167,7 @@ describe("InfoPanel session history", () => {
     const { panel } = makePanel({ onNavigateLeaf: vi.fn() });
     const info = new InfoPanel({
       panel,
-      actions: { apps: [], copyWorkspacePath: async () => "", openWorkspaceInApp: async () => {} },
+      actions: { copyWorkspacePath: async () => "" },
       t,
     });
     info.updateTree({ entries, leafId: "jwtA" });
@@ -167,11 +192,7 @@ describe("InfoPanel session history", () => {
     const onNavigateLeaf = vi.fn();
     const { info, panel } = makePanel({
       onNavigateLeaf,
-      actions: {
-        apps: [],
-        copyWorkspacePath: async () => "",
-        openWorkspaceInApp: async () => {},
-      },
+      actions: { copyWorkspacePath: async () => "" },
     });
     info.updateTree({ entries, leafId: "jwtA" });
     panel.querySelector(".info-panel-branch-summary").click();
@@ -210,11 +231,7 @@ describe("InfoPanel session history", () => {
     try {
       const info = new InfoPanel({
         panel: document.createElement("aside"),
-        actions: {
-          apps: [],
-          copyWorkspacePath: async () => "",
-          openWorkspaceInApp: async () => {},
-        },
+        actions: { copyWorkspacePath: async () => "" },
         t,
       });
       info.updateTree({ entries, leafId: "jwtA" });
@@ -229,10 +246,34 @@ describe("InfoPanel session history", () => {
     }
   });
 
+  test("clicking an active assistant node scrolls the anchored assistant message", () => {
+    const scrollIntoView = vi.fn();
+    const target = document.createElement("div");
+    target.dataset.entryId = "jwtA";
+    target.scrollIntoView = scrollIntoView;
+    document.body.append(target);
+    try {
+      const info = new InfoPanel({
+        panel: document.createElement("aside"),
+        actions: { copyWorkspacePath: async () => "" },
+        t,
+      });
+      info.updateTree({ entries, leafId: "jwtA" });
+      const row = [...info.panel.querySelectorAll(".info-panel-row.active")].find(
+        (r) => r.dataset.entryId === "jwtA",
+      );
+      row.click();
+      expect(row.classList.contains("selected")).toBe(true);
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+    } finally {
+      target.remove();
+    }
+  });
+
   test("empty tree renders the empty state", () => {
     const info = new InfoPanel({
       panel: document.createElement("aside"),
-      actions: { apps: [], copyWorkspacePath: async () => "", openWorkspaceInApp: async () => {} },
+      actions: { copyWorkspacePath: async () => "" },
       t,
     });
     info.updateTree({ entries: [], leafId: null });
@@ -242,7 +283,7 @@ describe("InfoPanel session history", () => {
   test("history heading leaves refresh control to the panel header", () => {
     const info = new InfoPanel({
       panel: document.createElement("aside"),
-      actions: { apps: [], copyWorkspacePath: async () => "", openWorkspaceInApp: async () => {} },
+      actions: { copyWorkspacePath: async () => "" },
       t,
     });
     expect(info.panel.querySelector(".info-panel-refresh-btn")).toBeNull();
@@ -251,7 +292,7 @@ describe("InfoPanel session history", () => {
   test("stale expand state is pruned when the tree changes", () => {
     const info = new InfoPanel({
       panel: document.createElement("aside"),
-      actions: { apps: [], copyWorkspacePath: async () => "", openWorkspaceInApp: async () => {} },
+      actions: { copyWorkspacePath: async () => "" },
       t,
     });
     info.updateTree({ entries, leafId: "jwtA" });
@@ -266,7 +307,7 @@ describe("InfoPanel session history", () => {
   test("current leaf row carries the marker class", () => {
     const info = new InfoPanel({
       panel: document.createElement("aside"),
-      actions: { apps: [], copyWorkspacePath: async () => "", openWorkspaceInApp: async () => {} },
+      actions: { copyWorkspacePath: async () => "" },
       t,
     });
     info.updateTree({ entries, leafId: "jwtA" });
@@ -295,7 +336,7 @@ describe("InfoPanel selection", () => {
 
   function makeSelectionPanel(overrides = {}) {
     return makePanel({
-      actions: { apps: [], copyWorkspacePath: async () => "", openWorkspaceInApp: async () => {} },
+      actions: { copyWorkspacePath: async () => "" },
       ...overrides,
     });
   }

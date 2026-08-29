@@ -47,6 +47,11 @@ const AUTO_SCROLL_BOTTOM_TOLERANCE = 1;
 export const USER_MESSAGE_COLLAPSE_CHAR_THRESHOLD = 400;
 export const USER_MESSAGE_COLLAPSE_NEWLINE_THRESHOLD = 8;
 
+function resolveMessageEntryId(message, override = null) {
+  const id = override ?? message?.entryId ?? message?.entry_id ?? null;
+  return typeof id === "string" && id ? id : null;
+}
+
 export function shouldCollapseUserMessage(text) {
   if (typeof text !== "string" || text.length === 0) return false;
   return (
@@ -274,7 +279,7 @@ export class MessageRenderer {
     footer.appendChild(this._createCopyButton());
     const timeSpan = this._createTimeSpan(message.timestamp);
     if (timeSpan) footer.appendChild(timeSpan);
-    const forkEntryId = entryId ?? message.entryId ?? message.entry_id ?? null;
+    const forkEntryId = resolveMessageEntryId(message, entryId);
     if (forkEntryId) {
       div.dataset.entryId = forkEntryId;
     }
@@ -294,6 +299,14 @@ export class MessageRenderer {
     const div = document.createElement("div");
     div.className = `message assistant${isHistory ? " history" : ""}`;
     div.dataset.messageId = message.id || "streaming";
+    // Jump targets for the Info panel. Process-group fragments share a
+    // parent assistant entry; only the visible answer (or unterminated
+    // leading text) should carry the session-tree id.
+    const isProcessMessage = targetContainer !== null;
+    const assistantEntryId = resolveMessageEntryId(message);
+    if (assistantEntryId && !isProcessMessage) {
+      div.dataset.entryId = assistantEntryId;
+    }
 
     let contentHtml = "";
     let usageHtml = "";
@@ -324,7 +337,6 @@ export class MessageRenderer {
     }
 
     const hasText = rawStreamingText.trim().length > 0;
-    const isProcessMessage = targetContainer !== null;
     if (!isProcessMessage && message.usage?.cost && !hasThinking) {
       const cost = message.usage.cost.total;
       if (cost > 0) {

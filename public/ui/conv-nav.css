@@ -19,7 +19,6 @@
 /* ── Rail — no background, just floating ticks on the left edge ── */
 .conv-nav {
   position: absolute;
-  left: 16px;
   top: 50%;
   transform: translateY(-50%);
   z-index: 30;
@@ -95,7 +94,6 @@
 
 /* Individual tick — button is the (large) hit target; ::after is the visual line */
 .conv-nav-dot {
-  width: 28px; /* wide hit target */
   height: 2px; /* visual bar height; gap provides spacing */
   padding: var(--space-0-5) 0;
   display: flex;

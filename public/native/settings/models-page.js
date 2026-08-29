@@ -6,12 +6,6 @@
 // access still happens inside pi via the bridge — this module only renders.
 
 import { onLocaleChange, t } from "../../i18n.js";
-import {
-  applyLoadingPlaceholder,
-  clearLoadingPlaceholder,
-  createLoadingPlaceholder,
-} from "../../ui/loading-placeholder.js";
-import { enhanceSelect } from "../../ui/select-menu.js";
 import { openCustomProviderEditor } from "./settings-custom-provider.js";
 import {
   clearSettingsSaveMessage,
@@ -79,12 +73,10 @@ export function setupModelsPage({ configGateway, oauthGateway, onModelConfigurat
     const scrollContainer = options.preserveUi ? getSettingsScrollContainer() : null;
     const scrollTop = scrollContainer?.scrollTop ?? 0;
     if (!options.preserveUi) {
-      apiKeysContainer.replaceChildren(
-        createLoadingPlaceholder({
-          className: "settings-api-keys-loading",
-          label: t("settings.loadingProviders"),
-        }),
-      );
+      const loading = document.createElement("div");
+      loading.className = "settings-api-keys-loading";
+      loading.textContent = t("settings.loadingProviders");
+      apiKeysContainer.replaceChildren(loading);
     }
     let data;
     try {
@@ -968,11 +960,10 @@ export function setupModelsPage({ configGateway, oauthGateway, onModelConfigurat
       inlineModelsTextarea.value = '{\n  "providers": {}\n}';
     }
     renderModelsConfigLayout();
-    if (inlineModelsPath) {
-      applyLoadingPlaceholder(inlineModelsPath, {
-        label: t("migrated.native.settings.settingsConfig.textcontent.loading"),
-      });
-    }
+    if (inlineModelsPath)
+      inlineModelsPath.textContent = t(
+        "migrated.native.settings.settingsConfig.textcontent.loading",
+      );
     try {
       const data = await call("read_models_config");
       if (!data?.ok) throw new Error(data?.error || "Failed to load models.json");
@@ -982,15 +973,9 @@ export function setupModelsPage({ configGateway, oauthGateway, onModelConfigurat
         inlineModelsTextarea.value = data.data.content;
       }
       renderModelsConfigLayout();
-      if (inlineModelsPath) {
-        clearLoadingPlaceholder(inlineModelsPath);
-        inlineModelsPath.textContent = data.data.path || "";
-      }
+      if (inlineModelsPath) inlineModelsPath.textContent = data.data.path || "";
     } catch (e) {
-      if (inlineModelsPath) {
-        clearLoadingPlaceholder(inlineModelsPath);
-        inlineModelsPath.textContent = "";
-      }
+      if (inlineModelsPath) inlineModelsPath.textContent = "";
       showInlineModelsError(e.message || String(e));
     }
   }
@@ -1319,7 +1304,6 @@ export function setupModelsPage({ configGateway, oauthGateway, onModelConfigurat
       provider.api = api.value;
       inlineModelsTextarea.value = JSON.stringify(config, null, 2);
     });
-    enhanceSelect(api);
     form.append(
       createModelsField("Provider name", name),
       createModelsField("Base URL", baseUrl),

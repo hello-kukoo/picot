@@ -251,6 +251,26 @@ describe("MessageRenderer streaming markdown preview", () => {
     expect(events).toEqual([{ entryId: "entry-user-2", text: "Revise me" }]);
   });
 
+  it("anchors visible assistant messages with data-entry-id", () => {
+    const el = renderer.renderAssistantMessage(
+      { content: "final answer", entryId: "asst-1" },
+      false,
+      true,
+    );
+    expect(el.dataset.entryId).toBe("asst-1");
+  });
+
+  it("does not anchor process-group assistant fragments", () => {
+    const group = document.createElement("div");
+    const el = renderer.renderAssistantMessage(
+      { content: "thinking out loud", entryId: "asst-1" },
+      false,
+      true,
+      group,
+    );
+    expect(el.dataset.entryId).toBeUndefined();
+  });
+
   it("highlights keyword matches across rendered messages", () => {
     renderer.renderUserMessage({ content: "Alpha beta gamma" }, true);
     renderer.renderAssistantMessage({ content: "Beta appears twice: beta." }, false, true);

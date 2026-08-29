@@ -35,62 +35,30 @@
   flex-direction: column;
 }
 
-.info-panel-path {
-  margin: 0;
-}
-
-.info-panel-actions {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-0-5);
-  padding: var(--space-3) var(--space-4);
-}
-
-/* One action per row — link appearance, not button chrome. */
-.info-panel-link {
+.info-panel-path-row {
   display: flex;
   align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+}
+
+.info-panel-path {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.info-panel-copy-path {
+  flex-shrink: 0;
+}
+
+.info-panel-session {
+  display: flex;
+  flex-direction: column;
   gap: var(--space-2);
-  width: 100%;
-  padding: var(--space-1-5) var(--space-2);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-primary);
-  text-align: left;
-  font-size: var(--font-size-sm);
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.info-panel-link:hover {
-  background: var(--bg-glass-hover);
-}
-
-.info-panel-link:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
-.info-panel-link-icon {
-  display: inline-grid;
-  width: 16px;
-  height: 16px;
-  flex: 0 0 16px;
-  place-items: center;
-}
-
-.info-panel-link-icon svg {
-  width: 14px;
-  height: 14px;
-  color: var(--text-secondary);
-}
-
-.info-panel-link-icon img {
-  display: block;
-  max-width: 16px;
-  max-height: 16px;
-  object-fit: contain;
+  padding: 0 var(--space-4) var(--space-3);
 }
 
 /* ── Session history (scrolls) ─────────────────────────────────────────── */
