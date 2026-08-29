@@ -86,20 +86,8 @@
       "steer",
       "switch_session"
     ],
-    "websocket": [
-      "/ws",
-      "browser connection",
-      "extension_ui_response",
-      "OAuth commands"
-    ],
-    "brokerControls": [
-      "commit",
-      "commit_diff",
-      "diff",
-      "log",
-      "log_detail",
-      "status"
-    ],
+    "websocket": ["/ws", "browser connection", "extension_ui_response", "OAuth commands"],
+    "brokerControls": ["commit", "commit_diff", "diff", "log", "log_detail", "status"],
     "hostFrames": [
       "hello",
       "host_request",
