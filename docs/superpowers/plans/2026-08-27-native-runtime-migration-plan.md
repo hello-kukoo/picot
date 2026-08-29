@@ -1,7 +1,7 @@
 # Picot Native Runtime 迁移实施计划
 
 > 依据：`docs/superpowers/specs/2026-08-27-native-runtime-migration-design.md`（**R4.5**）。
-> 同步记录：R4 已核验已提交 workspace registry（`7acbc0a`）并标记 Gate R 为 partial；R4.1 收尾 P5/P6/P7 依赖与 endpoint 归属；R4.2 将 Gate R 改为 migration-owned **WP-R.1–R.5**；R4.4 收敛 tmp snapshot、`runtime.*` ingress guard、Foundation/P0 分名与 decision gate 规则；R4.5 双文档评审收尾（Gate B exit D8 修正、Gate D 任务改 GD 命名、P4 依赖对齐 spec、§19 补 3 条停止条件、R2 补拒启场景、WP-R 单包估算、CP 增 P4/P6）。
+> 同步记录：R4 已核验已提交 workspace registry（`7acbc0a`）并标记 Gate R 为 partial；R4.1 收尾 P5/P6/P7 依赖与 endpoint 归属；R4.2 将 Gate R 改为 migration-owned **WP-R.1–R.5**；R4.4 收敛 tmp snapshot、`runtime.*` ingress guard、Foundation/P0 分名与 decision gate 规则；R4.5 双文档评审收尾（Gate B exit D8 修正、Gate D 任务改 GD 命名、P4 依赖对齐 spec、§19 补 3 条停止条件、R2 补拒启场景、WP-R 单包估算、CP 增 P4/P6）；R4.6 锁定 Gate B-design 交接语义（B-GAP owner 归属随 phase exit 关闭，Gate B 文档 §13/§14；spec P1 依赖限定 design closure）。
 > 开工门槛（不可协商）：任何改变生产启动路径、WebView origin、认证链、spawn 路径或路由行为的 work package，必须先通过其显式 Gate dependencies，并取得 spec §16 **Blocks** 列指向该 work package 的全部决策。WP-R（§3）仅限 additive authority API 与 `runtime.*` fail-closed 守卫；Foundation F0（§2）仅限只读盘点、测试基建和性能测量；二者不触碰上述生产路径。
 > 所有生产迁移 work package 必须以本计划和 R4.4 spec 的较严要求为准。估算基准：1 名熟悉本仓库的工程师全职、每工作包至少一次评审。P3 在 Gate D 完成 adapter prototype 前**不作固定人日承诺**。总排期须在 Gate R/A–D 后重估，且包含至少两个稳定 release 周期。
 
@@ -287,7 +287,7 @@ OperationRecord(Pending | Completed | Indeterminate | Expired | Revoked)
 
 至少覆盖：capability no/invalid/expired/cross-owner/cross-wid/revoked；remote impersonation；subscription 越权；bare loopback HTTP；Operation Registry pending/completed replay、cross-owner status、TTL、host restart、crash Indeterminate；A abort disconnect → A end → B start → old abort retry；duplicate abort；frame/body limits；event sequence gap。
 
-**Gate B exit：**B1–B6 已审查；B6 可直接转 P1/P2/P3/P5 tests；D2/D3/D4 已拍板（spec §16），本 Gate 验证其可实现性；D8 仍待 Gate A external caller 盘点，不在本 Gate 决策。
+**Gate B exit：**B1–B6 已审查；B6 可直接转 P1/P2/P3/P5 tests；D2/D3/D4 已拍板（spec §16），本 Gate 验证其可实现性；D8 仍待 Gate A external caller 盘点，不在本 Gate 决策；B-GAP-01–14 按 Gate B 文档 §13 的 owner 归属转各 phase 验收（Gate R←04、P1←05–07、P2←01–03/08/10–12、P5←13、P6←09、D8←14），不在本 Gate 关闭。
 
 ---
 

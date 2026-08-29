@@ -616,7 +616,7 @@ The migration inventory must include callers in at least:
 
 ### P1 — Native lifecycle and operation substrate, still dark
 
-**Depends on:** Gate R + Gate B + Gate C.
+**Depends on:** Gate R + Gate B（design closure，见 Gate B 文档 §14；B-GAP 实现缺口随归属 phase exit 关闭）+ Gate C.
 
 - Expand `NativeLaunchSpec`/manager to express full launch contract; no production routing yet.
 - Add child exit observer, crash state/event, pending request failure, stop ordering, Windows process policy. EOF, child exit, writer failure and fatal protocol error must atomically set `Crashed`, mark in-flight operations `Indeterminate`, reject pending bridge requests and emit a sequenced crash/snapshot-required event.
