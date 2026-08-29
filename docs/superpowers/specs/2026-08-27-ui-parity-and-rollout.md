@@ -244,11 +244,13 @@ D10 尚未拍板。建议 cohort 每阶段至少满足以下**提案阈值**，�
 
 **重估格式提案：**按上述 8 类给出 engineer-days range、未知项、验证成本、review buffer；prototype 通过前只报告范围，不给单点承诺。
 
+**Prototype 量化结果（2026-08-29）：P3 coding 19–29 人日**（核心传输 6–8、映射表补全 5–8、static/origin 2–3、E2E parity 5–8、compat per-route 3–5；不含 P1/P2 substrate 与 dogfood 窗口）。详见 `2026-08-27-adapter-prototype-evidence.md` §3。D2 重开评估：未触发（façade 成本有界，无 lossless-mapping 阻断）。
+
 ## 10. Evidence gaps / closure checklist
 
 | ID | Gap | Gate D impact | Required evidence |
 | --- | --- | --- | --- |
-| D-GAP-01 | 没有 runnable existing-shell adapter | Gate D blocker；不能证明 P3 | Host-origin adapter + browser smoke + real Pi |
+| D-GAP-01 | 没有 runnable existing-shell adapter | **prototype 范围已关闭（2026-08-29，`2026-08-27-adapter-prototype-evidence.md`，37/37）**：wrap+façade 双形态可运行，capability 重连缓存缺陷已修；浏览器/真 Pi 部分归 D-GAP-02/06/07/08 维持开放 | Host-origin adapter + browser smoke + real Pi（后两项见对应 D-GAP） |
 | D-GAP-02 | Host desktop capability 未验证；HostClientContext 未实现 | owner auth parity 不成立 | handshake/capability cross-owner tests |
 | D-GAP-03 | v1 broker 与 v2 WS 字段/hello/event 不兼容 | 不能声称 façade 可直接工作 | mapping fixture + reconnect/order tests |
 | D-GAP-04 | `/api/*` host compatibility middleware 不存在 | existing shell fetch 会 404 或误走旧 origin | 每条 retained route 的 auth/error/limit test |

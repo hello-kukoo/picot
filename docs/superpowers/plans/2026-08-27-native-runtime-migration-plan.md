@@ -63,7 +63,7 @@ Foundation F0（只读工具/测试基建）
 | P0 | 3 人日 | 零行为抽取 |
 | P1 | 12–15 人日 | lifecycle + Operation Registry + turn-bound abort + Gate R authority 收敛 |
 | P2 | 9–12 人日 | canonical wire、capability、安全/限额 integration |
-| P3 | **Gate D prototype 后重估** | host origin + existing UI adapter + 双态 parity，禁止按 5 人日承诺 |
+| P3 | **Gate D prototype 已量化（2026-08-29）：coding 19–29 人日**（原型证据 §3；不含 P1/P2 substrate 与 dogfood 窗口；static/origin 2–3、映射表 5–8、E2E 5–8、compat 3–5） | host origin + existing UI adapter + 双态 parity；旧「5 人日」作废 |
 | P4 | 7–9 人日 | 数据/session + Cost Dashboard complete compatibility operation |
 | P5 | 8–10 人日 | files/config + OAuth 唯一 phase ownership |
 | P6 | 6–8 人日 | 重集成与 HTTP binary paths |
