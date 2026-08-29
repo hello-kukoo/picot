@@ -1,6 +1,12 @@
 // ABOUTME: Defines network-boundary decisions for the embedded HTTP and WebSocket surfaces.
 // ABOUTME: Keeps loopback authentication policy pure, shared by Node and Bun adapters.
 
+// Full session transcripts (`/api/sessions/:dirName/:file`) are loopback-only:
+// the sibling bounded-header surface (GET /api/workspace-sessions) is already
+// loopback-only and transcripts are strictly more sensitive. Dynamic segments
+// mean the Set lookup below cannot express this route shape.
+const SESSION_FILE_ROUTE = /^\/api\/sessions\/[^/]+\/[^/]+$/;
+
 const LOOPBACK_ONLY_ROUTES = new Set([
   "POST /api/rpc",
   "PUT /api/files/content",
@@ -68,6 +74,10 @@ export function isLoopbackOnlyApiRequest(urlPath: string, method: string): boole
   }
 
   if (parsed.pathname === "/api/files" && parsed.searchParams.get("scope") === "picker") {
+    return true;
+  }
+
+  if (method.toUpperCase() === "GET" && SESSION_FILE_ROUTE.test(parsed.pathname)) {
     return true;
   }
 

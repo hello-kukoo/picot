@@ -820,6 +820,34 @@ export function isEphemeralSessionMutationRoute(urlPath: string, method: string)
   );
 }
 
+/**
+ * Decode and validate the raw (still URL-encoded) segments captured from
+ * `/api/sessions/:dirName/:file`. The route regex matches the encoded path,
+ * so decoding happens here — afterwards each segment must be a single path
+ * component (no separators, no `..`) or the joined path could escape
+ * SESSIONS_DIR. Returns null for malformed percent-encoding or unsafe
+ * segments; callers must reject the request in that case.
+ */
+export function decodeSessionRouteSegments(
+  dirNameRaw: string,
+  fileRaw: string,
+): { dirName: string; file: string } | null {
+  let dirName: string;
+  let file: string;
+  try {
+    dirName = decodeURIComponent(dirNameRaw);
+    file = decodeURIComponent(fileRaw);
+  } catch {
+    return null;
+  }
+  const isUnsafeSegment = (segment: string) =>
+    segment.includes("/") || segment.includes("\\") || segment.includes("..");
+  if (isUnsafeSegment(dirName) || isUnsafeSegment(file)) {
+    return null;
+  }
+  return { dirName, file };
+}
+
 export function resolveGitBranchCwd({
   foregroundPort,
   fallbackCwd,
@@ -4529,13 +4557,16 @@ export default function (pi: ExtensionAPI) {
         res.end(JSON.stringify({ error: "Session history is unavailable in temporary chat" }));
       } else {
         // dirName/file arrive URL-encoded (workspaces can contain spaces and
-        // non-ASCII, e.g. iCloud "Mobile Documents" paths). decode so the
-        // filesystem lookup matches the real session directory.
-        serveSessionFile(
-          res,
-          decodeURIComponent(sessionMatch[1]),
-          decodeURIComponent(sessionMatch[2]),
-        );
+        // non-ASCII, e.g. iCloud "Mobile Documents" paths). Decode and
+        // validate each segment: the regex above matched the encoded path, so
+        // decoding afterwards must never reintroduce separators or traversal.
+        const segments = decodeSessionRouteSegments(sessionMatch[1], sessionMatch[2]);
+        if (!segments) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid session path" }));
+          return;
+        }
+        serveSessionFile(res, segments.dirName, segments.file);
       }
       return;
     }
@@ -5659,6 +5690,15 @@ export default function (pi: ExtensionAPI) {
   // ═══════════════════════════════════════
   function serveSessionFile(res: http.ServerResponse, dirName: string, file: string) {
     const filePath = path.join(SESSIONS_DIR, dirName, file);
+    // Defense in depth: even with segment validation upstream, refuse any
+    // path that resolves outside SESSIONS_DIR.
+    const resolvedRoot = path.resolve(SESSIONS_DIR);
+    const resolvedPath = path.resolve(filePath);
+    if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(resolvedRoot + path.sep)) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Session not found" }));
+      return;
+    }
 
     if (!fs.existsSync(filePath)) {
       res.writeHead(404, { "Content-Type": "application/json" });

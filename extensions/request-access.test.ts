@@ -57,6 +57,9 @@ describe("isLoopbackOnlyApiRequest", () => {
     ["GET", "/api/files?scope=picker&path=%2F"],
     ["POST", "/api/skill-install-scan"],
     ["POST", "/api/skill-install-links"],
+    ["GET", "/api/sessions/dir-abc/session.jsonl"],
+    ["GET", "/api/sessions/My%20Docs%20Project/abc123.jsonl"],
+    ["GET", "/api/sessions/..%2F..%2Fagent/secret.jsonl"],
   ])("requires loopback for %s %s", (method, urlPath) => {
     expect(isLoopbackOnlyApiRequest(urlPath, method)).toBe(true);
   });
