@@ -7,6 +7,7 @@ mod host_data;
 mod host_router;
 mod host_server;
 mod metadata_store;
+mod mutation_types;
 mod native_pi_manager;
 mod package_manager;
 // Public API staged for the broker (Task 5) and host lifecycle (Task 7a).
@@ -751,8 +752,22 @@ fn open_workspace_window(
     let registry = registry.inner().clone();
     let canonical_cwd = fs::canonicalize(cwd).unwrap_or_else(|_| PathBuf::from(cwd));
     let origin = format!("http://localhost:{port}");
+    let workspace_id = app.try_state::<SharedMetadataStore>().and_then(|metadata| {
+        metadata
+            .inner()
+            .lock()
+            .ok()
+            .and_then(|store| store.workspace_id_for_canonical_root(&canonical_cwd).ok())
+    });
     let (owner, capability) = registry
-        .create_owner(label.clone(), canonical_cwd, port, origin)
+        .create_owner_with_workspace(
+            label.clone(),
+            canonical_cwd,
+            port,
+            origin,
+            workspace_id,
+            window_owner::TemporaryKind::DefaultStartup,
+        )
         .map_err(|e| format!("Failed to create window owner: {e}"))?;
     let init_script = window_owner::capability_initialization_script(&capability);
 
@@ -2396,10 +2411,17 @@ fn install_control_handler(
                         let target_port = owner_registry
                             .pending_target_port(&owner)
                             .ok_or("no pending workspace transition")?;
-                        owner_registry.commit_workspace_transition(
+                        let target_workspace_id = metadata.lock().ok().and_then(|store| {
+                            owner_registry
+                                .pending_target_cwd(&owner)
+                                .and_then(|cwd| store.workspace_id_for_canonical_root(&cwd).ok())
+                        });
+                        owner_registry.commit_workspace_transition_with_workspace(
                             &owner,
                             gen,
                             target_origin.clone(),
+                            target_workspace_id,
+                            window_owner::TemporaryKind::DefaultStartup,
                         )?;
                         if let Some(skill_sources) = app.try_state::<SkillSourceRegistryState>() {
                             skill_sources.revoke_workspace(&owner, prior_generation);
@@ -3010,6 +3032,7 @@ fn main() {
                 .join("picot.sqlite3");
             let shared_metadata: SharedMetadataStore =
                 Arc::new(Mutex::new(MetadataStore::open(&metadata_path)?));
+            app.manage(shared_metadata.clone());
             log::info!(
                 "[pi-desktop] metadata store ready at {}",
                 metadata_path.display()

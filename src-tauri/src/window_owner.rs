@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use serde::Serialize;
+
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rand::rngs::OsRng;
 use rand::RngCore;
@@ -16,6 +18,32 @@ const OWNER_ID_LEN: usize = 16;
 /// Opaque per-window owner identity. Distinct from the bearer capability.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct OwnerId(String);
+
+pub type WorkspaceId = String;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+#[allow(dead_code)]
+pub enum TemporaryKind {
+    DefaultStartup,
+    QuickChat,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
+pub enum OwnerWorkspaceSnapshot {
+    Registered {
+        wid: WorkspaceId,
+        root: PathBuf,
+        generation: u64,
+    },
+    Temporary {
+        root: PathBuf,
+        generation: u64,
+        temporary_kind: TemporaryKind,
+    },
+    NoWorkspace,
+}
 
 /// Shared registry of window owners, their capabilities, and navigation permits.
 #[derive(Clone, Default)]
@@ -40,6 +68,8 @@ struct OwnerRecord {
     pending: Option<PendingNavigation>,
     transition: Option<WorkspaceTransition>,
     capability_bytes: [u8; CAPABILITY_LEN],
+    workspace_id: Option<WorkspaceId>,
+    temporary_kind: TemporaryKind,
     workspace_generation: u64,
 }
 
@@ -73,12 +103,32 @@ impl OwnerId {
 }
 
 impl WindowOwnerRegistry {
+    #[allow(dead_code)]
     pub fn create_owner(
         &self,
         window_label: String,
         canonical_cwd: PathBuf,
         primary_port: u16,
         current_origin: String,
+    ) -> Result<(OwnerId, String), String> {
+        self.create_owner_with_workspace(
+            window_label,
+            canonical_cwd,
+            primary_port,
+            current_origin,
+            None,
+            TemporaryKind::DefaultStartup,
+        )
+    }
+
+    pub fn create_owner_with_workspace(
+        &self,
+        window_label: String,
+        canonical_cwd: PathBuf,
+        primary_port: u16,
+        current_origin: String,
+        workspace_id: Option<WorkspaceId>,
+        temporary_kind: TemporaryKind,
     ) -> Result<(OwnerId, String), String> {
         let origin = normalize_origin(&current_origin)
             .ok_or_else(|| "owner origin must be an http loopback Pi origin".to_string())?;
@@ -112,6 +162,8 @@ impl WindowOwnerRegistry {
                 pending: None,
                 transition: None,
                 capability_bytes,
+                workspace_id,
+                temporary_kind,
                 workspace_generation: 0,
             },
         );
@@ -236,11 +288,29 @@ impl WindowOwnerRegistry {
         Ok(generation)
     }
 
+    #[allow(dead_code)]
     pub fn commit_workspace_transition(
         &self,
         owner: &OwnerId,
         transition_generation: u64,
         target_origin: String,
+    ) -> Result<(), String> {
+        self.commit_workspace_transition_with_workspace(
+            owner,
+            transition_generation,
+            target_origin,
+            None,
+            TemporaryKind::DefaultStartup,
+        )
+    }
+
+    pub fn commit_workspace_transition_with_workspace(
+        &self,
+        owner: &OwnerId,
+        transition_generation: u64,
+        target_origin: String,
+        workspace_id: Option<WorkspaceId>,
+        temporary_kind: TemporaryKind,
     ) -> Result<(), String> {
         let target = normalize_origin(&target_origin)
             .ok_or_else(|| "commit origin must be an http loopback Pi origin".to_string())?;
@@ -273,11 +343,35 @@ impl WindowOwnerRegistry {
         if let Some(cwd) = new_cwd {
             record.canonical_cwd = cwd;
         }
+        record.workspace_id = workspace_id;
+        record.temporary_kind = temporary_kind;
         record.current_origin = target;
         record.workspace_generation = transition_generation;
         record.pending = None;
         record.transition = None;
         Ok(())
+    }
+
+    /// Return one coherent owner/workspace view. All fields come from one lock
+    /// snapshot; callers must not combine the legacy split accessors.
+    #[allow(dead_code)]
+    pub fn owner_current_workspace(&self, owner: &OwnerId) -> OwnerWorkspaceSnapshot {
+        let state = self.inner.lock().expect("owner registry lock poisoned");
+        let Some(record) = state.owners.get(owner) else {
+            return OwnerWorkspaceSnapshot::NoWorkspace;
+        };
+        match &record.workspace_id {
+            Some(wid) => OwnerWorkspaceSnapshot::Registered {
+                wid: wid.clone(),
+                root: record.canonical_cwd.clone(),
+                generation: record.workspace_generation,
+            },
+            None => OwnerWorkspaceSnapshot::Temporary {
+                root: record.canonical_cwd.clone(),
+                generation: record.workspace_generation,
+                temporary_kind: record.temporary_kind,
+            },
+        }
     }
 
     pub fn current_workspace(&self, owner: &OwnerId) -> Option<(PathBuf, u16)> {
@@ -506,6 +600,96 @@ mod tests {
             .is_err());
         reg.revoke_owner(&owner);
         assert!(new_owner(&reg, "w1", 3003).0 != owner);
+    }
+
+    #[test]
+    fn owner_snapshot_reports_registered_workspace() {
+        let reg = WindowOwnerRegistry::default();
+        let (owner, _) = reg
+            .create_owner_with_workspace(
+                "registered".to_string(),
+                PathBuf::from("/workspace"),
+                3001,
+                "http://127.0.0.1:3001".to_string(),
+                Some("wid-1".to_string()),
+                TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        assert_eq!(
+            reg.owner_current_workspace(&owner),
+            OwnerWorkspaceSnapshot::Registered {
+                wid: "wid-1".to_string(),
+                root: PathBuf::from("/workspace"),
+                generation: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn owner_snapshot_reports_temporary_without_workspace_id() {
+        let reg = WindowOwnerRegistry::default();
+        let (owner, _) = reg
+            .create_owner_with_workspace(
+                "temporary".to_string(),
+                PathBuf::from("/tmp/picot"),
+                3001,
+                "http://127.0.0.1:3001".to_string(),
+                None,
+                TemporaryKind::QuickChat,
+            )
+            .unwrap();
+        assert_eq!(
+            reg.owner_current_workspace(&owner),
+            OwnerWorkspaceSnapshot::Temporary {
+                root: PathBuf::from("/tmp/picot"),
+                generation: 0,
+                temporary_kind: TemporaryKind::QuickChat,
+            }
+        );
+    }
+
+    #[test]
+    fn owner_snapshot_reports_no_workspace_for_unknown_owner() {
+        let reg = WindowOwnerRegistry::default();
+        let (owner, _) = new_owner(&reg, "missing", 3001);
+        reg.revoke_owner(&owner);
+        assert_eq!(
+            reg.owner_current_workspace(&owner),
+            OwnerWorkspaceSnapshot::NoWorkspace
+        );
+    }
+
+    #[test]
+    fn transition_snapshot_updates_identity_atomically() {
+        let reg = WindowOwnerRegistry::default();
+        let (owner, _) = new_owner(&reg, "transition", 3001);
+        let generation = reg
+            .begin_workspace_transition(&owner, PathBuf::from("/workspace-b"), 3002)
+            .unwrap();
+        reg.prepare_navigation(
+            &owner,
+            3002,
+            PathBuf::from("/workspace-b"),
+            "http://127.0.0.1:3002".to_string(),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        reg.commit_workspace_transition_with_workspace(
+            &owner,
+            generation,
+            "http://127.0.0.1:3002".to_string(),
+            Some("wid-b".to_string()),
+            TemporaryKind::DefaultStartup,
+        )
+        .unwrap();
+        assert_eq!(
+            reg.owner_current_workspace(&owner),
+            OwnerWorkspaceSnapshot::Registered {
+                wid: "wid-b".to_string(),
+                root: PathBuf::from("/workspace-b"),
+                generation,
+            }
+        );
     }
 
     #[test]

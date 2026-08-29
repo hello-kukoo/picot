@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use crate::mutation_types::is_mutation;
 #[cfg(test)]
 use crate::pi_rpc_bridge::InMemoryPiProcess;
 use crate::pi_rpc_bridge::{BridgeFrame, PiRpcBridge, PiRpcProcess};
@@ -509,26 +510,6 @@ impl NativePiManager {
         }
         Ok(())
     }
-}
-
-fn is_mutation(command_type: &str) -> bool {
-    matches!(
-        command_type,
-        "prompt"
-            | "steer"
-            | "follow_up"
-            | "compact"
-            | "bash"
-            | "fork"
-            | "clone"
-            | "navigate_tree"
-            | "set_model"
-            | "set_thinking_level"
-            | "set_auto_compaction"
-            | "set_auto_retry"
-            | "set_steering_mode"
-            | "set_follow_up_mode"
-    )
 }
 
 #[cfg(target_os = "windows")]

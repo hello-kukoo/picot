@@ -63,9 +63,46 @@ impl std::fmt::Display for AddWorkspaceError {
     }
 }
 
+/// Failure from a read-only workspace registry lookup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceLookupError {
+    NotRegistered,
+    Db(String),
+}
+
+impl WorkspaceLookupError {
+    /// Stable machine-readable code for authority callers.
+    pub fn code(&self) -> &'static str {
+        match self {
+            WorkspaceLookupError::NotRegistered => "not_registered",
+            WorkspaceLookupError::Db(_) => "db_error",
+        }
+    }
+}
+
+impl std::fmt::Display for WorkspaceLookupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkspaceLookupError::NotRegistered => write!(f, "not_registered"),
+            WorkspaceLookupError::Db(detail) => write!(f, "{detail}"),
+        }
+    }
+}
+
+/// Capability held only by host-internal rollout code. Public preference
+/// controls never receive this marker.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RuntimePreferenceAuthorization(());
+
+/// Mint the capability used by the rollout-authorized host path.
+pub(crate) fn rollout_authorization() -> RuntimePreferenceAuthorization {
+    RuntimePreferenceAuthorization(())
+}
+
 pub struct MetadataStore {
     connection: Connection,
     path: PathBuf,
+    runtime_audit_events: Vec<String>,
 }
 
 /// App-level single store handle. One SQLite connection per process; every
@@ -92,6 +129,7 @@ impl MetadataStore {
         let mut store = Self {
             connection,
             path: path.to_path_buf(),
+            runtime_audit_events: Vec::new(),
         };
         store.migrate()?;
         store.restrict_permissions()?;
@@ -420,6 +458,31 @@ impl MetadataStore {
             .map_err(|error| error.to_string())
     }
 
+    /// Look up a registered workspace without canonicalizing, creating, or
+    /// touching a registry row. Callers must provide the host-canonical root.
+    pub fn workspace_id_for_canonical_root(
+        &self,
+        root: &Path,
+    ) -> Result<String, WorkspaceLookupError> {
+        self.workspace_row_by_path(&root.to_string_lossy())
+            .map_err(WorkspaceLookupError::Db)?
+            .map(|row| row.workspace_id)
+            .ok_or(WorkspaceLookupError::NotRegistered)
+    }
+
+    /// Resolve a registered workspace id to its canonical root. This is a
+    /// read-only authority lookup and deliberately does not check filesystem
+    /// existence or prune the registry row.
+    pub fn canonical_root_for_workspace_id(
+        &self,
+        workspace_id: &str,
+    ) -> Result<PathBuf, WorkspaceLookupError> {
+        self.workspace_row_by_id(workspace_id)
+            .map_err(WorkspaceLookupError::Db)?
+            .map(|row| PathBuf::from(row.canonical_path))
+            .ok_or(WorkspaceLookupError::NotRegistered)
+    }
+
     pub fn store_device_token(&mut self, device_id: &str, token: &str) -> Result<(), String> {
         let token_hash = token_hash(token);
         self.connection
@@ -474,7 +537,68 @@ impl MetadataStore {
             .map_err(|error| format!("Cannot commit Picot metadata reset: {error}"))
     }
 
+    /// Read rollout state for the host launch path. Any authorization,
+    /// schema, storage, JSON, or value-shape failure maps to `None`, which
+    /// means legacy remains selected.
+    pub(crate) fn runtime_pref_get(
+        &self,
+        authorization: Option<&RuntimePreferenceAuthorization>,
+    ) -> Option<bool> {
+        authorization?;
+        let json: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT value_json FROM preferences WHERE key = 'runtime.native_origin'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .ok()?;
+        let json = json?;
+        serde_json::from_str::<serde_json::Value>(&json)
+            .ok()?
+            .as_bool()
+    }
+
+    /// Write rollout state through the host-internal path only. Audit output
+    /// intentionally contains operation status, never preference key/value.
+    pub(crate) fn runtime_pref_set(
+        &mut self,
+        authorization: Option<&RuntimePreferenceAuthorization>,
+        value: bool,
+    ) -> Result<(), String> {
+        if authorization.is_none() {
+            return Err("rollout authorization required".to_string());
+        }
+        self.connection
+            .execute(
+                "INSERT INTO preferences (key, value_json) VALUES ('runtime.native_origin', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
+                [serde_json::to_string(&value).map_err(|error| {
+                    format!("Cannot serialize runtime rollout preference: {error}")
+                })?],
+            )
+            .map_err(|error| format!("Cannot write runtime rollout preference: {error}"))?;
+        let event = "runtime_preference_write status=success".to_string();
+        log::info!("[rollout-audit] {event}");
+        self.runtime_audit_events.push(event);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn runtime_audit_events(&self) -> &[String] {
+        &self.runtime_audit_events
+    }
+
+    fn validate_public_preference_key(key: &str) -> Result<(), String> {
+        if key.starts_with("runtime.") {
+            return Err("reserved preference namespace".to_string());
+        }
+        Ok(())
+    }
+
     pub fn pref_get(&self, key: &str) -> Result<Option<serde_json::Value>, String> {
+        Self::validate_public_preference_key(key)?;
         let json: Option<String> = self
             .connection
             .query_row(
@@ -493,6 +617,7 @@ impl MetadataStore {
     }
 
     pub fn pref_set(&self, key: &str, value: &serde_json::Value) -> Result<(), String> {
+        Self::validate_public_preference_key(key)?;
         let json = serde_json::to_string(value)
             .map_err(|error| format!("Cannot serialize Picot preference {key}: {error}"))?;
         self.connection
@@ -506,6 +631,7 @@ impl MetadataStore {
     }
 
     pub fn pref_delete(&self, key: &str) -> Result<bool, String> {
+        Self::validate_public_preference_key(key)?;
         let deleted = self
             .connection
             .execute("DELETE FROM preferences WHERE key = ?1", [key])
@@ -514,6 +640,9 @@ impl MetadataStore {
     }
 
     pub fn pref_list(&self, prefix: &str) -> Result<BTreeMap<String, serde_json::Value>, String> {
+        if prefix.starts_with("runtime.") {
+            return Err("reserved preference namespace".to_string());
+        }
         // Escape LIKE metacharacters so caller-supplied prefixes match
         // literally instead of acting as wildcards.
         let escaped = prefix
@@ -534,6 +663,9 @@ impl MetadataStore {
         for entry in mapped {
             let (key, json) =
                 entry.map_err(|error| format!("Cannot list Picot preferences: {error}"))?;
+            if key.starts_with("runtime.") {
+                continue;
+            }
             let value: serde_json::Value = serde_json::from_str(&json)
                 .map_err(|error| format!("Picot preference {key} holds invalid JSON: {error}"))?;
             entries.insert(key, value);
@@ -548,7 +680,9 @@ fn token_hash(token: &str) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AddWorkspaceError, MetadataStore, RemovedWorkspace, SCHEMA_VERSION};
+    use super::{
+        AddWorkspaceError, MetadataStore, RemovedWorkspace, WorkspaceLookupError, SCHEMA_VERSION,
+    };
     use rusqlite::Connection;
     use std::fs;
     use std::path::Path;
@@ -922,6 +1056,129 @@ mod tests {
         assert_eq!(
             store.pref_list("weird.x-b").unwrap()["weird.x-b"],
             serde_json::json!(1)
+        );
+    }
+
+    #[test]
+    fn runtime_preference_requires_rollout_authorization() {
+        let (_guard, mut store) = fresh_store("picot.sqlite3");
+        assert_eq!(store.runtime_pref_get(None), None);
+        assert_eq!(
+            store.runtime_pref_set(None, true).unwrap_err(),
+            "rollout authorization required"
+        );
+
+        let authorization = super::rollout_authorization();
+        store.runtime_pref_set(Some(&authorization), true).unwrap();
+        assert_eq!(store.runtime_pref_get(Some(&authorization)), Some(true));
+        assert_eq!(
+            store.pref_get("runtime.native_origin").unwrap_err(),
+            "reserved preference namespace"
+        );
+        assert_eq!(
+            store
+                .pref_set("runtime.native_origin", &serde_json::json!(false))
+                .unwrap_err(),
+            "reserved preference namespace"
+        );
+        assert_eq!(
+            store.pref_delete("runtime.native_origin").unwrap_err(),
+            "reserved preference namespace"
+        );
+        assert_eq!(
+            store.pref_list("runtime.").unwrap_err(),
+            "reserved preference namespace"
+        );
+        assert!(store.pref_list("").unwrap().is_empty());
+    }
+
+    #[test]
+    fn runtime_preference_reader_fails_closed_for_invalid_json_and_value() {
+        let (_guard, store) = fresh_store("picot.sqlite3");
+        let authorization = super::rollout_authorization();
+        store
+            .connection
+            .execute(
+                "INSERT INTO preferences (key, value_json) VALUES ('runtime.native_origin', 'not-json')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(store.runtime_pref_get(Some(&authorization)), None);
+
+        store
+            .connection
+            .execute(
+                "UPDATE preferences SET value_json = '42' WHERE key = 'runtime.native_origin'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(store.runtime_pref_get(Some(&authorization)), None);
+    }
+
+    #[test]
+    fn runtime_preference_write_audit_is_redacted() {
+        let (_guard, mut store) = fresh_store("picot.sqlite3");
+        let authorization = super::rollout_authorization();
+        store.runtime_pref_set(Some(&authorization), true).unwrap();
+        let events = store.runtime_audit_events();
+        assert_eq!(events, &["runtime_preference_write status=success"]);
+        assert!(events
+            .iter()
+            .all(|event| { !event.contains("runtime.native_origin") && !event.contains("true") }));
+    }
+
+    #[test]
+    fn readonly_workspace_lookups_are_registry_authority_without_writes() {
+        let (_guard, mut store) = fresh_store("picot.sqlite3");
+        let workspace = _guard.0.join("workspace");
+        let missing = _guard.0.join("missing");
+        fs::create_dir(&workspace).unwrap();
+
+        let count = |store: &MetadataStore| -> i64 {
+            store
+                .connection
+                .query_row("SELECT count(*) FROM workspaces", [], |row| row.get(0))
+                .unwrap()
+        };
+        let before = count(&store);
+        let error = store.workspace_id_for_canonical_root(&missing).unwrap_err();
+        assert_eq!(error, WorkspaceLookupError::NotRegistered);
+        assert_eq!(error.code(), "not_registered");
+        assert_eq!(
+            count(&store),
+            before,
+            "read-only lookup must not register path"
+        );
+
+        let row = store.add_workspace(&workspace).unwrap().0;
+        let canonical = Path::new(&row.canonical_path);
+        assert_eq!(
+            store.workspace_id_for_canonical_root(canonical).unwrap(),
+            row.workspace_id
+        );
+        assert_eq!(
+            store
+                .canonical_root_for_workspace_id(&row.workspace_id)
+                .unwrap(),
+            PathBuf::from(&row.canonical_path)
+        );
+        assert_eq!(
+            store.workspace_id_for_canonical_root(canonical).unwrap(),
+            store.workspace_id_for_path(&workspace).unwrap()
+        );
+
+        assert!(store.remove_workspace(&row.workspace_id).unwrap());
+        assert_eq!(
+            store
+                .canonical_root_for_workspace_id(&row.workspace_id)
+                .unwrap_err(),
+            WorkspaceLookupError::NotRegistered
+        );
+        assert_eq!(
+            store
+                .workspace_id_for_canonical_root(canonical)
+                .unwrap_err(),
+            WorkspaceLookupError::NotRegistered
         );
     }
 
