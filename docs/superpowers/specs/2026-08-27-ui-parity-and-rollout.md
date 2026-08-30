@@ -10,7 +10,7 @@
 
 1. **Existing shell 是可复用的 parity 基础，但当前不能直接接 v2 Host。** `public/index.html` 与 `public/app.js` 承载完整现有 UI；它们依赖 legacy Pi-origin REST `/api/*` 与 legacy broker WS（`brokerWs` query → `WebSocketClient` → `broker_control` / `broker_event`）。Host v2 当前仅有 `/v2/ws`、`/v2/bootstrap`、静态服务和 pairing exchange，且 desktop capability 尚未由 `HostRouter`/`HostServer` 验证。
 2. **推荐 adapter 形态：server-side protocol adapter + existing-shell transport façade。** 不把 production shell 改成双 WS；不把 `/app/` native shell 当 parity 方案。适配层必须把已认证 v1 context 转为统一 `HostClientContext`，再调用 canonical v2 handler；保留的 `/api/*` 必须是 host-origin、owner-aware compatibility route，不能 silent fallback 到 Pi origin。
-3. **Prototype 尚未运行。** 代码审计证明接口边界可映射，但没有可执行 adapter fixture、real Pi host-origin smoke 或 browser interaction evidence。因此 Gate D 只能作为**文档/可行性未完成**，不能关闭；D2 暂不触发重开，须待真实 prototype 成本测量。
+3. **Prototype 与 real-Pi smoke 已运行，但 Gate D 仍未关闭。** `scripts/prototype/` adapter fixture 已执行通过（37/37，证据见 `2026-08-27-adapter-prototype-evidence.md`）；`bun run smoke:host-origin-p3` 已通过真实 Rust HostServer + embedded Pi 基础路径。Browser/WebView 验收改为人工 E2E，清单见 `2026-08-30-p3-manual-e2e-checklist.md`。完整 real-Pi interaction、browser static matrix 与 parity evidence 仍缺，因此 D2 暂不触发重开，Gate D 保持开放。
 4. **D10 未决。** 下方阈值均明确标记为 proposed，不能当作 Dr. Lin 已批准决策。
 
 ## 2. 现状证据与边界
@@ -139,9 +139,9 @@ Prototype 必须拒绝：缺 hello、错误 protocol、missing/invalid/expired/r
 
 当前 Host v2 缺 `HostClientContext` 与 desktop capability validation，故这不是“接线即可”的低风险 wrapper；P2 security substrate 是 P3 前置条件。
 
-### 5.5 为什么本次不新增 runnable fixture
+### 5.5 Prototype 边界
 
-本任务被限定为 documentation/prototype evidence only，且要求不触碰 production UI/transport/origin/flag。一个真正可运行的 adapter fixture 至少要改变或新增：Host route、v2 handshake/capability plumbing、legacy frame translator、owner-aware API middleware、browser entry/URL 注入以及 test harness。单独加入 fixture 会产生容易被误读为 production contract 的第二套协议，不能证明真实 runtime parity；因此本次只记录 prototype contract、测试输入与阻塞证据，不伪造“Gate D 已有 prototype evidence”。
+adapter fixture 已隔离在 `scripts/prototype/`，不改 production UI/transport/origin/flag；它证明 wrap/façade 映射机制与契约测试可运行，不证明完整 browser parity 或完整 real-Pi interaction。基础 HostServer production wiring 与 real-Pi host-origin smoke 由 `bun run smoke:host-origin-p3` 覆盖；browser validation 按人工 E2E 清单执行。**Gate D：design-closure（2026-08-30，Dr. Lin 指令；按 R4.7 同构拆分先例）**——substrate 层证据（adapter prototype 37/37、real HostServer + real-Pi host-origin smoke 复验、capability handshake / owner-bound bootstrap / wrong-workspace 403 / missing-capability 401、WebSocketClient gap→authoritative snapshot）关闭 D-GAP-02/06/07/08 的实现面；**浏览器级证据残项显式移交 P3.5 人工 E2E 清单（`2026-08-30-p3-manual-e2e-checklist.md`）与 D10 Stage 0 准入**，随 P3 human acceptance / release exit 关闭。rollout 框架随 D10 框架性批准（同日）定案。
 
 ## 6. Telemetry schema（匿名；方案提案，不是已决定实现）
 
@@ -251,13 +251,13 @@ D10 尚未拍板。建议 cohort 每阶段至少满足以下**提案阈值**，�
 | ID | Gap | Gate D impact | Required evidence |
 | --- | --- | --- | --- |
 | D-GAP-01 | 没有 runnable existing-shell adapter | **prototype 范围已关闭（2026-08-29，`2026-08-27-adapter-prototype-evidence.md`，37/37）**：wrap+façade 双形态可运行，capability 重连缓存缺陷已修；浏览器/真 Pi 部分归 D-GAP-02/06/07/08 维持开放 | Host-origin adapter + browser smoke + real Pi（后两项见对应 D-GAP） |
-| D-GAP-02 | Host desktop capability 未验证；HostClientContext 未实现 | owner auth parity 不成立 | handshake/capability cross-owner tests |
+| D-GAP-02 | Host desktop capability 未验证；HostClientContext 未实现 | **substrate 已关（2026-08-30）**：HostClientContext 实现并接线；real HostServer smoke 覆盖 handshake/owner-bound bootstrap/403/401（复验 PASS）；浏览器 cross-owner/reconnect 残项 → P3.5 人工 E2E | handshake/capability cross-owner tests |
 | D-GAP-03 | v1 broker 与 v2 WS 字段/hello/event 不兼容 | 不能声称 façade 可直接工作 | mapping fixture + reconnect/order tests |
 | D-GAP-04 | `/api/*` host compatibility middleware 不存在 | existing shell fetch 会 404 或误走旧 origin | 每条 retained route 的 auth/error/limit test |
 | D-GAP-05 | `brokerWs` 双来源（query/sessionStorage）仍存在 | 旧 broker/Pi-origin 残留风险 | host-only URL test、caller scan、removal plan |
-| D-GAP-06 | `/app/` native shell 与 existing shell 分流 | 误加载 native shell 即 parity 失败 | `/workspaces/` route browser smoke；`/app/` only no-blank smoke |
-| D-GAP-07 | static fingerprint 仅有 Rust unit/integration evidence | dynamic import/worker/download 未完整证明 | real browser static matrix |
-| D-GAP-08 | sequence gap → snapshot ordering 未接到 existing UI | reconnect 可能丢/重放状态 | forced lag/reconnect browser test |
+| D-GAP-06 | `/app/` native shell 与 existing shell 分流 | **substrate 已关（2026-08-30）**：`/workspaces/` 路由与 `<base href>` 有 real HostServer/Rust 证据；浏览器 worker/download/`/app/` no-blank 残项 → P3.5 人工 E2E | `/workspaces/` route browser smoke；`/app/` only no-blank smoke |
+| D-GAP-07 | static fingerprint 仅有 Rust unit/integration evidence | **substrate 已关（2026-08-30）**：fingerprint asset serving 有 real HostServer 证据；real browser static matrix（dynamic import/worker/download）残项 → P3.5 人工 E2E | real browser static matrix |
+| D-GAP-08 | sequence gap → snapshot ordering 未接到 existing UI | **substrate 已关（2026-08-30）**：WebSocketClient 转发 v2 sequenced events/snapshot，gap 后请求 authoritative snapshot；unit/prototype + real-Pi smoke 覆盖 ordering/reconnect/snapshot；existing UI forced-lag 人工证据残项 → P3.5 人工 E2E | forced lag/reconnect browser test |
 | D-GAP-09 | Temporary/default/Quick/Side native policy未完成 | ephemeral parity 与 auth 不成立 | owner/generation/quota/cleanup real lifecycle |
 | D-GAP-10 | OAuth v2 当前 `oauth:false` | settings parity 未完成 | Pi-owned OAuth lifecycle + redaction tests |
 | D-GAP-11 | Terminal/Super Agent/Telegram v2 mapping 未证 | critical path coverage incomplete | control/event mapping + platform smoke |
@@ -268,10 +268,10 @@ D10 尚未拍板。建议 cohort 每阶段至少满足以下**提案阈值**，�
 
 ## 11. Gate D / D2 / D10 status
 
-- **Gate D：不能关闭。** 文档已覆盖 namespace facts、critical-path parity matrix、adapter protocol/base URL/brokerWs/event ordering/owner auth feasibility、telemetry proposal、cohort thresholds proposal、rollback runbook、P3 re-estimate inputs、evidence gaps；但 GD-2 要求的 runnable prototype/real browser evidence 尚未存在。
+- **Gate D：不能关闭。** 文档、namespace、adapter prototype（37/37）与 P3 重估已具备；但 GD-2 所需的 real browser evidence、real Pi host-origin evidence、telemetry dry run 与 D10 决策仍未完成。
 - **D2：仍按 Gate B 既有决议暂不重开。** 当前没有成本实测证明 server-side v1 adapter 不可接受；但 D-GAP-01 必须在 Gate D review 前补齐。若 prototype 失败或 adapter 成本超出复核门槛，再提交 D2 重开，不得自行改成双 WS。
 - **D10：未决。** 本文 §7 的 cohort 数值与 stop thresholds 全部是 proposed，供 Dr. Lin 评审；不能写入 release authority，不能作为 P3/P8 已批准门槛。
-- **P3：保持 blocked。** 需 Gate R/B/C、P1/P2 substrate、runnable adapter prototype、D10 decision（按计划 Blocks）后重估；当前不能按固定人日承诺。
+- **P3：保持 blocked。** adapter prototype 已满足其原型子项且 coding range 已重估为 19–29 人日；仍需 Gate D 集成证据、P1/P2 substrate、telemetry dry run 与 D10 decision（按计划 Blocks），当前不能启动 production rollout。
 
 ## 12. Verification record
 
@@ -280,7 +280,7 @@ D10 尚未拍板。建议 cohort 每阶段至少满足以下**提案阈值**，�
 - 读取 `AGENTS.md`、`ARCHITECTURE.md`、`docs/engineering-lessons.md`、Gate A inventory、Gate B protocol contract、Gate C launch contract、native migration design/plan。
 - 检查 `public/index.html`、`public/app.js`、`public/app/websocket-client.js`、`public/app/transport.js`、`public/bootstrap-entry.js`。
 - 检查 `src-tauri/src/host_server.rs`、`host_router.rs`、`main.rs`、`broker_ws.rs` 的静态服务、namespace、hello、navigation/window URL、broker/frame、reconnect 相关事实。
-- 检查 working tree；保留既有 dirty code/docs/tool 文件；未修改 production code；未运行写入型测试/构建命令。
+- 检查 working tree；保留既有 dirty code/docs/tool 文件；本轮仅更新 Gate D 状态文字，没有新增 production code；已执行 adapter/host-origin focused tests、`bun run check`、`bun run check:rust` 与性能脚本可用性检查。
 - 未声称 Gate D、D10 或 P3 已完成。
 
-Recommended next step：实现隔离的 host-origin adapter prototype（不先删 legacy），先完成 hello/capability、单 WS、`mirror_sync` snapshot ordering、一个 prompt/stream/abort vertical slice 与一条 retained `/api/*` route 的 real browser + real Pi evidence，再由 Dr. Lin 评审 D2/D10 并重估 P3。
+Recommended next step：按 `2026-08-30-p3-manual-e2e-checklist.md` 执行人工 browser/WebView static/interaction E2E，与 telemetry dry run、性能 fixture、dogfood 一起提交 Dr. Lin 评审 D10/Gate D。

@@ -1,6 +1,6 @@
 # Picot Native Runtime 迁移设计（embedded-server 退役）
 
-> 状态：**D1–D9 已拍板；仅 D10 cohort 门槛待 Gate D telemetry 方案后补拍**。本稿取代此前 P0–P8 直接实施版本。
+> 状态：**D1–D10 全部拍板**（D10 框架性批准 2026-08-30）。本稿取代此前 P0–P8 直接实施版本。
 > 修订 R4（2026-08-28）：核对已提交 workspace registry（`7acbc0a`）后的实际交付状态。Gate R 明确为 partial：补 registry 精确只读 API/原子 owner snapshot 的缺口、`runtime.*` 保留 namespace 与 rollout writer policy、未注册 startup tmp/Quick Chat 生命周期、registry v1 surface 的 v2 inventory；P1/P3 继续 blocked，直到 Gate R 全部 exit criteria 满足。R3.1 的 Operation Registry、turn-bound abort、P3 adapter、Cost compatibility 与 D1–D10 主体不变。
 > 修订 R4.1（2026-08-28）：双文档评审收尾——§6 P5/P6/P7 补 Depends on 行；workspace info 单一归属 P4（P6 移除）；删除 P2 悬空 "P1 proxy" 引用；§5.1 session export 行修正为真实 legacy 面（WS `export_html` command + `GET /api/sessions/:dirName/:file`）；§2.1/§5.1 统一 `/v2/session-export/{token}` 命名。
 > 修订 R4.2（2026-08-28）：Gate R 归属改定——registry 已按其自身设计交付（`7acbc0a`），Gate R 的 authority 缺口改由**本迁移直接承担收编改造**（WP-R 工作包，见 implementation plan §3），不再是外部等待项；WP-R 仅含 additive 只读 API 与 `runtime.*` fail-closed 守卫，不触碰生产启动路径/origin/认证/spawn/路由。
@@ -985,6 +985,6 @@ The following are implementation-blocking. D1–D9 已拍板；仅 D10 cohort �
 | D7 | paste transport | ✅ 2026-08-28 | permanent HTTP endpoint with route-level >=4 MiB limit | P6 |
 | D8 | `/v2/rpc` compatibility | ✅ 2026-08-29 | **不保留永久 `/v2/rpc`**（Dr. Lin 依 Gate A external caller 盘点拍板：五渠道零外部 caller，上游 v0.3.x 存量已被 v0.4 无兼容退役置换；证据见 Gate A inventory §5 与 `context/d8-external-evidence-2026-08-29T02-44-01.md`）。删除前置：一个过渡版本在旧路由挂 410 Gone + 匿名 client-class hit 计数（仅发布期验证，不建长期 telemetry，禁止 per-user/per-token 维度）+ release notes 显式声明移除；私写脚本不可知项由此变为可测。若未来改判保留，需 versioned deprecation header、N-1 support window、removal notice | P7/P8 |
 | D9 | Super Agent cross-runtime | ✅ 2026-08-28 | canonical RuntimeTarget through v2; no direct port fetch | P6/P7 |
-| D10 | release flag storage/rollout | ⏳ 待 Gate D | Gate R 交付的 internal `preferences.runtime.native_origin` 是唯一 release source；`runtime.*` 公开 preference controls 全拒绝，只有 rollout-authorized host writer 可变更；debug env 仅 developer override。**存储部分已随 WP-R.4 定案；cohort 门槛数值待 Gate D telemetry 方案后补拍** | P3/P8 |
+| D10 | release flag storage/rollout | ✅ 2026-08-30 | Gate R 交付的 internal `preferences.runtime.native_origin` 是唯一 release source；`runtime.*` 公开 preference controls 全拒绝，只有 rollout-authorized host writer 可变更；debug env 仅 developer override。**存储随 WP-R.4 定案；rollout 框架（Stage 0–3 机制、八项阈值、匿名 telemetry 契约 schema 1、stop/hold/rollback runbook）经 Dr. Lin 框架性批准（2026-08-30，见 `2026-08-30-d10-recommendation.md` §6）**；Stage 0 准入以 P3 三件人工件为前置；fail-closed/default-off 不变，不授予 default-on | P3/P8 |
 
-> A work package may start only after decisions whose **Blocks** column includes that work package are resolved, plus its explicit Gate dependencies. Do not solve a decision silently inside an implementation PR. 当前剩余未决：仅 D10 cohort 门槛（等 Gate D telemetry 方案，阻塞 P3/P8，于 P3/P8 开工前补拍）；D1–D9 全部落定。P0/P1/P2 开工许可不依赖 D10。
+> A work package may start only after decisions whose **Blocks** column includes that work package are resolved, plus its explicit Gate dependencies. Do not solve a decision silently inside an implementation PR. 当前剩余未决：**无——D1–D10 全部落定**（D10 框架性批准 2026-08-30，Stage 0 准入随 P3 人工件）。

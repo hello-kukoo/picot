@@ -424,8 +424,8 @@ Exit：Gate B 安全与限额矩阵全绿；feature 不对 release 用户可见�
 
 | 任务 | 内容 | 测试 |
 | --- | --- | --- |
-| P3.1 | flag：`preferences.runtime.native_origin` launch snapshot、fail-closed、匿名 telemetry | flag/schema failure unit |
-| P3.2 | D1 namespace 实现：production URL 固定 `/workspaces/:wid/sessions/:sid`；`/app/` 保持 experimental | bootstrap/static/window/navigation/capability smoke |
+| P3.1 | flag：`preferences.runtime.native_origin` launch snapshot、fail-closed、匿名 telemetry | flag off/on、schema failure unit |
+| P3.2 | D1 namespace 实现：production URL 固定 `/workspaces/:wid/sessions/:sid`；`/app/` 保持 experimental | bootstrap/static/window/navigation/capability smoke；real HostServer + embedded Pi smoke |
 | P3.3 | window lifecycle：owner 先建、capability 注入、navigation authorizer、route wid binding | window integration test |
 | P3.4 | existing-shell adapter：落实 replace/wrap/adapt 决策；broker v1→v2 controls/events；brokerWs removal；retained `/api/*` owner-aware middleware；禁止 Pi-origin/unauthenticated `/ws`/404 fallback | hello/reconnect/order/gap/owner/base/retained-route contract tests |
 | P3.5 | flag on/off parity、dogfood 2 周、性能对照 | full parity matrix + baseline thresholds |
@@ -536,10 +536,10 @@ Exit：`bun run test`、`bun run check`、`bun run check:rust`、`bun run build:
 | # | 时点 | 内容 |
 | --- | --- | --- |
 | CP0 | Gate R（WP-R 完成后） | **已关闭（2026-08-29，Dr. Lin 签署）**：六项 exit criteria 逐条验证（criterion 1 admission 边界修正见 spec R4.12）；WP-R.1–R.6 全部交付；P0/P1 解锁 |
-| CP1 | Gate A–D | 分场：**Gate B-design + Gate C-design + Gate A 已于 2026-08-29 关闭**（Dr. Lin 签署；B/C 见 `2026-08-29-cp1-review.md`；Gate A 人审裁决：A-HTTP-37 直接 retire、A-HTTP-25/D8 边界、高危行终态认可，含两条安全修复）；Gate D（adapter 原型在途）另行关闭 |
+| CP1 | Gate A–D | 分场：**Gate B-design + Gate C-design + Gate A 已于 2026-08-29 关闭**（Dr. Lin 签署；B/C 见 `2026-08-29-cp1-review.md`；Gate A 人审裁决：A-HTTP-37 直接 retire、A-HTTP-25/D8 边界、高危行终态认可，含两条安全修复）；**Gate D 已于 2026-08-30 design-closure（Dr. Lin 指令，R4.7 同构拆分先例）**——substrate 证据关闭 D-GAP-02/06/07/08 实现面，浏览器级残项显式移交 P3.5 人工 E2E 与 D10 Stage 0 准入（见 `2026-08-27-ui-parity-and-rollout.md` Gate D closure 段） |
 | CP2 | 决策会 | **已重构关闭（2026-08-29，Dr. Lin）**：单一会议按 R4.4 per-Blocks 规则解散；D1–D9 全部拍板（D8 见 spec §16 R4.13）；残项 D10 cohort 门槛由「Gate D telemetry 就绪后、P3/P8 开工前补拍」接管，不阻塞 P0/P1/P2 |
-| CP3 | P1 完 | lifecycle、Operation Registry、turn abort、runtime smoke |
-| CP4 | P2 完 | capability/authorization/limit matrix |
+| CP3 | P1 完 | **已关闭（2026-08-30，Dr. Lin 审阅通过）**：四件全绿——lifecycle（P1.11 五类真 Pi smoke 5/5）、Operation Registry（scope/TTL/eviction/revoke 全测）、turn abort（事件泵绑定 + 全场景族）、runtime smoke（cargo 340/0/5，clippy/check 绿）；Exit 四条款逐条验证与证据索引见 `2026-08-30-cp3-review.md`；P1.6 缺口 1–2 已按 reuse 裁决闭环、缺口 3 归位 P2；Windows 实证顺延 P8（R4.10）。P1 关闭，P2 前置全部满足 |
+| CP4 | P2 完 | **已关闭（2026-08-30，Dr. Lin 指令）**：capability/authorization/limit matrix 全绿——cargo 364/0/6 + clippy + check/check:inventory；评审→整改→独立复验链闭环（1 blocker + 6 majors 全修，#2 改判 SUPERSEDED by D10）；hello×class 九宫格、三 acceptance 带内 replay、双通路限额三点法、注册表增长回归齐；v2 面 release 隔离双门验证；证据与复验记录见 `2026-08-30-cp4-review.md` + `2026-08-30-p2-review-remediation.md` |
 | CP5 | P3 完 | dogfood go/no-go、P3 performance/parity |
 | CP6 | P4 完 | Cost fixture parity、delete/export contract 签收 |
 | CP7 | P5 完 | OAuth lifecycle/security 签收 |

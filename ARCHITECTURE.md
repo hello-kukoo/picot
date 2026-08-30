@@ -186,7 +186,9 @@ Rust 一侧掌管 OS 进程。三个模块分工清晰：
   `49xxx` 段端口。WebView 连到它；它把帧转发到 embedded-server.ts 的
   WebSocket，把上游消息包成 `broker_event` 信封，运行 `broker_control`
   命令路由（`new_session` / `switch_session` / `stop_instance` /
-  `spawn_session_process` / `open_devtools`）。要改路由语义或加新
+  `spawn_session_process` / `open_devtools`）。`v1_control_adapter.rs` 维护
+  legacy `broker_control` 的显式 allowlist、canonical v2 kind 与幂等元数据；
+  未映射 control 返回 `unimplemented_route`，不静默转发。要改路由语义或加新
   broker 命令时从这里读起。
 
 **架构不变量：** Rust 绝不重新实现 pi 运行时逻辑。它只做进程管理
@@ -605,6 +607,13 @@ session 文件、不变端口。
 
 `main.rs::setup()` 按以下顺序执行：
 
+Native rollout only starts when an authorized registered workspace exists. It
+loads that workspace's registry ID and canonical root, then creates a
+`Registered` owner snapshot before admitting its runtime target. An empty or
+unavailable registry uses legacy startup: its default `~/.pi/tmp` runtime
+remains `Temporary` and has no synthetic workspace ID, so it cannot enter the
+Registered-only v2 target/route scope.
+
 1. 从 `~/.pi/agent/sessions/` 和用户设置文件解析 resume 目标。
 2. `manager.next_port()` —— 选第一个空闲的 `≥ 47821` 端口。
 3. `manager.spawn(cwd, port, session)` —— `Command::new(pi)`，附带
@@ -624,6 +633,12 @@ session 文件、不变端口。
 `on_window_event` 处理器在窗口销毁时杀掉该工作区的专用 session
 进程以及主 pi 进程。`RunEvent::Exit` 触发 `manager.kill_all()` 走
 正常关闭路径；**`SIGKILL` 不会触发它**，会留下持有端口的孤儿 pi 进程。
+Pi child termination is centralized in `src-tauri/src/process_tree.rs`: legacy
+and native Pi launches create an exact Unix process group or Windows Job Object,
+then terminate the tree with bounded SIGTERM→SIGKILL escalation (or Job Object
+termination with direct-child fallback) before wait/reap. Legacy standby cleanup
+uses the same supervisor through its managed process records. Windows runtime
+smoke still requires a Windows host.
 
 ---
 
