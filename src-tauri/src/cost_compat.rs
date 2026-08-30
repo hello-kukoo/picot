@@ -37,6 +37,16 @@ fn js_number(value: f64) -> f64 {
     }
 }
 
+/// Serialize a float the way JavaScript JSON.stringify does: integral
+/// values print without a fractional part (1.0 -> 1).
+fn js_value_number(value: f64) -> Value {
+    if value.is_finite() && value.fract() == 0.0 && value.abs() < 9.007_199_254_740_992e15 {
+        Value::from(value as i64)
+    } else {
+        Value::from(value)
+    }
+}
+
 /// Port of `parseDateOnly`/`new Date`: RFC3339 first, then date-only strings
 /// which JavaScript parses as UTC midnight.
 pub fn parse_js_date(value: &str) -> Option<DateTime<Utc>> {
@@ -165,7 +175,7 @@ pub fn legacy_cost_session(
 ) -> Option<LegacyCostSession> {
     if params.scope == "current" {
         let matches_root = metrics
-            .cwd
+            .cwd_canonical
             .as_deref()
             .is_some_and(|cwd| cwd == current_root);
         if !matches_root {
@@ -235,12 +245,12 @@ pub(crate) fn empty_payload(params: &CostRangeParams) -> Value {
             "range": params.range,
         },
         "summary": {
-            "totalCost": 0.0,
+            "totalCost": 0,
             "totalTokens": 0,
             "sessionCount": 0,
             "userMessageCount": 0,
-            "avgCostPerSession": 0.0,
-            "avgCostPerUserMessage": 0.0,
+            "avgCostPerSession": 0,
+            "avgCostPerUserMessage": 0,
         },
         "series": [],
         "breakdown": { "byModel": [], "byTool": [] },
@@ -248,12 +258,12 @@ pub(crate) fn empty_payload(params: &CostRangeParams) -> Value {
         "sessions": [],
         "infobar": {
             "overview": {
-                "totalCost": 0.0,
+                "totalCost": 0,
                 "sessionCount": 0,
                 "messageCount": 0,
                 "daysActive": 0,
-                "avgCostPerDay": 0.0,
-                "todayCost": 0.0,
+                "avgCostPerDay": 0,
+                "todayCost": 0,
             },
             "models": [],
             "projects": [],
@@ -277,7 +287,7 @@ fn session_json(session: &LegacyCostSession) -> Value {
         "workspace": session.workspace,
         "model": session.model,
         "time": session.time.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        "totalCost": js_number(session.total_cost),
+        "totalCost": js_value_number(session.total_cost),
         "inputTokens": session.input_tokens,
         "outputTokens": session.output_tokens,
         "cacheRead": session.cache_read,
@@ -286,7 +296,7 @@ fn session_json(session: &LegacyCostSession) -> Value {
         "toolCalls": session.tool_calls,
         "userMessages": session.user_messages,
         "assistantMessages": session.assistant_messages,
-        "costPerUserMessage": js_number(session.cost_per_user_message),
+        "costPerUserMessage": js_value_number(session.cost_per_user_message),
         "toolCostByName": session.tool_cost_by_name,
     })
 }
@@ -323,7 +333,7 @@ pub fn build_cost_payload(
     for session in &sorted {
         let total_cost = js_number(session.total_cost);
         let total_tokens = session.total_tokens;
-        payload["summary"]["totalCost"] = json!(js_number(
+        payload["summary"]["totalCost"] = json!(js_value_number(
             payload["summary"]["totalCost"].as_f64().unwrap_or(0.0) + total_cost
         ));
         payload["summary"]["totalTokens"] =
@@ -360,7 +370,8 @@ pub fn build_cost_payload(
             let today = payload["infobar"]["overview"]["todayCost"]
                 .as_f64()
                 .unwrap_or(0.0);
-            payload["infobar"]["overview"]["todayCost"] = json!(js_number(today + total_cost));
+            payload["infobar"]["overview"]["todayCost"] =
+                json!(js_value_number(today + total_cost));
         }
 
         let project_key = if session.workspace.is_empty() {
@@ -420,12 +431,14 @@ pub fn build_cost_payload(
                 }
             };
             let tool = &mut payload["infobar"]["usage"]["tools"][usage_tool];
-            tool["cost"] = json!(js_number(tool["cost"].as_f64().unwrap_or(0.0) + tool_cost));
+            tool["cost"] = json!(js_value_number(
+                tool["cost"].as_f64().unwrap_or(0.0) + tool_cost
+            ));
             tool["count"] = Value::from(tool["count"].as_u64().unwrap_or(0) + 1);
         }
 
         let overview = &mut payload["infobar"]["overview"];
-        overview["totalCost"] = json!(js_number(
+        overview["totalCost"] = json!(js_value_number(
             overview["totalCost"].as_f64().unwrap_or(0.0) + total_cost
         ));
         overview["sessionCount"] = Value::from(overview["sessionCount"].as_u64().unwrap_or(0) + 1);
@@ -449,7 +462,7 @@ pub fn build_cost_payload(
             Value::from(usage["toolCalls"].as_u64().unwrap_or(0) + session.tool_calls);
     }
 
-    payload["summary"]["avgCostPerSession"] = json!(js_number(
+    payload["summary"]["avgCostPerSession"] = json!(js_value_number(
         if payload["summary"]["sessionCount"].as_u64().unwrap_or(0) > 0 {
             payload["summary"]["totalCost"].as_f64().unwrap_or(0.0)
                 / payload["summary"]["sessionCount"].as_u64().unwrap_or(0) as f64
@@ -457,7 +470,7 @@ pub fn build_cost_payload(
             0.0
         }
     ));
-    payload["summary"]["avgCostPerUserMessage"] = json!(js_number(
+    payload["summary"]["avgCostPerUserMessage"] = json!(js_value_number(
         if payload["summary"]["userMessageCount"].as_u64().unwrap_or(0) > 0 {
             payload["summary"]["totalCost"].as_f64().unwrap_or(0.0)
                 / payload["summary"]["userMessageCount"].as_u64().unwrap_or(0) as f64
@@ -471,7 +484,7 @@ pub fn build_cost_payload(
         by_bucket
             .iter()
             .map(|(bucket, cost, tokens)| {
-                json!({ "bucket": bucket, "cost": js_number(*cost), "tokens": tokens })
+                json!({ "bucket": bucket, "cost": js_value_number(*cost), "tokens": tokens })
             })
             .collect(),
     );
@@ -480,14 +493,14 @@ pub fn build_cost_payload(
     payload["breakdown"]["byModel"] = Value::Array(
         by_model
             .iter()
-            .map(|(name, cost, _)| json!({ "name": name, "cost": js_number(*cost) }))
+            .map(|(name, cost, _)| json!({ "name": name, "cost": js_value_number(*cost) }))
             .collect(),
     );
     by_tool.sort_by(|a, b| b.1.total_cmp(&a.1));
     payload["breakdown"]["byTool"] = Value::Array(
         by_tool
             .iter()
-            .map(|(name, cost)| json!({ "name": name, "cost": js_number(*cost) }))
+            .map(|(name, cost)| json!({ "name": name, "cost": js_value_number(*cost) }))
             .collect(),
     );
 
@@ -497,14 +510,15 @@ pub fn build_cost_payload(
     payload["topSessions"] = Value::Array(top.iter().map(session_json).collect());
 
     payload["infobar"]["overview"]["daysActive"] = Value::from(active_days.len() as u64);
-    payload["infobar"]["overview"]["avgCostPerDay"] = json!(js_number(if active_days.is_empty() {
-        0.0
-    } else {
-        payload["infobar"]["overview"]["totalCost"]
-            .as_f64()
-            .unwrap_or(0.0)
-            / active_days.len() as f64
-    }));
+    payload["infobar"]["overview"]["avgCostPerDay"] =
+        json!(js_value_number(if active_days.is_empty() {
+            0.0
+        } else {
+            payload["infobar"]["overview"]["totalCost"]
+                .as_f64()
+                .unwrap_or(0.0)
+                / active_days.len() as f64
+        }));
 
     by_model.sort_by(|a, b| b.1.total_cmp(&a.1));
     let max_model_cost = by_model.first().map(|(_, cost, _)| *cost).unwrap_or(0.0);
@@ -514,9 +528,9 @@ pub fn build_cost_payload(
             .map(|(name, cost, count)| {
                 json!({
                     "name": name,
-                    "cost": js_number(*cost),
+                    "cost": js_value_number(*cost),
                     "count": count,
-                    "fraction": js_number(if max_model_cost > 0.0 { cost / max_model_cost } else { 0.0 }),
+                    "fraction": js_value_number(if max_model_cost > 0.0 { cost / max_model_cost } else { 0.0 }),
                 })
             })
             .collect(),
@@ -534,9 +548,9 @@ pub fn build_cost_payload(
                 json!({
                     "name": name,
                     "path": path,
-                    "cost": js_number(*cost),
+                    "cost": js_value_number(*cost),
                     "sessions": sessions,
-                    "fraction": js_number(if max_project_cost > 0.0 { cost / max_project_cost } else { 0.0 }),
+                    "fraction": js_value_number(if max_project_cost > 0.0 { cost / max_project_cost } else { 0.0 }),
                 })
             })
             .collect(),
@@ -553,9 +567,9 @@ pub fn build_cost_payload(
             .map(|(name, cost, count)| {
                 json!({
                     "name": name,
-                    "cost": js_number(*cost),
+                    "cost": js_value_number(*cost),
                     "count": count,
-                    "fraction": js_number(if max_tool_cost > 0.0 { cost / max_tool_cost } else { 0.0 }),
+                    "fraction": js_value_number(if max_tool_cost > 0.0 { cost / max_tool_cost } else { 0.0 }),
                 })
             })
             .collect(),
@@ -608,6 +622,106 @@ pub fn scan_compat_cost_dashboard(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cost_payload_matches_legacy_ts_on_identical_fixtures() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("picot-cost-parity-{nonce}"));
+        let workspace = root.join("workspace");
+        let project_a = root.join("sessions").join("--workspace-proj--");
+        let project_b = root.join("sessions").join("--other-proj--");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&project_a).unwrap();
+        std::fs::create_dir_all(&project_b).unwrap();
+        let cwd_a = serde_json::to_string(&workspace.to_string_lossy()).unwrap();
+        let cwd_b = serde_json::to_string(&root.join("other").to_string_lossy()).unwrap();
+        std::fs::write(
+            project_a.join("a1.jsonl"),
+            format!(
+                "{{\"type\":\"session\",\"id\":\"a1\",\"cwd\":{cwd_a}}}\n{{\"type\":\"session_info\",\"name\":\"Alpha\"}}\n{{\"type\":\"model_change\",\"model\":\"model-x\"}}\n{{\"type\":\"message\",\"message\":{{\"role\":\"user\"}},\"timestamp\":\"2026-08-10T09:00:00.000Z\"}}\n{{\"type\":\"message\",\"message\":{{\"role\":\"assistant\",\"model\":\"model-x\",\"usage\":{{\"cost\":{{\"total\":3.5}},\"input\":100,\"output\":50,\"cacheRead\":10,\"cacheWrite\":5}},\"content\":[{{\"type\":\"toolCall\",\"name\":\"bash\"}},{{\"type\":\"toolCall\",\"name\":\"read\"}}]}},\"timestamp\":\"2026-08-10T09:05:00.000Z\"}}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            project_a.join("a2.jsonl"),
+            format!(
+                "{{\"type\":\"session\",\"id\":\"a2\",\"cwd\":{cwd_a}}}\n{{\"type\":\"message\",\"message\":{{\"role\":\"assistant\",\"model\":\"model-y\",\"usage\":{{\"cost\":{{\"total\":1.25}},\"input\":40,\"output\":20}}}},\"content\":[{{\"type\":\"toolCall\",\"name\":\"bash\"}}]}},\"timestamp\":\"2026-08-11T08:00:00.000Z\"}}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            project_b.join("b1.jsonl"),
+            format!(
+                "{{\"type\":\"session\",\"id\":\"b1\",\"cwd\":{cwd_b}}}\n{{\"type\":\"message\",\"message\":{{\"role\":\"assistant\",\"model\":\"model-x\",\"usage\":{{\"cost\":{{\"total\":99.0}}}}}}}}\n"
+            ),
+        )
+        .unwrap();
+
+        let params = CostRangeParams {
+            from: parse_js_date("2026-08-01T00:00:00Z").unwrap(),
+            to: parse_js_date("2026-09-01T00:00:00Z").unwrap(),
+            range: "custom".into(),
+            granularity: "day".into(),
+            scope: "all".into(),
+            models: HashSet::new(),
+        };
+        let now = parse_js_date("2026-08-30T12:00:00Z").unwrap();
+        let rust_payload =
+            scan_compat_cost_dashboard(&root.join("sessions"), &workspace, &params, now).unwrap();
+
+        let params_json = serde_json::json!({
+            "range": "custom",
+            "from": "2026-08-01T00:00:00.000Z",
+            "to": "2026-09-01T00:00:00.000Z",
+            "granularity": "day",
+            "scope": "all",
+            "models": [],
+        })
+        .to_string();
+        let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("scripts")
+            .join("p4-cost-parity.mjs");
+        let output = std::process::Command::new("bun")
+            .arg(&script)
+            .arg(root.join("sessions"))
+            .arg(&workspace)
+            .arg(&params_json)
+            .arg("2026-08-30T12:00:00Z")
+            .output()
+            .expect("bun harness must run");
+        assert!(
+            output.status.success(),
+            "TS harness failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let ts_payload: Value = serde_json::from_slice(&output.stdout).expect("TS payload JSON");
+        assert_eq!(
+            rust_payload, ts_payload,
+            "Rust and legacy TS payloads must match field-by-field"
+        );
+
+        // scope=current keeps only the workspace-scoped project.
+        let current_params = CostRangeParams {
+            scope: "current".into(),
+            ..params
+        };
+        let current_payload =
+            scan_compat_cost_dashboard(&root.join("sessions"), &workspace, &current_params, now)
+                .unwrap();
+        let session_rows = current_payload["sessions"].as_array().unwrap();
+        assert!(
+            session_rows
+                .iter()
+                .all(|row| row["workspace"] == workspace.to_string_lossy().as_ref()),
+            "scope=current must exclude other-project sessions"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     fn session(model: &str, time: &str, cost: f64) -> LegacyCostSession {
         LegacyCostSession {

@@ -94,6 +94,7 @@ pub(crate) struct SessionMetrics {
     pub(crate) id: String,
     pub(crate) title: String,
     pub(crate) cwd: Option<PathBuf>,
+    pub(crate) cwd_canonical: Option<PathBuf>,
     pub(crate) model: String,
     pub(crate) timestamp: String,
     pub(crate) last_active: Option<chrono::DateTime<chrono::Utc>>,
@@ -188,8 +189,8 @@ impl HostDataPlane {
                 }
             }
         }
-        // Header-sample fallback: majority recorded cwd must canonicalize to
-        // the workspace root.
+        // Header-sample fallback: the majority recorded cwd must match any
+        // candidate spelling (raw or canonicalized) of the workspace root.
         for dir in std::fs::read_dir(session_root).ok()?.filter_map(Result::ok) {
             let dir_path = dir.path();
             if !dir_path.is_dir() {
@@ -203,8 +204,8 @@ impl HostDataPlane {
                 })
                 .filter_map(|file| parse_session_metrics(&file.path()).ok())
                 .flatten()
-                .filter_map(|metrics| metrics.cwd)
-                .any(|cwd| cwd == canonical);
+                .filter_map(|metrics| metrics.cwd_canonical.or(metrics.cwd))
+                .any(|cwd| candidates.iter().any(|candidate| candidate == &cwd));
             if matches {
                 return Some(dir_path);
             }
@@ -563,7 +564,7 @@ impl HostDataPlane {
                 if let Some(metrics) = parse_session_metrics(&path)? {
                     // HostDataPlane is workspace-scoped: only sessions whose
                     // canonical cwd matches the registered workspace root.
-                    if metrics.cwd.as_deref() == Some(&workspace) {
+                    if metrics.cwd_canonical.as_deref() == Some(&workspace) {
                         sessions.push(metrics);
                     }
                 }
@@ -893,12 +894,13 @@ pub(crate) fn parse_session_metrics(path: &Path) -> Result<Option<SessionMetrics
     if metrics.id.is_empty() {
         return Ok(None);
     }
-    // Canonicalize so scope filters compare realpath-to-realpath.
-    metrics.cwd = metrics
+    // Keep the recorded cwd verbatim (the legacy payload echoes it) and add
+    // a canonicalized copy so scope filters compare realpath-to-realpath.
+    metrics.cwd_canonical = metrics
         .cwd
         .as_ref()
         .and_then(|cwd| cwd.canonicalize().ok())
-        .or(metrics.cwd);
+        .or_else(|| metrics.cwd.clone());
     if metrics.title.is_empty() {
         metrics.title = "Untitled".to_owned();
     }
