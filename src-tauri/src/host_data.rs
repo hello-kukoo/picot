@@ -90,22 +90,22 @@ pub struct CostDashboard {
 }
 
 #[derive(Debug, Default)]
-struct SessionMetrics {
-    id: String,
-    title: String,
-    cwd: Option<PathBuf>,
-    model: String,
-    timestamp: String,
-    last_active: Option<chrono::DateTime<chrono::Utc>>,
-    total_cost: f64,
-    input_tokens: u64,
-    output_tokens: u64,
-    cache_read: u64,
-    cache_write: u64,
-    assistant_messages: u64,
-    tool_calls: u64,
-    user_messages: u64,
-    tool_cost_by_name: HashMap<String, f64>,
+pub(crate) struct SessionMetrics {
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) cwd: Option<PathBuf>,
+    pub(crate) model: String,
+    pub(crate) timestamp: String,
+    pub(crate) last_active: Option<chrono::DateTime<chrono::Utc>>,
+    pub(crate) total_cost: f64,
+    pub(crate) input_tokens: u64,
+    pub(crate) output_tokens: u64,
+    pub(crate) cache_read: u64,
+    pub(crate) cache_write: u64,
+    pub(crate) assistant_messages: u64,
+    pub(crate) tool_calls: u64,
+    pub(crate) user_messages: u64,
+    pub(crate) tool_cost_by_name: HashMap<String, f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,6 +144,158 @@ impl HostDataPlane {
         self
     }
 
+    /// Pi's session-project directory name for a workspace root
+    /// (`encodeSessionDirName`): `--` + path without the leading slash with
+    /// `/`, `\` and `:` folded to `-`, plus a trailing `--`.
+    #[allow(dead_code)]
+    fn encode_session_dir_name(workspace_root: &Path) -> Option<String> {
+        let text = workspace_root.to_string_lossy();
+        let stripped = text.strip_prefix(['/', '\\']).unwrap_or(&text);
+        let encoded: String = stripped
+            .chars()
+            .map(|c| {
+                if matches!(c, '/' | '\\' | ':') {
+                    '-'
+                } else {
+                    c
+                }
+            })
+            .collect();
+        Some(format!("--{encoded}--"))
+    }
+
+    /// Locate the session-project directory for a workspace root: the Pi
+    /// encoding first, then a bounded header-sample fallback for dirs Pi
+    /// created under a different spelling of the same workspace.
+    #[allow(dead_code)]
+    pub fn session_dir_for_workspace(&self, workspace_root: &Path) -> Option<PathBuf> {
+        let Some(session_root) = &self.session_root else {
+            return None;
+        };
+        if let Some(encoded) = Self::encode_session_dir_name(workspace_root) {
+            let candidate = session_root.join(&encoded);
+            if candidate.is_dir() {
+                return Some(candidate);
+            }
+        }
+        // Header-sample fallback: majority recorded cwd must canonicalize to
+        // the workspace root.
+        for dir in std::fs::read_dir(session_root).ok()?.filter_map(Result::ok) {
+            let dir_path = dir.path();
+            if !dir_path.is_dir() {
+                continue;
+            }
+            let matches = std::fs::read_dir(&dir_path)
+                .ok()?
+                .filter_map(Result::ok)
+                .filter(|file| {
+                    file.path().extension().and_then(|value| value.to_str()) == Some("jsonl")
+                })
+                .filter_map(|file| parse_session_metrics(&file.path()).ok())
+                .flatten()
+                .filter_map(|metrics| metrics.cwd)
+                .any(|cwd| cwd == workspace_root);
+            if matches {
+                return Some(dir_path);
+            }
+        }
+        None
+    }
+
+    /// Session file path for a workspace session
+    /// (`<sessions>/<encoded-workspace>/<session-id>.jsonl`).
+    pub fn session_file_path(&self, workspace_id: &str, session_id: &str) -> Option<PathBuf> {
+        let root = self.workspace_root(workspace_id).ok()?;
+        let encoded = Self::encode_session_dir_name(&root)?;
+        self.session_root.as_ref().map(|session_root| {
+            session_root
+                .join(encoded)
+                .join(format!("{session_id}.jsonl"))
+        })
+    }
+
+    /// Append a `session_info` name record to a session file (rename).
+    #[allow(dead_code)]
+    pub fn append_session_info_name(
+        &self,
+        session_file: &Path,
+        name: &str,
+    ) -> Result<(), HostDataError> {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(session_file)
+            .map_err(|error| HostDataError::Io(error.to_string()))?;
+        let record = serde_json::json!({ "type": "session_info", "name": name });
+        writeln!(file, "{record}").map_err(|error| HostDataError::Io(error.to_string()))?;
+        Ok(())
+    }
+
+    /// P4 delete-batch: trash-first removal (move into a sibling staging
+    /// trash, falling back to permanent unlink), running sessions are
+    /// protected, and per-path results follow the legacy contract
+    /// `{deleted, errors, running}`.
+    #[allow(dead_code)]
+    pub fn delete_session_batch(
+        &self,
+        file_paths: &[String],
+        running_session_files: &[String],
+    ) -> Result<serde_json::Value, HostDataError> {
+        let Some(session_root) = &self.session_root else {
+            return Ok(serde_json::json!({ "deleted": 0, "errors": [], "running": [] }));
+        };
+        let resolved_root = session_root
+            .canonicalize()
+            .unwrap_or_else(|_| session_root.clone());
+        let trash_dir = session_root
+            .parent()
+            .map(|parent| parent.join(".picot-session-trash"))
+            .unwrap_or_else(|| session_root.join(".picot-session-trash"));
+        let mut result = serde_json::json!({ "deleted": 0, "errors": [], "running": [] });
+        for path in file_paths {
+            let path: &str = path;
+            let canonical = std::path::PathBuf::from(path)
+                .canonicalize()
+                .unwrap_or_else(|_| std::path::PathBuf::from(path));
+            if !path.ends_with(".jsonl")
+                || !canonical
+                    .to_string_lossy()
+                    .starts_with(resolved_root.to_string_lossy().as_ref())
+            {
+                if let Some(errors) = result["errors"].as_array_mut() {
+                    errors.push(serde_json::Value::String(path.to_owned()));
+                }
+                continue;
+            }
+            if running_session_files.iter().any(|running| running == path) {
+                if let Some(running) = result["running"].as_array_mut() {
+                    running.push(serde_json::Value::String(path.to_owned()));
+                }
+                continue;
+            }
+            std::fs::create_dir_all(&trash_dir)
+                .map_err(|error| HostDataError::Io(error.to_string()))?;
+            let target = trash_dir.join(format!(
+                "{}.{}",
+                canonical
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                uuid::Uuid::new_v4().simple()
+            ));
+            let removed = std::fs::rename(&canonical, &target)
+                .or_else(|_| std::fs::remove_file(&canonical))
+                .is_ok();
+            if removed {
+                result["deleted"] =
+                    serde_json::Value::from(result["deleted"].as_u64().unwrap_or(0) + 1);
+            } else if let Some(errors) = result["errors"].as_array_mut() {
+                errors.push(serde_json::Value::String(path.to_owned()));
+            }
+        }
+        Ok(result)
+    }
+
     /// Legacy `/api/cost-dashboard` payload (P4 parity): full aggregation
     /// with range/granularity/scope/models parameters over the shared
     /// session tree.
@@ -164,6 +316,99 @@ impl HostDataPlane {
             .map_err(HostDataError::Io),
             None => Ok(crate::cost_compat::empty_payload(params)),
         }
+    }
+
+    pub fn file_mentions(
+        &self,
+        workspace_id: &str,
+        query: &str,
+    ) -> Result<Vec<FileEntry>, HostDataError> {
+        const MAX_ENTRIES: usize = 10_000;
+        const MAX_RESULTS: usize = 20;
+        const MAX_MILLIS: u128 = 500;
+        let root = self.workspace_root(workspace_id)?;
+        let needle = query.trim().trim_start_matches('@').to_lowercase();
+        if needle.is_empty() {
+            return Ok(Vec::new());
+        }
+        let started = std::time::Instant::now();
+        let mut visited = 0usize;
+        let mut results = Vec::new();
+        fn walk(
+            root: &Path,
+            dir: &Path,
+            needle: &str,
+            visited: &mut usize,
+            results: &mut Vec<FileEntry>,
+            started: std::time::Instant,
+        ) {
+            if *visited >= MAX_ENTRIES
+                || results.len() >= MAX_RESULTS
+                || started.elapsed().as_millis() >= MAX_MILLIS
+            {
+                return;
+            }
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                if *visited >= MAX_ENTRIES
+                    || results.len() >= MAX_RESULTS
+                    || started.elapsed().as_millis() >= MAX_MILLIS
+                {
+                    break;
+                }
+                *visited += 1;
+                let path = entry.path();
+                let Ok(file_type) = entry.file_type() else {
+                    continue;
+                };
+                let Ok(canonical) = path.canonicalize() else {
+                    continue;
+                };
+                if !canonical.starts_with(root) {
+                    continue;
+                }
+                let relative = canonical
+                    .strip_prefix(root)
+                    .unwrap_or(&canonical)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if relative.to_lowercase().contains(needle) {
+                    results.push(FileEntry {
+                        name: entry.file_name().to_string_lossy().into_owned(),
+                        relative_path: relative.clone(),
+                        kind: if file_type.is_dir() {
+                            FileKind::Directory
+                        } else {
+                            FileKind::File
+                        },
+                    });
+                }
+                if file_type.is_dir() {
+                    walk(root, &canonical, needle, visited, results, started);
+                }
+            }
+        }
+        walk(&root, &root, &needle, &mut visited, &mut results, started);
+        Ok(results)
+    }
+
+    /// Session root directory for compat handlers that validate absolute
+    /// session file paths.
+    pub fn session_root_path(&self) -> Option<PathBuf> {
+        self.session_root.clone()
+    }
+
+    /// Reverse lookup: registered workspace id whose root canonicalizes to
+    /// the given path (owner-only system-open validation).
+    pub fn workspace_root_for_path(&self, path: &Path) -> Result<String, HostDataError> {
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        self.metadata
+            .lock()
+            .map_err(|_| HostDataError::UnknownWorkspace)?
+            .workspace_id_for_canonical_root(&canonical)
+            .map_err(|_| HostDataError::UnknownWorkspace)
     }
 
     pub fn list_files(
@@ -427,7 +672,7 @@ fn search_session_file(
     }))
 }
 
-fn parse_session_metrics(path: &Path) -> Result<Option<SessionMetrics>, HostDataError> {
+pub(crate) fn parse_session_metrics(path: &Path) -> Result<Option<SessionMetrics>, HostDataError> {
     let file = std::fs::File::open(path).map_err(|error| HostDataError::Io(error.to_string()))?;
     let mut metrics = SessionMetrics {
         model: "unknown".to_owned(),
@@ -758,6 +1003,116 @@ mod tests {
         let store = Arc::new(Mutex::new(MetadataStore::open(&db).unwrap()));
         let (row, _) = store.lock().unwrap().add_workspace(workspace).unwrap();
         (HostDataPlane::new(store), row.workspace_id)
+    }
+
+    #[test]
+    fn delete_session_batch_trashes_protects_running_and_rejects_outside_paths() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-p4-delete-{nonce}"));
+        let workspace = temp.join("workspace");
+        let sessions = temp.join("sessions");
+        let project = sessions.join("--workspace-project--");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        let free = project.join("free.jsonl");
+        let running = project.join("running.jsonl");
+        fs::write(&free, "{\"type\":\"session\",\"id\":\"free\"}\n").unwrap();
+        fs::write(&running, "{\"type\":\"session\",\"id\":\"running\"}\n").unwrap();
+        let outside = temp.join("outside.jsonl");
+        fs::write(&outside, "{}").unwrap();
+
+        let (data, workspace_id) = test_data(&workspace);
+        let data = data.with_session_root(sessions.clone());
+
+        let result = data
+            .delete_session_batch(
+                &[
+                    free.to_string_lossy().into_owned(),
+                    running.to_string_lossy().into_owned(),
+                    outside.to_string_lossy().into_owned(),
+                ],
+                &[running.to_string_lossy().into_owned()],
+            )
+            .unwrap();
+
+        assert_eq!(result["deleted"], 1);
+        assert_eq!(result["running"].as_array().unwrap().len(), 1);
+        assert_eq!(result["errors"].as_array().unwrap().len(), 1);
+        assert!(!free.exists(), "free session must be removed from the tree");
+        assert!(running.exists(), "running session must be protected");
+        // Trash-first: the free file survives in the staging trash directory.
+        let trash = sessions.parent().unwrap().join(".picot-session-trash");
+        assert_eq!(fs::read_dir(&trash).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn session_dir_for_workspace_resolves_by_encoding_then_header_sample() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-p4-dir-{nonce}"));
+        let workspace = temp.join("workspace");
+        let encoded = format!(
+            "--{}--",
+            workspace
+                .to_string_lossy()
+                .trim_start_matches('/')
+                .replace('/', "-")
+        );
+        // Header-sample fallback dir: a name the encoding would never claim.
+        let sampled = temp.join("sessions").join("--legacy-name--");
+        fs::create_dir_all(&sampled).unwrap();
+        fs::write(
+            sampled.join("session-x.jsonl"),
+            format!(
+                "{{\"type\":\"session\",\"id\":\"x\",\"cwd\":{}\n",
+                serde_json::to_string(&workspace.to_string_lossy()).unwrap()
+            ),
+        )
+        .unwrap();
+
+        let (data, _) = test_data(&workspace);
+        let data = data.with_session_root(temp.join("sessions"));
+
+        let dir = data
+            .session_dir_for_workspace(&workspace)
+            .expect("header-sample fallback must locate the project dir");
+        assert_eq!(dir, sampled);
+
+        // Deterministic encoding match wins once the Pi-shaped dir exists.
+        let exact = temp.join("sessions").join(&encoded);
+        fs::create_dir_all(&exact).unwrap();
+        assert_eq!(
+            data.session_dir_for_workspace(&workspace)
+                .expect("encoding match"),
+            exact
+        );
+    }
+
+    #[test]
+    fn append_session_info_name_appends_a_valid_record() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let session_file = std::env::temp_dir().join(format!("picot-p4-rename-{nonce}.jsonl"));
+        fs::write(&session_file, "{\"type\":\"session\",\"id\":\"a\"}\n").unwrap();
+
+        let (data, workspace_id) = test_data(std::path::Path::new("/"));
+        let _ = workspace_id;
+        data.append_session_info_name(&session_file, "Renamed")
+            .unwrap();
+
+        let content = fs::read_to_string(&session_file).unwrap();
+        let last = content.lines().last().unwrap();
+        let record: serde_json::Value = serde_json::from_str(last).unwrap();
+        assert_eq!(record["type"], "session_info");
+        assert_eq!(record["name"], "Renamed");
+        let _ = fs::remove_file(&session_file);
     }
 
     #[test]

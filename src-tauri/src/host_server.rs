@@ -30,7 +30,7 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::oneshot;
@@ -110,6 +110,24 @@ pub struct HostServer {
 }
 
 impl HostServer {
+    /// Advance OAuth generation when native runtime is created.
+    pub fn runtime_started(&self) -> Result<u64, String> {
+        self.state
+            .oauth
+            .lock()
+            .map_err(|_| "OAuth manager unavailable".to_owned())
+            .map(|mut oauth| oauth.runtime_started())
+    }
+
+    /// Revoke OAuth operations when native runtime stops.
+    pub fn runtime_stopped(&self) -> Result<(), String> {
+        self.state
+            .oauth
+            .lock()
+            .map_err(|_| "OAuth manager unavailable".to_owned())
+            .map(|mut oauth| oauth.runtime_stopped())
+    }
+
     pub async fn start(
         static_dir: PathBuf,
         runtimes: NativePiManager,
@@ -200,6 +218,17 @@ impl HostServer {
             .route("/api/sessions", get(compat_sessions))
             .route("/api/search", get(compat_search))
             .route("/api/cost-dashboard", get(compat_cost_dashboard))
+            .route("/api/instances", get(compat_instances))
+            .route("/api/home", get(compat_home))
+            .route("/api/workspace-info", get(compat_workspace_info))
+            .route("/api/workspace-sessions", get(compat_workspace_sessions))
+            .route("/api/sessions/rename", post(compat_sessions_rename))
+            .route(
+                "/api/sessions/delete-batch",
+                post(compat_sessions_delete_batch),
+            )
+            .route("/api/sessions/switch", post(compat_sessions_switch))
+            .route("/api/workspace/open", post(compat_workspace_open))
             .route("/v2/ws", get(websocket_upgrade))
             // Bare Pi-origin WebSocket paths are never valid on host origin.
             // Keep static fallback from turning `/ws` into a misleading shell.
@@ -273,6 +302,7 @@ impl HostServer {
     }
 
     pub fn stop(mut self) {
+        let _ = self.runtime_stopped();
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
@@ -281,6 +311,11 @@ impl HostServer {
 
 impl Drop for HostServer {
     fn drop(&mut self) {
+        let _ = self
+            .state
+            .oauth
+            .lock()
+            .map(|mut oauth| oauth.runtime_stopped());
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
@@ -470,17 +505,236 @@ async fn compat_cost_dashboard(
     .iter()
     .filter_map(|(key, value)| value.map(|value| ((*key).to_string(), value.to_string())))
     .collect::<Vec<(String, String)>>();
-    let params = crate::cost_compat::parse_cost_range_params(&pairs);
+    let params = crate::cost_compat::parse_cost_range_params(&pairs)
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "invalid_cost_range"))?;
     let payload = state
         .data
         .cost_dashboard_compat(&workspace_id, &params, chrono::Utc::now())
-        .map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                api_error(StatusCode::INTERNAL_SERVER_ERROR, "cost_scan_failed"),
-            )
-        })?;
+        .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "cost_scan_failed"))?;
     Ok(Json(payload))
+}
+
+async fn compat_instances(
+    State(state): State<Arc<HostState>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    compat_owner_workspace(&state, &headers, None)?;
+    let mut instances = Vec::new();
+    for target in state.runtimes.running_targets() {
+        let pid = state.runtimes.pid_for(&target);
+        let cwd = state
+            .data
+            .workspace_root(&target.workspace_id)
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let session_file = state
+            .data
+            .session_file_path(&target.workspace_id, &target.session_id)
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        instances.push(json!({
+            "port": 0,
+            "pid": pid.unwrap_or(0),
+            "sessionFile": session_file,
+            "cwd": cwd,
+            "startedAt": Value::Null,
+        }));
+    }
+    Ok(Json(json!({ "instances": instances })))
+}
+
+async fn compat_home() -> Json<Value> {
+    Json(json!({
+        "home": dirs::home_dir()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    }))
+}
+
+async fn compat_workspace_info(
+    State(state): State<Arc<HostState>>,
+    headers: HeaderMap,
+    Query(query): Query<WorkspaceQuery>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let workspace_id = compat_owner_workspace(&state, &headers, query.workspace_id.as_deref())?;
+    let path = state
+        .data
+        .workspace_root(&workspace_id)
+        .map_err(host_data_error_response)?;
+    Ok(Json(json!({
+        "workspaceId": workspace_id,
+        "path": path.to_string_lossy(),
+    })))
+}
+
+#[derive(Deserialize)]
+struct WorkspaceSessionsQuery {
+    path: String,
+    mode: Option<String>,
+}
+
+async fn compat_workspace_sessions(
+    State(state): State<Arc<HostState>>,
+    headers: HeaderMap,
+    Query(query): Query<WorkspaceSessionsQuery>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    compat_owner_workspace(&state, &headers, None)?;
+    if !query.path.starts_with('/') {
+        return Err(api_error(StatusCode::BAD_REQUEST, "invalid_path"));
+    }
+    let session_dir = state.data.session_dir_for_workspace(Path::new(&query.path));
+    let Some(dir) = session_dir else {
+        return Ok(Json(json!({
+            "path": query.path,
+            "dirName": Value::Null,
+            "sessions": [],
+        })));
+    };
+    let mut sessions = Vec::new();
+    for file in std::fs::read_dir(&dir)
+        .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "session_io_failed"))?
+        .filter_map(Result::ok)
+    {
+        let path = file.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
+            continue;
+        }
+        sessions.push(json!({
+            "file": path.file_name().map(|name| name.to_string_lossy().into_owned()),
+            "modifiedAtMs": file
+                .metadata()
+                .ok()
+                .and_then(|meta| meta.modified().ok())
+                .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis()),
+        }));
+    }
+    if query.mode.as_deref() == Some("count") {
+        return Ok(Json(json!({
+            "path": query.path,
+            "dirName": dir.file_name().map(|name| name.to_string_lossy().into_owned()),
+            "count": sessions.len(),
+        })));
+    }
+    Ok(Json(json!({
+        "path": query.path,
+        "dirName": dir.file_name().map(|name| name.to_string_lossy().into_owned()),
+        "sessions": sessions,
+    })))
+}
+
+#[derive(Deserialize)]
+struct SessionRenameBody {
+    #[serde(rename = "filePath")]
+    file_path: String,
+    name: String,
+}
+
+async fn compat_sessions_rename(
+    State(state): State<Arc<HostState>>,
+    headers: HeaderMap,
+    Json(body): Json<SessionRenameBody>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    compat_owner_workspace(&state, &headers, None)?;
+    let name = body.name.trim().to_owned();
+    if name.is_empty() || name.chars().count() > 200 {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Name must be 1-200 characters",
+        ));
+    }
+    let Some(session_root) = state.data.session_root_path() else {
+        return Err(api_error(StatusCode::NOT_FOUND, "Session is unavailable"));
+    };
+    let canonical = std::path::PathBuf::from(&body.file_path)
+        .canonicalize()
+        .unwrap_or_else(|_| std::path::PathBuf::from(&body.file_path));
+    let root_canonical = session_root
+        .canonicalize()
+        .unwrap_or_else(|_| session_root.clone());
+    if !body.file_path.ends_with(".jsonl")
+        || !canonical
+            .to_string_lossy()
+            .starts_with(root_canonical.to_string_lossy().as_ref())
+    {
+        return Err(api_error(StatusCode::NOT_FOUND, "Session is unavailable"));
+    }
+    state
+        .data
+        .append_session_info_name(&canonical, &name)
+        .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "session_rename_failed"))?;
+    Ok(Json(
+        json!({ "ok": true, "filePath": body.file_path, "name": name }),
+    ))
+}
+
+#[derive(Deserialize)]
+struct SessionDeleteBatchBody {
+    #[serde(rename = "filePaths")]
+    file_paths: Vec<String>,
+}
+
+async fn compat_sessions_delete_batch(
+    State(state): State<Arc<HostState>>,
+    headers: HeaderMap,
+    Json(body): Json<SessionDeleteBatchBody>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    compat_owner_workspace(&state, &headers, None)?;
+    let running_session_files = state
+        .runtimes
+        .running_targets()
+        .iter()
+        .filter_map(|target| {
+            state
+                .data
+                .session_file_path(&target.workspace_id, &target.session_id)
+                .map(|path| path.to_string_lossy().into_owned())
+        })
+        .collect::<Vec<String>>();
+    let result = state
+        .data
+        .delete_session_batch(&body.file_paths, &running_session_files)
+        .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "session_delete_failed"))?;
+    Ok(Json(result))
+}
+
+async fn compat_sessions_switch() -> Json<Value> {
+    Json(json!({
+        "success": true,
+        "embedded": true,
+        "note": "Session switching is controlled by Picot's Rust side",
+    }))
+}
+
+async fn compat_workspace_open(
+    State(state): State<Arc<HostState>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    compat_owner_workspace(&state, &headers, None)?;
+    let path = body
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "path is required"))?;
+    let canonical = std::path::PathBuf::from(path)
+        .canonicalize()
+        .map_err(|_| api_error(StatusCode::NOT_FOUND, "workspace_not_found"))?;
+    // Owner-only: the directory must be a registered workspace root.
+    state
+        .data
+        .workspace_root_for_path(&canonical)
+        .map_err(|_| api_error(StatusCode::NOT_FOUND, "workspace_not_found"))?;
+    open_directory_in_file_manager(&canonical);
+    Ok(Json(json!({ "success": true })))
+}
+
+fn open_directory_in_file_manager(path: &std::path::Path) {
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(path).spawn();
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("explorer").arg(path).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let _ = std::process::Command::new("xdg-open").arg(path).spawn();
 }
 
 fn host_data_error_response(error: HostDataError) -> (StatusCode, Json<Value>) {
@@ -1280,6 +1534,76 @@ async fn dispatch(
             ))?;
             if matches!(
                 operation.as_str(),
+                "settings_get" | "settings_put" | "agent_text_file_get" | "agent_text_file_put"
+            ) {
+                let args = frame.get("args").cloned().unwrap_or_else(|| json!({}));
+                let name = args
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("AGENTS.md");
+                let scope = args
+                    .get("scope")
+                    .and_then(Value::as_str)
+                    .unwrap_or("workspace");
+                let root = if scope == "global" {
+                    dirs::home_dir()
+                        .ok_or((
+                            "config_unavailable",
+                            "Global config root unavailable".to_owned(),
+                        ))?
+                        .join(".pi/agent")
+                } else {
+                    let workspace_id = context
+                        .workspace_id
+                        .as_deref()
+                        .ok_or(("not_registered", "Registered workspace required".to_owned()))?;
+                    state
+                        .data
+                        .workspace_root(workspace_id)
+                        .map_err(host_data_error)?
+                };
+                if name.contains('/') || name.contains('\\') || name.is_empty() {
+                    return Err((
+                        "invalid_config_path",
+                        "Config path is not allowed".to_owned(),
+                    ));
+                }
+                let path = root.join(name);
+                let response = match operation.as_str() {
+                    "settings_get" => crate::host_config::read_json(&path)
+                        .map(|value| json!({ "value": value }))
+                        .map_err(|error| (error.code(), "Settings read failed".to_owned()))?,
+                    "settings_put" => {
+                        let value = args
+                            .get("value")
+                            .ok_or(("invalid_config", "value is required".to_owned()))?;
+                        crate::host_config::write_json(&path, value)
+                            .map_err(|error| (error.code(), "Settings write failed".to_owned()))?;
+                        json!({ "saved": true })
+                    }
+                    "agent_text_file_get" => {
+                        let content = std::fs::read_to_string(&path).map_err(|_| {
+                            ("config_not_found", "Config file unavailable".to_owned())
+                        })?;
+                        json!({ "content": content })
+                    }
+                    "agent_text_file_put" => {
+                        let content = args
+                            .get("content")
+                            .and_then(Value::as_str)
+                            .ok_or(("invalid_config", "content is required".to_owned()))?;
+                        crate::host_config::write_text(&path, content)
+                            .map_err(|error| (error.code(), "Config write failed".to_owned()))?;
+                        json!({ "saved": true })
+                    }
+                    _ => unreachable!(),
+                };
+                return Ok(
+                    json!({ "type": "host_response", "requestId": request_id, "operation": operation, "response": response }),
+                );
+            }
+            if matches!(
+                operation.as_str(),
                 "get_oauth_login_capabilities"
                     | "start_oauth_login"
                     | "cancel_oauth_login"
@@ -1397,6 +1721,16 @@ async fn dispatch(
                 return Err(("unauthorized_target", "Workspace is not authorized".into()));
             }
             match frame.get("operation").and_then(Value::as_str) {
+                Some("file_mentions") => {
+                    let query = frame.get("query").and_then(Value::as_str).unwrap_or("");
+                    let entries = state
+                        .data
+                        .file_mentions(workspace_id, query)
+                        .map_err(host_data_error)?;
+                    Ok(
+                        json!({ "type": "data_response", "requestId": request_id, "operation": "file_mentions", "entries": entries }),
+                    )
+                }
                 Some("list_files") => {
                     let workspace_id = frame
                         .get("workspaceId")
@@ -1624,7 +1958,29 @@ mod tests {
     use serde_json::{json, Value};
     use std::fs;
     use std::sync::{Arc, Mutex};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn oauth_runtime_restart_revokes_previous_operation() {
+        let mut manager = crate::oauth_manager::OAuthManager::default();
+        let first_generation = manager.runtime_started();
+        let operation = manager
+            .start(
+                crate::oauth_manager::OAuthClient::Desktop,
+                "owner",
+                "oauth-test",
+                Duration::from_secs(60),
+            )
+            .expect("OAuth operation starts");
+        assert_eq!(operation.generation, first_generation);
+        manager.runtime_stopped();
+        let second_generation = manager.runtime_started();
+        assert_eq!(
+            manager.status("owner", first_generation, "oauth-test"),
+            Err(crate::oauth_manager::OAuthError::OperationNotFound)
+        );
+        assert!(second_generation > first_generation);
+    }
 
     #[tokio::test]
     #[ignore = "real host-origin + embedded Pi smoke; run via scripts/smoke-host-origin-p3.mjs"]

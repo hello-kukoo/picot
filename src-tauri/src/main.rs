@@ -1305,6 +1305,7 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
         remote_auth,
         Arc::clone(&shared_metadata),
     ))?;
+    host.runtime_started()?;
     let owner_registry = Arc::new(WindowOwnerRegistry::default());
     let (owner, capability) = owner_registry.create_owner_with_workspace(
         format!("native-workspace-{workspace_id}"),
@@ -1345,6 +1346,7 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
         &capability,
     ) {
         runtimes.stop_all();
+        host.runtime_stopped()?;
         return Err(error);
     }
     log::info!(

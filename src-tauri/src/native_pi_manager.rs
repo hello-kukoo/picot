@@ -1322,6 +1322,28 @@ impl NativePiManager {
         Ok(formal)
     }
 
+    /// Targets of all running native runtimes (host compat surface).
+    pub fn running_targets(&self) -> Vec<RuntimeTarget> {
+        self.inner
+            .runtimes
+            .lock()
+            .map(|runtimes| {
+                runtimes
+                    .values()
+                    .filter_map(|runtime| runtime.target.lock().ok().map(|target| target.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Process id of a running native runtime, when present.
+    pub fn pid_for(&self, target: &RuntimeTarget) -> Option<u32> {
+        let runtimes = self.inner.runtimes.lock().ok()?;
+        let runtime = runtimes.get(&target.instance_id)?;
+        let process = runtime.process.as_ref()?;
+        process.pid()
+    }
+
     pub fn snapshot(&self, target: &RuntimeTarget) -> Result<RuntimeSnapshot, String> {
         self.inner
             .coordinator
