@@ -96,10 +96,14 @@ struct SessionMetrics {
     cwd: Option<PathBuf>,
     model: String,
     timestamp: String,
+    last_active: Option<chrono::DateTime<chrono::Utc>>,
     total_cost: f64,
     input_tokens: u64,
     output_tokens: u64,
     cache_read: u64,
+    cache_write: u64,
+    assistant_messages: u64,
+    tool_calls: u64,
     user_messages: u64,
     tool_cost_by_name: HashMap<String, f64>,
 }
@@ -127,7 +131,7 @@ impl HostDataPlane {
         }
     }
 
-    fn workspace_root(&self, workspace_id: &str) -> Result<PathBuf, HostDataError> {
+    pub fn workspace_root(&self, workspace_id: &str) -> Result<PathBuf, HostDataError> {
         self.metadata
             .lock()
             .map_err(|_| HostDataError::UnknownWorkspace)?
@@ -138,6 +142,28 @@ impl HostDataPlane {
     pub fn with_session_root(mut self, session_root: PathBuf) -> Self {
         self.session_root = Some(session_root);
         self
+    }
+
+    /// Legacy `/api/cost-dashboard` payload (P4 parity): full aggregation
+    /// with range/granularity/scope/models parameters over the shared
+    /// session tree.
+    pub fn cost_dashboard_compat(
+        &self,
+        workspace_id: &str,
+        params: &crate::cost_compat::CostRangeParams,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<serde_json::Value, HostDataError> {
+        let workspace = self.workspace_root(workspace_id)?;
+        match &self.session_root {
+            Some(session_root) => crate::cost_compat::scan_compat_cost_dashboard(
+                session_root,
+                &workspace,
+                params,
+                now,
+            )
+            .map_err(HostDataError::Io),
+            None => Ok(crate::cost_compat::empty_payload(params)),
+        }
     }
 
     pub fn list_files(
@@ -279,8 +305,12 @@ impl HostDataPlane {
                 if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
                     continue;
                 }
-                if let Some(metrics) = parse_session_metrics(&path, &workspace)? {
-                    sessions.push(metrics);
+                if let Some(metrics) = parse_session_metrics(&path)? {
+                    // HostDataPlane is workspace-scoped: only sessions whose
+                    // canonical cwd matches the registered workspace root.
+                    if metrics.cwd.as_deref() == Some(&workspace) {
+                        sessions.push(metrics);
+                    }
                 }
             }
         }
@@ -397,10 +427,7 @@ fn search_session_file(
     }))
 }
 
-fn parse_session_metrics(
-    path: &Path,
-    workspace: &Path,
-) -> Result<Option<SessionMetrics>, HostDataError> {
+fn parse_session_metrics(path: &Path) -> Result<Option<SessionMetrics>, HostDataError> {
     let file = std::fs::File::open(path).map_err(|error| HostDataError::Io(error.to_string()))?;
     let mut metrics = SessionMetrics {
         model: "unknown".to_owned(),
@@ -414,6 +441,11 @@ fn parse_session_metrics(
         let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
         };
+        if let Some(timestamp) = entry.get("timestamp").and_then(serde_json::Value::as_str) {
+            if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(timestamp) {
+                metrics.last_active = Some(parsed.with_timezone(&chrono::Utc));
+            }
+        }
         match entry.get("type").and_then(serde_json::Value::as_str) {
             Some("session") => {
                 metrics.id = entry
@@ -497,13 +529,19 @@ fn parse_session_metrics(
                     .unwrap_or_default();
                 if !tool_calls.is_empty() && cost > 0.0 {
                     let per_tool_cost = cost / tool_calls.len() as f64;
-                    for tool_name in tool_calls {
+                    for tool_name in &tool_calls {
                         *metrics
                             .tool_cost_by_name
-                            .entry(tool_name.to_owned())
+                            .entry((*tool_name).to_owned())
                             .or_insert(0.0) += per_tool_cost;
                     }
                 }
+                metrics.tool_calls += tool_calls.len() as u64;
+                metrics.assistant_messages += 1;
+                metrics.cache_write += usage
+                    .and_then(|usage| usage.get("cacheWrite"))
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
             }
             _ => {}
         }
@@ -511,12 +549,12 @@ fn parse_session_metrics(
     if metrics.id.is_empty() {
         return Ok(None);
     }
-    let Some(cwd) = metrics.cwd.as_ref().and_then(|cwd| cwd.canonicalize().ok()) else {
-        return Ok(None);
-    };
-    if cwd != workspace {
-        return Ok(None);
-    }
+    // Canonicalize so scope filters compare realpath-to-realpath.
+    metrics.cwd = metrics
+        .cwd
+        .as_ref()
+        .and_then(|cwd| cwd.canonicalize().ok())
+        .or(metrics.cwd);
     if metrics.title.is_empty() {
         metrics.title = "Untitled".to_owned();
     }

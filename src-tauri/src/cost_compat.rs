@@ -1,12 +1,12 @@
 // ABOUTME: Legacy /api/cost-dashboard payload compatibility for the native host (P4).
 // ABOUTME: Ports parseRangeParams/buildCostDashboardPayload semantics field-by-field from cost-dashboard-data.ts.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
-use crate::host_data::parse_session_metrics;
+use crate::host_data::{parse_session_metrics, SessionMetrics};
 
 /// Query parameters of the legacy `/api/cost-dashboard` surface
 /// (`parseRangeParams`): range, granularity, scope=all|current, models CSV,
@@ -176,17 +176,11 @@ pub fn legacy_cost_session(
         return None;
     }
     let time = metrics.last_active.or_else(|| {
-        metrics
-            .timestamp
-            .as_str()
-            .is_empty()
-            .not()
-            .then(|| metrics.timestamp.clone())
-            .and_then(|value| parse_js_date(&value))
+        (!metrics.timestamp.is_empty())
+            .then(|| parse_js_date(&metrics.timestamp))
+            .flatten()
     });
-    let Some(time) = time else {
-        return None;
-    };
+    let time = time?;
     if time < params.from || time > params.to {
         return None;
     }
@@ -231,7 +225,7 @@ pub fn legacy_cost_session(
     })
 }
 
-fn empty_payload(params: &CostRangeParams) -> Value {
+pub(crate) fn empty_payload(params: &CostRangeParams) -> Value {
     json!({
         "range": {
             "from": params.from.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -312,7 +306,7 @@ pub fn build_cost_payload(
         .clone();
 
     let mut sorted = sessions;
-    sorted.sort_by(|a, b| b.time.cmp(&a.time));
+    sorted.sort_by_key(|session| std::cmp::Reverse(session.time));
     payload["sessions"] = Value::Array(sorted.iter().map(session_json).collect());
     payload["summary"]["sessionCount"] = Value::from(sorted.len() as u64);
 
@@ -536,7 +530,7 @@ pub fn build_cost_payload(
     payload["infobar"]["projects"] = Value::Array(
         by_project
             .iter()
-            .map(|(key, name, path, cost, sessions)| {
+            .map(|(_key, name, path, cost, sessions)| {
                 json!({
                     "name": name,
                     "path": path,
@@ -567,7 +561,7 @@ pub fn build_cost_payload(
             .collect(),
     );
 
-    payload
+    Value::Object(payload)
 }
 
 /// Scan the shared session tree and build the legacy cost payload for the
@@ -598,7 +592,8 @@ pub fn scan_compat_cost_dashboard(
             if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
                 continue;
             }
-            let Some(metrics) = parse_session_metrics(&path).map_err(|error| error.to_string())?
+            let Some(metrics) =
+                parse_session_metrics(&path).map_err(|_| "session parse failed".to_owned())?
             else {
                 continue;
             };
@@ -613,7 +608,6 @@ pub fn scan_compat_cost_dashboard(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host_data::SessionMetrics;
 
     fn session(model: &str, time: &str, cost: f64) -> LegacyCostSession {
         LegacyCostSession {
@@ -714,8 +708,9 @@ mod tests {
         // Series buckets are sorted ascending by key.
         let series = payload["series"].as_array().unwrap();
         assert_eq!(series.len(), 3);
-        assert!(series
-            .windows(2)
-            .all(|pair| pair[0]["bucket"] <= pair[1]["bucket"]));
+        assert!(series.windows(2).all(|pair| {
+            let (left, right) = (pair[0]["bucket"].as_str(), pair[1]["bucket"].as_str());
+            left.unwrap_or("") <= right.unwrap_or("")
+        }));
     }
 }

@@ -23,6 +23,7 @@ mod v1_control_adapter;
 // Public API staged for the broker (Task 5) and host lifecycle (Task 7a).
 #[allow(dead_code)]
 mod command_policy;
+mod cost_compat;
 mod ephemeral_registry;
 mod git_pi_runner;
 mod git_service;

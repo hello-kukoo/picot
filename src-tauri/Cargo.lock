@@ -2866,6 +2866,7 @@ version = "0.3.6"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "chrono",
  "dirs 5.0.1",
  "fix-path-env",
  "futures-util",

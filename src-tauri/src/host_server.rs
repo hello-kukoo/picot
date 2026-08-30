@@ -13,7 +13,7 @@ use crate::transport_limits::{
 };
 use crate::v1_control_adapter;
 use crate::window_owner::WindowOwnerRegistry;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::Query;
 use axum::extract::{DefaultBodyLimit, Json, State};
@@ -39,6 +39,7 @@ use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 const MAX_HTTP_BODY_BYTES: usize = HTTP_DEFAULT_BODY_BYTES;
+const MAX_PASTE_BODY_BYTES: usize = 4 * 1024 * 1024 + 64 * 1024;
 const MAX_WS_MESSAGE_BYTES: usize = WS_PHYSICAL_FRAME_BYTES;
 
 fn bind_is_loopback(address: std::net::IpAddr) -> bool {
@@ -99,6 +100,7 @@ struct HostState {
     data: HostDataPlane,
     index_html: Mutex<String>,
     control_handler: Mutex<Option<ControlHandler>>,
+    oauth: Mutex<crate::oauth_manager::OAuthManager>,
 }
 
 pub struct HostServer {
@@ -127,6 +129,7 @@ impl HostServer {
             data,
             index_html: Mutex::new(String::new()),
             control_handler: Mutex::new(None),
+            oauth: Mutex::new(crate::oauth_manager::OAuthManager::default()),
         });
         let index = static_dir.join("index.html");
         // Serve this build's JS/CSS/HTML under a version-stamped path
@@ -203,6 +206,10 @@ impl HostServer {
             .route("/ws", any(reject_legacy_ws))
             .route("/v2/bootstrap", get(bootstrap_target))
             .route("/v2/auth/exchange", post(exchange_pairing))
+            .route(
+                "/v2/paste-offload",
+                post(paste_offload).layer(DefaultBodyLimit::max(MAX_PASTE_BODY_BYTES)),
+            )
             // Legacy HTTP callers must never receive the static shell by
             // accident. Retained routes are added behind owner-aware adapters;
             // everything else has an explicit migration failure.
@@ -355,6 +362,46 @@ fn compat_owner_workspace(
     }
 }
 
+#[derive(Deserialize)]
+struct PasteRequest {
+    content: String,
+}
+
+async fn paste_offload(
+    State(state): State<Arc<HostState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let workspace_id = compat_owner_workspace(&state, &headers, None)?;
+    let request: PasteRequest = serde_json::from_slice(&body)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid_request"))?;
+    let root = state
+        .data
+        .workspace_root(&workspace_id)
+        .map_err(host_data_error_response)?;
+    let path = crate::paste_offload::write(&root, &request.content, SystemTime::now()).map_err(
+        |error| {
+            let (status, code) = match error {
+                crate::paste_offload::PasteError::TooLarge => {
+                    (StatusCode::PAYLOAD_TOO_LARGE, "paste_too_large")
+                }
+                crate::paste_offload::PasteError::QuotaExceeded => {
+                    (StatusCode::PAYLOAD_TOO_LARGE, "paste_quota_exceeded")
+                }
+                crate::paste_offload::PasteError::InvalidWorkspace
+                | crate::paste_offload::PasteError::Symlink => {
+                    (StatusCode::FORBIDDEN, "workspace_unavailable")
+                }
+                crate::paste_offload::PasteError::Io => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, "paste_write_failed")
+                }
+            };
+            api_error(status, code)
+        },
+    )?;
+    Ok(Json(json!({ "ok": true, "path": path })))
+}
+
 async fn compat_files(
     State(state): State<Arc<HostState>>,
     headers: HeaderMap,
@@ -394,17 +441,46 @@ async fn compat_search(
     Ok(Json(json!({ "success": true, "results": results })))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CostQuery {
+    workspace_id: Option<String>,
+    range: Option<String>,
+    granularity: Option<String>,
+    scope: Option<String>,
+    models: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
+}
+
 async fn compat_cost_dashboard(
     State(state): State<Arc<HostState>>,
     headers: HeaderMap,
-    Query(query): Query<WorkspaceQuery>,
+    Query(query): Query<CostQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let workspace_id = compat_owner_workspace(&state, &headers, query.workspace_id.as_deref())?;
-    let dashboard = state
+    let pairs = [
+        ("range", query.range.as_deref()),
+        ("granularity", query.granularity.as_deref()),
+        ("scope", query.scope.as_deref()),
+        ("models", query.models.as_deref()),
+        ("from", query.from.as_deref()),
+        ("to", query.to.as_deref()),
+    ]
+    .iter()
+    .filter_map(|(key, value)| value.map(|value| ((*key).to_string(), value.to_string())))
+    .collect::<Vec<(String, String)>>();
+    let params = crate::cost_compat::parse_cost_range_params(&pairs);
+    let payload = state
         .data
-        .cost_dashboard(&workspace_id)
-        .map_err(host_data_error_response)?;
-    Ok(Json(json!({ "success": true, "data": dashboard })))
+        .cost_dashboard_compat(&workspace_id, &params, chrono::Utc::now())
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                api_error(StatusCode::INTERNAL_SERVER_ERROR, "cost_scan_failed"),
+            )
+        })?;
+    Ok(Json(payload))
 }
 
 fn host_data_error_response(error: HostDataError) -> (StatusCode, Json<Value>) {
@@ -1202,6 +1278,73 @@ async fn dispatch(
                 "unauthorized_target",
                 "Registered desktop owner required".into(),
             ))?;
+            if matches!(
+                operation.as_str(),
+                "get_oauth_login_capabilities"
+                    | "start_oauth_login"
+                    | "cancel_oauth_login"
+                    | "get_oauth_login_status"
+                    | "logout_oauth_login"
+            ) {
+                let mut oauth = state
+                    .oauth
+                    .lock()
+                    .map_err(|_| ("oauth_unavailable", "OAuth manager unavailable".to_owned()))?;
+                let args = frame.get("args").cloned().unwrap_or_else(|| json!({}));
+                let generation = oauth.generation();
+                let response = match operation.as_str() {
+                    "get_oauth_login_capabilities" => json!({ "providers": ["openai-codex"] }),
+                    "start_oauth_login" => {
+                        let operation_id = args
+                            .get("operationId")
+                            .and_then(Value::as_str)
+                            .filter(|value| !value.is_empty())
+                            .unwrap_or("oauth-operation")
+                            .to_owned();
+                        let record = oauth
+                            .start(
+                                crate::oauth_manager::OAuthClient::Desktop,
+                                owner.as_str(),
+                                operation_id,
+                                Duration::from_secs(300),
+                            )
+                            .map_err(|error| (error.code(), "OAuth start rejected".to_owned()))?;
+                        json!({ "operationId": record.id, "generation": record.generation, "status": "pending" })
+                    }
+                    "cancel_oauth_login" => {
+                        let operation_id = args
+                            .get("operationId")
+                            .and_then(Value::as_str)
+                            .ok_or(("invalid_operation", "operationId is required".to_owned()))?;
+                        oauth
+                            .cancel(owner.as_str(), generation, operation_id)
+                            .map_err(|error| (error.code(), "OAuth cancel rejected".to_owned()))?;
+                        json!({ "operationId": operation_id, "status": "cancelled" })
+                    }
+                    "get_oauth_login_status" => {
+                        let operation_id = args
+                            .get("operationId")
+                            .and_then(Value::as_str)
+                            .ok_or(("invalid_operation", "operationId is required".to_owned()))?;
+                        let status = oauth
+                            .status(owner.as_str(), generation, operation_id)
+                            .map_err(|error| {
+                                (error.code(), "OAuth status unavailable".to_owned())
+                            })?;
+                        json!({ "operationId": operation_id, "status": format!("{status:?}").to_ascii_lowercase() })
+                    }
+                    "logout_oauth_login" => {
+                        json!({ "provider": "openai-codex", "status": "completed" })
+                    }
+                    _ => unreachable!(),
+                };
+                return Ok(json!({
+                    "type": "host_response",
+                    "requestId": request_id,
+                    "operation": operation,
+                    "response": response,
+                }));
+            }
             let handler = state
                 .control_handler
                 .lock()
@@ -1321,6 +1464,56 @@ async fn dispatch(
                         "requestId": request_id,
                         "operation": "cost_dashboard",
                         "dashboard": dashboard,
+                    }))
+                }
+                Some("file_read") => {
+                    let path = frame
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_path", "path is required".into()))?;
+                    let root = state
+                        .data
+                        .workspace_root(workspace_id)
+                        .map_err(host_data_error)?;
+                    let content = crate::host_files::read(&root, path)
+                        .map_err(|error| (error.code(), "File read failed".to_owned()))?;
+                    let text = String::from_utf8(content.bytes)
+                        .map_err(|_| ("binary_file", "Binary file requires raw download".into()))?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "file_read",
+                        "path": content.relative_path,
+                        "content": text,
+                        "modifiedAtMs": content.modified_at_ms,
+                    }))
+                }
+                Some("file_write") => {
+                    let path = frame
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_path", "path is required".into()))?;
+                    let content = frame
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_content", "content is required".into()))?;
+                    let expected = frame
+                        .get("expectedModifiedAtMs")
+                        .and_then(Value::as_u64)
+                        .map(u128::from);
+                    let root = state
+                        .data
+                        .workspace_root(workspace_id)
+                        .map_err(host_data_error)?;
+                    let modified_at_ms =
+                        crate::host_files::write(&root, path, content.as_bytes(), expected)
+                            .map_err(|error| (error.code(), "File write failed".to_owned()))?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "file_write",
+                        "path": path,
+                        "modifiedAtMs": modified_at_ms,
                     }))
                 }
                 _ => Err((

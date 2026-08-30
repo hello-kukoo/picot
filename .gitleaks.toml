@@ -1,7 +1,9 @@
+# Build artifacts and vendored compiled output: byte patterns inside compiled
+# third-party dependency metadata (e.g. tauri menu library rmeta) are not
+# repository secrets. `target/` is gitignored and never committed.
 [extend]
 useDefault = true
 
 [allowlist]
-description = "Rust build artifacts are gitignored binaries; README marketing copy trips entropy rules"
-paths = ['''^src-tauri/target/''']
-stopwords = ["expand/collapse"]
+description = "Rust build artifacts (compiled dependency metadata)"
+paths = ['''(^|/)target/''', '''\.rmeta$''']
