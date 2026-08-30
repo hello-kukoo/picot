@@ -455,6 +455,31 @@ impl WindowOwnerRegistry {
     /// Cancel an in-progress workspace transition for this owner, retaining the
     /// old workspace binding. Idempotent when nothing is in progress; rejects a
     /// mismatched generation so a stale cancel cannot clear a newer transition.
+    pub fn validate_workspace_transition_generation(
+        &self,
+        owner: &OwnerId,
+        transition_generation: u64,
+    ) -> Result<(), String> {
+        let state = self.inner.lock().expect("owner registry lock poisoned");
+        let record = state
+            .owners
+            .get(owner)
+            .ok_or_else(|| "unknown owner".to_string())?;
+        let matches = record
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.transition_generation == transition_generation)
+            || record
+                .transition
+                .as_ref()
+                .is_some_and(|transition| transition.generation == transition_generation);
+        if matches {
+            Ok(())
+        } else {
+            Err("transition generation mismatch".to_string())
+        }
+    }
+
     pub fn cancel_workspace_transition(
         &self,
         owner: &OwnerId,
@@ -927,6 +952,21 @@ mod tests {
         // A new transition can begin after cancel.
         assert!(reg
             .begin_workspace_transition(&owner, PathBuf::from("/ws-c"), 3003)
+            .is_ok());
+    }
+
+    #[test]
+    fn validate_workspace_transition_rejects_stale_generation() {
+        let reg = WindowOwnerRegistry::default();
+        let (owner, _) = new_owner(&reg, "w-validate", 3001);
+        let generation = reg
+            .begin_workspace_transition(&owner, PathBuf::from("/ws-b"), 3002)
+            .unwrap();
+        assert!(reg
+            .validate_workspace_transition_generation(&owner, generation + 1)
+            .is_err());
+        assert!(reg
+            .validate_workspace_transition_generation(&owner, generation)
             .is_ok());
     }
 

@@ -70,8 +70,64 @@ pub(crate) fn configure_child_process_for_windows(command: &mut Command) {
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn configure_child_process_for_windows(_command: &mut Command) {}
 
+/// Redact child-process diagnostics before they enter logs or UI error payloads.
+/// Paths, bearer/token-like values, and control characters must not cross this
+/// boundary; operators still get stable failure context without raw Pi output.
+pub(crate) fn redact_child_diagnostic(input: &str) -> String {
+    let mut output = String::with_capacity(input.len().min(4096));
+    let tokens: Vec<&str> = input.split_whitespace().collect();
+    let mut redact_next = false;
+    for (index, token) in tokens.iter().enumerate() {
+        if index > 0 {
+            output.push(' ');
+        }
+        if redact_next {
+            output.push_str("<redacted>");
+            redact_next = false;
+            continue;
+        }
+        let is_path = token.starts_with("/Users/")
+            || token.starts_with("/home/")
+            || token.starts_with("/tmp/")
+            || token.starts_with("/private/")
+            || token.starts_with("/var/")
+            || token.starts_with('\\')
+            || token.contains(":\\")
+            || token.starts_with("PI_STUDIO_SKILL_INSTALL_SECRET=")
+            || token.starts_with("Bearer")
+            || token.to_ascii_lowercase().contains("token=")
+            || token.to_ascii_lowercase().contains("secret=");
+        if is_path {
+            output.push_str("<redacted>");
+            redact_next = *token == "Bearer";
+        } else {
+            output.extend(token.chars().filter(|c| !c.is_control()).take(512));
+        }
+    }
+    output.chars().take(4096).collect()
+}
+
 pub(crate) fn format_pi_stderr_log_line(port: u16, line: &str) -> String {
-    format!("[pi-desktop] pi stderr port={port}: {line}")
+    format!(
+        "[pi-desktop] pi stderr port={port}: {}",
+        redact_child_diagnostic(line)
+    )
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::redact_child_diagnostic;
+
+    #[test]
+    fn redacts_paths_and_bootstrap_secrets() {
+        let result = redact_child_diagnostic(
+            "failed /Users/lin/.pi/settings.json PI_STUDIO_SKILL_INSTALL_SECRET=secret123 Bearer abc",
+        );
+        assert!(!result.contains("/Users/lin"));
+        assert!(!result.contains("secret123"));
+        assert!(!result.contains("Bearer abc"));
+        assert!(result.contains("<redacted>"));
+    }
 }
 
 /// Forward Pi's stderr into Picot's log so release builds retain startup errors.
@@ -451,6 +507,7 @@ pub(crate) fn native_launch_spec_for(
         runtime_type,
         no_tools: runtime_type == NativeRuntimeType::QuickChat,
         readiness: ReadinessPolicy::default(),
+        cleanup: crate::native_pi_manager::NativeCleanupResources::default(),
     };
     Ok(spec)
 }

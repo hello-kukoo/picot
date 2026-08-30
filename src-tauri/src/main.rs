@@ -3,6 +3,7 @@
 // ABOUTME: owns windows, the broker, ephemeral chats, and the native close lifecycle.
 
 mod broker_ws;
+mod host_capability;
 mod host_data;
 mod host_router;
 mod host_server;
@@ -11,6 +12,7 @@ mod mutation_types;
 mod native_pi_manager;
 mod operation_registry;
 mod package_manager;
+mod v1_control_adapter;
 // Public API staged for the broker (Task 5) and host lifecycle (Task 7a).
 #[allow(dead_code)]
 mod command_policy;
@@ -20,15 +22,18 @@ mod git_service;
 mod pi_launch;
 mod pi_manager;
 mod pi_rpc_bridge;
+mod process_tree;
 mod remote_auth;
 mod runtime_coordinator;
 mod session_ui_profile_store;
 mod skill_source_registry;
+mod telemetry;
 mod terminal_manager;
 mod terminal_output;
 mod terminal_profiles;
 mod terminal_registry;
 mod terminal_state_store;
+mod transport_limits;
 mod window_owner;
 mod workspace_controls;
 
@@ -41,7 +46,7 @@ use git_service::GitService;
 use host_server::HostServer;
 use metadata_store::{MetadataStore, SharedMetadataStore};
 use native_pi_manager::NativePiManager;
-use pi_launch::{locked_pi_version, PiSpawnSpec};
+use pi_launch::{locked_pi_version, redact_child_diagnostic, PiSpawnSpec};
 use pi_manager::{
     build_ephemeral_environment, canonical_temp_root, cleanup_quick_chat_dir,
     create_quick_chat_temp_dir, wait_for_endpoint, wait_for_health as wait_for_pi_health,
@@ -807,14 +812,19 @@ fn open_native_workspace_window(
     app: &AppHandle,
     host_origin: &str,
     target: &RuntimeTarget,
+    owner_registry: Arc<WindowOwnerRegistry>,
+    owner: window_owner::OwnerId,
+    capability: &str,
 ) -> Result<(), String> {
     let label = format!("native-workspace-{}", target.workspace_id);
     let url = format!(
-        "{}/app/workspaces/{}/sessions/{}",
+        "{}/workspaces/{}/sessions/{}",
         host_origin, target.workspace_id, target.session_id
     );
     let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))
         .map_err(|error| format!("Failed to load window icon: {error}"))?;
+    let init_script = window_owner::capability_initialization_script(capability);
+    let nav_owner = owner;
     let builder = WebviewWindowBuilder::new(
         app,
         &label,
@@ -827,7 +837,10 @@ fn open_native_workspace_window(
     .inner_size(1300.0, 860.0)
     .min_inner_size(800.0, 600.0)
     .icon(icon)
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| error.to_string())?
+    .initialization_script(init_script)
+    .on_navigation(move |url| owner_registry.authorize_navigation(&nav_owner, url))
+    .on_new_window(|_url, _features| tauri::webview::NewWindowResponse::Deny);
 
     #[cfg(target_os = "macos")]
     let builder = builder
@@ -841,14 +854,16 @@ fn open_native_workspace_window(
 }
 
 fn startup_health_failure_message(error: &str) -> String {
+    let safe_error = redact_child_diagnostic(error);
     format!(
-        "The embedded Pi did not become healthy.\n\n{error}\n\nCheck the Picot log for lines prefixed with '[pi-desktop] pi stderr'."
+        "The embedded Pi did not become healthy.\n\n{safe_error}\n\nCheck the Picot log for lines prefixed with '[pi-desktop] pi stderr'."
     )
 }
 
 fn report_startup_spawn_error(app: &tauri::App, error: &str) {
-    log::error!("[pi-desktop] startup failed to spawn pi: {}", error);
-    if let Err(window_err) = open_bootstrap_window(&app.handle().clone(), error) {
+    let safe_error = redact_child_diagnostic(error);
+    log::error!("[pi-desktop] startup failed to spawn pi: {}", safe_error);
+    if let Err(window_err) = open_bootstrap_window(&app.handle().clone(), &safe_error) {
         log::error!(
             "[pi-desktop] failed to open bootstrap window after startup error: {}",
             window_err
@@ -856,7 +871,7 @@ fn report_startup_spawn_error(app: &tauri::App, error: &str) {
         app.dialog()
             .message(format!(
                 "Picot could not start the embedded pi runtime.\n\n{}\n\nThe Picot installation may be incomplete or corrupted. Please reinstall Picot and try again.",
-                error
+                safe_error
             ))
             .title("Picot startup failed")
             .kind(MessageDialogKind::Error)
@@ -868,11 +883,12 @@ fn open_bootstrap_window(app: &AppHandle, startup_error: &str) -> Result<(), Str
     let label = "bootstrap";
     let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))
         .map_err(|e| format!("Failed to load window icon: {}", e))?;
-    let encoded_error = startup_error
-        .replace('&', "%26")
-        .replace(' ', "%20")
-        .replace('\n', "%0A");
-    let url = format!("bootstrap.html?startupError={}", encoded_error);
+    // Strictly encode bootstrap diagnostics so error text cannot alter URL query.
+    let safe_error = redact_child_diagnostic(startup_error);
+    let url = format!(
+        "bootstrap.html?startupError={}",
+        encode_query_value(&safe_error)
+    );
 
     let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
         .title("Picot")
@@ -945,8 +961,8 @@ fn find_static_dir(app: &tauri::App) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        image_mime_from_path, navigate_tree_message, resolve_static_dir,
-        side_chat_startup_rpc_commands, touch_registered_workspace,
+        image_mime_from_path, navigate_tree_message, registered_native_startup_workspace,
+        resolve_static_dir, side_chat_startup_rpc_commands, touch_registered_workspace,
     };
     use crate::metadata_store::{MetadataStore, SharedMetadataStore};
     use serde_json::json;
@@ -976,6 +992,20 @@ mod tests {
             )),
             temp,
         )
+    }
+
+    #[test]
+    fn native_startup_selects_registered_workspace_and_never_temporary_root() {
+        let (metadata, temp) = shared_test_metadata("native-startup");
+        let project = temp.join("project");
+        fs::create_dir_all(&project).unwrap();
+        let row = metadata.lock().unwrap().add_workspace(&project).unwrap().0;
+
+        let selected = registered_native_startup_workspace(&metadata).unwrap();
+        assert_eq!(
+            selected,
+            Some((row.workspace_id, project.canonicalize().unwrap()))
+        );
     }
 
     #[test]
@@ -1182,45 +1212,130 @@ fn is_invalid_working_directory_error(error: &str) -> bool {
     error.contains("(os error 267)")
 }
 
-fn native_runtime_enabled() -> bool {
-    cfg!(debug_assertions)
-        && std::env::var("PICOT_RUNTIME").is_ok_and(|value| value.eq_ignore_ascii_case("native"))
+/// Read native rollout state once at launch. Storage, schema, authorization,
+/// JSON, and value failures all select legacy; debug env is not release
+/// authority.
+fn registered_native_startup_workspace(
+    metadata: &SharedMetadataStore,
+) -> Result<Option<(String, PathBuf)>, String> {
+    let mut store = metadata
+        .lock()
+        .map_err(|_| "Metadata store lock poisoned".to_string())?;
+    let (rows, _) = store.list_workspaces_and_prune()?;
+    Ok(rows
+        .into_iter()
+        .next()
+        .map(|row| (row.workspace_id, PathBuf::from(row.canonical_path))))
+}
+
+fn native_runtime_enabled(app: &tauri::App) -> bool {
+    // Native v2 surface is an explicitly opt-in development surface. Release
+    // binaries must remain on the legacy startup path regardless of stale DB
+    // preferences or inherited environment.
+    if !cfg!(debug_assertions) || std::env::var("PICOT_RUNTIME").as_deref() != Ok("native") {
+        return false;
+    }
+    let Ok(path) = app
+        .path()
+        .app_data_dir()
+        .map(|dir| dir.join("picot.sqlite3"))
+    else {
+        log::warn!("[picot-runtime] rollout preference unavailable; using legacy");
+        return false;
+    };
+    let Ok(mut store) = MetadataStore::open(&path) else {
+        log::warn!("[picot-runtime] rollout preference unavailable; using legacy");
+        return false;
+    };
+    if store.runtime_pref_get(Some(&metadata_store::rollout_authorization())) != Some(true) {
+        return false;
+    }
+    // Default ~/.pi/tmp is Temporary and has no v2 target identity. Native
+    // startup therefore opts into the registered path only; an empty registry
+    // falls back to legacy startup, which owns the explicit temporary policy.
+    match store.list_workspaces_and_prune() {
+        Ok((workspaces, _)) => !workspaces.is_empty(),
+        Err(error) => {
+            log::warn!("[picot-runtime] workspace registry unavailable; using legacy: {error}");
+            false
+        }
+    }
 }
 
 fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(), String> {
-    // Startup always opens the default `~/.pi/tmp` workspace with a fresh
-    // session; historical sessions are reachable through the sidebar registry.
-    let cwd = pi_manager::ensure_picot_tmp_root()?
-        .to_string_lossy()
-        .to_string();
-    let session_path: Option<String> = None;
     let metadata_path = app
         .path()
         .app_data_dir()
         .map_err(|error| format!("Cannot resolve Picot app data directory: {error}"))?
         .join("picot.sqlite3");
     let shared_metadata = Arc::new(Mutex::new(MetadataStore::open(&metadata_path)?));
-    // SPEC §5.3: default ~/.pi/tmp stays temporary and is never auto-registered.
-    // Native data-plane lookup therefore rejects this target until a registered
-    // workspace is opened through the registry.
-    let workspace_id = format!("native-{}", uuid::Uuid::new_v4().simple());
-    let session_id = format!("temporary-{}", uuid::Uuid::new_v4().simple());
-    let target = RuntimeTarget::new(
-        workspace_id,
-        session_id,
-        format!("instance-{}", uuid::Uuid::new_v4().simple()),
-    );
+    let Some((workspace_id, cwd_path)) = registered_native_startup_workspace(&shared_metadata)?
+    else {
+        return Err("Native startup requires a registered workspace".into());
+    };
+    let cwd = cwd_path.to_string_lossy().to_string();
+    let session_path: Option<String> = None;
+    let session_id = format!("native-session-{}", uuid::Uuid::new_v4().simple());
     let launch = pi_launch::native_launch_spec(&static_dir, &cwd, session_path.as_deref())?;
     let runtimes = NativePiManager::new(256);
     let remote_auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&shared_metadata))));
+    let ephemeral_registry = Arc::new(EphemeralRegistry::default());
+    runtimes.set_ephemeral_registry(ephemeral_registry.clone());
+    // Keep one native host-control authority. Host-origin v2 dispatch invokes
+    // this same handler; it must not grow a parallel OS-control implementation.
+    let broker = Arc::new(BrokerWs::start()?);
+    let legacy_manager = Arc::new(PiManager::new(static_dir.clone()));
+    let session_ui_profiles = Arc::new(SessionUiProfileStore::open(
+        app.path()
+            .app_data_dir()
+            .map_err(|error| format!("Cannot resolve Picot app data directory: {error}"))?
+            .join("session-ui-profiles.json"),
+    )?);
     let host = tauri::async_runtime::block_on(HostServer::start(
         static_dir,
         runtimes.clone(),
         remote_auth,
-        shared_metadata,
+        Arc::clone(&shared_metadata),
     ))?;
+    let owner_registry = Arc::new(WindowOwnerRegistry::default());
+    let (owner, capability) = owner_registry.create_owner_with_workspace(
+        format!("native-workspace-{workspace_id}"),
+        PathBuf::from(&cwd),
+        0,
+        host.origin().to_string(),
+        Some(workspace_id.clone()),
+        window_owner::TemporaryKind::DefaultStartup,
+    )?;
+    host.set_owner_registry(owner_registry.clone());
+    install_control_handler(
+        &broker,
+        legacy_manager,
+        owner_registry.clone(),
+        ephemeral_registry.clone(),
+        session_ui_profiles,
+        Arc::clone(&shared_metadata),
+        app.handle().clone(),
+    );
+    let Some(control_handler) = broker.control_handler() else {
+        return Err("Native host control handler unavailable".into());
+    };
+    host.set_control_handler(control_handler);
+    let target = RuntimeTarget::with_owner(
+        workspace_id,
+        session_id,
+        format!("instance-{}", uuid::Uuid::new_v4().simple()),
+        owner.as_str(),
+        0,
+    );
     runtimes.spawn(target.clone(), launch)?;
-    if let Err(error) = open_native_workspace_window(app.handle(), host.origin(), &target) {
+    if let Err(error) = open_native_workspace_window(
+        app.handle(),
+        host.origin(),
+        &target,
+        owner_registry.clone(),
+        owner.clone(),
+        &capability,
+    ) {
         runtimes.stop_all();
         return Err(error);
     }
@@ -1232,7 +1347,10 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
         host.origin()
     );
     app.manage(runtimes);
+    app.manage(broker);
     app.manage(host);
+    app.manage(owner_registry);
+    app.manage(ephemeral_registry);
     Ok(())
 }
 
@@ -1596,9 +1714,42 @@ fn install_control_handler(
     let broker_for_handler = broker.clone();
     let handler: broker_ws::ControlHandler = Arc::new(
         move |ctx: broker_ws::VerifiedClientContext,
-              command: String,
-              args: Value,
+              canonical: Value,
               progress: broker_ws::ProgressSink| {
+            let (command, args) = match canonical.get("type").and_then(Value::as_str) {
+                Some("runtime_request") => {
+                    let command = canonical
+                        .pointer("/command/type")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let mut args = canonical
+                        .get("args")
+                        .cloned()
+                        .unwrap_or(Value::Object(Default::default()));
+                    if let (Some(target), Some(object)) =
+                        (canonical.get("command"), args.as_object_mut())
+                    {
+                        if let Some(command_object) = target.as_object() {
+                            for (key, value) in command_object {
+                                if key != "type" {
+                                    object.entry(key.clone()).or_insert_with(|| value.clone());
+                                }
+                            }
+                        }
+                    }
+                    (command, args)
+                }
+                Some("host_request") => (
+                    canonical
+                        .get("operation")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    canonical.get("args").cloned().unwrap_or(Value::Null),
+                ),
+                _ => (String::new(), Value::Null),
+            };
             let manager = manager.clone();
             let broker = broker_for_handler.clone();
             let owner_registry = owner_registry.clone();
@@ -2375,6 +2526,12 @@ fn install_control_handler(
                         let gen = arg("transitionGeneration")
                             .as_u64()
                             .ok_or("transitionGeneration is required")?;
+                        owner_registry.validate_workspace_transition_generation(&owner, gen)?;
+                        // Stop native old-generation runtimes through owner-bound
+                        // authority before committing new workspace identity.
+                        if let Some(native) = app.try_state::<NativePiManagerState>() {
+                            native.stop_for_owner_transition(owner.as_str(), gen);
+                        }
                         // Safety net: generation-checked cleanup of any old-workspace
                         // side chats the frontend did not settle before committing.
                         let is_cross_workspace = owner_registry
@@ -2444,6 +2601,7 @@ fn install_control_handler(
                         let gen = arg("transitionGeneration")
                             .as_u64()
                             .ok_or("transitionGeneration is required")?;
+                        owner_registry.validate_workspace_transition_generation(&owner, gen)?;
                         if let Some(target_port) = owner_registry.pending_target_port(&owner) {
                             manager.kill(target_port);
                             broker.unregister_port(target_port);
@@ -2886,7 +3044,13 @@ fn handle_window_destroyed(window: &tauri::Window) {
     let label = window.label();
     if let Some(workspace_id) = label.strip_prefix("native-workspace-") {
         if let Some(manager) = window.try_state::<NativePiManagerState>() {
-            manager.stop_workspace(workspace_id);
+            if let Some(registry) = window.try_state::<OwnerRegistryState>() {
+                if let Some(owner) = registry.owner_for_label(label) {
+                    manager.stop_for_owner(owner.as_str());
+                    registry.revoke_owner(&owner);
+                }
+            }
+            manager.stop_for_window_destroy(workspace_id);
         }
         return;
     }
@@ -2984,7 +3148,7 @@ fn main() {
         )
         .setup(|app| {
             let static_dir = find_static_dir(app);
-            if native_runtime_enabled() {
+            if native_runtime_enabled(app) {
                 setup_native_runtime(app, static_dir).map_err(std::io::Error::other)?;
                 return Ok(());
             }
@@ -3280,7 +3444,7 @@ fn main() {
         .run(|app_handle: &tauri::AppHandle, event| {
             if let tauri::RunEvent::Exit = event {
                 if let Some(manager) = app_handle.try_state::<NativePiManagerState>() {
-                    manager.stop_all();
+                    manager.stop_for_app_exit();
                 }
                 if let Some(manager) = app_handle.try_state::<PiManagerState>() {
                     manager.kill_all_standby();
@@ -3349,6 +3513,15 @@ mod startup_tests {
         assert!(!is_invalid_working_directory_error(
             "Failed to spawn embedded pi: Access is denied. (os error 5)"
         ));
+    }
+
+    #[test]
+    fn bootstrap_diagnostics_redact_raw_pi_paths_and_tokens() {
+        let message = startup_health_failure_message(
+            "failed /Users/lin/.pi/auth.json PI_STUDIO_SKILL_INSTALL_SECRET=secret",
+        );
+        assert!(!message.contains("/Users/lin"));
+        assert!(!message.contains("secret"));
     }
 
     #[test]

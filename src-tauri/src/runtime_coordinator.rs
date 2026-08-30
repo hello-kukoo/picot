@@ -10,6 +10,10 @@ pub struct RuntimeTarget {
     pub workspace_id: String,
     pub session_id: String,
     pub instance_id: String,
+    /// Host-derived owner binding. None is retained only for legacy/unit
+    /// fixtures; native production admission requires Some.
+    pub owner_id: Option<String>,
+    pub workspace_generation: u64,
 }
 
 impl RuntimeTarget {
@@ -22,7 +26,22 @@ impl RuntimeTarget {
             workspace_id: workspace_id.into(),
             session_id: session_id.into(),
             instance_id: instance_id.into(),
+            owner_id: None,
+            workspace_generation: 0,
         }
+    }
+
+    pub fn with_owner(
+        workspace_id: impl Into<String>,
+        session_id: impl Into<String>,
+        instance_id: impl Into<String>,
+        owner_id: impl Into<String>,
+        workspace_generation: u64,
+    ) -> Self {
+        let mut target = Self::new(workspace_id, session_id, instance_id);
+        target.owner_id = Some(owner_id.into());
+        target.workspace_generation = workspace_generation;
+        target
     }
 }
 

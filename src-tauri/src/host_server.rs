@@ -1,20 +1,28 @@
 #![cfg_attr(not(test), allow(dead_code))]
 
+use crate::broker_ws::{ControlHandler, ProgressSink, VerifiedClientContext};
+use crate::host_capability::HostCapabilityStore;
 use crate::host_data::{HostDataError, HostDataPlane};
-use crate::host_router::{HostRouter, RoutedAction, PROTOCOL_VERSION};
+use crate::host_router::{HostClientContext, HostRouter, RoutedAction, PROTOCOL_VERSION};
 use crate::metadata_store::SharedMetadataStore;
 use crate::native_pi_manager::NativePiManager;
 use crate::remote_auth::RemoteAuth;
 use crate::runtime_coordinator::RuntimeTarget;
+use crate::transport_limits::{
+    validate, PayloadKind, HTTP_DEFAULT_BODY_BYTES, WS_PHYSICAL_FRAME_BYTES,
+};
+use crate::v1_control_adapter;
+use crate::window_owner::WindowOwnerRegistry;
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::Query;
 use axum::extract::{DefaultBodyLimit, Json, State};
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, PRAGMA};
+use axum::http::HeaderMap;
 use axum::http::HeaderValue;
 use axum::http::StatusCode;
 use axum::response::Response;
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::Router;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -30,8 +38,12 @@ use tower::ServiceBuilder;
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
-const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
-const MAX_WS_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_HTTP_BODY_BYTES: usize = HTTP_DEFAULT_BODY_BYTES;
+const MAX_WS_MESSAGE_BYTES: usize = WS_PHYSICAL_FRAME_BYTES;
+
+fn bind_is_loopback(address: std::net::IpAddr) -> bool {
+    address.is_loopback()
+}
 
 /// Fingerprints the static bundle by (path, size, mtime) of every file under
 /// `static_dir`, without reading file contents — cheap enough to run once on
@@ -79,15 +91,20 @@ fn fingerprint_static_dir(static_dir: &std::path::Path) -> String {
 
 struct HostState {
     router: Mutex<HostRouter>,
+    #[allow(dead_code)]
+    desktop_capabilities: Mutex<HostCapabilityStore>,
+    owner_registry: Mutex<Option<Arc<WindowOwnerRegistry>>>,
     runtimes: NativePiManager,
     auth: Arc<Mutex<RemoteAuth>>,
-    session_owners: Mutex<std::collections::HashMap<RuntimeTarget, String>>,
     data: HostDataPlane,
+    index_html: Mutex<String>,
+    control_handler: Mutex<Option<ControlHandler>>,
 }
 
 pub struct HostServer {
     origin: String,
     shutdown: Option<oneshot::Sender<()>>,
+    state: Arc<HostState>,
 }
 
 impl HostServer {
@@ -103,10 +120,13 @@ impl HostServer {
         }
         let state = Arc::new(HostState {
             router: Mutex::new(HostRouter::new()),
+            desktop_capabilities: Mutex::new(HostCapabilityStore::default()),
+            owner_registry: Mutex::new(None),
             runtimes,
             auth,
-            session_owners: Mutex::new(std::collections::HashMap::new()),
             data,
+            index_html: Mutex::new(String::new()),
+            control_handler: Mutex::new(None),
         });
         let index = static_dir.join("index.html");
         // Serve this build's JS/CSS/HTML under a version-stamped path
@@ -131,6 +151,9 @@ impl HostServer {
             &format!("<base href=\"{versioned_prefix}/\" />"),
             1,
         );
+        if let Ok(mut html) = state.index_html.lock() {
+            *html = index_html.clone();
+        }
         let index_fallback = tower::service_fn(move |_req: axum::extract::Request| {
             let html = index_html.clone();
             std::future::ready(Ok::<_, Infallible>(
@@ -168,13 +191,37 @@ impl HostServer {
             .service(ServeDir::new(static_dir));
         let app = Router::new()
             .route("/health", get(health))
+            .route("/api/health", get(health))
+            .route("/api/pi-version", get(pi_version))
+            .route("/api/files", get(compat_files))
+            .route("/api/sessions", get(compat_sessions))
+            .route("/api/search", get(compat_search))
+            .route("/api/cost-dashboard", get(compat_cost_dashboard))
             .route("/v2/ws", get(websocket_upgrade))
+            // Bare Pi-origin WebSocket paths are never valid on host origin.
+            // Keep static fallback from turning `/ws` into a misleading shell.
+            .route("/ws", any(reject_legacy_ws))
             .route("/v2/bootstrap", get(bootstrap_target))
             .route("/v2/auth/exchange", post(exchange_pairing))
+            // Legacy HTTP callers must never receive the static shell by
+            // accident. Retained routes are added behind owner-aware adapters;
+            // everything else has an explicit migration failure.
+            .route("/api/{*path}", any(unimplemented_api_route))
+            // Existing shell is production at the registered workspace/session
+            // namespace. Static fallback still serves its index so bootstrap-
+            // entry.js selects the legacy shell; /app remains experimental.
+            .route(
+                "/workspaces/{workspace_id}/sessions/{session_id}",
+                get(workspace_shell),
+            )
             .nest_service(&versioned_prefix, versioned_service)
             .fallback_service(static_service)
             .layer(DefaultBodyLimit::max(MAX_HTTP_BODY_BYTES))
-            .with_state(state);
+            .with_state(Arc::clone(&state));
+        let bind_address = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+        if !bind_is_loopback(bind_address) {
+            return Err("Host bind rejected: non-loopback address".into());
+        }
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
             .map_err(|error| format!("Cannot bind Picot Host: {error}"))?;
@@ -195,11 +242,27 @@ impl HostServer {
         Ok(Self {
             origin: format!("http://{address}"),
             shutdown: Some(shutdown_tx),
+            state,
         })
     }
 
     pub fn origin(&self) -> &str {
         &self.origin
+    }
+
+    /// Bind window-owner authority after host bind, before any desktop window connects.
+    pub fn set_owner_registry(&self, registry: Arc<WindowOwnerRegistry>) {
+        if let Ok(mut slot) = self.state.owner_registry.lock() {
+            *slot = Some(registry);
+        }
+    }
+
+    /// Install same owner-checked control handler used by legacy broker.
+    /// Host-origin v2 dispatch must not grow a second control implementation.
+    pub fn set_control_handler(&self, handler: ControlHandler) {
+        if let Ok(mut slot) = self.state.control_handler.lock() {
+            *slot = Some(handler);
+        }
     }
 
     pub fn stop(mut self) {
@@ -229,6 +292,159 @@ async fn health() -> Json<Value> {
     }))
 }
 
+/// Retained compatibility endpoint. It exposes only host build metadata.
+async fn pi_version() -> Json<Value> {
+    Json(json!({
+        "success": true,
+        "version": crate::pi_launch::locked_pi_version(),
+    }))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceQuery {
+    workspace_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileQuery {
+    workspace_id: Option<String>,
+    #[serde(default)]
+    path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchQuery {
+    workspace_id: Option<String>,
+    #[serde(default)]
+    q: String,
+}
+
+fn compat_owner_workspace(
+    state: &HostState,
+    headers: &HeaderMap,
+    requested_workspace_id: Option<&str>,
+) -> Result<String, (StatusCode, Json<Value>)> {
+    let capability = headers
+        .get("x-picot-desktop-capability")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "unauthenticated"))?;
+    let registry = state
+        .owner_registry
+        .lock()
+        .map_err(|_| api_error(StatusCode::SERVICE_UNAVAILABLE, "auth_unavailable"))?
+        .clone()
+        .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "unauthenticated"))?;
+    let owner = registry
+        .authenticate(capability)
+        .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "unauthenticated"))?;
+    let snapshot = registry.owner_current_workspace(&owner);
+    match snapshot {
+        crate::window_owner::OwnerWorkspaceSnapshot::Registered { wid, .. }
+            if requested_workspace_id.is_none_or(|requested| requested == wid) =>
+        {
+            Ok(wid)
+        }
+        crate::window_owner::OwnerWorkspaceSnapshot::Registered { .. } => {
+            Err(api_error(StatusCode::FORBIDDEN, "unauthorized_target"))
+        }
+        _ => Err(api_error(StatusCode::FORBIDDEN, "not_registered")),
+    }
+}
+
+async fn compat_files(
+    State(state): State<Arc<HostState>>,
+    headers: HeaderMap,
+    Query(query): Query<FileQuery>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let workspace_id = compat_owner_workspace(&state, &headers, query.workspace_id.as_deref())?;
+    let entries = state
+        .data
+        .list_files(&workspace_id, &query.path)
+        .map_err(host_data_error_response)?;
+    Ok(Json(json!({ "success": true, "entries": entries })))
+}
+
+async fn compat_sessions(
+    State(state): State<Arc<HostState>>,
+    headers: HeaderMap,
+    Query(query): Query<WorkspaceQuery>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let workspace_id = compat_owner_workspace(&state, &headers, query.workspace_id.as_deref())?;
+    let sessions = state
+        .data
+        .list_sessions(&workspace_id)
+        .map_err(host_data_error_response)?;
+    Ok(Json(json!({ "success": true, "sessions": sessions })))
+}
+
+async fn compat_search(
+    State(state): State<Arc<HostState>>,
+    headers: HeaderMap,
+    Query(query): Query<SearchQuery>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let workspace_id = compat_owner_workspace(&state, &headers, query.workspace_id.as_deref())?;
+    let results = state
+        .data
+        .search_sessions(&workspace_id, &query.q)
+        .map_err(host_data_error_response)?;
+    Ok(Json(json!({ "success": true, "results": results })))
+}
+
+async fn compat_cost_dashboard(
+    State(state): State<Arc<HostState>>,
+    headers: HeaderMap,
+    Query(query): Query<WorkspaceQuery>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let workspace_id = compat_owner_workspace(&state, &headers, query.workspace_id.as_deref())?;
+    let dashboard = state
+        .data
+        .cost_dashboard(&workspace_id)
+        .map_err(host_data_error_response)?;
+    Ok(Json(json!({ "success": true, "data": dashboard })))
+}
+
+fn host_data_error_response(error: HostDataError) -> (StatusCode, Json<Value>) {
+    let (code, _) = host_data_error(error);
+    let status = if code == "workspace_not_found" {
+        StatusCode::NOT_FOUND
+    } else {
+        StatusCode::BAD_REQUEST
+    };
+    api_error(status, code)
+}
+
+/// Host-origin entry for production existing-shell windows. Route parameters
+/// are validated before serving bootstrap HTML; runtime authorization remains
+/// on `/v2/bootstrap` and `/v2/ws`, never in browser-provided URL state.
+async fn workspace_shell(
+    State(state): State<Arc<HostState>>,
+    axum::extract::Path((workspace_id, session_id)): axum::extract::Path<(String, String)>,
+) -> Result<Response, (StatusCode, Json<Value>)> {
+    if workspace_id.is_empty() || session_id.is_empty() {
+        return Err(api_error(StatusCode::NOT_FOUND, "runtime_not_found"));
+    }
+    if state
+        .runtimes
+        .target_for_session(&workspace_id, &session_id)
+        .is_none()
+    {
+        return Err(api_error(StatusCode::NOT_FOUND, "runtime_not_found"));
+    }
+    let html = state
+        .index_html
+        .lock()
+        .map_err(|_| api_error(StatusCode::SERVICE_UNAVAILABLE, "static_unavailable"))?
+        .clone();
+    Ok(Response::builder()
+        .header(CONTENT_TYPE, "text/html; charset=utf-8")
+        .body(Body::from(html))
+        .expect("workspace shell response is well-formed"))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BootstrapQuery {
@@ -236,15 +452,67 @@ struct BootstrapQuery {
     session_id: String,
 }
 
+async fn reject_legacy_ws() -> (StatusCode, Json<Value>) {
+    api_error(StatusCode::NOT_FOUND, "unsupported_host_route")
+}
+
 async fn bootstrap_target(
     State(state): State<Arc<HostState>>,
+    headers: HeaderMap,
     Query(query): Query<BootstrapQuery>,
 ) -> Result<Json<RuntimeTarget>, (StatusCode, Json<Value>)> {
-    state
+    // Bootstrap is control-plane data: bind it to authenticated desktop owner,
+    // not merely opaque workspace/session query values.
+    let _workspace_id = compat_owner_workspace(&state, &headers, Some(&query.workspace_id))?;
+    let target = state
         .runtimes
         .target_for_session(&query.workspace_id, &query.session_id)
-        .map(Json)
-        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "runtime_not_found"))
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "runtime_not_found"))?;
+    let registry = state
+        .owner_registry
+        .lock()
+        .map_err(|_| api_error(StatusCode::SERVICE_UNAVAILABLE, "auth_unavailable"))?
+        .clone()
+        .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "unauthenticated"))?;
+    let capability = headers
+        .get("x-picot-desktop-capability")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "unauthenticated"))?;
+    let owner = registry
+        .authenticate(capability)
+        .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "unauthenticated"))?;
+    if target.owner_id.as_deref() != Some(owner.as_str()) {
+        return Err(api_error(StatusCode::FORBIDDEN, "unauthorized_target"));
+    }
+    Ok(Json(target))
+}
+
+fn oversized_code(kind: PayloadKind) -> &'static str {
+    match kind {
+        PayloadKind::Response => "response_too_large",
+        PayloadKind::Snapshot => "snapshot_too_large",
+        PayloadKind::Event => "event_too_large",
+        PayloadKind::Progress => "progress_too_large",
+        _ => "response_too_large",
+    }
+}
+
+async fn send_checked(socket: &mut WebSocket, value: Value, kind: PayloadKind) -> bool {
+    if validate(&value, kind).is_err() {
+        let error = structured_error(
+            None,
+            oversized_code(kind),
+            "Outbound payload exceeds protocol limit",
+        );
+        return socket
+            .send(Message::Text(error.to_string().into()))
+            .await
+            .is_ok();
+    }
+    socket
+        .send(Message::Text(value.to_string().into()))
+        .await
+        .is_ok()
 }
 
 async fn websocket_upgrade(
@@ -280,6 +548,35 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
             return;
         }
     };
+    if hello.get("clientType").and_then(Value::as_str) == Some("desktop") {
+        let Some(capability) = hello.get("desktopCapability").and_then(Value::as_str) else {
+            let _ = send_error(
+                &mut socket,
+                None,
+                "unauthenticated",
+                "Desktop capability required",
+            )
+            .await;
+            return;
+        };
+        let configured = state
+            .owner_registry
+            .lock()
+            .ok()
+            .and_then(|registry| registry.clone());
+        if let Some(registry) = configured {
+            if registry.authenticate(capability).is_none() {
+                let _ = send_error(
+                    &mut socket,
+                    None,
+                    "unauthenticated",
+                    "Desktop capability rejected",
+                )
+                .await;
+                return;
+            }
+        }
+    }
     if hello.get("clientType").and_then(Value::as_str) == Some("remote") {
         let authorized = hello
             .get("deviceToken")
@@ -297,13 +594,63 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
             return;
         }
     }
+    let context = match hello.get("clientType").and_then(Value::as_str) {
+        Some("desktop") => {
+            let capability = hello
+                .get("desktopCapability")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let Some(registry) = state
+                .owner_registry
+                .lock()
+                .ok()
+                .and_then(|slot| slot.clone())
+            else {
+                let _ = send_error(
+                    &mut socket,
+                    None,
+                    "unauthenticated",
+                    "Desktop capability rejected",
+                )
+                .await;
+                return;
+            };
+            let Some(owner) = registry.authenticate(capability) else {
+                let _ = send_error(
+                    &mut socket,
+                    None,
+                    "unauthenticated",
+                    "Desktop capability rejected",
+                )
+                .await;
+                return;
+            };
+            HostClientContext::desktop(
+                client_id.clone(),
+                owner.clone(),
+                registry.owner_current_workspace(&owner),
+            )
+        }
+        Some("remote") => HostClientContext::remote(client_id.clone()),
+        Some("browser") | Some("unpaired") => HostClientContext::public(client_id.clone()),
+        _ => {
+            let _ = send_error(
+                &mut socket,
+                None,
+                "invalid_client_type",
+                "Unsupported client type",
+            )
+            .await;
+            return;
+        }
+    };
     let handshake = state
         .router
         .lock()
         .map_err(|_| "Host router unavailable".to_string())
         .and_then(|mut router| {
             router
-                .connect(&client_id, &hello)
+                .connect(&client_id, &hello, context)
                 .map_err(|error| error.message)
         });
     if let Err(message) = handshake {
@@ -324,6 +671,11 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
 
     let mut runtime_events = state.runtimes.subscribe();
     let mut subscriptions = HashSet::new();
+    let client_context = state
+        .router
+        .lock()
+        .ok()
+        .and_then(|router| router.client_context(&client_id).cloned());
     loop {
         tokio::select! {
             incoming = socket.next() => {
@@ -332,13 +684,26 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                     if matches!(message, Message::Close(_)) { break; }
                     continue;
                 };
-                let frame = match serde_json::from_str::<Value>(&text) {
+                let mut frame = match serde_json::from_str::<Value>(&text) {
                     Ok(frame) => frame,
                     Err(_) => {
                         let _ = send_error(&mut socket, None, "invalid_json", "Invalid JSON frame").await;
                         continue;
                     }
                 };
+                let legacy_control = frame.get("type").and_then(Value::as_str) == Some("broker_control");
+                if legacy_control {
+                    let command = frame.get("command").and_then(Value::as_str).unwrap_or("");
+                    let request_id = frame.get("requestId").and_then(Value::as_str).unwrap_or("");
+                    let args = frame.get("args").cloned().unwrap_or_else(|| json!({}));
+                    frame = match v1_control_adapter::to_v2(command, request_id, args) {
+                        Ok(frame) => frame,
+                        Err(error) => {
+                            if !send_checked(&mut socket, structured_error(Some(request_id), "unimplemented_route", &error), PayloadKind::Response).await { break; }
+                            continue;
+                        }
+                    };
+                }
                 let request_id = frame
                     .get("requestId")
                     .and_then(Value::as_str)
@@ -353,40 +718,68 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                             .map_err(|error| (error.code, error.message))
                     });
                 let mut after_response = Vec::new();
+                let progress_frames = Arc::new(Mutex::new(Vec::<Value>::new()));
+                let progress_sink = {
+                    let progress_frames = Arc::clone(&progress_frames);
+                    let request_id = request_id.clone();
+                    Arc::new(move |data: Value| {
+                        if let Ok(mut frames) = progress_frames.lock() {
+                            frames.push(json!({
+                                "type": "control_progress",
+                                "requestId": request_id,
+                                "data": data,
+                            }));
+                        }
+                    }) as ProgressSink
+                };
                 let response = match routed {
                     Ok(RoutedAction::Subscribe { request_id, target, .. }) => {
                         match serde_json::from_value::<RuntimeTarget>(target) {
-                            Ok(target) => {
+                            Ok(requested) => {
+                                let target = state.runtimes.target_for_session(&requested.workspace_id, &requested.session_id);
+                                if let Some(target) = target.filter(|target| authorize_target(&state, client_context.as_ref(), target) && runtime_target_is_live(&state, target)) {
                                 subscriptions.insert(target.clone());
-                                let owns_session = state
-                                    .session_owners
-                                    .lock()
-                                    .map(|mut owners| {
-                                        owners.entry(target.clone()).or_insert_with(|| client_id.clone()) == &client_id
-                                    })
-                                    .unwrap_or(false);
-                                if owns_session {
-                                    if let Ok(pending) = state.runtimes.pending_extension_ui(&target) {
-                                        after_response.extend(pending.into_iter().map(runtime_event_frame));
-                                    }
+                                if let Ok(pending) = state.runtimes.pending_extension_ui(&target) {
+                                    after_response.extend(pending.into_iter().map(runtime_event_frame));
                                 }
                                 Ok(json!({ "type": "runtime_subscribed", "requestId": request_id }))
+                                } else {
+                                    Err(("unauthorized_target", "Runtime target is not authorized".into()))
+                                }
                             }
                             Err(_) => Err(("invalid_target", "Runtime target is invalid".into())),
                         }
                     }
-                    Ok(action) => dispatch(action, &state).await,
+                    Ok(action) => dispatch(action, &state, client_context.as_ref(), progress_sink).await,
                     Err((code, message)) => Err((code, message)),
                 };
                 let outgoing = match response {
-                    Ok(value) => value,
+                    Ok(mut value) => {
+                        if legacy_control && value.get("type").and_then(Value::as_str) == Some("runtime_response") {
+                            value["type"] = json!("control_response");
+                            value["ok"] = json!(true);
+                            value["result"] = value.get("response").cloned().unwrap_or(Value::Null);
+                        }
+                        value
+                    }
                     Err((code, message)) => structured_error(request_id.as_deref(), code, &message),
                 };
-                if socket.send(Message::Text(outgoing.to_string().into())).await.is_err() {
+                let outbound_kind = match outgoing.get("type").and_then(Value::as_str) {
+                    Some("runtime_snapshot") => PayloadKind::Snapshot,
+                    Some("control_progress") => PayloadKind::Progress,
+                    Some("runtime_event") | Some("event_sequence_gap") => PayloadKind::Event,
+                    _ => PayloadKind::Response,
+                };
+                for progress in progress_frames.lock().map(|frames| frames.clone()).unwrap_or_default() {
+                    if !send_checked(&mut socket, progress, PayloadKind::Progress).await {
+                        return;
+                    }
+                }
+                if !send_checked(&mut socket, outgoing, outbound_kind).await {
                     break;
                 }
                 for replay in after_response {
-                    if socket.send(Message::Text(replay.to_string().into())).await.is_err() {
+                    if !send_checked(&mut socket, replay, PayloadKind::Event).await {
                         return;
                     }
                 }
@@ -394,18 +787,14 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
             event = runtime_events.recv() => {
                 match event {
                     Ok(event) if subscriptions.contains(&event.target) => {
-                        if event.event.get("type").and_then(Value::as_str) == Some("extension_ui_request") {
-                            let is_owner = state
-                                .session_owners
-                                .lock()
-                                .ok()
-                                .and_then(|owners| owners.get(&event.target).cloned())
-                                .as_deref()
-                                == Some(client_id.as_str());
-                            if !is_owner { continue; }
+                        // Re-check authority on delivery too: transition can commit while
+                        // socket remains subscribed, so stale contexts receive nothing.
+                        if !authorize_target(&state, client_context.as_ref(), &event.target) {
+                            subscriptions.remove(&event.target);
+                            continue;
                         }
                         let outgoing = runtime_event_frame(event);
-                        if socket.send(Message::Text(outgoing.to_string().into())).await.is_err() {
+                        if !send_checked(&mut socket, outgoing, PayloadKind::Event).await {
                             break;
                         }
                     }
@@ -416,7 +805,7 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                             "event_sequence_gap",
                             "Runtime events were missed; request a snapshot",
                         );
-                        if socket.send(Message::Text(outgoing.to_string().into())).await.is_err() {
+                        if !send_checked(&mut socket, outgoing, PayloadKind::Event).await {
                             break;
                         }
                     }
@@ -425,35 +814,199 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
             }
         }
     }
-    if let Ok(mut owners) = state.session_owners.lock() {
-        owners.retain(|_, owner| owner != &client_id);
+    if let Ok(mut router) = state.router.lock() {
+        router.disconnect(&client_id);
     }
 }
 
 fn runtime_event_frame(event: crate::native_pi_manager::NativeRuntimeEvent) -> Value {
-    json!({
+    let operation_id = event.event.get("operationId").cloned();
+    let turn_id = event.event.get("turnId").cloned();
+    let mut frame = json!({
         "type": "runtime_event",
         "target": event.target,
         "sequence": event.sequence,
         "event": event.event,
-    })
+    });
+    if let Some(operation_id) = operation_id {
+        frame["operationId"] = operation_id;
+    }
+    if let Some(turn_id) = turn_id {
+        frame["turnId"] = turn_id;
+    }
+    frame
+}
+
+fn runtime_target_is_live(state: &HostState, target: &RuntimeTarget) -> bool {
+    state
+        .runtimes
+        .target_for_session_id(&target.session_id)
+        .as_ref()
+        == Some(target)
+}
+
+fn current_registered_context(state: &HostState, context: &HostClientContext) -> bool {
+    let Some(owner) = context.owner_id.as_ref() else {
+        return false;
+    };
+    let current = state
+        .owner_registry
+        .lock()
+        .ok()
+        .and_then(|registry| registry.clone())
+        .map(|registry| registry.owner_current_workspace(owner));
+    matches!(
+        current,
+        Some(crate::window_owner::OwnerWorkspaceSnapshot::Registered {
+            wid,
+            generation,
+            ..
+        }) if context.kind == crate::host_router::ClientKind::Desktop
+            && context.workspace_id.as_deref() == Some(wid.as_str())
+            && context.workspace_generation == Some(generation)
+    )
+}
+
+fn dialog_response_allowed(context: Option<&HostClientContext>, target: &RuntimeTarget) -> bool {
+    let Some(context) = context else { return false };
+    let Some(owner) = context.owner_id.as_ref() else {
+        return false;
+    };
+    context.kind == crate::host_router::ClientKind::Desktop
+        && target.owner_id.as_deref() == Some(owner.as_str())
+}
+
+fn authorize_target(
+    state: &HostState,
+    context: Option<&HostClientContext>,
+    target: &RuntimeTarget,
+) -> bool {
+    let Some(context) = context else {
+        return false;
+    };
+    let Some(owner) = context.owner_id.as_ref() else {
+        return false;
+    };
+    if context.kind != crate::host_router::ClientKind::Desktop
+        || target.owner_id.as_deref() != Some(owner.as_str())
+    {
+        return false;
+    }
+    // Re-read registry authority for every admission. Handshake context is only
+    // an identity proof; workspace/generation can change while socket remains open.
+    let current = state
+        .owner_registry
+        .lock()
+        .ok()
+        .and_then(|registry| registry.clone())
+        .map(|registry| registry.owner_current_workspace(owner));
+    matches!(
+        current,
+        Some(crate::window_owner::OwnerWorkspaceSnapshot::Registered {
+            wid,
+            generation,
+            ..
+        }) if wid == target.workspace_id && generation == target.workspace_generation
+    )
+}
+
+fn operation_scope(
+    context: Option<&HostClientContext>,
+    session_id: &str,
+) -> Result<crate::operation_registry::OperationScope, (&'static str, String)> {
+    let context = context.ok_or(("unauthenticated", "Authentication required".into()))?;
+    let owner = context.owner_id.as_ref().ok_or((
+        "unauthorized_target",
+        "Registered desktop owner required".into(),
+    ))?;
+    let workspace = context.workspace_id.as_ref().ok_or((
+        "not_registered",
+        "Temporary workspace has no registered target".into(),
+    ))?;
+    let generation = context.workspace_generation.ok_or((
+        "stale_generation",
+        "Workspace generation is unavailable".into(),
+    ))?;
+    Ok(crate::operation_registry::OperationScope::new(
+        owner.as_str(),
+        workspace,
+        session_id,
+        generation,
+    ))
 }
 
 async fn dispatch(
     action: RoutedAction,
     state: &HostState,
+    context: Option<&HostClientContext>,
+    progress: ProgressSink,
 ) -> Result<Value, (&'static str, String)> {
     match action {
-        RoutedAction::Runtime {
-            client_id,
+        RoutedAction::OperationStatus {
             request_id,
-            frame,
+            operation_id,
+            ..
         } => {
+            let context = context.ok_or(("unauthenticated", "Authentication required".into()))?;
+            if context.kind != crate::host_router::ClientKind::Desktop {
+                return Err((
+                    "forbidden_class",
+                    "Only desktop owner may query operations".into(),
+                ));
+            }
+            let owner = context.owner_id.as_ref().ok_or((
+                "unauthorized_target",
+                "Registered desktop owner required".into(),
+            ))?;
+            let workspace = context.workspace_id.as_ref().ok_or((
+                "not_registered",
+                "Temporary workspace has no registered target".into(),
+            ))?;
+            let generation = context.workspace_generation.ok_or((
+                "stale_generation",
+                "Workspace generation is unavailable".into(),
+            ))?;
+            if !current_registered_context(state, context) {
+                return Err(("stale_generation", "Workspace generation is stale".into()));
+            }
+            let record = state
+                .runtimes
+                .operation_status_for_context(&operation_id, owner.as_str(), workspace, generation)
+                .map_err(|_| {
+                    (
+                        "operation_not_found",
+                        "Operation is not visible to this owner".into(),
+                    )
+                })?;
+            Ok(json!({
+                "type": "operation_status_response",
+                "requestId": request_id,
+                "operationId": operation_id,
+                "state": record.state,
+                "turnId": record.turn_id,
+                "crashReason": record.crash_reason,
+                "response": record.terminal_response,
+            }))
+        }
+        RoutedAction::Runtime {
+            request_id, frame, ..
+        } => {
+            let target_value = frame
+                .get("target")
+                .cloned()
+                .ok_or(("invalid_target", "Runtime target is required".into()))?;
+            let requested_target: RuntimeTarget = serde_json::from_value(target_value)
+                .map_err(|_| ("invalid_target", "Runtime target is invalid".into()))?;
+            if !authorize_target(state, context, &requested_target)
+                || !runtime_target_is_live(state, &requested_target)
+            {
+                return Err((
+                    "unauthorized_target",
+                    "Runtime target is not authorized".into(),
+                ));
+            }
             if frame.get("type").and_then(Value::as_str) == Some("runtime_snapshot_request") {
-                let session_id = frame
-                    .get("sessionId")
-                    .and_then(Value::as_str)
-                    .ok_or(("invalid_session", "sessionId is required".into()))?;
+                let session_id = requested_target.session_id.as_str();
                 let mut target = state
                     .runtimes
                     .target_for_session_id(session_id)
@@ -536,33 +1089,17 @@ async fn dispatch(
                     "Unsupported runtime request".into(),
                 ));
             }
-            let target: RuntimeTarget = serde_json::from_value(
-                frame
-                    .get("target")
-                    .cloned()
-                    .ok_or(("invalid_target", "Runtime target is required".into()))?,
-            )
-            .map_err(|_| ("invalid_target", "Runtime target is invalid".into()))?;
+            let target = requested_target;
             let command = frame
                 .get("command")
                 .cloned()
                 .ok_or(("invalid_command", "Runtime command is required".into()))?;
+            let scope = operation_scope(context, &target.session_id)?;
             if command.get("type").and_then(Value::as_str) == Some("extension_ui_response") {
-                let is_owner = state
-                    .session_owners
-                    .lock()
-                    .map_err(|_| {
-                        (
-                            "dialog_owner_unavailable",
-                            "Dialog owner unavailable".into(),
-                        )
-                    })?
-                    .get(&target)
-                    .is_some_and(|owner| owner == &client_id);
-                if !is_owner {
+                if !dialog_response_allowed(context, &target) {
                     return Err((
                         "dialog_response_forbidden",
-                        "Only the owning client may answer this dialog".into(),
+                        "Only the current workspace owner may answer this dialog".into(),
                     ));
                 }
                 state
@@ -573,20 +1110,47 @@ async fn dispatch(
                 return Ok(json!({
                     "type": "runtime_response",
                     "requestId": request_id,
-                    "acceptance": "completed",
+                    "acceptance": "duplicate_completed",
+                    "operationId": format!("dialog-{request_id}"),
                     "response": { "success": true },
                 }));
             }
-            let idempotency_key = frame.get("idempotencyKey").and_then(Value::as_str);
-            let response = state
+            if command.get("type").and_then(Value::as_str) == Some("abort") {
+                let response = state
+                    .runtimes
+                    .abort_turn(
+                        &target,
+                        &scope,
+                        command.get("turnId").and_then(Value::as_str),
+                        Duration::from_secs(30),
+                    )
+                    .await
+                    .map_err(|message| ("runtime_request_failed", message))?;
+                return Ok(
+                    json!({ "type": "runtime_response", "requestId": request_id, "acceptance": "accepted_pending", "operationId": format!("abort-{request_id}"), "response": response }),
+                );
+            }
+            let key = frame.get("idempotencyKey").and_then(Value::as_str).ok_or((
+                "idempotency_key_required",
+                "Runtime mutations require idempotencyKey".into(),
+            ))?;
+            let (operation_id, acceptance, response) = state
                 .runtimes
-                .request(&target, command, idempotency_key, Duration::from_secs(30))
+                .request_scoped_receipt(&target, scope, command, key, Duration::from_secs(30))
                 .await
                 .map_err(|message| ("runtime_request_failed", message))?;
+            let acceptance = match acceptance {
+                crate::operation_registry::OperationAcceptance::Accepted => "accepted_pending",
+                crate::operation_registry::OperationAcceptance::DuplicatePending => {
+                    "duplicate_pending"
+                }
+                crate::operation_registry::OperationAcceptance::DuplicateCompleted => {
+                    "duplicate_completed"
+                }
+            };
             Ok(json!({
-                "type": "runtime_response",
-                "requestId": request_id,
-                "acceptance": "accepted",
+                "type": "runtime_response", "requestId": request_id,
+                "acceptance": acceptance, "operationId": operation_id,
                 "response": response,
             }))
         }
@@ -594,6 +1158,14 @@ async fn dispatch(
             request_id, frame, ..
         } => match frame.get("operation").and_then(Value::as_str) {
             Some("create_pairing") => {
+                if context
+                    .is_none_or(|context| context.kind != crate::host_router::ClientKind::Unpaired)
+                {
+                    return Err((
+                        "forbidden_class",
+                        "Pairing can only be created by an unpaired browser".into(),
+                    ));
+                }
                 let pairing = state
                     .auth
                     .lock()
@@ -611,87 +1183,152 @@ async fn dispatch(
                 "Unsupported auth operation".into(),
             )),
         },
-        RoutedAction::Host { .. } => Err((
-            "host_operation_unimplemented",
-            "Host operation is not implemented on protocol v2".into(),
-        )),
+        RoutedAction::Host {
+            client_id,
+            request_id,
+            operation,
+            frame,
+        } => {
+            let context = context.ok_or(("unauthenticated", "Authentication required".into()))?;
+            if context.kind != crate::host_router::ClientKind::Desktop
+                || !current_registered_context(state, context)
+            {
+                return Err((
+                    "stale_generation",
+                    "Verified desktop workspace context is stale".into(),
+                ));
+            }
+            let owner = context.owner_id.clone().ok_or((
+                "unauthorized_target",
+                "Registered desktop owner required".into(),
+            ))?;
+            let handler = state
+                .control_handler
+                .lock()
+                .map_err(|_| {
+                    (
+                        "control_unavailable",
+                        "Host control handler unavailable".into(),
+                    )
+                })?
+                .clone()
+                .ok_or((
+                    "control_unavailable",
+                    "Host control handler unavailable".into(),
+                ))?;
+            let client_id = client_id.parse::<u64>().unwrap_or(0);
+            let verified = VerifiedClientContext {
+                client_id,
+                class: crate::broker_ws::ClientClass::Native,
+                owner_id: Some(owner),
+            };
+            let args = frame.get("args").cloned().unwrap_or(Value::Null);
+            let canonical = json!({
+                "type": "host_request",
+                "requestId": request_id,
+                "operation": operation,
+                "args": args,
+            });
+            let result = handler(verified, canonical, progress)
+                .await
+                .map_err(|message| ("host_operation_failed", message))?;
+            Ok(json!({
+                "type": "host_response",
+                "requestId": request_id,
+                "operation": operation,
+                "response": result,
+            }))
+        }
         RoutedAction::Data {
             request_id, frame, ..
-        } => match frame.get("operation").and_then(Value::as_str) {
-            Some("list_files") => {
-                let workspace_id = frame
-                    .get("workspaceId")
-                    .and_then(Value::as_str)
-                    .ok_or(("invalid_workspace", "workspaceId is required".into()))?;
-                let relative_path = frame
-                    .get("path")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let entries = state
-                    .data
-                    .list_files(workspace_id, relative_path)
-                    .map_err(host_data_error)?;
-                Ok(json!({
-                    "type": "data_response",
-                    "requestId": request_id,
-                    "operation": "list_files",
-                    "entries": entries,
-                }))
+        } => {
+            let workspace_id = frame
+                .get("workspaceId")
+                .and_then(Value::as_str)
+                .ok_or(("invalid_workspace", "workspaceId is required".into()))?;
+            let authorized = context.is_some_and(|ctx| {
+                ctx.kind == crate::host_router::ClientKind::Desktop
+                    && ctx.workspace_id.as_deref() == Some(workspace_id)
+            });
+            if !authorized {
+                return Err(("unauthorized_target", "Workspace is not authorized".into()));
             }
-            Some("list_sessions") => {
-                let workspace_id = frame
-                    .get("workspaceId")
-                    .and_then(Value::as_str)
-                    .ok_or(("invalid_workspace", "workspaceId is required".into()))?;
-                let sessions = state
-                    .data
-                    .list_sessions(workspace_id)
-                    .map_err(host_data_error)?;
-                Ok(json!({
-                    "type": "data_response",
-                    "requestId": request_id,
-                    "operation": "list_sessions",
-                    "sessions": sessions,
-                }))
+            match frame.get("operation").and_then(Value::as_str) {
+                Some("list_files") => {
+                    let workspace_id = frame
+                        .get("workspaceId")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_workspace", "workspaceId is required".into()))?;
+                    let relative_path = frame
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let entries = state
+                        .data
+                        .list_files(workspace_id, relative_path)
+                        .map_err(host_data_error)?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "list_files",
+                        "entries": entries,
+                    }))
+                }
+                Some("list_sessions") => {
+                    let workspace_id = frame
+                        .get("workspaceId")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_workspace", "workspaceId is required".into()))?;
+                    let sessions = state
+                        .data
+                        .list_sessions(workspace_id)
+                        .map_err(host_data_error)?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "list_sessions",
+                        "sessions": sessions,
+                    }))
+                }
+                Some("search_sessions") => {
+                    let workspace_id = frame
+                        .get("workspaceId")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_workspace", "workspaceId is required".into()))?;
+                    let query = frame.get("query").and_then(Value::as_str).unwrap_or("");
+                    let results = state
+                        .data
+                        .search_sessions(workspace_id, query)
+                        .map_err(host_data_error)?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "search_sessions",
+                        "results": results,
+                    }))
+                }
+                Some("cost_dashboard") => {
+                    let workspace_id = frame
+                        .get("workspaceId")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_workspace", "workspaceId is required".into()))?;
+                    let dashboard = state
+                        .data
+                        .cost_dashboard(workspace_id)
+                        .map_err(host_data_error)?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "cost_dashboard",
+                        "dashboard": dashboard,
+                    }))
+                }
+                _ => Err((
+                    "unknown_data_operation",
+                    "Unsupported data operation".into(),
+                )),
             }
-            Some("search_sessions") => {
-                let workspace_id = frame
-                    .get("workspaceId")
-                    .and_then(Value::as_str)
-                    .ok_or(("invalid_workspace", "workspaceId is required".into()))?;
-                let query = frame.get("query").and_then(Value::as_str).unwrap_or("");
-                let results = state
-                    .data
-                    .search_sessions(workspace_id, query)
-                    .map_err(host_data_error)?;
-                Ok(json!({
-                    "type": "data_response",
-                    "requestId": request_id,
-                    "operation": "search_sessions",
-                    "results": results,
-                }))
-            }
-            Some("cost_dashboard") => {
-                let workspace_id = frame
-                    .get("workspaceId")
-                    .and_then(Value::as_str)
-                    .ok_or(("invalid_workspace", "workspaceId is required".into()))?;
-                let dashboard = state
-                    .data
-                    .cost_dashboard(workspace_id)
-                    .map_err(host_data_error)?;
-                Ok(json!({
-                    "type": "data_response",
-                    "requestId": request_id,
-                    "operation": "cost_dashboard",
-                    "dashboard": dashboard,
-                }))
-            }
-            _ => Err((
-                "unknown_data_operation",
-                "Unsupported data operation".into(),
-            )),
-        },
+        }
         RoutedAction::Subscribe { request_id, .. } => Ok(json!({
             "type": "runtime_subscribed",
             "requestId": request_id,
@@ -744,6 +1381,10 @@ async fn exchange_pairing(
     }))
 }
 
+async fn unimplemented_api_route() -> (StatusCode, Json<Value>) {
+    api_error(StatusCode::NOT_FOUND, "unimplemented_route")
+}
+
 fn api_error(status: StatusCode, code: &'static str) -> (StatusCode, Json<Value>) {
     (status, Json(json!({ "error": { "code": code } })))
 }
@@ -780,16 +1421,872 @@ fn now_seconds() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::HostServer;
+    use super::{bind_is_loopback, dialog_response_allowed, HostServer};
+    use crate::host_router::HostClientContext;
     use crate::metadata_store::MetadataStore;
     use crate::native_pi_manager::NativePiManager;
     use crate::remote_auth::RemoteAuth;
     use crate::runtime_coordinator::RuntimeTarget;
     use futures_util::{SinkExt, StreamExt};
-    use serde_json::json;
+    use serde_json::{json, Value};
     use std::fs;
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[tokio::test]
+    #[ignore = "real host-origin + embedded Pi smoke; run via scripts/smoke-host-origin-p3.mjs"]
+    async fn native_smoke_host_origin_p3() {
+        use crate::native_pi_manager::NativeRuntimeType;
+        use crate::pi_launch::native_launch_spec_for;
+        use std::time::Duration;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-origin-p3-{nonce}"));
+        let workspace = temp.join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        let public = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("public");
+        let metadata = Arc::new(Mutex::new(
+            MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
+        ));
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
+        let runtimes = NativePiManager::new(32);
+        let registry = Arc::new(crate::window_owner::WindowOwnerRegistry::default());
+        let host = HostServer::start(public.clone(), runtimes.clone(), auth, metadata)
+            .await
+            .expect("host server starts");
+        let (owner, capability) = registry
+            .create_owner_with_workspace(
+                "p3-smoke-window".into(),
+                workspace.clone(),
+                0,
+                host.origin().into(),
+                Some("p3-workspace".into()),
+                crate::window_owner::TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        host.set_owner_registry(registry);
+        let target = RuntimeTarget::with_owner(
+            "p3-workspace",
+            "p3-session",
+            format!("p3-instance-{nonce}"),
+            owner.as_str(),
+            0,
+        );
+        let spec = native_launch_spec_for(&public, NativeRuntimeType::Primary, &workspace, None)
+            .expect("native launch spec resolves embedded Pi");
+        runtimes
+            .spawn(target.clone(), spec)
+            .expect("embedded Pi spawns");
+
+        if let Some(output_path) = std::env::var_os("PICOT_P3_PERF_OUTPUT") {
+            let samples = std::env::var("PICOT_P3_PERF_SAMPLES")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(20);
+            let warmup = std::env::var("PICOT_P3_PERF_WARMUP")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(3);
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            let shell_url = format!(
+                "{}/workspaces/{}/sessions/{}",
+                host.origin(),
+                target.workspace_id,
+                target.session_id
+            );
+            let capability_url = format!(
+                "{}/v2/bootstrap?workspaceId={}&sessionId={}",
+                host.origin(),
+                target.workspace_id,
+                target.session_id
+            );
+            let shell_start = std::time::Instant::now();
+            let shell_status = client.get(&shell_url).send().await.unwrap().status();
+            let shell_ms = shell_start.elapsed().as_secs_f64() * 1000.0;
+            let bootstrap_start = std::time::Instant::now();
+            let bootstrap_status = client
+                .get(&capability_url)
+                .header("x-picot-desktop-capability", &capability)
+                .send()
+                .await
+                .unwrap()
+                .status();
+            let bootstrap_ms = bootstrap_start.elapsed().as_secs_f64() * 1000.0;
+            assert!(shell_status.is_success() && bootstrap_status.is_success());
+            let ws_url = host.origin().replacen("http://", "ws://", 1) + "/v2/ws";
+            let (mut socket, _) = tokio_tungstenite::connect_async(ws_url).await.unwrap();
+            socket
+                .send(Message::Text(
+                    json!({
+                        "type": "hello", "protocolVersion": 2, "clientType": "desktop",
+                        "clientId": "p3-perf-window", "desktopCapability": capability
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+            let _: Value =
+                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
+                    .unwrap();
+            socket
+                .send(Message::Text(
+                    json!({
+                        "type": "runtime_subscribe", "requestId": "perf-sub", "target": target
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+            let _: Value =
+                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
+                    .unwrap();
+            let mut snapshot_ms = Vec::with_capacity(samples);
+            let mut prompt_ms = Vec::with_capacity(samples);
+            for index in 0..(warmup + samples) {
+                let snapshot_started = std::time::Instant::now();
+                let snapshot_id = format!("perf-snapshot-{index}");
+                socket
+                    .send(Message::Text(
+                        json!({
+                            "type": "runtime_snapshot_request", "requestId": snapshot_id,
+                            "target": target.clone()
+                        })
+                        .to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                let snapshot = loop {
+                    let frame: Value = serde_json::from_str(
+                        tokio::time::timeout(Duration::from_secs(30), socket.next())
+                            .await
+                            .unwrap()
+                            .unwrap()
+                            .unwrap()
+                            .to_text()
+                            .unwrap(),
+                    )
+                    .unwrap();
+                    if frame["type"] == "runtime_snapshot" && frame["requestId"] == snapshot_id {
+                        break snapshot_started.elapsed().as_secs_f64() * 1000.0;
+                    }
+                };
+                let prompt_started = std::time::Instant::now();
+                let prompt_id = format!("perf-prompt-{index}");
+                socket
+                    .send(Message::Text(
+                        json!({
+                            "type": "runtime_request", "requestId": prompt_id,
+                            "idempotencyKey": prompt_id, "target": target.clone(),
+                            "command": { "type": "prompt", "message": "Reply with one short word." }
+                        })
+                        .to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                let (prompt, turn_id) = loop {
+                    let frame: Value = serde_json::from_str(
+                        tokio::time::timeout(Duration::from_secs(30), socket.next())
+                            .await
+                            .unwrap()
+                            .unwrap()
+                            .unwrap()
+                            .to_text()
+                            .unwrap(),
+                    )
+                    .unwrap();
+                    if frame["type"] == "runtime_event" {
+                        let turn_id = frame["turnId"]
+                            .as_str()
+                            .filter(|id| !id.is_empty())
+                            .map(str::to_owned);
+                        break (prompt_started.elapsed().as_secs_f64() * 1000.0, turn_id);
+                    }
+                };
+                if let Some(turn_id) = turn_id {
+                    socket.send(Message::Text(json!({
+                        "type": "runtime_request", "requestId": format!("perf-abort-{index}"),
+                        "target": target.clone(), "command": { "type": "abort", "turnId": turn_id }
+                    }).to_string())).await.unwrap();
+                    loop {
+                        let frame: Value = serde_json::from_str(
+                            socket.next().await.unwrap().unwrap().to_text().unwrap(),
+                        )
+                        .unwrap();
+                        if frame["type"] == "runtime_response"
+                            && frame["requestId"] == format!("perf-abort-{index}")
+                        {
+                            break;
+                        }
+                    }
+                }
+                if index >= warmup {
+                    snapshot_ms.push(snapshot);
+                    prompt_ms.push(prompt);
+                }
+            }
+            fs::write(
+                output_path,
+                serde_json::to_vec_pretty(&json!({
+                    "samples": samples, "warmup": warmup,
+                    "shellMs": shell_ms, "bootstrapMs": bootstrap_ms,
+                    "snapshotMs": snapshot_ms, "promptToFirstEventMs": prompt_ms
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let _ = socket.close(None).await;
+            runtimes.stop(&target).expect("perf runtime stops");
+            host.stop();
+            let _ = fs::remove_dir_all(temp);
+            return;
+        }
+
+        // Optional browser harness rendezvous. The Rust test owns real HostServer
+        // and embedded Pi; a separate real Chromium process drives browser APIs.
+        if let Some(handshake_path) = std::env::var_os("PICOT_P3_BROWSER_HANDSHAKE") {
+            let handshake = json!({
+                "origin": host.origin(),
+                "capability": capability,
+                "workspaceId": target.workspace_id,
+                "sessionId": target.session_id,
+                "owner": owner.as_str(),
+            });
+            fs::write(handshake_path, serde_json::to_vec(&handshake).unwrap()).unwrap();
+            let done_path =
+                std::env::var_os("PICOT_P3_BROWSER_DONE").expect("browser harness done path");
+            let deadline = std::time::Instant::now() + Duration::from_secs(120);
+            while !std::path::Path::new(&done_path).exists() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "browser harness timed out"
+                );
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let shell = client
+            .get(format!(
+                "{}/workspaces/{}/sessions/{}",
+                host.origin(),
+                target.workspace_id,
+                target.session_id
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            shell.status().is_success(),
+            "host shell status={}",
+            shell.status()
+        );
+        assert!(shell.text().await.unwrap().contains("<base href="));
+        let bootstrap = client
+            .get(format!(
+                "{}/v2/bootstrap?workspaceId={}&sessionId={}",
+                host.origin(),
+                target.workspace_id,
+                target.session_id
+            ))
+            .header("x-picot-desktop-capability", &capability)
+            .send()
+            .await
+            .unwrap();
+        let bootstrap_status = bootstrap.status();
+        let bootstrap_body = bootstrap.text().await.unwrap();
+        assert!(
+            bootstrap_status.is_success(),
+            "bootstrap status={bootstrap_status} body={bootstrap_body}"
+        );
+        assert_eq!(
+            serde_json::from_str::<RuntimeTarget>(&bootstrap_body).unwrap(),
+            target
+        );
+        assert_eq!(
+            client
+                .get(format!("{}/ws", host.origin()))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            client
+                .get(format!(
+                    "{}/v2/bootstrap?workspaceId=other&sessionId=s",
+                    host.origin()
+                ))
+                .header("x-picot-desktop-capability", &capability)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            client
+                .get(format!(
+                    "{}/v2/bootstrap?workspaceId={}&sessionId={}",
+                    host.origin(),
+                    target.workspace_id,
+                    target.session_id
+                ))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::UNAUTHORIZED
+        );
+
+        let ws_url = host.origin().replacen("http://", "ws://", 1) + "/v2/ws";
+        let (mut socket, _) = tokio_tungstenite::connect_async(ws_url).await.unwrap();
+        socket
+            .send(Message::Text(
+                json!({
+                    "type": "hello", "protocolVersion": 2, "clientType": "desktop",
+                    "clientId": "p3-smoke-window", "desktopCapability": capability
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let ack: Value = serde_json::from_str(
+            tokio::time::timeout(Duration::from_secs(30), socket.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
+                .to_text()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(ack["type"], "hello_ack");
+        socket
+            .send(Message::Text(
+                json!({
+                    "type": "runtime_subscribe", "requestId": "sub-1", "target": target
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let subscribed: Value =
+            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(subscribed["type"], "runtime_subscribed");
+        socket
+            .send(Message::Text(
+                json!({
+                    "type": "runtime_snapshot_request", "requestId": "state-1", "target": target
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let response = loop {
+            let frame: Value = serde_json::from_str(
+                tokio::time::timeout(Duration::from_secs(30), socket.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap()
+                    .to_text()
+                    .unwrap(),
+            )
+            .unwrap();
+            if frame["type"] == "runtime_snapshot" && frame["requestId"] == "state-1" {
+                break frame;
+            }
+        };
+        assert_eq!(
+            response["type"], "runtime_snapshot",
+            "read-only snapshot response: {response}"
+        );
+        assert_eq!(response["requestId"], "state-1");
+        assert!(response["state"].is_object());
+        let snapshot_sequence = response["sequence"].as_u64().unwrap();
+
+        // Drive one real prompt through HostServer → native bridge → embedded Pi.
+        // No model result is required: the accepted response plus first runtime
+        // event proves prompt dispatch and event forwarding without asserting
+        // provider-specific text.
+        socket
+            .send(Message::Text(
+                json!({
+                    "type": "runtime_request", "requestId": "prompt-1",
+                    "idempotencyKey": "p3-prompt-1", "target": target,
+                    "command": { "type": "prompt", "message": "Reply with one short word." }
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let mut prompt_response = None;
+        let mut turn_id = None;
+        let mut first_event_sequence = None;
+        for _ in 0..16 {
+            let frame: Value = serde_json::from_str(
+                tokio::time::timeout(Duration::from_secs(30), socket.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap()
+                    .to_text()
+                    .unwrap(),
+            )
+            .unwrap();
+            if frame["type"] == "runtime_response" && frame["requestId"] == "prompt-1" {
+                prompt_response = Some(frame);
+                break;
+            }
+            if frame["type"] == "runtime_event" {
+                first_event_sequence = frame["sequence"].as_u64();
+                if let Some(id) = frame["turnId"].as_str().filter(|id| !id.is_empty()) {
+                    turn_id = Some(id.to_owned());
+                }
+            }
+        }
+        let prompt_response = prompt_response.expect("prompt response must arrive");
+        assert_eq!(
+            prompt_response["type"], "runtime_response",
+            "prompt response: {prompt_response}"
+        );
+        assert_eq!(prompt_response["requestId"], "prompt-1");
+        assert!(matches!(
+            prompt_response["acceptance"].as_str(),
+            Some("accepted_pending" | "duplicate_pending" | "duplicate_completed")
+        ));
+
+        for _ in 0..16 {
+            if turn_id.is_some() {
+                break;
+            }
+            let event: Value = serde_json::from_str(
+                tokio::time::timeout(Duration::from_secs(30), socket.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap()
+                    .to_text()
+                    .unwrap(),
+            )
+            .unwrap();
+            if event["type"] != "runtime_event" {
+                continue;
+            }
+            first_event_sequence = event["sequence"].as_u64();
+            if let Some(id) = event["turnId"].as_str().filter(|id| !id.is_empty()) {
+                turn_id = Some(id.to_owned());
+                break;
+            }
+        }
+        assert!(
+            first_event_sequence.is_some(),
+            "prompt must produce runtime event"
+        );
+        if let Some(turn_id) = turn_id {
+            // Abort exact observed turn; stale turn IDs must never affect a new turn.
+            socket
+                .send(Message::Text(
+                    json!({
+                        "type": "runtime_request", "requestId": "abort-1", "target": target,
+                        "command": { "type": "abort", "turnId": turn_id }
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+            let abort_response: Value = serde_json::from_str(
+                tokio::time::timeout(Duration::from_secs(30), socket.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap()
+                    .to_text()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                abort_response["type"], "runtime_response",
+                "abort response: {abort_response}"
+            );
+            assert_eq!(abort_response["requestId"], "abort-1");
+            assert_ne!(abort_response["response"]["disposition"], "stale_turn");
+        }
+
+        // Reconnect on same authorized owner, then hydrate from authoritative snapshot.
+        let _ = socket.close(None).await;
+        let (mut reconnected, _) = tokio_tungstenite::connect_async(
+            host.origin().replacen("http://", "ws://", 1) + "/v2/ws",
+        )
+        .await
+        .unwrap();
+        reconnected
+            .send(Message::Text(
+                json!({
+                    "type": "hello", "protocolVersion": 2, "clientType": "desktop",
+                    "clientId": "p3-smoke-window-reconnect", "desktopCapability": capability
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let reconnect_ack: Value = serde_json::from_str(
+            tokio::time::timeout(Duration::from_secs(30), reconnected.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
+                .to_text()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(reconnect_ack["type"], "hello_ack");
+        reconnected
+            .send(Message::Text(
+                json!({
+                    "type": "runtime_subscribe", "requestId": "sub-reconnect", "target": target
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let subscribed: Value = serde_json::from_str(
+            reconnected
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .to_text()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(subscribed["type"], "runtime_subscribed");
+        reconnected
+            .send(Message::Text(json!({
+                "type": "runtime_snapshot_request", "requestId": "state-reconnect", "target": target
+            }).to_string()))
+            .await.unwrap();
+        let reconnect_snapshot = loop {
+            let frame: Value = serde_json::from_str(
+                tokio::time::timeout(Duration::from_secs(30), reconnected.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap()
+                    .to_text()
+                    .unwrap(),
+            )
+            .unwrap();
+            if frame["type"] == "runtime_snapshot" && frame["requestId"] == "state-reconnect" {
+                break frame;
+            }
+        };
+        assert_eq!(reconnect_snapshot["type"], "runtime_snapshot");
+        assert_eq!(reconnect_snapshot["requestId"], "state-reconnect");
+        assert!(reconnect_snapshot["sequence"].as_u64().unwrap() >= snapshot_sequence);
+        assert!(first_event_sequence
+            .is_none_or(|sequence| reconnect_snapshot["sequence"].as_u64().unwrap() >= sequence));
+        let _ = reconnected.close(None).await;
+        runtimes.stop(&target).expect("smoke runtime stops");
+        host.stop();
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn dialog_response_policy_requires_owner_desktop_class() {
+        let target = RuntimeTarget::with_owner("workspace", "session", "instance", "owner", 3);
+        let owner = crate::window_owner::OwnerId::from_string("owner".into());
+        let desktop = HostClientContext::desktop(
+            "desktop",
+            owner,
+            crate::window_owner::OwnerWorkspaceSnapshot::Registered {
+                wid: "workspace".into(),
+                root: "/workspace".into(),
+                generation: 3,
+            },
+        );
+        assert!(dialog_response_allowed(Some(&desktop), &target));
+        assert!(!dialog_response_allowed(
+            Some(&HostClientContext::remote("remote")),
+            &target
+        ));
+        assert!(!dialog_response_allowed(
+            Some(&HostClientContext::public("browser")),
+            &target
+        ));
+        let other = HostClientContext::desktop(
+            "other",
+            crate::window_owner::OwnerId::from_string("other-owner".into()),
+            crate::window_owner::OwnerWorkspaceSnapshot::Registered {
+                wid: "workspace".into(),
+                root: "/workspace".into(),
+                generation: 3,
+            },
+        );
+        assert!(!dialog_response_allowed(Some(&other), &target));
+    }
+
+    #[test]
+    fn bind_policy_rejects_non_loopback_addresses() {
+        assert!(bind_is_loopback("127.0.0.1".parse().unwrap()));
+        assert!(bind_is_loopback("::1".parse().unwrap()));
+        assert!(!bind_is_loopback("192.168.1.10".parse().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn retained_routes_have_complete_auth_method_and_limit_contract() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-api-contract-{nonce}"));
+        let workspace_a = temp.join("workspace-a");
+        let workspace_b = temp.join("workspace-b");
+        fs::create_dir_all(&workspace_a).unwrap();
+        fs::create_dir_all(&workspace_b).unwrap();
+        fs::write(workspace_a.join("note.txt"), "contract").unwrap();
+        let public = temp.join("public");
+        fs::create_dir_all(&public).unwrap();
+        fs::write(public.join("index.html"), "Picot").unwrap();
+        let metadata = Arc::new(Mutex::new(
+            MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
+        ));
+        let (workspace_a_id, workspace_b_id) = {
+            let store = metadata.lock().unwrap();
+            let a = store.add_workspace(&workspace_a).unwrap().0.workspace_id;
+            let b = store.add_workspace(&workspace_b).unwrap().0.workspace_id;
+            (a, b)
+        };
+        assert_ne!(workspace_a_id, workspace_b_id);
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
+        let registry = Arc::new(crate::window_owner::WindowOwnerRegistry::default());
+        let host = HostServer::start(public, NativePiManager::new(32), auth, metadata)
+            .await
+            .unwrap();
+        let (owner_a, capability_a) = registry
+            .create_owner_with_workspace(
+                "contract-a".into(),
+                workspace_a,
+                0,
+                host.origin().into(),
+                Some(workspace_a_id.clone()),
+                crate::window_owner::TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        let (_owner_b, capability_b) = registry
+            .create_owner_with_workspace(
+                "contract-b".into(),
+                workspace_b,
+                0,
+                host.origin().into(),
+                Some(workspace_b_id.clone()),
+                crate::window_owner::TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        host.set_owner_registry(registry);
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+
+        // Health/version are deliberately public host metadata. They must not
+        // accidentally inherit workspace authorization, but remain GET-only.
+        for route in ["/health", "/api/health", "/api/pi-version"] {
+            let response = client
+                .get(format!("{}{}", host.origin(), route))
+                .send()
+                .await
+                .unwrap();
+            assert!(response.status().is_success(), "route={route}");
+            let response = client
+                .post(format!("{}{}", host.origin(), route))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                reqwest::StatusCode::METHOD_NOT_ALLOWED,
+                "route={route}"
+            );
+        }
+
+        let retained = [
+            ("/api/files?workspaceId=", "files"),
+            ("/api/sessions?workspaceId=", "sessions"),
+            ("/api/search?workspaceId=", "search"),
+            ("/api/cost-dashboard?workspaceId=", "cost-dashboard"),
+        ];
+        for (prefix, name) in retained {
+            let route_a = if name == "files" {
+                format!("{prefix}{workspace_a_id}&path=.")
+            } else if name == "search" {
+                format!("{prefix}{workspace_a_id}&q=contract")
+            } else {
+                format!("{prefix}{workspace_a_id}")
+            };
+            let url = |route: &str| format!("{}{}", host.origin(), route);
+
+            let missing = client.get(url(&route_a)).send().await.unwrap();
+            assert_eq!(
+                missing.status(),
+                reqwest::StatusCode::UNAUTHORIZED,
+                "route={name}"
+            );
+            assert_eq!(
+                missing.json::<Value>().await.unwrap()["error"]["code"],
+                "unauthenticated"
+            );
+
+            let wrong_owner = client
+                .get(url(&route_a))
+                .header("x-picot-desktop-capability", &capability_b)
+                .send()
+                .await
+                .unwrap();
+            let wrong_owner_status = wrong_owner.status();
+            let wrong_owner_body = wrong_owner.text().await.unwrap();
+            assert_eq!(
+                wrong_owner_status,
+                reqwest::StatusCode::FORBIDDEN,
+                "route={name} body={wrong_owner_body}"
+            );
+            assert_eq!(
+                serde_json::from_str::<Value>(&wrong_owner_body).unwrap()["error"]["code"],
+                "unauthorized_target"
+            );
+
+            let wrong_workspace = if name == "files" {
+                format!("{prefix}{workspace_b_id}&path=.")
+            } else if name == "search" {
+                format!("{prefix}{workspace_b_id}&q=contract")
+            } else {
+                format!("{prefix}{workspace_b_id}")
+            };
+            let wrong_workspace = client
+                .get(url(&wrong_workspace))
+                .header("x-picot-desktop-capability", &capability_a)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                wrong_workspace.status(),
+                reqwest::StatusCode::FORBIDDEN,
+                "route={name}"
+            );
+            assert_eq!(
+                wrong_workspace.json::<Value>().await.unwrap()["error"]["code"],
+                "unauthorized_target"
+            );
+
+            let valid = client
+                .get(url(&route_a))
+                .header("x-picot-desktop-capability", &capability_a)
+                .send()
+                .await
+                .unwrap();
+            assert!(valid.status().is_success(), "route={name}");
+
+            let method = client
+                .post(url(&route_a))
+                .header("x-picot-desktop-capability", &capability_a)
+                .send()
+                .await
+                .unwrap();
+            // Retained compatibility routes are read-only GET routes.
+            assert_eq!(
+                method.status(),
+                reqwest::StatusCode::METHOD_NOT_ALLOWED,
+                "route={name}"
+            );
+        }
+
+        // Body limits apply before handler dispatch on a body-bearing route;
+        // retained GET routes remain method-rejected without reading a body.
+        let oversized = client
+            .post(format!("{}/v2/auth/exchange", host.origin()))
+            .header("content-type", "application/json")
+            .body(vec![b'x'; 2 * 1024 * 1024])
+            .send()
+            .await;
+        assert!(
+            oversized.is_err()
+                || oversized.unwrap().status() == reqwest::StatusCode::PAYLOAD_TOO_LARGE,
+            "HTTP body limit must reject oversized input"
+        );
+
+        assert_eq!(owner_a.as_str().len(), 32);
+        host.stop();
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[tokio::test]
+    async fn legacy_api_routes_require_owner_capability_and_unknown_routes_fail_closed() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-api-auth-{nonce}"));
+        let public = temp.join("public");
+        fs::create_dir_all(&public).unwrap();
+        fs::write(public.join("index.html"), "Picot").unwrap();
+        let metadata = Arc::new(Mutex::new(
+            MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
+        ));
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
+        let host = HostServer::start(public, NativePiManager::new(32), auth, metadata)
+            .await
+            .unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        // Every retained existing-shell route must enforce the same desktop
+        // capability boundary. Keep this list in lockstep with the router
+        // registrations above; a new retained route without this assertion is
+        // an accidental unauthenticated compatibility surface.
+        for route in [
+            "/api/files?workspaceId=w",
+            "/api/sessions?workspaceId=w",
+            "/api/search?workspaceId=w&q=ab",
+            "/api/cost-dashboard?workspaceId=w",
+        ] {
+            let response = client
+                .get(format!("{}{}", host.origin(), route))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                reqwest::StatusCode::UNAUTHORIZED,
+                "retained route must require capability: {route}"
+            );
+            let body: Value = response.json().await.unwrap();
+            assert_eq!(body["error"]["code"], "unauthenticated", "route={route}");
+        }
+
+        for route in ["/api/not-retained", "/api/rpc", "/api/super-agent/tasks"] {
+            for request in [
+                client.get(format!("{}{}", host.origin(), route)),
+                client.post(format!("{}{}", host.origin(), route)),
+            ] {
+                let response = request.send().await.unwrap();
+                assert_eq!(
+                    response.status(),
+                    reqwest::StatusCode::NOT_FOUND,
+                    "route={route}"
+                );
+                let body: Value = response.json().await.unwrap();
+                assert_eq!(
+                    body["error"]["code"], "unimplemented_route",
+                    "route={route}"
+                );
+            }
+        }
+        host.stop();
+        fs::remove_dir_all(temp).unwrap();
+    }
 
     #[tokio::test]
     async fn serves_health_and_static_assets_from_one_origin() {
@@ -908,11 +2405,24 @@ mod tests {
         ));
         let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
         let runtimes = NativePiManager::new(32);
-        let target = RuntimeTarget::new("workspace-a", "session-a", "instance-a");
+        let registry = Arc::new(crate::window_owner::WindowOwnerRegistry::default());
+        let (owner, capability) = registry
+            .create_owner_with_workspace(
+                "desktop-a".into(),
+                temp.clone(),
+                0,
+                "http://127.0.0.1:1".into(),
+                Some("workspace-a".into()),
+                crate::window_owner::TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        let target =
+            RuntimeTarget::with_owner("workspace-a", "session-a", "instance-a", owner.as_str(), 0);
         let mut fake = runtimes.register_in_memory(target.clone()).unwrap();
         let host = HostServer::start(public, runtimes, auth, metadata)
             .await
             .unwrap();
+        host.set_owner_registry(registry);
         let ws_url = host.origin().replace("http://", "ws://") + "/v2/ws";
         let (mut socket, _) = tokio_tungstenite::connect_async(ws_url).await.unwrap();
         socket
@@ -921,7 +2431,8 @@ mod tests {
                     "type": "hello",
                     "protocolVersion": 2,
                     "clientType": "desktop",
-                    "clientId": "desktop-a"
+                    "clientId": "desktop-a",
+                    "desktopCapability": capability
                 })
                 .to_string(),
             ))
@@ -959,6 +2470,161 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn first_subscriber_cannot_claim_another_owners_extension_ui_response() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-dialog-owners-{nonce}"));
+        let public = temp.join("public");
+        let owner_b_root = temp.join("owner-b");
+        fs::create_dir_all(&public).unwrap();
+        fs::create_dir_all(&owner_b_root).unwrap();
+        fs::write(public.join("index.html"), "Picot").unwrap();
+        let metadata = Arc::new(Mutex::new(
+            MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
+        ));
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
+        let runtimes = NativePiManager::new(32);
+        let registry = Arc::new(crate::window_owner::WindowOwnerRegistry::default());
+        let (owner_a, capability_a) = registry
+            .create_owner_with_workspace(
+                "desktop-a".into(),
+                temp.clone(),
+                0,
+                "http://127.0.0.1:1".into(),
+                Some("workspace-a".into()),
+                crate::window_owner::TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        let (owner_b, capability_b) = registry
+            .create_owner_with_workspace(
+                "desktop-b".into(),
+                owner_b_root,
+                0,
+                "http://127.0.0.1:2".into(),
+                Some("workspace-b".into()),
+                crate::window_owner::TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        assert_ne!(owner_a, owner_b);
+        let target = RuntimeTarget::with_owner(
+            "workspace-b",
+            "session-b",
+            "instance-b",
+            owner_b.as_str(),
+            0,
+        );
+        let mut fake = runtimes.register_in_memory(target.clone()).unwrap();
+        fake.write_frame(json!({
+            "type": "extension_ui_request",
+            "id": "dialog-b",
+            "method": "select",
+            "title": "Project trust",
+            "options": ["Trust once", "Open untrusted"]
+        }))
+        .await
+        .unwrap();
+        tokio::task::yield_now().await;
+
+        let host = HostServer::start(public, runtimes, auth, metadata)
+            .await
+            .unwrap();
+        host.set_owner_registry(registry);
+        let ws_url = host.origin().replace("http://", "ws://") + "/v2/ws";
+        let (mut socket_a, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
+        socket_a
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "type": "hello",
+                    "protocolVersion": 2,
+                    "clientType": "desktop",
+                    "clientId": "desktop-a",
+                    "desktopCapability": capability_a
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        socket_a.next().await.unwrap().unwrap();
+        socket_a
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "type": "runtime_subscribe",
+                    "requestId": "subscribe-a",
+                    "target": target,
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let denied = socket_a.next().await.unwrap().unwrap();
+        let denied: serde_json::Value = serde_json::from_str(denied.to_text().unwrap()).unwrap();
+        assert_eq!(denied["type"], "error");
+        assert_eq!(denied["error"]["code"], "unauthorized_target");
+
+        let (mut socket_b, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
+        socket_b
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "type": "hello",
+                    "protocolVersion": 2,
+                    "clientType": "desktop",
+                    "clientId": "desktop-b",
+                    "desktopCapability": capability_b
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        socket_b.next().await.unwrap().unwrap();
+        socket_b
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "type": "runtime_subscribe",
+                    "requestId": "subscribe-b",
+                    "target": target,
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        socket_b.next().await.unwrap().unwrap();
+        let replay = socket_b.next().await.unwrap().unwrap();
+        let replay: serde_json::Value = serde_json::from_str(replay.to_text().unwrap()).unwrap();
+        assert_eq!(replay["event"]["id"], "dialog-b");
+
+        socket_b
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "type": "runtime_request",
+                    "requestId": "dialog-response-b",
+                    "target": target,
+                    "command": {
+                        "type": "extension_ui_response",
+                        "id": "dialog-b",
+                        "value": "Trust once"
+                    }
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        socket_b.next().await.unwrap().unwrap();
+        assert_eq!(
+            fake.read_request().await.unwrap(),
+            json!({
+                "type": "extension_ui_response",
+                "id": "dialog-b",
+                "value": "Trust once"
+            })
+        );
+
+        host.stop();
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[tokio::test]
     async fn replays_startup_extension_ui_and_routes_the_owners_response_exactly_once() {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -973,7 +2639,19 @@ mod tests {
         ));
         let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
         let runtimes = NativePiManager::new(32);
-        let target = RuntimeTarget::new("workspace-a", "session-a", "instance-a");
+        let registry = Arc::new(crate::window_owner::WindowOwnerRegistry::default());
+        let (owner, capability) = registry
+            .create_owner_with_workspace(
+                "owner".into(),
+                temp.clone(),
+                0,
+                "http://127.0.0.1:1".into(),
+                Some("workspace-a".into()),
+                crate::window_owner::TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        let target =
+            RuntimeTarget::with_owner("workspace-a", "session-a", "instance-a", owner.as_str(), 0);
         let mut fake = runtimes.register_in_memory(target.clone()).unwrap();
         fake.write_frame(json!({
             "type": "extension_ui_request",
@@ -989,6 +2667,7 @@ mod tests {
         let host = HostServer::start(public, runtimes, auth, metadata)
             .await
             .unwrap();
+        host.set_owner_registry(registry);
         let ws_url = host.origin().replace("http://", "ws://") + "/v2/ws";
         let (mut socket, _) = tokio_tungstenite::connect_async(ws_url).await.unwrap();
         socket
@@ -997,7 +2676,8 @@ mod tests {
                     "type": "hello",
                     "protocolVersion": 2,
                     "clientType": "desktop",
-                    "clientId": "owner"
+                    "clientId": "owner",
+                    "desktopCapability": capability
                 })
                 .to_string(),
             ))

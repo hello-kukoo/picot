@@ -3,6 +3,7 @@
 
 #![allow(dead_code)]
 
+use crate::ephemeral_registry::EphemeralRegistry;
 use crate::mutation_types::is_mutation;
 use crate::operation_registry::{OperationRegistry, OperationScope};
 #[cfg(test)]
@@ -18,6 +19,16 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeCleanupStage {
+    AdmissionClosed,
+    OperationsSettled,
+    ProcessTreeTerminated,
+    ProcessReaped,
+    TemporaryResourcesCleaned,
+    RuntimeUnregistered,
+}
 
 const MAX_RPC_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
@@ -46,7 +57,12 @@ impl Default for ReadinessPolicy {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
+pub struct NativeCleanupResources {
+    pub temporary_directory: Option<(PathBuf, String)>,
+    pub oauth_generation_supported: bool,
+}
+
 pub struct NativeLaunchSpec {
     pub binary: PathBuf,
     pub cwd: PathBuf,
@@ -60,6 +76,7 @@ pub struct NativeLaunchSpec {
     pub runtime_type: NativeRuntimeType,
     pub no_tools: bool,
     pub readiness: ReadinessPolicy,
+    pub cleanup: NativeCleanupResources,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,6 +156,7 @@ struct ManagedRuntime {
     target: Arc<Mutex<RuntimeTarget>>,
     bridge: PiRpcBridge,
     process: Option<PiRpcProcess>,
+    cleanup: NativeCleanupResources,
 }
 
 struct NativePiManagerInner {
@@ -159,6 +177,11 @@ struct NativePiManagerInner {
     /// identity makes repeated stop a no-op without allowing stale stops to
     /// affect a replacement using the same instance id.
     closing: Mutex<HashMap<String, RuntimeTarget>>,
+    cleanup_trace: Mutex<Vec<(String, NativeCleanupStage)>>,
+    revoked_owners: Mutex<HashMap<String, u64>>,
+    ephemeral_registry: Mutex<Option<Arc<EphemeralRegistry>>>,
+    owners: Mutex<std::collections::HashSet<String>>,
+    secret_generations: Mutex<HashMap<String, u64>>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -255,6 +278,11 @@ impl NativePiManager {
                 events,
                 pending_ui: Mutex::new(HashMap::new()),
                 closing: Mutex::new(HashMap::new()),
+                cleanup_trace: Mutex::new(Vec::new()),
+                revoked_owners: Mutex::new(HashMap::new()),
+                ephemeral_registry: Mutex::new(None),
+                owners: Mutex::new(std::collections::HashSet::new()),
+                secret_generations: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -265,6 +293,23 @@ impl NativePiManager {
     }
 
     pub fn spawn(&self, target: RuntimeTarget, spec: NativeLaunchSpec) -> Result<(), String> {
+        if let Some(owner_id) = target.owner_id.as_deref() {
+            if self
+                .inner
+                .revoked_owners
+                .lock()
+                .map_err(|_| "Native owner revocation lock poisoned".to_string())?
+                .get(owner_id)
+                .is_some_and(|generation| *generation >= target.workspace_generation)
+            {
+                return Err("Native runtime owner generation has been revoked".into());
+            }
+            self.inner
+                .secret_generations
+                .lock()
+                .map_err(|_| "Native secret registry lock poisoned".to_string())?
+                .insert(owner_id.to_string(), target.workspace_generation);
+        }
         let launch = spec.command_description();
         let mut command = Command::new(&launch.program);
         configure_child_process(&mut command);
@@ -290,6 +335,13 @@ impl NativePiManager {
             let _ = process.kill();
             return Err(format!("Cannot register Pi runtime: {error:?}"));
         }
+        if let Some(owner_id) = target.owner_id.as_ref() {
+            self.inner
+                .owners
+                .lock()
+                .map_err(|_| "Native owner registry lock poisoned".to_string())?
+                .insert(owner_id.clone());
+        }
         self.inner
             .runtimes
             .lock()
@@ -300,6 +352,7 @@ impl NativePiManager {
                     target: Arc::new(Mutex::new(target.clone())),
                     bridge: bridge.clone(),
                     process: Some(process),
+                    cleanup: spec.cleanup,
                 },
             );
         self.start_event_pump(target, bridge, Some(observer));
@@ -328,6 +381,7 @@ impl NativePiManager {
                     target: Arc::new(Mutex::new(target.clone())),
                     bridge: bridge.clone(),
                     process: None,
+                    cleanup: NativeCleanupResources::default(),
                 },
             );
         self.start_event_pump(target, bridge, None);
@@ -473,6 +527,22 @@ impl NativePiManager {
             .map_err(|error| format!("Operation lookup rejected: {error:?}"))
     }
 
+    pub fn operation_status_for_context(
+        &self,
+        operation_id: &str,
+        owner_id: &str,
+        workspace_id: &str,
+        generation: u64,
+    ) -> Result<crate::operation_registry::OperationRecord, String> {
+        self.inner
+            .operations
+            .lock()
+            .map_err(|_| "Operation registry lock poisoned".to_string())?
+            .get_owner_scoped(operation_id, owner_id, workspace_id, generation)
+            .cloned()
+            .map_err(|error| format!("Operation lookup rejected: {error:?}"))
+    }
+
     /// Host restart invalidates unresolved logical operations but retains terminal records.
     pub fn mark_host_restart(&self, reason: impl Into<String>) -> Result<(), String> {
         self.inner
@@ -532,6 +602,26 @@ impl NativePiManager {
         idempotency_key: &str,
         timeout: Duration,
     ) -> Result<Value, String> {
+        self.request_scoped_receipt(target, scope, command, idempotency_key, timeout)
+            .await
+            .map(|(_, _, response)| response.unwrap_or(Value::Null))
+    }
+
+    pub async fn request_scoped_receipt(
+        &self,
+        target: &RuntimeTarget,
+        scope: OperationScope,
+        command: Value,
+        idempotency_key: &str,
+        timeout: Duration,
+    ) -> Result<
+        (
+            String,
+            crate::operation_registry::OperationAcceptance,
+            Option<Value>,
+        ),
+        String,
+    > {
         if scope.workspace_id != target.workspace_id || scope.session_id != target.session_id {
             return Err("Operation scope does not match runtime target".into());
         }
@@ -556,12 +646,13 @@ impl NativePiManager {
             .map_err(|error| format!("Operation rejected: {error:?}"))?;
         match acceptance {
             crate::operation_registry::OperationAcceptance::DuplicateCompleted => {
-                return self
+                let response = self
                     .operation_status(&operation_id, &scope)
-                    .map(|record| record.terminal_response.unwrap_or(Value::Null));
+                    .map(|record| record.terminal_response.clone().unwrap_or(Value::Null))?;
+                return Ok((operation_id, acceptance, Some(response)));
             }
             crate::operation_registry::OperationAcceptance::DuplicatePending => {
-                return Err("Operation is still pending".into());
+                return Ok((operation_id, acceptance, None));
             }
             crate::operation_registry::OperationAcceptance::Accepted => {}
         }
@@ -594,7 +685,7 @@ impl NativePiManager {
             .map_err(|_| "Operation registry lock poisoned".to_string())?
             .complete(&operation_id, response.clone())
             .map_err(|error| format!("Cannot complete operation: {error:?}"))?;
-        Ok(response)
+        Ok((operation_id, acceptance, Some(response)))
     }
 
     /// Binds a turn-starting operation to current runtime turn.
@@ -751,8 +842,13 @@ impl NativePiManager {
         Ok(response)
     }
 
-    /// Stops one exact runtime. Cleanup is deliberately synchronous: process
-    /// termination and reap complete before the runtime is unregistered.
+    fn record_cleanup(&self, target: &RuntimeTarget, stage: NativeCleanupStage) {
+        if let Ok(mut trace) = self.inner.cleanup_trace.lock() {
+            trace.push((target.instance_id.clone(), stage));
+        }
+    }
+
+    /// Stops one exact runtime. All lifecycle callers use this ordered path.
     pub fn stop(&self, target: &RuntimeTarget) -> Result<(), String> {
         {
             let coordinator = self
@@ -795,6 +891,7 @@ impl NativePiManager {
         if already_closing {
             return Ok(());
         }
+        self.record_cleanup(target, NativeCleanupStage::AdmissionClosed);
 
         // Preserve operation records, but make unresolved work explicitly
         // indeterminate so no completed response can be replayed as success.
@@ -803,6 +900,7 @@ impl NativePiManager {
             .lock()
             .map_err(|_| "Operation registry lock poisoned".to_string())?
             .instance_replaced(&target.instance_id, "runtime_stopped");
+        self.record_cleanup(target, NativeCleanupStage::OperationsSettled);
 
         let mut runtime = self
             .inner
@@ -821,6 +919,17 @@ impl NativePiManager {
                 cleanup_error.get_or_insert(error);
             }
         }
+        self.record_cleanup(target, NativeCleanupStage::ProcessTreeTerminated);
+        self.record_cleanup(target, NativeCleanupStage::ProcessReaped);
+        if let Some((path, token)) = runtime.cleanup.temporary_directory.take() {
+            let root = crate::pi_manager::canonical_temp_root();
+            if let Err(error) = crate::pi_manager::cleanup_quick_chat_dir(&root, &path, &token) {
+                cleanup_error.get_or_insert(error);
+            }
+        }
+        // OAuth is unsupported by native runtime. The false capability is a
+        // fail-closed state; no token or generation cleanup is attempted.
+        self.record_cleanup(target, NativeCleanupStage::TemporaryResourcesCleaned);
         // Pending UI belongs to exact instance and is no longer addressable.
         self.inner
             .pending_ui
@@ -852,6 +961,7 @@ impl NativePiManager {
             .map_err(|_| "Runtime coordinator lock poisoned".to_string())?
             .unregister(target)
             .map_err(|error| format!("Cannot unregister stopped runtime: {error:?}"))?;
+        self.record_cleanup(target, NativeCleanupStage::RuntimeUnregistered);
         cleanup_error.map_or(Ok(()), Err)
     }
 
@@ -863,6 +973,238 @@ impl NativePiManager {
             .map_err(|_| "Runtime stop registry lock poisoned".to_string())?
             .get(&target.instance_id)
             .is_some_and(|current| current == target))
+    }
+
+    pub fn cleanup_trace(&self) -> Vec<(String, NativeCleanupStage)> {
+        self.inner
+            .cleanup_trace
+            .lock()
+            .map(|trace| trace.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn set_ephemeral_registry(&self, registry: Arc<EphemeralRegistry>) {
+        if let Ok(mut current) = self.inner.ephemeral_registry.lock() {
+            *current = Some(registry);
+        }
+    }
+
+    /// Create a native ephemeral chat (Side/Quick) through the shared
+    /// `EphemeralRegistry` — the single lifecycle authority (decision:
+    /// reuse, Dr. Lin 2026-08-30). The registry mints instance identity and
+    /// enforces per-owner quotas; commit happens only after a successful
+    /// spawn, and the existing owner/transition/process-exit cleanup paths
+    /// become effective for natively created chats. A failed spawn rolls
+    /// the reservation back so no orphan record survives.
+    pub fn spawn_ephemeral(
+        &self,
+        workspace_id: &str,
+        session_id: &str,
+        spec: NativeLaunchSpec,
+        owner: &crate::window_owner::OwnerId,
+        kind: crate::ephemeral_registry::EphemeralKind,
+        transition_generation: u64,
+    ) -> Result<RuntimeTarget, String> {
+        let kind_matches = match kind {
+            crate::ephemeral_registry::EphemeralKind::SideChat => {
+                spec.runtime_type == NativeRuntimeType::SideChat
+            }
+            crate::ephemeral_registry::EphemeralKind::QuickChat => {
+                spec.runtime_type == NativeRuntimeType::QuickChat
+            }
+        };
+        if !kind_matches {
+            return Err("Ephemeral kind must match the launch spec runtime type".into());
+        }
+        let canonical_cwd = spec.cwd.clone();
+        let cleanup_resources = spec.cleanup.clone();
+        let registry = self
+            .inner
+            .ephemeral_registry
+            .lock()
+            .map_err(|_| "Native ephemeral registry lock poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| {
+                "Native ephemeral creation requires the shared ephemeral registry".to_string()
+            })?;
+        let reservation = registry
+            .reserve_create(owner, kind)
+            .map_err(|error| format!("Ephemeral reservation rejected: {error}"))?;
+        let target = RuntimeTarget::with_owner(
+            workspace_id,
+            session_id,
+            reservation.instance_id.clone(),
+            owner.as_str(),
+            transition_generation,
+        );
+        if let Err(error) = self.spawn(target.clone(), spec) {
+            if let Ok(Some(lease)) =
+                registry.begin_close(owner, &reservation.instance_id, reservation.generation)
+            {
+                registry.finish_cleanup(&lease);
+            }
+            return Err(error);
+        }
+        let pid = {
+            let runtimes = self
+                .inner
+                .runtimes
+                .lock()
+                .map_err(|_| "Native runtime registry lock poisoned".to_string())?;
+            let Some(runtime) = runtimes.get(&target.instance_id) else {
+                return Err("Native runtime vanished before ephemeral commit".into());
+            };
+            runtime
+                .process
+                .as_ref()
+                .and_then(|process| process.pid())
+                .unwrap_or_default()
+        };
+        registry
+            .commit_ready(
+                &reservation,
+                crate::ephemeral_registry::OwnedProcess {
+                    // Native runtimes speak RPC over stdio; there is no HTTP
+                    // port. Zero marks the field unused for native records.
+                    port: 0,
+                    pid,
+                    child_identity: pid as u64,
+                    canonical_cwd,
+                    transition_generation,
+                    temporary_directory: cleanup_resources.temporary_directory,
+                },
+            )
+            .map_err(|error| {
+                // Commit rejected (e.g. stale reservation): do not leave a
+                // half-owned runtime behind.
+                let _ = self.stop(&target);
+                format!("Ephemeral commit rejected: {error}")
+            })?;
+        Ok(target)
+    }
+
+    /// Owner binding is host-derived and carried by RuntimeTarget.
+    /// Revokes owner generation before stopping processes. This also blocks
+    /// stale secret-bearing launch specs from being admitted for that owner.
+    pub fn stop_for_owner(&self, owner_id: &str) {
+        let targets = self
+            .inner
+            .runtimes
+            .lock()
+            .map(|runtimes| {
+                runtimes
+                    .values()
+                    .filter_map(|runtime| runtime.target.lock().ok().map(|target| target.clone()))
+                    .filter(|target| target.owner_id.as_deref() == Some(owner_id))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let generation = targets
+            .iter()
+            .map(|target| target.workspace_generation)
+            .max()
+            .unwrap_or_default();
+        for target in targets {
+            let _ = self.stop(&target);
+        }
+        if let Ok(mut revoked) = self.inner.revoked_owners.lock() {
+            revoked.insert(owner_id.to_string(), generation);
+        }
+        if let Ok(mut secrets) = self.inner.secret_generations.lock() {
+            secrets.remove(owner_id);
+        }
+        self.cleanup_ephemeral_owner(owner_id);
+    }
+
+    fn cleanup_ephemeral_owner(&self, owner_id: &str) {
+        let Some(registry) = self
+            .inner
+            .ephemeral_registry
+            .lock()
+            .ok()
+            .and_then(|registry| registry.clone())
+        else {
+            return;
+        };
+        let owner = crate::window_owner::OwnerId::from_string(owner_id.to_string());
+        for lease in registry.owner_cleanup(&owner) {
+            if let Some((path, token)) = lease.temporary_directory.as_ref() {
+                let _ = crate::pi_manager::cleanup_quick_chat_dir(
+                    &crate::pi_manager::canonical_temp_root(),
+                    path,
+                    token,
+                );
+            }
+            registry.finish_cleanup(&lease);
+        }
+    }
+
+    pub fn stop_for_workspace_transition(&self, workspace_id: &str) {
+        self.stop_workspace(workspace_id);
+    }
+
+    /// Stop old owner-bound runtimes and revoke all old-generation ephemeral
+    /// leases. Caller must pass generation from WindowOwnerRegistry; workspace
+    /// IDs alone are not an authorization boundary during navigation.
+    pub fn stop_for_owner_transition(&self, owner_id: &str, transition_generation: u64) {
+        let targets = self
+            .inner
+            .runtimes
+            .lock()
+            .map(|runtimes| {
+                runtimes
+                    .values()
+                    .filter_map(|runtime| runtime.target.lock().ok().map(|target| target.clone()))
+                    .filter(|target| {
+                        target.owner_id.as_deref() == Some(owner_id)
+                            && target.workspace_generation < transition_generation
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for target in targets {
+            let _ = self.stop(&target);
+        }
+        // Old-generation admission is gone; its secret generation must die
+        // with it instead of lingering until the next owner spawn.
+        if let Ok(mut secrets) = self.inner.secret_generations.lock() {
+            secrets.remove(owner_id);
+        }
+        if let Some(registry) = self
+            .inner
+            .ephemeral_registry
+            .lock()
+            .ok()
+            .and_then(|registry| registry.clone())
+        {
+            let owner = crate::window_owner::OwnerId::from_string(owner_id.to_string());
+            for lease in registry.cleanup_for_transition(&owner, transition_generation) {
+                if let Some((path, token)) = lease.temporary_directory.as_ref() {
+                    let _ = crate::pi_manager::cleanup_quick_chat_dir(
+                        &crate::pi_manager::canonical_temp_root(),
+                        path,
+                        token,
+                    );
+                }
+                registry.finish_cleanup(&lease);
+            }
+        }
+    }
+    pub fn stop_for_window_destroy(&self, workspace_id: &str) {
+        self.stop_workspace(workspace_id);
+    }
+
+    pub fn stop_for_app_exit(&self) {
+        self.stop_all();
+        let owners = self
+            .inner
+            .owners
+            .lock()
+            .map(|owners| owners.iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for owner in owners {
+            self.cleanup_ephemeral_owner(&owner);
+        }
     }
 
     pub fn stop_workspace(&self, workspace_id: &str) {
@@ -1062,7 +1404,7 @@ fn configure_child_process(_command: &mut Command) {}
 #[cfg(test)]
 mod tests {
     use super::{NativeLaunchSpec, NativePiManager, NativeRuntimeType};
-    use crate::operation_registry::OperationScope;
+    use crate::operation_registry::{OperationScope, OperationState};
     use crate::runtime_coordinator::RuntimeTarget;
     use serde_json::json;
     use std::path::PathBuf;
@@ -1194,6 +1536,7 @@ mod tests {
             runtime_type: super::NativeRuntimeType::Primary,
             no_tools: false,
             readiness: super::ReadinessPolicy::default(),
+            cleanup: super::NativeCleanupResources::default(),
         };
         let launch = spec.command_description();
         assert_eq!(launch.program, PathBuf::from("/embedded/pi"));
@@ -1243,10 +1586,124 @@ mod tests {
             "snapshot_required"
         );
         assert!(request.await.unwrap().is_err());
-        let record = manager
-            .operation_status("missing", &scope)
-            .expect_err("operation id is intentionally opaque");
-        assert!(record.contains("NotFound"));
+        let states = manager
+            .inner
+            .operations
+            .lock()
+            .unwrap()
+            .states_for_instance("instance-a");
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0].1, OperationState::Indeterminate);
+    }
+
+    #[tokio::test]
+    async fn child_exit_crashes_runtime_and_emits_snapshot_required() {
+        let cwd =
+            std::env::temp_dir().join(format!("picot-native-child-exit-{}", std::process::id()));
+        std::fs::create_dir_all(&cwd).unwrap();
+        let spec = NativeLaunchSpec {
+            binary: PathBuf::from("/bin/sh"),
+            cwd: cwd.clone(),
+            session_path: None,
+            extensions: Vec::new(),
+            pi_version: "test".into(),
+            path_env: "/usr/bin:/bin".into(),
+            agent_root: None,
+            static_dir: None,
+            install_secret: None,
+            runtime_type: NativeRuntimeType::Primary,
+            no_tools: false,
+            readiness: super::ReadinessPolicy::default(),
+            cleanup: super::NativeCleanupResources::default(),
+        };
+        let manager = NativePiManager::in_memory(8);
+        let target = RuntimeTarget::new("workspace-exit", "session-exit", "instance-exit");
+        let mut events = manager.subscribe();
+        // The shell exits immediately because native launch flags are invalid
+        // for it; this exercises observer child-exit handling without mocks.
+        manager.spawn(target, spec).unwrap();
+        let crash = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let event = events.recv().await.unwrap();
+                if event.event["type"] == "runtime_crashed" {
+                    break event;
+                }
+            }
+        })
+        .await
+        .expect("child exit crash event");
+        assert_eq!(crash.event["reason"], "runtime_crashed");
+        assert_eq!(
+            events.recv().await.unwrap().event["type"],
+            "snapshot_required"
+        );
+        let _ = std::fs::remove_dir_all(cwd);
+    }
+
+    #[tokio::test]
+    async fn stop_cleans_owned_temporary_directory_idempotently() {
+        let manager = NativePiManager::in_memory(8);
+        let target = RuntimeTarget::new("workspace-temp", "session-temp", "instance-temp");
+        let fake = manager.register_in_memory(target.clone()).unwrap();
+        let root = crate::pi_manager::canonical_temp_root();
+        let (path, token) = crate::pi_manager::create_quick_chat_temp_dir().unwrap();
+        manager
+            .inner
+            .runtimes
+            .lock()
+            .unwrap()
+            .get_mut(&target.instance_id)
+            .unwrap()
+            .cleanup
+            .temporary_directory = Some((path.clone(), token));
+        manager.stop(&target).unwrap();
+        assert!(!path.exists());
+        // The ownership guard makes a second cleanup attempt a harmless no-op;
+        // stop itself is idempotent for the exact target.
+        assert!(crate::pi_manager::cleanup_quick_chat_dir(&root, &path, "unused").is_err());
+        assert!(manager.stop(&target).is_ok());
+        drop(fake);
+    }
+
+    #[tokio::test]
+    async fn writer_fail_crashes_and_marks_in_flight_indeterminate() {
+        let manager = NativePiManager::in_memory(8);
+        let target = RuntimeTarget::new("workspace-a", "session-a", "instance-a");
+        let scope = OperationScope::new("owner-a", "workspace-a", "session-a", 1);
+        let mut events = manager.subscribe();
+        let mut fake = manager.register_in_memory(target.clone()).unwrap();
+        // Kill only the host→child request pipe BEFORE any request flows: the
+        // next host write fails immediately — the writer-fault class — while
+        // the child→host direction stays open, so this is distinct from EOF.
+        fake.fail_outbound();
+        let result = manager
+            .request_scoped(
+                &target,
+                scope,
+                json!({ "type": "prompt" }),
+                "crash-intent",
+                Duration::from_secs(5),
+            )
+            .await;
+        assert!(result.is_err());
+        let crash = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("crash event within 5s")
+            .expect("event stream open");
+        assert_eq!(crash.event["type"], "runtime_crashed");
+        let snapshot = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("snapshot_required within 5s")
+            .expect("event stream open");
+        assert_eq!(snapshot.event["type"], "snapshot_required");
+        let states = manager
+            .inner
+            .operations
+            .lock()
+            .unwrap()
+            .states_for_instance("instance-a");
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0].1, OperationState::Indeterminate);
     }
 
     #[tokio::test]
@@ -1481,6 +1938,333 @@ mod tests {
         assert!(manager.stop(&target).is_ok());
         assert!(manager.stop(&stale).is_err());
         assert!(manager.pending_extension_ui(&target).is_err());
+        assert_eq!(
+            manager
+                .cleanup_trace()
+                .into_iter()
+                .map(|(_, stage)| stage)
+                .collect::<Vec<_>>(),
+            vec![
+                super::NativeCleanupStage::AdmissionClosed,
+                super::NativeCleanupStage::OperationsSettled,
+                super::NativeCleanupStage::ProcessTreeTerminated,
+                super::NativeCleanupStage::ProcessReaped,
+                super::NativeCleanupStage::TemporaryResourcesCleaned,
+                super::NativeCleanupStage::RuntimeUnregistered,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn owner_stop_cleans_registry_leases_and_is_idempotent() {
+        let manager = NativePiManager::in_memory(8);
+        let registry = std::sync::Arc::new(crate::ephemeral_registry::EphemeralRegistry::default());
+        manager.set_ephemeral_registry(registry.clone());
+        let owner = crate::window_owner::OwnerId::from_string("owner-stop".to_string());
+        let reservation = registry
+            .reserve_create(&owner, crate::ephemeral_registry::EphemeralKind::SideChat)
+            .unwrap();
+        registry
+            .commit_ready(
+                &reservation,
+                crate::ephemeral_registry::OwnedProcess {
+                    port: 6100,
+                    pid: 6100,
+                    child_identity: 6100,
+                    canonical_cwd: PathBuf::from("/workspace"),
+                    transition_generation: 1,
+                    temporary_directory: None,
+                },
+            )
+            .unwrap();
+        let target =
+            RuntimeTarget::with_owner("workspace-a", "session-a", "instance-a", owner.as_str(), 1);
+        manager.register_in_memory(target).unwrap();
+        manager.stop_for_owner(owner.as_str());
+        manager.stop_for_owner(owner.as_str());
+        assert!(registry.descriptors(&owner).is_empty());
+    }
+
+    #[test]
+    fn transition_cleanup_rejects_stale_generation_at_owner_boundary() {
+        let manager = NativePiManager::in_memory(8);
+        let registry = std::sync::Arc::new(crate::ephemeral_registry::EphemeralRegistry::default());
+        manager.set_ephemeral_registry(registry.clone());
+        let owner = crate::window_owner::OwnerId::from_string("owner-transition".to_string());
+        let reservation = registry
+            .reserve_create(&owner, crate::ephemeral_registry::EphemeralKind::SideChat)
+            .unwrap();
+        registry
+            .commit_ready(
+                &reservation,
+                crate::ephemeral_registry::OwnedProcess {
+                    port: 6200,
+                    pid: 6200,
+                    child_identity: 6200,
+                    canonical_cwd: PathBuf::from("/workspace"),
+                    transition_generation: 2,
+                    temporary_directory: None,
+                },
+            )
+            .unwrap();
+        manager.stop_for_owner_transition(owner.as_str(), 2);
+        assert_eq!(registry.descriptors(&owner).len(), 1);
+        manager.stop_for_owner_transition(owner.as_str(), 3);
+        assert!(registry.descriptors(&owner).is_empty());
+    }
+
+    fn cat_ephemeral_spec(
+        runtime_type: NativeRuntimeType,
+        secret: Option<&str>,
+    ) -> NativeLaunchSpec {
+        NativeLaunchSpec {
+            binary: PathBuf::from("/bin/cat"),
+            cwd: std::env::temp_dir(),
+            session_path: None,
+            extensions: Vec::new(),
+            pi_version: "test".to_string(),
+            path_env: std::env::var("PATH").unwrap_or_default(),
+            agent_root: None,
+            static_dir: None,
+            install_secret: secret.map(str::to_string),
+            runtime_type,
+            no_tools: runtime_type == NativeRuntimeType::QuickChat,
+            readiness: super::ReadinessPolicy::default(),
+            cleanup: super::NativeCleanupResources::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_ephemeral_rejects_kind_mismatch() {
+        let manager = NativePiManager::in_memory(8);
+        let owner = crate::window_owner::OwnerId::from_string("owner-a".into());
+        let error = manager
+            .spawn_ephemeral(
+                "workspace-a",
+                "session-a",
+                cat_ephemeral_spec(NativeRuntimeType::SideChat, None),
+                &owner,
+                crate::ephemeral_registry::EphemeralKind::QuickChat,
+                1,
+            )
+            .unwrap_err();
+        assert!(error.contains("must match"));
+    }
+
+    #[tokio::test]
+    async fn spawn_ephemeral_requires_shared_registry() {
+        let manager = NativePiManager::in_memory(8);
+        let owner = crate::window_owner::OwnerId::from_string("owner-a".into());
+        let error = manager
+            .spawn_ephemeral(
+                "workspace-a",
+                "session-a",
+                cat_ephemeral_spec(NativeRuntimeType::SideChat, None),
+                &owner,
+                crate::ephemeral_registry::EphemeralKind::SideChat,
+                1,
+            )
+            .unwrap_err();
+        assert!(error.contains("shared ephemeral registry"));
+    }
+
+    #[tokio::test]
+    async fn spawn_ephemeral_populates_shared_registry_and_cleans_on_transition() {
+        let manager = NativePiManager::in_memory(8);
+        let registry = std::sync::Arc::new(crate::ephemeral_registry::EphemeralRegistry::default());
+        manager.set_ephemeral_registry(std::sync::Arc::clone(&registry));
+        let owner = crate::window_owner::OwnerId::from_string("owner-a".into());
+        let target = manager
+            .spawn_ephemeral(
+                "workspace-a",
+                "session-a",
+                cat_ephemeral_spec(NativeRuntimeType::SideChat, None),
+                &owner,
+                crate::ephemeral_registry::EphemeralKind::SideChat,
+                2,
+            )
+            .unwrap();
+        assert_eq!(target.owner_id.as_deref(), Some("owner-a"));
+        assert_eq!(target.workspace_generation, 2);
+        let descriptors = registry.descriptors(&owner);
+        assert_eq!(descriptors.len(), 1);
+        assert_eq!(descriptors[0].instance_id, target.instance_id);
+
+        // Transition to a newer generation stops the runtime and clears the
+        // natively-created record through the shared authority.
+        manager.stop_for_owner_transition("owner-a", 3);
+        assert!(registry.descriptors(&owner).is_empty());
+        assert!(manager.snapshot(&target).is_err());
+    }
+
+    #[tokio::test]
+    async fn spawn_ephemeral_enforces_owner_quota() {
+        let manager = NativePiManager::in_memory(8);
+        let registry = std::sync::Arc::new(crate::ephemeral_registry::EphemeralRegistry::default());
+        manager.set_ephemeral_registry(std::sync::Arc::clone(&registry));
+        let owner = crate::window_owner::OwnerId::from_string("owner-a".into());
+        manager
+            .spawn_ephemeral(
+                "workspace-a",
+                "session-a",
+                cat_ephemeral_spec(NativeRuntimeType::SideChat, None),
+                &owner,
+                crate::ephemeral_registry::EphemeralKind::SideChat,
+                2,
+            )
+            .unwrap();
+        // SIDE_CHAT_QUOTA is one per owner.
+        let error = manager
+            .spawn_ephemeral(
+                "workspace-a",
+                "session-b",
+                cat_ephemeral_spec(NativeRuntimeType::SideChat, None),
+                &owner,
+                crate::ephemeral_registry::EphemeralKind::SideChat,
+                2,
+            )
+            .unwrap_err();
+        assert!(error.contains("quota"));
+        assert_eq!(registry.descriptors(&owner).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn spawn_ephemeral_failure_rolls_back_reservation() {
+        let manager = NativePiManager::in_memory(8);
+        let registry = std::sync::Arc::new(crate::ephemeral_registry::EphemeralRegistry::default());
+        manager.set_ephemeral_registry(std::sync::Arc::clone(&registry));
+        let owner = crate::window_owner::OwnerId::from_string("owner-a".into());
+        let mut spec = cat_ephemeral_spec(NativeRuntimeType::SideChat, None);
+        spec.binary = PathBuf::from("/nonexistent/picot-p16-smoke");
+        let error = manager
+            .spawn_ephemeral(
+                "workspace-a",
+                "session-a",
+                spec,
+                &owner,
+                crate::ephemeral_registry::EphemeralKind::SideChat,
+                1,
+            )
+            .unwrap_err();
+        assert!(error.contains("Cannot start"));
+        assert!(registry.descriptors(&owner).is_empty());
+    }
+
+    #[tokio::test]
+    async fn owner_transition_revokes_secret_generation() {
+        let manager = NativePiManager::in_memory(8);
+        let registry = std::sync::Arc::new(crate::ephemeral_registry::EphemeralRegistry::default());
+        manager.set_ephemeral_registry(std::sync::Arc::clone(&registry));
+        let owner = crate::window_owner::OwnerId::from_string("owner-a".into());
+        manager
+            .spawn_ephemeral(
+                "workspace-a",
+                "session-a",
+                cat_ephemeral_spec(NativeRuntimeType::QuickChat, Some("secret-a")),
+                &owner,
+                crate::ephemeral_registry::EphemeralKind::QuickChat,
+                2,
+            )
+            .unwrap();
+        assert!(manager
+            .inner
+            .secret_generations
+            .lock()
+            .unwrap()
+            .contains_key("owner-a"));
+        manager.stop_for_owner_transition("owner-a", 3);
+        assert!(!manager
+            .inner
+            .secret_generations
+            .lock()
+            .unwrap()
+            .contains_key("owner-a"));
+    }
+
+    #[tokio::test]
+    async fn mutation_replay_covers_all_three_acceptance_states() {
+        let manager = NativePiManager::in_memory(8);
+        let target = RuntimeTarget::new("workspace-a", "session-a", "instance-a");
+        let scope = OperationScope::new("owner-a", "workspace-a", "session-a", 1);
+        let mut fake = manager.register_in_memory(target.clone()).unwrap();
+
+        // accepted_pending: the first send is accepted; completion delivers
+        // its terminal response.
+        let first = tokio::spawn({
+            let manager = manager.clone();
+            let target = target.clone();
+            let scope = scope.clone();
+            async move {
+                manager
+                    .request_scoped_receipt(
+                        &target,
+                        scope,
+                        json!({ "type": "prompt", "message": "m" }),
+                        "intent-replay",
+                        Duration::from_secs(5),
+                    )
+                    .await
+            }
+        });
+        let outbound = fake.read_request().await.unwrap();
+        let id = outbound["id"].as_str().unwrap();
+
+        // duplicate_pending: the same idempotency key while the first request
+        // is still in flight reports the in-band pending acceptance — no
+        // error, no second execution.
+        let (_, pending_acceptance, pending_response) = manager
+            .request_scoped_receipt(
+                &target.clone(),
+                scope.clone(),
+                json!({ "type": "prompt", "message": "m" }),
+                "intent-replay",
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            pending_acceptance,
+            crate::operation_registry::OperationAcceptance::DuplicatePending
+        ));
+        assert!(pending_response.is_none());
+
+        fake.write_frame(json!({
+            "id": id,
+            "type": "response",
+            "command": "prompt",
+            "success": true
+        }))
+        .await
+        .unwrap();
+        let (first_id, first_acceptance, first_response) = first.await.unwrap().unwrap();
+        assert!(matches!(
+            first_acceptance,
+            crate::operation_registry::OperationAcceptance::Accepted
+        ));
+        let first_response = first_response.expect("first send returns its terminal response");
+        assert_eq!(first_response["success"], true);
+
+        // duplicate_completed: after completion the same key replays the
+        // recorded terminal response instead of executing again.
+        let (third_id, third_acceptance, third_response) = manager
+            .request_scoped_receipt(
+                &target.clone(),
+                scope.clone(),
+                json!({ "type": "prompt", "message": "m" }),
+                "intent-replay",
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        assert_eq!(third_id, first_id);
+        assert!(matches!(
+            third_acceptance,
+            crate::operation_registry::OperationAcceptance::DuplicateCompleted
+        ));
+        assert_eq!(
+            third_response.expect("completed duplicate replays terminal response"),
+            first_response
+        );
     }
 
     #[tokio::test]

@@ -21,6 +21,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use crate::native_pi_manager::NativeLaunchSpec;
+use crate::process_tree::{configure_child, ProcessTree};
 use tokio::sync::broadcast;
 
 const QUICK_CHAT_TEMP_PREFIX: &str = "picot-quick-chat-";
@@ -52,6 +53,7 @@ pub struct RpcOutput {
 
 struct PiProcess {
     child: Child,
+    tree: ProcessTree,
     stdin: ChildStdin,
     pid: u32,
     identity: u64,
@@ -274,6 +276,7 @@ impl PiManager {
             runtime_type: crate::native_pi_manager::NativeRuntimeType::Primary,
             no_tools: false,
             readiness: crate::native_pi_manager::ReadinessPolicy::default(),
+            cleanup: crate::native_pi_manager::NativeCleanupResources::default(),
         })
     }
 
@@ -559,6 +562,7 @@ impl PiManager {
         log_child_path_diagnostics("spawn", &augmented_path);
 
         let mut child = Command::new(&pi_bin_str);
+        configure_child(&mut child);
         configure_child_process_for_windows(&mut child);
         child
             .args(&args)
@@ -636,6 +640,10 @@ impl PiManager {
             identity,
             spawn_started_at.elapsed().as_millis()
         );
+        let tree = ProcessTree::attach(&mut child).inspect_err(|_| {
+            let _ = child.kill();
+            let _ = child.wait();
+        })?;
         let stdin = child
             .stdin
             .take()
@@ -666,6 +674,7 @@ impl PiManager {
                 spec.port,
                 PiProcess {
                     child,
+                    tree,
                     stdin,
                     pid,
                     identity,
@@ -838,14 +847,16 @@ impl PiManager {
     pub fn kill(&self, port: u16) {
         let mut lock = self.processes.lock().unwrap();
         if let Some(mut proc) = lock.remove(&port) {
-            let _ = proc.child.kill();
+            let _ = proc.tree.terminate(&mut proc.child);
+            let _ = ProcessTree::wait(&mut proc.child);
         }
     }
 
     pub fn kill_all(&self) {
         let mut lock = self.processes.lock().unwrap();
         for (_, mut proc) in lock.drain() {
-            let _ = proc.child.kill();
+            let _ = proc.tree.terminate(&mut proc.child);
+            let _ = ProcessTree::wait(&mut proc.child);
         }
     }
 

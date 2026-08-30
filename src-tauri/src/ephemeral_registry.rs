@@ -418,6 +418,27 @@ impl EphemeralRegistry {
         leases
     }
 
+    pub fn cleanup_for_transition(
+        &self,
+        owner: &OwnerId,
+        transition_generation: u64,
+    ) -> Vec<CleanupLease> {
+        let mut state = self.inner.lock().expect("ephemeral registry lock poisoned");
+        let Some(partition) = state.get_mut(owner) else {
+            return Vec::new();
+        };
+        let mut leases = Vec::new();
+        for record in partition.all_records_mut() {
+            if record.transition_generation < transition_generation
+                && record.state != EphemeralState::Closing
+            {
+                record.state = EphemeralState::Closing;
+                leases.push(record.lease(owner.clone()));
+            }
+        }
+        leases
+    }
+
     pub fn side_chat_cleanup_for_transition(
         &self,
         owner: &OwnerId,

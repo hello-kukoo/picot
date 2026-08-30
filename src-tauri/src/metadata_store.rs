@@ -518,6 +518,18 @@ impl MetadataStore {
             .map_err(|error| format!("Cannot load Picot workspace row: {error}"))
     }
 
+    /// Return whether registry contains at least one workspace without
+    /// canonicalizing, pruning, or mutating the database. Startup uses this
+    /// gate before selecting a Registered native target.
+    pub fn has_registered_workspaces(&self) -> Result<bool, String> {
+        self.connection
+            .query_row("SELECT EXISTS(SELECT 1 FROM workspaces)", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map(|value| value != 0)
+            .map_err(|error| format!("Cannot inspect Picot workspace registry: {error}"))
+    }
+
     pub fn workspace_id_for_path(&mut self, workspace: &Path) -> Result<String, String> {
         self.add_workspace(workspace)
             .map(|(row, _added)| row.workspace_id)
@@ -1197,6 +1209,8 @@ mod tests {
         );
 
         let authorization = super::rollout_authorization();
+        store.runtime_pref_set(Some(&authorization), false).unwrap();
+        assert_eq!(store.runtime_pref_get(Some(&authorization)), Some(false));
         store.runtime_pref_set(Some(&authorization), true).unwrap();
         assert_eq!(store.runtime_pref_get(Some(&authorization)), Some(true));
         assert_eq!(
@@ -1308,6 +1322,16 @@ mod tests {
                 .unwrap_err(),
             WorkspaceLookupError::NotRegistered
         );
+    }
+
+    #[test]
+    fn has_registered_workspaces_is_read_only() {
+        let (_guard, store) = fresh_store("picot.sqlite3");
+        assert!(!store.has_registered_workspaces().unwrap());
+        let workspace = _guard.0.join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        store.add_workspace(&workspace).unwrap();
+        assert!(store.has_registered_workspaces().unwrap());
     }
 
     #[test]

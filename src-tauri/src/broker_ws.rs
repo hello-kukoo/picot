@@ -5,13 +5,14 @@ use crate::command_policy::{classify_core_command, EphemeralPermission};
 use crate::git_pi_runner::GitPiRunner;
 use crate::git_service::GitService;
 use crate::terminal_manager::TerminalManager;
+use crate::v1_control_adapter;
 use crate::window_owner::{OwnerId, WindowOwnerRegistry};
 use futures_util::future::BoxFuture;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -52,7 +53,7 @@ fn git_commit_diff_args(value: &Value) -> Result<(String, Vec<u8>), String> {
 }
 
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
+use tokio::sync::Notify;
 use tokio_tungstenite::tungstenite::Message;
 
 const PROTOCOL_VERSION: u8 = 1;
@@ -60,8 +61,138 @@ const PROTOCOL_VERSION: u8 = 1;
 const AUTH_TIMEOUT_SECS: u64 = 5;
 pub const EPHEMERAL_JOURNAL_MAX_EVENTS: usize = 512;
 const EPHEMERAL_JOURNAL_MAX_BYTES: usize = 2 * 1024 * 1024;
+const MAX_BROKER_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
-type Tx = mpsc::UnboundedSender<String>;
+const UI_QUEUE_CAPACITY: usize = 64;
+const UPSTREAM_QUEUE_CAPACITY: usize = 64;
+#[derive(Clone)]
+struct Tx {
+    queue: Arc<Mutex<crate::transport_limits::OutboundQueue>>,
+    notify: Arc<Notify>,
+    closed: Arc<AtomicBool>,
+    coalesce: bool,
+    sequence: Arc<AtomicU64>,
+}
+
+impl Tx {
+    fn try_send(&self, payload: String) -> Result<(), ()> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(());
+        }
+        let is_terminal = is_terminal_frame(&payload);
+        let key = if is_terminal || self.coalesce {
+            // Terminal outcomes always use request/operation identity, even on
+            // upstream queues where progress frames are not coalesced.
+            coalesce_key(&payload)
+        } else {
+            format!("frame:{}", self.sequence.fetch_add(1, Ordering::Relaxed))
+        };
+        let accepted = {
+            let mut queue = self.queue.lock().unwrap();
+            if is_terminal {
+                queue.push_terminal(key, payload)
+            } else {
+                queue.push_data(key, payload)
+            }
+        };
+        if accepted {
+            self.notify.notify_one();
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+        self.notify.notify_waiters();
+    }
+
+    async fn recv(&self) -> Option<String> {
+        loop {
+            if let Some(frame) = self.queue.lock().unwrap().pop() {
+                return Some(match frame {
+                    crate::transport_limits::OutboundFrame::Data { payload, .. }
+                    | crate::transport_limits::OutboundFrame::Terminal { payload, .. } => payload,
+                });
+            }
+            if self.closed.load(Ordering::Acquire) {
+                return None;
+            }
+            self.notify.notified().await;
+        }
+    }
+}
+
+struct OutboundReceiver(Tx);
+
+impl OutboundReceiver {
+    async fn recv(&mut self) -> Option<String> {
+        self.0.recv().await
+    }
+
+    #[cfg(test)]
+    fn try_recv(&mut self) -> Result<String, ()> {
+        self.0
+            .queue
+            .lock()
+            .unwrap()
+            .pop()
+            .map(|frame| match frame {
+                crate::transport_limits::OutboundFrame::Data { payload, .. }
+                | crate::transport_limits::OutboundFrame::Terminal { payload, .. } => payload,
+            })
+            .ok_or(())
+    }
+}
+
+fn outbound_channel(capacity: usize, coalesce: bool) -> (Tx, OutboundReceiver) {
+    let notify = Arc::new(Notify::new());
+    let closed = Arc::new(AtomicBool::new(false));
+    let queue = Arc::new(Mutex::new(crate::transport_limits::OutboundQueue::new(
+        capacity,
+    )));
+    let sequence = Arc::new(AtomicU64::new(0));
+    let tx = Tx {
+        queue,
+        notify,
+        closed,
+        coalesce,
+        sequence,
+    };
+    (tx.clone(), OutboundReceiver(tx))
+}
+
+fn coalesce_key(payload: &str) -> String {
+    serde_json::from_str::<Value>(payload)
+        .ok()
+        .map(|value| {
+            format!(
+                "{}:{}:{}",
+                value.get("type").and_then(Value::as_str).unwrap_or("frame"),
+                value.get("requestId").unwrap_or(&Value::Null),
+                value.get("sessionId").unwrap_or(&Value::Null)
+            )
+        })
+        .unwrap_or_else(|| "frame".to_string())
+}
+
+fn is_terminal_frame(payload: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(payload) else {
+        return false;
+    };
+    let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
+    kind == "capabilities"
+        || kind == "owner_bootstrap"
+        || kind == "control_response"
+        || kind == "command_undeliverable"
+        || kind.ends_with("_end")
+        || kind.ends_with("_result")
+        || kind.ends_with("_failed")
+        || kind.ends_with("_ack")
+        || kind.ends_with("_required")
+        || kind == "outbound_queue_gap"
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClientClass {
@@ -84,19 +215,11 @@ pub struct VerifiedClientContext {
 /// requesting client's socket, tagged with the original `requestId`.
 pub type ProgressSink = Arc<dyn Fn(Value) + Send + Sync>;
 
-/// Async handler for `broker_control` requests. Given the verified client
-/// context, a command name + args (+ a progress sink for streaming ops) it
-/// resolves to `Ok(result_json)` or `Err(message)`. Injected from main.rs so
-/// the broker can run process/window lifecycle and native ops on behalf of any
-/// authenticated client without main.rs and broker_ws forming a circular
-/// dependency. Native-only controls enforce class/owner in the host handler.
+/// Canonical v2 control handler. Legacy `broker_control` requests are adapted
+/// before this callback is invoked; handlers must dispatch from the canonical
+/// frame, not from a second legacy validation path.
 pub type ControlHandler = Arc<
-    dyn Fn(
-            VerifiedClientContext,
-            String,
-            Value,
-            ProgressSink,
-        ) -> BoxFuture<'static, Result<Value, String>>
+    dyn Fn(VerifiedClientContext, Value, ProgressSink) -> BoxFuture<'static, Result<Value, String>>
         + Send
         + Sync,
 >;
@@ -158,6 +281,9 @@ struct BrokerInner {
     active_port: Mutex<Option<u16>>,
     next_client_id: AtomicU64,
     control_handler: Mutex<Option<ControlHandler>>,
+    /// Monotonic sequence per legacy Pi upstream, used by the v1→v2 event
+    /// facade before the event is adapted back to the legacy broker envelope.
+    event_sequences: Mutex<HashMap<u16, u64>>,
     owner_registry: Mutex<Option<Arc<WindowOwnerRegistry>>>,
     terminal_manager: Mutex<Option<Arc<TerminalManager>>>,
     git_service: Mutex<Option<Arc<GitService>>>,
@@ -172,7 +298,7 @@ pub struct BrokerWs {
 
 impl BrokerWs {
     pub fn start() -> Result<Self, String> {
-        let std_listener = std::net::TcpListener::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0))
+        let std_listener = std::net::TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .map_err(|e| format!("Failed to bind broker websocket: {}", e))?;
         std_listener
             .set_nonblocking(true)
@@ -228,6 +354,11 @@ impl BrokerWs {
     /// once from main.rs after PiManager + BrokerWs exist.
     pub fn set_control_handler(&self, handler: ControlHandler) {
         *self.inner.control_handler.lock().unwrap() = Some(handler);
+    }
+
+    /// Reuse installed control authority from host-origin protocol adapters.
+    pub fn control_handler(&self) -> Option<ControlHandler> {
+        self.inner.control_handler.lock().unwrap().clone()
     }
 
     /// Install the window-owner registry used to authenticate `client_hello`
@@ -394,7 +525,7 @@ impl BrokerWs {
             clients
                 .get(&id)
                 .filter(|c| c.authed && c.owner_id.as_ref() == Some(owner))
-                .and_then(|c| c.tx.send(message).ok())
+                .and_then(|c| c.tx.try_send(message).ok())
                 .is_some()
         };
         delivered
@@ -412,7 +543,7 @@ impl BrokerWs {
         for client in clients.values() {
             if client.authed
                 && client.class == ClientClass::Native
-                && client.tx.send(message.clone()).is_ok()
+                && client.tx.try_send(message.clone()).is_ok()
             {
                 delivered += 1;
             }
@@ -553,7 +684,9 @@ impl BrokerWs {
     pub fn unregister_port(&self, port: u16) {
         log::info!("[broker-ws] unregister_port port={}", port);
         self.inner.disabled_ports.lock().unwrap().insert(port);
-        self.inner.upstreams.lock().unwrap().remove(&port);
+        if let Some(tx) = self.inner.upstreams.lock().unwrap().remove(&port) {
+            tx.close();
+        }
         self.inner
             .routes
             .lock()
@@ -592,7 +725,7 @@ impl BrokerWs {
         };
         let client_id = self.inner.next_client_id.fetch_add(1, Ordering::Relaxed);
         let (mut writer, mut reader) = ws.split();
-        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        let (tx, mut rx) = outbound_channel(UI_QUEUE_CAPACITY, true);
         // Accept the socket as unauthenticated; it cannot route commands until a
         // valid `client_hello` is classified and the record is marked authed.
         self.inner.ui_clients.lock().unwrap().insert(
@@ -605,9 +738,11 @@ impl BrokerWs {
             },
         );
 
+        let writer_tx = tx.clone();
         let writer_task = tauri::async_runtime::spawn(async move {
             while let Some(message) = rx.recv().await {
                 if writer.send(Message::Text(message)).await.is_err() {
+                    writer_tx.close();
                     break;
                 }
             }
@@ -649,7 +784,7 @@ impl BrokerWs {
             }
         };
 
-        let _ = tx.send(
+        let _ = tx.try_send(
             json!({
                 "type": "capabilities",
                 "protocolVersion": PROTOCOL_VERSION,
@@ -724,6 +859,7 @@ impl BrokerWs {
     fn remove_client(&self, client_id: u64) {
         let removed = self.inner.ui_clients.lock().unwrap().remove(&client_id);
         if let Some(client) = removed {
+            client.tx.close();
             if let Some(owner) = &client.owner_id {
                 if let Some(service) = self.inner.git_service.lock().unwrap().clone() {
                     // On client disconnect, cancel pending status/diff snapshots
@@ -773,7 +909,7 @@ impl BrokerWs {
                 })
                 .unwrap_or((0, Vec::new()))
         };
-        let _ = tx.send(
+        let _ = tx.try_send(
             json!({
                 "type": "owner_bootstrap",
                 "protocolVersion": PROTOCOL_VERSION,
@@ -786,7 +922,7 @@ impl BrokerWs {
         // generation, in completion order, so a reconnecting client recovers
         // every detached commit result (not just one).
         for outcome in pending_git_outcomes {
-            let _ = tx.send(
+            let _ = tx.try_send(
                 serde_json::to_string(&serde_json::json!({
                     "type": "git_commit_result",
                     "requestId": outcome.request_id,
@@ -830,6 +966,10 @@ impl BrokerWs {
     }
 
     fn route_ui_message(&self, ctx: &VerifiedClientContext, text: &str, client_tx: &Tx) {
+        if text.len() > MAX_BROKER_FRAME_BYTES {
+            self.notify_undeliverable(client_tx, &Value::Null, "frame_too_large");
+            return;
+        }
         let Ok(value) = serde_json::from_str::<Value>(text) else {
             log::warn!("[broker-ws] invalid UI message");
             return;
@@ -917,7 +1057,7 @@ impl BrokerWs {
         // queues into the channel even while reconnecting, so a `None` tx (or a
         // closed channel) means the port is genuinely gone (killed/disabled).
         let delivered = match upstream_tx {
-            Some(tx) => tx.send(text.to_string()).is_ok(),
+            Some(tx) => tx.try_send(text.to_string()).is_ok(),
             None => false,
         };
         if !delivered {
@@ -943,7 +1083,7 @@ impl BrokerWs {
             }),
         };
         if !authorized {
-            let _ = client_tx.send(
+            let _ = client_tx.try_send(
                 json!({
                     "type": "command_undeliverable",
                     "requestId": value.get("requestId"),
@@ -965,13 +1105,17 @@ impl BrokerWs {
         tauri::async_runtime::spawn(async move {
             if let Err(error) = handler(
                 context,
-                "rpc_extension_ui_response".to_string(),
-                args,
+                json!({
+                    "type": "host_request",
+                    "requestId": request_id.clone(),
+                    "operation": "rpc_extension_ui_response",
+                    "args": args,
+                }),
                 Arc::new(|_| {}),
             )
             .await
             {
-                let _ = tx.send(
+                let _ = tx.try_send(
                     json!({
                         "type": "command_undeliverable",
                         "requestId": request_id,
@@ -1000,7 +1144,7 @@ impl BrokerWs {
             .to_string();
         let mut payload = value.get("payload").cloned().unwrap_or(Value::Null);
         let fail = || {
-            let _ = client_tx.send(
+            let _ = client_tx.try_send(
                 json!({
                     "type": "ephemeral_command_failed",
                     "protocolVersion": PROTOCOL_VERSION,
@@ -1029,7 +1173,8 @@ impl BrokerWs {
         }
         self.ensure_upstream(port);
         let upstream_tx = self.inner.upstreams.lock().unwrap().get(&port).cloned();
-        let delivered = matches!(&upstream_tx, Some(tx) if tx.send(payload.to_string()).is_ok());
+        let delivered =
+            matches!(&upstream_tx, Some(tx) if tx.try_send(payload.to_string()).is_ok());
         if !delivered {
             fail();
         }
@@ -1060,13 +1205,17 @@ impl BrokerWs {
         tauri::async_runtime::spawn(async move {
             if let Err(_error) = handler(
                 context,
-                "ephemeral_extension_ui_response".to_string(),
-                args,
+                json!({
+                    "type": "host_request",
+                    "requestId": request_id.clone(),
+                    "operation": "ephemeral_extension_ui_response",
+                    "args": args,
+                }),
                 Arc::new(|_| {}),
             )
             .await
             {
-                let _ = tx.send(
+                let _ = tx.try_send(
                     json!({
                         "type": "ephemeral_command_failed",
                         "protocolVersion": PROTOCOL_VERSION,
@@ -1097,7 +1246,7 @@ impl BrokerWs {
             .unwrap_or("")
             .to_string();
         let fail = |reason: &str| {
-            let _ = client_tx.send(
+            let _ = client_tx.try_send(
                 json!({
                     "type": "terminal_command_failed",
                     "protocolVersion": PROTOCOL_VERSION,
@@ -1144,7 +1293,7 @@ impl BrokerWs {
         let payload = value.get("payload").cloned().unwrap_or(Value::Null);
         match manager.dispatch(owner, &workspace_root, &payload) {
             Ok(response) => {
-                let _ = client_tx.send(response.to_string());
+                let _ = client_tx.try_send(response.to_string());
             }
             Err(error) => fail(&error),
         }
@@ -1160,7 +1309,7 @@ impl BrokerWs {
             .and_then(|registry| registry.current_workspace_generation(ctx.owner_id.as_ref()?))
             .unwrap_or(0);
         let fail = |error: &str| {
-            let _ = client_tx.send(
+            let _ = client_tx.try_send(
                 json!({
                     "type": "git_command_failed",
                     "requestId": request_id,
@@ -1235,7 +1384,7 @@ impl BrokerWs {
                 // in-flight workspace switch cancels the AI request before it
                 // starts a subprocess.
                 if registry.workspace_transition_in_progress(&owner_owned) {
-                    let _ = client_tx_owned.send(
+                    let _ = client_tx_owned.try_send(
                         json!({ "type": "git_ai_commit_message_failed", "requestId": request_id_owned, "workspaceGeneration": generation, "error": "workspace transition" })
                             .to_string(),
                     );
@@ -1244,13 +1393,13 @@ impl BrokerWs {
                 let message = GitPiRunner::run(&binary, &root, &request_id_owned, &prompt);
                 match message {
                     Ok(message) => {
-                        let _ = client_tx_owned.send(
+                        let _ = client_tx_owned.try_send(
                             json!({ "type": "git_ai_commit_message", "requestId": request_id_owned, "workspaceGeneration": generation, "snapshot": snapshot_owned, "message": message })
                                 .to_string(),
                         );
                     }
                     Err(error) => {
-                        let _ = client_tx_owned.send(
+                        let _ = client_tx_owned.try_send(
                             json!({ "type": "git_ai_commit_message_failed", "requestId": request_id_owned, "workspaceGeneration": generation, "error": error })
                                 .to_string(),
                         );
@@ -1267,7 +1416,7 @@ impl BrokerWs {
         if command == "status" {
             match service.status(owner.as_str(), &root, generation) {
                 Ok(snapshot) => {
-                    let _ = client_tx.send(json!({ "type": "git_status", "requestId": request_id, "workspaceGeneration": generation, "snapshot": snapshot }).to_string());
+                    let _ = client_tx.try_send(json!({ "type": "git_status", "requestId": request_id, "workspaceGeneration": generation, "snapshot": snapshot }).to_string());
                 }
                 Err(error) => fail(&error),
             }
@@ -1305,7 +1454,7 @@ impl BrokerWs {
                 comparison,
             ) {
                 Ok(diff) => {
-                    let _ = client_tx.send(
+                    let _ = client_tx.try_send(
                         json!({ "type": "git_diff", "requestId": request_id, "workspaceGeneration": generation, "diff": diff })
                             .to_string(),
                     );
@@ -1322,7 +1471,7 @@ impl BrokerWs {
             };
             match service.log(owner.as_str(), &root, generation, limit, before.as_deref()) {
                 Ok(log) => {
-                    let _ = client_tx.send(
+                    let _ = client_tx.try_send(
                         json!({
                             "type": "git_log",
                             "requestId": request_id,
@@ -1345,7 +1494,7 @@ impl BrokerWs {
             };
             match service.log_detail(owner.as_str(), &root, generation, &oid) {
                 Ok(detail) => {
-                    let _ = client_tx.send(
+                    let _ = client_tx.try_send(
                         json!({
                             "type": "git_log_detail",
                             "requestId": request_id,
@@ -1367,7 +1516,7 @@ impl BrokerWs {
             };
             match service.commit_diff(owner.as_str(), &root, generation, &oid, &path) {
                 Ok(diff) => {
-                    let _ = client_tx.send(
+                    let _ = client_tx.try_send(
                         json!({
                             "type": "git_commit_diff",
                             "requestId": request_id,
@@ -1411,7 +1560,7 @@ impl BrokerWs {
                     // outcome through owner_bootstrap on reconnect.
                     let client_tx_clone = client_tx.clone();
                     let notify: Box<dyn FnOnce(String) + Send> = Box::new(move |frame| {
-                        let _ = client_tx_clone.send(frame);
+                        let _ = client_tx_clone.try_send(frame);
                     });
                     service.commit_detached(
                         snapshot_id.to_string(),
@@ -1424,14 +1573,14 @@ impl BrokerWs {
                     );
                     // Tell the UI a commit is in flight so it can show a spinner;
                     // the final result arrives as git_commit_result.
-                    let _ = client_tx.send(
+                    let _ = client_tx.try_send(
                         json!({ "type": "git_commit_started", "requestId": request_id, "workspaceGeneration": generation })
                             .to_string(),
                     );
                 }
                 Err(error) if error.starts_with("confirmationRequired:") => {
                     let token = error.trim_start_matches("confirmationRequired:");
-                    let _ = client_tx.send(json!({ "type": "git_commit_confirmation_required", "requestId": request_id, "workspaceGeneration": generation, "snapshotId": snapshot_id, "confirmationToken": token }).to_string());
+                    let _ = client_tx.try_send(json!({ "type": "git_commit_confirmation_required", "requestId": request_id, "workspaceGeneration": generation, "snapshotId": snapshot_id, "confirmationToken": token }).to_string());
                 }
                 Err(error) => fail(&error),
             }
@@ -1507,7 +1656,7 @@ impl BrokerWs {
                 command,
             ) {
                 Ok(()) => {
-                    let _ = client_tx.send(
+                    let _ = client_tx.try_send(
                         json!({ "type": "git_command_ack", "requestId": request_id, "workspaceGeneration": generation }).to_string(),
                     );
                 }
@@ -1528,7 +1677,7 @@ impl BrokerWs {
             .and_then(Value::as_str)
             .or_else(|| value.get("type").and_then(Value::as_str))
             .unwrap_or("");
-        let _ = client_tx.send(
+        let _ = client_tx.try_send(
             json!({
                 "type": "command_undeliverable",
                 "protocolVersion": PROTOCOL_VERSION,
@@ -1553,12 +1702,34 @@ impl BrokerWs {
             .unwrap_or("")
             .to_string();
         let args = value.get("args").cloned().unwrap_or(Value::Null);
+        let canonical = match v1_control_adapter::to_v2(&command, &request_id, args.clone()) {
+            Ok(frame) => frame,
+            Err(error) => {
+                let _ = client_tx.try_send(
+                    json!({
+                        "type": "control_response",
+                        "requestId": request_id,
+                        "ok": false,
+                        "error": error,
+                    })
+                    .to_string(),
+                );
+                return;
+            }
+        };
+        let canonical_type = canonical
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("host_request")
+            .to_owned();
+        let mutation = canonical.get("idempotencyKey").is_some();
+        let idempotency_key = canonical.get("idempotencyKey").cloned();
 
         let handler = self.inner.control_handler.lock().unwrap().clone();
         let tx = client_tx.clone();
 
         let Some(handler) = handler else {
-            let _ = tx.send(
+            let _ = tx.try_send(
                 json!({
                     "type": "control_response",
                     "requestId": request_id,
@@ -1574,11 +1745,14 @@ impl BrokerWs {
         // chunks) back to the requesting client, tagged with the requestId.
         let progress_tx = tx.clone();
         let progress_request_id = request_id.clone();
+        let progress_sequence = Arc::new(AtomicU64::new(0));
         let sink: ProgressSink = Arc::new(move |data: Value| {
-            let _ = progress_tx.send(
+            let sequence = progress_sequence.fetch_add(1, Ordering::Relaxed) + 1;
+            let _ = progress_tx.try_send(
                 json!({
                     "type": "control_progress",
                     "requestId": progress_request_id,
+                    "sequence": sequence,
                     "data": data,
                 })
                 .to_string(),
@@ -1592,12 +1766,15 @@ impl BrokerWs {
         );
         let ctx = ctx.clone();
         tauri::async_runtime::spawn(async move {
-            let response = match handler(ctx, command.clone(), args, sink).await {
+            let response = match handler(ctx, canonical, sink).await {
                 Ok(result) => json!({
                     "type": "control_response",
                     "requestId": request_id,
                     "ok": true,
                     "result": result,
+                    "canonicalType": canonical_type,
+                    "mutation": mutation,
+                    "idempotencyKey": idempotency_key,
                 }),
                 Err(error) => {
                     log::warn!("[broker-ws] control command {} failed: {}", command, error);
@@ -1609,7 +1786,7 @@ impl BrokerWs {
                     })
                 }
             };
-            let _ = tx.send(response.to_string());
+            let _ = tx.try_send(response.to_string());
         });
     }
 
@@ -1684,7 +1861,7 @@ impl BrokerWs {
             if upstreams.contains_key(&port) {
                 return;
             }
-            let (tx, rx) = mpsc::unbounded_channel::<String>();
+            let (tx, rx) = outbound_channel(UPSTREAM_QUEUE_CAPACITY, false);
             upstreams.insert(port, tx);
             rx
         };
@@ -1694,7 +1871,7 @@ impl BrokerWs {
         });
     }
 
-    async fn run_upstream(self, port: u16, mut rx: mpsc::UnboundedReceiver<String>) {
+    async fn run_upstream(self, port: u16, mut rx: OutboundReceiver) {
         let url = format!("ws://127.0.0.1:{}/ws", port);
 
         loop {
@@ -1823,6 +2000,22 @@ impl BrokerWs {
         }
         let workspace_id = payload.get("workspaceId").cloned().unwrap_or(Value::Null);
         let session_id = payload.get("sessionId").cloned().unwrap_or(Value::Null);
+        let instance_id = json!(port.to_string());
+        let sequence = {
+            let mut sequences = self.inner.event_sequences.lock().unwrap();
+            let next = sequences.entry(port).or_insert(0);
+            *next = next.saturating_add(1);
+            *next
+        };
+        // Canonicalize every legacy event at production ingress. The legacy
+        // broker envelope below intentionally preserves v1 wire compatibility.
+        let canonical = v1_control_adapter::event_to_v2(
+            payload.clone(),
+            workspace_id.clone(),
+            session_id.clone(),
+            instance_id,
+            sequence,
+        );
         Some(
             json!({
                 "type": "broker_event",
@@ -1831,6 +2024,7 @@ impl BrokerWs {
                 "sessionId": session_id,
                 "sourcePort": port,
                 "payload": payload,
+                "runtimeEvent": canonical,
             })
             .to_string(),
         )
@@ -1840,8 +2034,19 @@ impl BrokerWs {
         let mut stale = Vec::new();
         let clients = self.inner.ui_clients.lock().unwrap();
         for (id, client) in clients.iter() {
-            if client.tx.send(message.to_string()).is_err() {
-                stale.push(*id);
+            if client.tx.try_send(message.to_string()).is_err() {
+                // A slow consumer missed at least one coalescible event. Keep
+                // connection alive, but force snapshot hydration instead of
+                // allowing client to infer state from a partial event stream.
+                let gap = json!({
+                    "type": "event_sequence_gap",
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "reason": "outbound_queue_overflow",
+                })
+                .to_string();
+                if client.tx.try_send(gap).is_err() {
+                    stale.push(*id);
+                }
             }
         }
         drop(clients);
@@ -1883,6 +2088,48 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::process::Command as StdCommand;
+
+    #[test]
+    fn live_outbound_queue_coalesces_progress_but_retains_terminal_response() {
+        let (tx, mut rx) = outbound_channel(2, true);
+        assert!(tx
+            .try_send(json!({"type":"message_update","sessionId":"s","delta":"a"}).to_string())
+            .is_ok());
+        assert!(tx
+            .try_send(json!({"type":"message_update","sessionId":"s","delta":"b"}).to_string())
+            .is_ok());
+        assert!(tx
+            .try_send(json!({"type":"message_end","sessionId":"s"}).to_string())
+            .is_ok());
+        let first: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        let second: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        assert_eq!(first["type"], "message_update");
+        assert_eq!(first["delta"], "b");
+        assert_eq!(second["type"], "message_end");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn canonical_runtime_event_is_present_at_broker_ingress() {
+        let broker = BrokerWs {
+            port: 49000,
+            inner: Arc::new(BrokerInner::default()),
+        };
+        let frame = broker
+            .wrap_upstream_message(
+                47821,
+                &json!({
+                    "type":"event", "event":{"type":"agent_start"},
+                    "workspaceId":"workspace-a", "sessionId":"session-a"
+                })
+                .to_string(),
+            )
+            .unwrap();
+        let value: Value = serde_json::from_str(&frame).unwrap();
+        assert_eq!(value["runtimeEvent"]["type"], "runtime_event");
+        assert_eq!(value["runtimeEvent"]["event"]["type"], "agent_start");
+        assert_eq!(value["runtimeEvent"]["target"]["sessionId"], "session-a");
+    }
 
     #[test]
     fn extract_session_id_prefers_route_metadata() {
@@ -2062,9 +2309,9 @@ mod tests {
         class: ClientClass,
         owner: Option<OwnerId>,
         authed: bool,
-    ) -> (u64, mpsc::UnboundedReceiver<String>) {
+    ) -> (u64, OutboundReceiver) {
         let client_id = broker.inner.next_client_id.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = mpsc::unbounded_channel::<String>();
+        let (tx, rx) = outbound_channel(UI_QUEUE_CAPACITY, true);
         broker.inner.ui_clients.lock().unwrap().insert(
             client_id,
             UiClient {
@@ -2077,7 +2324,7 @@ mod tests {
         (client_id, rx)
     }
 
-    fn drain(rx: &mut mpsc::UnboundedReceiver<String>) -> Vec<Value> {
+    fn drain(rx: &mut OutboundReceiver) -> Vec<Value> {
         let mut frames = Vec::new();
         while let Ok(text) = rx.try_recv() {
             frames.push(serde_json::from_str(&text).expect("frame json"));
@@ -2220,7 +2467,7 @@ mod tests {
             class: ClientClass::Remote,
             owner_id: None,
         };
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = outbound_channel(UI_QUEUE_CAPACITY, true);
         broker.route_ui_message(
             &remote,
             &serde_json::to_string(&json!({
@@ -2302,7 +2549,7 @@ mod tests {
             owner_id: Some(owner),
         };
         broker.set_git_service(Arc::new(GitService::new()));
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = outbound_channel(UI_QUEUE_CAPACITY, true);
         broker.route_ui_message(
             &ctx,
             &serde_json::to_string(&json!({
@@ -2367,7 +2614,7 @@ mod tests {
             owner_id: Some(owner),
         };
         broker.set_git_service(Arc::new(GitService::new()));
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = outbound_channel(UI_QUEUE_CAPACITY, true);
         broker.route_ui_message(
             &ctx,
             &serde_json::to_string(&json!({
@@ -2440,7 +2687,7 @@ mod tests {
         broker.set_git_service(Arc::new(GitService::new()));
         let encoded =
             base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"file.txt");
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = outbound_channel(UI_QUEUE_CAPACITY, true);
         broker.route_ui_message(
             &ctx,
             &serde_json::to_string(&json!({
@@ -2494,7 +2741,7 @@ mod tests {
         let current_gen = registry
             .current_workspace_generation(&owner)
             .expect("current generation");
-        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        let (tx, mut rx) = outbound_channel(UI_QUEUE_CAPACITY, true);
         let frame = json!({
             "type": "terminal_command",
             "requestId": "r-gen",
@@ -2582,14 +2829,14 @@ mod tests {
                 port,
             })
             .expect("route");
-        let (upstream_tx, mut upstream_rx) = mpsc::unbounded_channel();
+        let (upstream_tx, mut upstream_rx) = outbound_channel(UPSTREAM_QUEUE_CAPACITY, false);
         broker
             .inner
             .upstreams
             .lock()
             .unwrap()
             .insert(port, upstream_tx);
-        let (client_tx, _client_rx) = mpsc::unbounded_channel();
+        let (client_tx, _client_rx) = outbound_channel(UI_QUEUE_CAPACITY, true);
 
         broker.dispatch_ephemeral_command(
             &ctx,
@@ -2769,7 +3016,7 @@ mod tests {
             |_| json!([{ "instanceId": "chat-1", "generation": 1, "kind": "side-chat" }]),
         ));
 
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = outbound_channel(UI_QUEUE_CAPACITY, true);
         broker.send_owner_bootstrap(&owner, &tx);
         let frame: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
         assert_eq!(frame["type"], "owner_bootstrap");

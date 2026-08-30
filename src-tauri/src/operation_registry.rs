@@ -181,6 +181,26 @@ impl OperationRegistry {
         Ok(record)
     }
 
+    /// Lookup status while enforcing owner/workspace/generation scope. Session
+    /// identity remains part of stored scope but is not client supplied for
+    /// operation recovery.
+    pub fn get_owner_scoped(
+        &mut self,
+        operation_id: &str,
+        owner_id: &str,
+        workspace_id: &str,
+        generation: u64,
+    ) -> Result<&OperationRecord, OperationLookupError> {
+        let record = self.get(operation_id)?;
+        if record.scope.owner_id != owner_id
+            || record.scope.workspace_id != workspace_id
+            || record.scope.workspace_generation != generation
+        {
+            return Err(OperationLookupError::NotFound);
+        }
+        Ok(record)
+    }
+
     pub fn bind_turn(
         &mut self,
         operation_id: &str,
@@ -233,6 +253,27 @@ impl OperationRegistry {
                 stored.crash_reason = Some(reason.clone());
             }
         }
+    }
+
+    /// Test-only observation of per-instance operation states, so crash
+    /// semantics (Pending → Indeterminate with crash reason) can be asserted
+    /// directly instead of inferred from opaque operation ids.
+    #[cfg(test)]
+    pub(crate) fn states_for_instance(
+        &self,
+        execution_instance_id: &str,
+    ) -> Vec<(String, OperationState, Option<String>)> {
+        self.operations
+            .values()
+            .filter(|stored| stored.execution_instance_id == execution_instance_id)
+            .map(|stored| {
+                (
+                    stored.operation_id.clone(),
+                    stored.state.clone(),
+                    stored.crash_reason.clone(),
+                )
+            })
+            .collect()
     }
 
     pub fn host_restart(&mut self, crash_reason: impl Into<String>) {
@@ -388,6 +429,33 @@ mod tests {
         assert_eq!(
             registry.get(&generation_id),
             Err(OperationLookupError::Revoked)
+        );
+    }
+
+    #[test]
+    fn replay_reports_each_acceptance_state_and_preserves_operation_id() {
+        let (_, clock) = clock();
+        let mut registry = OperationRegistry::with_clock(4, Duration::from_secs(60), clock);
+        let (id, acceptance) = registry
+            .accept(scope(1), "same", "prompt", "instance")
+            .unwrap();
+        assert_eq!(acceptance, OperationAcceptance::Accepted);
+        let (pending_id, acceptance) = registry
+            .accept(scope(1), "same", "prompt", "other")
+            .unwrap();
+        assert_eq!(pending_id, id);
+        assert_eq!(acceptance, OperationAcceptance::DuplicatePending);
+        registry
+            .complete(&id, serde_json::json!({"ok": true}))
+            .unwrap();
+        let (completed_id, acceptance) = registry
+            .accept(scope(1), "same", "prompt", "other")
+            .unwrap();
+        assert_eq!(completed_id, id);
+        assert_eq!(acceptance, OperationAcceptance::DuplicateCompleted);
+        assert_eq!(
+            registry.get(&id).unwrap().terminal_response,
+            Some(serde_json::json!({"ok": true}))
         );
     }
 

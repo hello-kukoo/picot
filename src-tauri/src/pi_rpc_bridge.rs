@@ -3,6 +3,7 @@
 
 #![allow(dead_code)]
 
+use crate::process_tree::ProcessTree;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -50,6 +51,7 @@ pub struct PiRpcBridge {
 pub struct InMemoryPiProcess {
     outbound: mpsc::Receiver<Value>,
     incoming: Option<mpsc::Sender<Vec<u8>>>,
+    fatal_frames: Option<mpsc::Sender<BridgeFrame>>,
 }
 
 pub struct PiRpcProcess {
@@ -62,83 +64,12 @@ pub struct PiRpcProcessObserver {
     child: Arc<StdMutex<Child>>,
 }
 
-#[derive(Debug)]
-struct ProcessTree {
-    #[cfg(unix)]
-    pgid: libc::pid_t,
-    #[cfg(windows)]
-    job: windows_job::JobHandle,
-}
-
-impl ProcessTree {
-    fn for_child(child: &mut Child) -> Result<Self, String> {
-        #[cfg(unix)]
-        {
-            let pid = child.id() as libc::pid_t;
-            // pre_exec makes child its own group leader; reject unexpected
-            // identity rather than signaling an unrelated process group.
-            let group = unsafe { libc::getpgid(pid) };
-            if group != pid {
-                return Err(format!(
-                    "Pi RPC child process group identity mismatch: {group} != {pid}"
-                ));
-            }
-            Ok(Self { pgid: pid })
-        }
-        #[cfg(windows)]
-        {
-            windows_job::create_and_assign(child.id())
-                .map(|job| Self { job })
-                .ok_or_else(|| "Cannot assign Pi RPC process to Windows Job Object".into())
-        }
-        #[cfg(not(any(unix, windows)))]
-        {
-            let _ = child;
-            Ok(Self {})
-        }
-    }
-
-    fn terminate(&mut self, child: &mut Child) -> Result<(), String> {
-        #[cfg(unix)]
-        {
-            let pid = child.id() as libc::pid_t;
-            if child.try_wait().map_err(|e| e.to_string())?.is_some() {
-                return Ok(());
-            }
-            if unsafe { libc::getpgid(pid) } != self.pgid {
-                return Err(
-                    "Pi RPC child identity changed before process-group termination".into(),
-                );
-            }
-            unsafe {
-                libc::kill(-self.pgid, libc::SIGTERM);
-            }
-            for _ in 0..20 {
-                if child.try_wait().map_err(|e| e.to_string())?.is_some() {
-                    return Ok(());
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            if unsafe { libc::getpgid(pid) } == self.pgid {
-                unsafe {
-                    libc::kill(-self.pgid, libc::SIGKILL);
-                }
-            }
-        }
-        #[cfg(windows)]
-        windows_job::terminate(&self.job);
-        #[cfg(not(any(unix, windows)))]
-        child.kill().map_err(|e| e.to_string())?;
-        Ok(())
-    }
-}
-
 impl PiRpcBridge {
     pub fn attach(
         mut child: Child,
         max_frame_bytes: usize,
     ) -> Result<(Self, PiRpcProcess), String> {
-        let tree = ProcessTree::for_child(&mut child).inspect_err(|_| {
+        let tree = ProcessTree::attach(&mut child).inspect_err(|_| {
             let _ = child.kill();
             let _ = child.wait();
         })?;
@@ -225,6 +156,7 @@ impl PiRpcBridge {
             frames: Mutex::new(frame_rx),
             pending: Mutex::new(HashMap::new()),
         });
+        let fatal_frames = frame_tx.clone();
         tokio::spawn(read_frames(
             incoming_rx,
             frame_tx,
@@ -236,6 +168,7 @@ impl PiRpcBridge {
             InMemoryPiProcess {
                 outbound: outbound_rx,
                 incoming: Some(incoming_tx),
+                fatal_frames: Some(fatal_frames),
             },
         )
     }
@@ -286,9 +219,20 @@ impl PiRpcBridge {
     pub async fn next_frame(&self) -> Option<BridgeFrame> {
         self.inner.frames.lock().await.recv().await
     }
+
+    pub(crate) async fn reject_pending(&self) {
+        for (_, sender) in self.inner.pending.lock().await.drain() {
+            let _ = sender.send(Err(BridgeError::ProcessClosed));
+        }
+    }
 }
 
 impl PiRpcProcess {
+    /// Process id of the attached child, if it has not been reaped yet.
+    pub fn pid(&self) -> Option<u32> {
+        self.child.lock().ok().map(|child| child.id())
+    }
+
     pub fn observer(&self) -> PiRpcProcessObserver {
         PiRpcProcessObserver {
             child: Arc::clone(&self.child),
@@ -462,15 +406,6 @@ mod windows_job {
             if job.is_null() {
                 return None;
             }
-            let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
-            if process.is_null() || AssignProcessToJobObject(job, process) == 0 {
-                if !process.is_null() {
-                    CloseHandle(process);
-                }
-                CloseHandle(job);
-                return None;
-            }
-            CloseHandle(process);
             let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
             limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
             let configured = SetInformationJobObject(
@@ -483,14 +418,27 @@ mod windows_job {
                 CloseHandle(job);
                 return None;
             }
+            let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
+            if process.is_null() || AssignProcessToJobObject(job, process) == 0 {
+                if !process.is_null() {
+                    CloseHandle(process);
+                }
+                CloseHandle(job);
+                return None;
+            }
+            CloseHandle(process);
             Some(JobHandle(job))
         }
     }
 
-    pub fn terminate(job: &JobHandle) {
-        unsafe {
-            TerminateJobObject(job.0, 1);
+    pub fn terminate(job: &JobHandle) -> Result<(), String> {
+        if unsafe { TerminateJobObject(job.0, 1) } == 0 {
+            return Err(format!(
+                "TerminateJobObject failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
+        Ok(())
     }
 }
 
@@ -519,6 +467,18 @@ impl InMemoryPiProcess {
 
     pub(crate) async fn close(&mut self) {
         self.incoming.take();
+        self.fatal_frames.take();
+    }
+
+    /// Close only the host→child request pipe. The bridge writer task then
+    /// observes a failed send — the writer-fail fault class — while the
+    /// child→host direction stays alive.
+    pub(crate) fn fail_outbound(&mut self) {
+        self.outbound.close();
+        if let Some(fatal_frames) = self.fatal_frames.take() {
+            let _ =
+                fatal_frames.try_send(BridgeFrame::TransportError("Pi RPC writer failed".into()));
+        }
     }
 }
 
@@ -587,6 +547,34 @@ mod tests {
         ));
         process.close().await;
         assert!(request.await.unwrap().unwrap_err().is_process_closed());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn process_tree_uses_child_group_and_escalates_to_termination() {
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("trap '' TERM; while :; do sleep 1; done")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+        let child = command.spawn().unwrap();
+        let (bridge, mut process) = PiRpcBridge::attach(child, 1024).unwrap();
+        process.kill().unwrap();
+        let status = process.wait().unwrap();
+        assert!(!status.success());
+        drop(bridge);
     }
 
     #[cfg(unix)]
