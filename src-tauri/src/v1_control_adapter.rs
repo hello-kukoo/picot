@@ -61,6 +61,7 @@ const HOST_CONTROLS: &[(&str, bool)] = &[
     ("update_pi_package", true),
     ("set_pi_package_disabled", true),
     ("restart_runtime", true),
+    ("session_export", false),
     ("get_pi_version", false),
     ("get_app_version", false),
     ("is_dev", false),

@@ -170,47 +170,111 @@ impl HostDataPlane {
     /// created under a different spelling of the same workspace.
     #[allow(dead_code)]
     pub fn session_dir_for_workspace(&self, workspace_root: &Path) -> Option<PathBuf> {
+        self.session_dirs_for_workspace(workspace_root)
+            .into_iter()
+            .next()
+    }
+
+    /// All session-project buckets for a workspace root: every on-disk Pi
+    /// encoding of its path spellings plus every dir whose newest session
+    /// headers vote for the same canonical root (legacy multi-bucket merge —
+    /// a workspace whose encoded dir name changed keeps its history).
+    pub fn session_dirs_for_workspace(&self, workspace_root: &Path) -> Vec<PathBuf> {
         let Some(session_root) = &self.session_root else {
-            return None;
+            return Vec::new();
         };
-        // Pi encodes path.resolve(cwd); a canonicalized registry path can
-        // drift from the directory spelling Pi actually created, so try both
-        // spellings (mirrors the legacy alternateSpellings contract).
         let canonical = workspace_root
             .canonicalize()
             .unwrap_or_else(|_| workspace_root.to_path_buf());
         let mut candidates = vec![workspace_root.to_path_buf(), canonical.clone()];
         candidates.dedup();
+        let mut buckets: Vec<PathBuf> = Vec::new();
         for candidate in &candidates {
             if let Some(encoded) = Self::encode_session_dir_name(candidate) {
                 let dir = session_root.join(&encoded);
-                if dir.is_dir() {
-                    return Some(dir);
+                if dir.is_dir() && !buckets.contains(&dir) {
+                    buckets.push(dir);
                 }
             }
         }
-        // Header-sample fallback: the majority recorded cwd must match any
-        // candidate spelling (raw or canonicalized) of the workspace root.
-        for dir in std::fs::read_dir(session_root).ok()?.filter_map(Result::ok) {
+        // Header-sample fallback: bounded to the three newest session
+        // headers per dir (majority cwd must canonicalize to the root).
+        for dir in std::fs::read_dir(session_root)
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+        {
             let dir_path = dir.path();
-            if !dir_path.is_dir() {
+            if !dir_path.is_dir() || buckets.contains(&dir_path) {
                 continue;
             }
-            let matches = std::fs::read_dir(&dir_path)
-                .ok()?
-                .filter_map(Result::ok)
-                .filter(|file| {
-                    file.path().extension().and_then(|value| value.to_str()) == Some("jsonl")
-                })
-                .filter_map(|file| parse_session_metrics(&file.path()).ok())
-                .flatten()
-                .filter_map(|metrics| metrics.cwd_canonical.or(metrics.cwd))
-                .any(|cwd| candidates.iter().any(|candidate| candidate == &cwd));
-            if matches {
-                return Some(dir_path);
+            if sample_bucket_cwd_matches(&dir_path, &canonical) && !buckets.contains(&dir_path) {
+                buckets.push(dir_path);
             }
         }
-        None
+        buckets
+    }
+
+    /// Legacy workspace-sessions listing: parse each bucket's session
+    /// headers and emit the exact entry contract the sidebar consumes
+    /// (`id/timestamp/name/firstMessage/cwd/file/filePath/mtime/ctime`),
+    /// merged across buckets and sorted by activity time descending.
+    pub fn list_workspace_session_entries(&self, buckets: &[PathBuf]) -> Vec<serde_json::Value> {
+        let mut entries = Vec::new();
+        for dir in buckets {
+            let Ok(files) = std::fs::read_dir(dir) else {
+                continue;
+            };
+            for file in files.filter_map(Result::ok) {
+                let path = file.path();
+                if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
+                    continue;
+                }
+                let (Ok(metadata), Some(header)) = (file.metadata(), parse_session_header(&path))
+                else {
+                    continue;
+                };
+                let modified = metadata.modified().ok().and_then(|value| {
+                    value
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .ok()
+                        .map(|duration| duration.as_millis())
+                });
+                let created = metadata.created().ok().and_then(|value| {
+                    value
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .ok()
+                        .map(|duration| duration.as_millis())
+                });
+                entries.push(serde_json::json!({
+                    "id": header.id,
+                    "timestamp": header.timestamp,
+                    "name": header.name,
+                    "firstMessage": header.first_message,
+                    "cwd": header.cwd,
+                    "file": path.file_name().map(|name| name.to_string_lossy().into_owned()),
+                    "filePath": path.to_string_lossy(),
+                    "mtime": modified,
+                    "ctime": created,
+                }));
+            }
+        }
+        entries.sort_by(|a, b| session_activity_time(b).total_cmp(&session_activity_time(a)));
+        entries
+    }
+
+    /// Count of `.jsonl` files across the given buckets (legacy count mode:
+    /// readdir-only, no parsing).
+    pub fn count_bucket_sessions(&self, buckets: &[PathBuf]) -> usize {
+        buckets
+            .iter()
+            .filter_map(|dir| std::fs::read_dir(dir).ok())
+            .flat_map(|read| read.filter_map(Result::ok))
+            .filter(|file| {
+                file.path().extension().and_then(|value| value.to_str()) == Some("jsonl")
+            })
+            .count()
     }
 
     /// Session file path for a workspace session
@@ -268,17 +332,19 @@ impl HostDataPlane {
             let canonical = std::path::PathBuf::from(path)
                 .canonicalize()
                 .unwrap_or_else(|_| std::path::PathBuf::from(path));
-            if !path.ends_with(".jsonl")
-                || !canonical
-                    .to_string_lossy()
-                    .starts_with(resolved_root.to_string_lossy().as_ref())
-            {
+            if !path.ends_with(".jsonl") || canonical.strip_prefix(&resolved_root).is_err() {
                 if let Some(errors) = result["errors"].as_array_mut() {
                     errors.push(serde_json::Value::String(path.to_owned()));
                 }
                 continue;
             }
-            if running_session_files.iter().any(|running| running == path) {
+            let running_hit = running_session_files.iter().any(|running| {
+                let running_canonical = std::path::PathBuf::from(running)
+                    .canonicalize()
+                    .unwrap_or_else(|_| std::path::PathBuf::from(running));
+                running_canonical == canonical
+            });
+            if running_hit {
                 if let Some(running) = result["running"].as_array_mut() {
                     running.push(serde_json::Value::String(path.to_owned()));
                 }
@@ -691,9 +757,18 @@ fn search_session_file(
 /// constructs this registry outside tests.
 #[allow(dead_code)]
 pub struct SessionExportRegistry {
-    tokens: std::sync::Mutex<HashMap<String, (std::path::PathBuf, String, std::time::Instant)>>,
+    tokens: std::sync::Mutex<HashMap<String, ExportGrant>>,
     max_per_owner: usize,
     ttl: std::time::Duration,
+}
+
+/// One outstanding export grant: bound to the issuing owner, the workspace
+/// generation at issue time, the validated session file, and the expiry.
+pub struct ExportGrant {
+    pub file_path: std::path::PathBuf,
+    pub owner: String,
+    pub generation: u64,
+    pub expires: std::time::Instant,
 }
 
 #[allow(dead_code)]
@@ -714,6 +789,7 @@ impl SessionExportRegistry {
     pub fn issue(
         &self,
         owner: &str,
+        generation: u64,
         file_path: std::path::PathBuf,
     ) -> Result<(String, std::time::Instant), String> {
         let mut tokens = self
@@ -722,39 +798,62 @@ impl SessionExportRegistry {
             .map_err(|_| "export registry lock poisoned".to_string())?;
         // Expire stale entries for the owner first so the quota reflects
         // only live grants.
-        tokens.retain(|_, (_, _, expires)| *expires > std::time::Instant::now());
-        let outstanding = tokens
-            .values()
-            .filter(|(_, owner_id, _)| owner_id == owner)
-            .count();
+        tokens.retain(|_, grant| grant.expires > std::time::Instant::now());
+        let outstanding = tokens.values().filter(|grant| grant.owner == owner).count();
         if outstanding >= self.max_per_owner {
             return Err("export token quota reached".to_string());
         }
         let token = uuid::Uuid::new_v4().simple().to_string();
         let expires = std::time::Instant::now() + self.ttl;
-        tokens.insert(token.clone(), (file_path, owner.to_string(), expires));
+        tokens.insert(
+            token.clone(),
+            ExportGrant {
+                file_path,
+                owner: owner.to_string(),
+                generation,
+                expires,
+            },
+        );
         Ok((token, expires))
     }
 
     /// Redeem a token: one-shot. Expired or unknown tokens are rejected and
     /// removed.
-    pub fn redeem(&self, token: &str) -> Result<std::path::PathBuf, String> {
-        let (_, (file_path, _, expires)) = self
+    pub fn redeem(
+        &self,
+        token: &str,
+        owner: &str,
+        current_generation: u64,
+    ) -> Result<std::path::PathBuf, String> {
+        self.redeem_checked(token, |grant_owner, grant_generation| {
+            grant_owner == owner && grant_generation == current_generation
+        })
+    }
+
+    /// Atomically redeem a one-shot token; the grant's owner and generation
+    /// must still be current per the caller-supplied authority check.
+    pub fn redeem_checked(
+        &self,
+        token: &str,
+        is_current: impl Fn(&str, u64) -> bool,
+    ) -> Result<std::path::PathBuf, String> {
+        let (_, grant) = self
             .tokens
             .lock()
             .map_err(|_| "export registry lock poisoned".to_string())?
             .remove_entry(token)
             .ok_or_else(|| "export token is invalid or expired".to_string())?;
-        if expires <= std::time::Instant::now() {
+        if grant.expires <= std::time::Instant::now() || !is_current(&grant.owner, grant.generation)
+        {
             return Err("export token is invalid or expired".to_string());
         }
-        Ok(file_path)
+        Ok(grant.file_path)
     }
 
     /// Owner destruction hygiene: drop every outstanding grant.
     pub fn revoke_owner(&self, owner: &str) {
         if let Ok(mut tokens) = self.tokens.lock() {
-            tokens.retain(|_, (_, owner_id, _)| owner_id != owner);
+            tokens.retain(|_, grant| grant.owner != owner);
         }
     }
 
@@ -762,14 +861,167 @@ impl SessionExportRegistry {
     pub fn outstanding_for(&self, owner: &str) -> usize {
         self.tokens
             .lock()
-            .map(|tokens| {
-                tokens
-                    .values()
-                    .filter(|(_, owner_id, _)| owner_id == owner)
-                    .count()
-            })
+            .map(|tokens| tokens.values().filter(|grant| grant.owner == owner).count())
             .unwrap_or(0)
     }
+}
+
+/// Bounded session header (legacy `parseSessionFile`): at most 50 lines,
+/// early exit once name and first message are both known.
+pub(crate) struct SessionHeader {
+    pub id: String,
+    pub timestamp: String,
+    pub name: Option<String>,
+    pub first_message: Option<String>,
+    pub cwd: Option<String>,
+}
+
+pub(crate) fn parse_session_header(path: &Path) -> Option<SessionHeader> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(path).ok()?;
+    let mut header: Option<(String, String, Option<String>)> = None;
+    let mut name: Option<String> = None;
+    let mut first_message: Option<String> = None;
+    let mut user_messages = 0usize;
+    let mut line_count = 0usize;
+    for line in std::io::BufReader::new(file).lines() {
+        let Ok(line) = line else { break };
+        if line.trim().is_empty() {
+            continue;
+        }
+        line_count += 1;
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        match entry.get("type").and_then(serde_json::Value::as_str) {
+            Some("session") => {
+                header = Some((
+                    entry
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    entry
+                        .get("timestamp")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    entry
+                        .get("cwd")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
+                ));
+            }
+            Some("session_info") => {
+                if name.is_none() {
+                    name = entry
+                        .get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned);
+                }
+            }
+            Some("message") => {
+                let role = entry
+                    .pointer("/message/role")
+                    .and_then(serde_json::Value::as_str);
+                if role == Some("user") {
+                    user_messages += 1;
+                    if first_message.is_none() {
+                        first_message =
+                            entry
+                                .pointer("/message/content")
+                                .and_then(|content| match content {
+                                    serde_json::Value::String(text) => {
+                                        Some(text.chars().take(120).collect::<String>())
+                                    }
+                                    serde_json::Value::Array(blocks) => blocks
+                                        .iter()
+                                        .find(|block| {
+                                            block.get("type").and_then(serde_json::Value::as_str)
+                                                == Some("text")
+                                        })
+                                        .and_then(|block| block.get("text"))
+                                        .and_then(serde_json::Value::as_str)
+                                        .map(|text| text.chars().take(120).collect::<String>()),
+                                    _ => None,
+                                });
+                    }
+                }
+            }
+            _ => {}
+        }
+        if line_count > 50 && first_message.is_some() && name.is_some() {
+            break;
+        }
+    }
+    let (id, timestamp, cwd) = header?;
+    if id.is_empty() {
+        return None;
+    }
+    // Suppress trivially-short one-shot sessions (no user input at all).
+    if user_messages == 0 && line_count <= 4 {
+        return None;
+    }
+    Some(SessionHeader {
+        id,
+        timestamp,
+        name,
+        first_message,
+        cwd,
+    })
+}
+
+/// Legacy header-sample vote: the three newest session files' headers vote
+/// for the bucket's recorded cwd; the majority canonical form must match the
+/// workspace root.
+fn sample_bucket_cwd_matches(dir: &Path, canonical_root: &Path) -> bool {
+    let mut candidates: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter(|file| file.path().extension().and_then(|value| value.to_str()) == Some("jsonl"))
+        .filter_map(|file| {
+            let modified = file.metadata().ok()?.modified().ok()?;
+            Some((modified, file.path()))
+        })
+        .collect();
+    candidates.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+    candidates.truncate(3);
+    let total = candidates.len();
+    let mut votes = 0usize;
+    for (_, path) in &candidates {
+        let matches = parse_session_header(path)
+            .and_then(|header| header.cwd)
+            .map(|cwd| {
+                PathBuf::from(&cwd)
+                    .canonicalize()
+                    .unwrap_or_else(|_| PathBuf::from(cwd))
+            })
+            .is_some_and(|cwd| cwd == canonical_root);
+        if matches {
+            votes += 1;
+        }
+    }
+    votes * 2 > total && total > 0
+}
+
+/// Legacy `sessionActivityTime`: mtime, else parsed timestamp, else ctime.
+fn session_activity_time(entry: &serde_json::Value) -> f64 {
+    if let Some(modified) = entry.get("mtime").and_then(serde_json::Value::as_f64) {
+        return modified;
+    }
+    if let Some(timestamp) = entry
+        .get("timestamp")
+        .and_then(serde_json::Value::as_str)
+        .and_then(crate::cost_compat::parse_js_date)
+    {
+        return timestamp.timestamp_millis() as f64;
+    }
+    entry
+        .get("ctime")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0)
 }
 
 pub(crate) fn parse_session_metrics(path: &Path) -> Result<Option<SessionMetrics>, HostDataError> {
@@ -1165,24 +1417,27 @@ mod tests {
         assert_eq!(registry.ttl_secs(), 60);
         let file = std::path::PathBuf::from("/tmp/session.jsonl");
         let (token, expires) = registry
-            .issue("owner", file.clone())
+            .issue("owner", 1, file.clone())
             .expect("first grant is issued");
         assert!(expires > Instant::now());
         assert_eq!(registry.outstanding_for("owner"), 1);
         // Quota is per-owner and counts only live grants.
-        assert!(registry.issue("owner", file.clone()).is_err());
-        assert!(registry.issue("other", file.clone()).is_ok());
+        assert!(registry.issue("owner", 1, file.clone()).is_err());
+        assert!(registry.issue("other", 1, file.clone()).is_ok());
         // One-shot: a redeemed token cannot be redeemed twice.
-        assert_eq!(registry.redeem(&token), Ok(file));
-        assert!(registry.redeem(&token).is_err());
+        assert_eq!(registry.redeem(&token, "owner", 1), Ok(file));
+        assert!(registry.redeem(&token, "owner", 1).is_err());
         registry.revoke_owner("other");
         assert_eq!(registry.outstanding_for("other"), 0);
 
         let expired = SessionExportRegistry::new(4, Duration::ZERO);
         let (stale, _) = expired
-            .issue("owner", std::path::PathBuf::from("/tmp/session.jsonl"))
+            .issue("owner", 1, std::path::PathBuf::from("/tmp/session.jsonl"))
             .expect("grant is issued");
-        assert!(expired.redeem(&stale).is_err(), "zero-ttl grant is expired");
+        assert!(
+            expired.redeem(&stale, "owner", 1).is_err(),
+            "zero-ttl grant is expired"
+        );
     }
 
     #[test]
@@ -1207,7 +1462,7 @@ mod tests {
         fs::write(
             sampled.join("session-x.jsonl"),
             format!(
-                "{{\"type\":\"session\",\"id\":\"x\",\"cwd\":{}}}\n",
+                "{{\"type\":\"session\",\"id\":\"x\",\"cwd\":{}}}\n{{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n",
                 serde_json::to_string(&workspace.to_string_lossy()).unwrap()
             ),
         )

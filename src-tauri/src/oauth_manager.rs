@@ -110,10 +110,11 @@ impl OAuthManager {
             .operations
             .get(id)
             .ok_or(OAuthError::OperationNotFound)?;
-        if operation.owner_id != owner_id
-            || operation.generation != generation
-            || generation != self.generation
-        {
+        if operation.owner_id != owner_id {
+            // Cross-owner lookups must not reveal operation existence.
+            return Err(OAuthError::OperationNotFound);
+        }
+        if operation.generation != generation || generation != self.generation {
             return Err(OAuthError::StaleGeneration);
         }
         if Instant::now() >= operation.expires_at {
@@ -163,9 +164,10 @@ mod tests {
                 .unwrap(),
             OAuthStatus::Pending
         );
+        // m9: cross-owner lookups must not reveal operation existence.
         assert_eq!(
             manager.status("owner-b", generation, "op"),
-            Err(OAuthError::StaleGeneration)
+            Err(OAuthError::OperationNotFound)
         );
         manager.runtime_started();
         assert_eq!(

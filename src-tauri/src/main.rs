@@ -2542,6 +2542,10 @@ fn install_control_handler(
                         if let Some(native) = app.try_state::<NativePiManagerState>() {
                             native.stop_for_owner_transition(owner.as_str(), gen);
                         }
+                        // M4: export grants die with the old generation.
+                        if let Some(host) = app.try_state::<host_server::HostServer>() {
+                            host.revoke_session_exports(owner.as_str());
+                        }
                         // Safety net: generation-checked cleanup of any old-workspace
                         // side chats the frontend did not settle before committing.
                         let is_cross_workspace = owner_registry

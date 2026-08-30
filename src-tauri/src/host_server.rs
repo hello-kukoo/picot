@@ -17,17 +17,18 @@ use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::Query;
 use axum::extract::{DefaultBodyLimit, Json, State};
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, PRAGMA};
+use axum::http::header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, PRAGMA};
 use axum::http::HeaderMap;
 use axum::http::HeaderValue;
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::routing::{any, get, post};
 use axum::Router;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -104,6 +105,11 @@ struct HostState {
     index_html: Mutex<String>,
     control_handler: Mutex<Option<ControlHandler>>,
     oauth: Mutex<crate::oauth_manager::OAuthManager>,
+    /// P4-d: one-shot TTL'd export tokens backing `session_export`.
+    session_exports: crate::host_data::SessionExportRegistry,
+    /// D8: anonymous client-class hit counts for the retired `/api/rpc`
+    /// surface (no per-user/per-token dimensions).
+    legacy_rpc_gone_hits: Mutex<HashMap<String, u64>>,
 }
 
 pub struct HostServer {
@@ -151,6 +157,11 @@ impl HostServer {
             index_html: Mutex::new(String::new()),
             control_handler: Mutex::new(None),
             oauth: Mutex::new(crate::oauth_manager::OAuthManager::default()),
+            session_exports: crate::host_data::SessionExportRegistry::new(
+                8,
+                std::time::Duration::from_secs(300),
+            ),
+            legacy_rpc_gone_hits: Mutex::new(HashMap::new()),
         });
         let index = static_dir.join("index.html");
         // Serve this build's JS/CSS/HTML under a version-stamped path
@@ -231,7 +242,10 @@ impl HostServer {
                 post(compat_sessions_delete_batch),
             )
             .route("/api/sessions/switch", post(compat_sessions_switch))
+            .route("/api/sessions/{dir_name}/{file}", get(compat_session_file))
             .route("/api/workspace/open", post(compat_workspace_open))
+            .route("/v2/session-export/{token}", get(session_export_stream))
+            .route("/api/rpc", any(rpc_retired))
             .route("/v2/ws", get(websocket_upgrade))
             // Bare Pi-origin WebSocket paths are never valid on host origin.
             // Keep static fallback from turning `/ws` into a misleading shell.
@@ -294,6 +308,12 @@ impl HostServer {
         if let Ok(mut slot) = self.state.owner_registry.lock() {
             *slot = Some(registry);
         }
+    }
+
+    /// Drop every outstanding session-export grant for an owner (workspace
+    /// transition / owner teardown hygiene; M4).
+    pub fn revoke_session_exports(&self, owner: &str) {
+        self.state.session_exports.revoke_owner(owner);
     }
 
     /// Install same owner-checked control handler used by legacy broker.
@@ -546,12 +566,18 @@ async fn compat_instances(
     Ok(Json(json!({ "instances": instances })))
 }
 
-async fn compat_home() -> Json<Value> {
-    Json(json!({
+async fn compat_home(
+    State(state): State<Arc<HostState>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    // A-HTTP-18: explicit capability boundary on host-origin (legacy was
+    // loopback-open; native host applies the same owner boundary).
+    compat_owner_workspace(&state, &headers, None)?;
+    Ok(Json(json!({
         "home": dirs::home_dir()
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default(),
-    }))
+    })))
 }
 
 async fn compat_workspace_info(
@@ -585,44 +611,27 @@ async fn compat_workspace_sessions(
     if !query.path.starts_with('/') {
         return Err(api_error(StatusCode::BAD_REQUEST, "invalid_path"));
     }
-    let session_dir = state.data.session_dir_for_workspace(Path::new(&query.path));
-    let Some(dir) = session_dir else {
-        return Ok(Json(json!({
-            "path": query.path,
-            "dirName": Value::Null,
-            "sessions": [],
-        })));
-    };
-    let mut sessions = Vec::new();
-    for file in std::fs::read_dir(&dir)
-        .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "session_io_failed"))?
-        .filter_map(Result::ok)
-    {
-        let path = file.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
-            continue;
-        }
-        sessions.push(json!({
-            "file": path.file_name().map(|name| name.to_string_lossy().into_owned()),
-            "modifiedAtMs": file
-                .metadata()
-                .ok()
-                .and_then(|meta| meta.modified().ok())
-                .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|duration| duration.as_millis()),
-        }));
-    }
+    // Legacy multi-bucket merge: every historical dirName bucket for the
+    // workspace contributes its sessions (A-HTTP-35/36 entry contract).
+    let buckets = state
+        .data
+        .session_dirs_for_workspace(Path::new(&query.path));
+    let dir_name = buckets
+        .first()
+        .and_then(|dir| dir.file_name())
+        .map(|name| name.to_string_lossy().into_owned());
     if query.mode.as_deref() == Some("count") {
         return Ok(Json(json!({
             "path": query.path,
-            "dirName": dir.file_name().map(|name| name.to_string_lossy().into_owned()),
-            "count": sessions.len(),
+            "dirName": dir_name,
+            "sessions": [],
+            "sessionCount": state.data.count_bucket_sessions(&buckets),
         })));
     }
     Ok(Json(json!({
         "path": query.path,
-        "dirName": dir.file_name().map(|name| name.to_string_lossy().into_owned()),
-        "sessions": sessions,
+        "dirName": dir_name,
+        "sessions": state.data.list_workspace_session_entries(&buckets),
     })))
 }
 
@@ -636,9 +645,18 @@ struct SessionRenameBody {
 async fn compat_sessions_rename(
     State(state): State<Arc<HostState>>,
     headers: HeaderMap,
-    Json(body): Json<SessionRenameBody>,
+    body: axum::body::Bytes,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     compat_owner_workspace(&state, &headers, None)?;
+    // Legacy rename body bound: 8 KiB (readBoundedJsonBody).
+    if body.len() > 8 * 1024 {
+        return Err(api_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request_too_large",
+        ));
+    }
+    let body: SessionRenameBody = serde_json::from_slice(&body)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid_rename_request"))?;
     let name = body.name.trim().to_owned();
     if name.is_empty() || name.chars().count() > 200 {
         return Err(api_error(
@@ -655,11 +673,14 @@ async fn compat_sessions_rename(
     let root_canonical = session_root
         .canonicalize()
         .unwrap_or_else(|_| session_root.clone());
-    if !body.file_path.ends_with(".jsonl")
-        || !canonical
-            .to_string_lossy()
-            .starts_with(root_canonical.to_string_lossy().as_ref())
-    {
+    // Containment must be separator-safe (a sibling like `sessions-evil`
+    // shares the string prefix but not the directory).
+    if !body.file_path.ends_with(".jsonl") || canonical.strip_prefix(&root_canonical).is_err() {
+        return Err(api_error(StatusCode::NOT_FOUND, "Session is unavailable"));
+    }
+    // Managed-session membership (legacy renameManagedSession): the target
+    // must parse as a session file, not an arbitrary .jsonl in the tree.
+    if crate::host_data::parse_session_header(&canonical).is_none() {
         return Err(api_error(StatusCode::NOT_FOUND, "Session is unavailable"));
     }
     state
@@ -680,9 +701,18 @@ struct SessionDeleteBatchBody {
 async fn compat_sessions_delete_batch(
     State(state): State<Arc<HostState>>,
     headers: HeaderMap,
-    Json(body): Json<SessionDeleteBatchBody>,
+    body: axum::body::Bytes,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     compat_owner_workspace(&state, &headers, None)?;
+    // Legacy delete body bound: 8 KiB.
+    if body.len() > 8 * 1024 {
+        return Err(api_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request_too_large",
+        ));
+    }
+    let body: SessionDeleteBatchBody = serde_json::from_slice(&body)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid_delete_batch"))?;
     let running_session_files = state
         .runtimes
         .running_targets()
@@ -709,12 +739,69 @@ async fn compat_sessions_switch() -> Json<Value> {
     }))
 }
 
+/// A-HTTP-39: session-file history view. Segments arrive percent-decoded by
+/// the extractor; decoding must never reintroduce separators or traversal
+/// (legacy `decodeSessionRouteSegments`), the bucket must belong to the
+/// requesting owner's workspace, and the resolved path stays inside the
+/// shared session root. Responds with the legacy `{entries}` shape.
+async fn compat_session_file(
+    State(state): State<Arc<HostState>>,
+    headers: HeaderMap,
+    axum::extract::Path((dir_name, file)): axum::extract::Path<(String, String)>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let workspace_id = compat_owner_workspace(&state, &headers, None)?;
+    let unsafe_segment =
+        |segment: &str| segment.contains('/') || segment.contains('\\') || segment.contains("..");
+    if unsafe_segment(&dir_name) || unsafe_segment(&file) {
+        return Err(api_error(StatusCode::BAD_REQUEST, "Invalid session path"));
+    }
+    let root = state
+        .data
+        .workspace_root(&workspace_id)
+        .map_err(host_data_error_response)?;
+    let owned = state
+        .data
+        .session_dirs_for_workspace(&root)
+        .iter()
+        .any(|dir| {
+            dir.file_name()
+                .is_some_and(|name| name.to_string_lossy() == dir_name)
+        });
+    if !owned {
+        return Err(api_error(StatusCode::NOT_FOUND, "Session not found"));
+    }
+    let Some(session_root) = state.data.session_root_path() else {
+        return Err(api_error(StatusCode::NOT_FOUND, "Session not found"));
+    };
+    let path = session_root.join(&dir_name).join(&file);
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.clone());
+    let resolved_root = session_root
+        .canonicalize()
+        .unwrap_or_else(|_| session_root.clone());
+    if resolved == resolved_root || resolved.strip_prefix(&resolved_root).is_err() {
+        return Err(api_error(StatusCode::NOT_FOUND, "Session not found"));
+    }
+    if !resolved.is_file() {
+        return Err(api_error(StatusCode::NOT_FOUND, "Session not found"));
+    }
+    let content = std::fs::read_to_string(&resolved)
+        .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "session_io_failed"))?;
+    let entries: Vec<Value> = content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    Ok(Json(json!({ "entries": entries })))
+}
+
 async fn compat_workspace_open(
     State(state): State<Arc<HostState>>,
     headers: HeaderMap,
-    Json(body): Json<Value>,
+    body: axum::body::Bytes,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     compat_owner_workspace(&state, &headers, None)?;
+    let body: Value = serde_json::from_slice(&body)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid_open_request"))?;
     let path = body
         .get("path")
         .and_then(Value::as_str)
@@ -738,6 +825,90 @@ fn open_directory_in_file_manager(path: &std::path::Path) {
     let _ = std::process::Command::new("explorer").arg(path).spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
     let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+}
+
+/// P4-d: stream a session file for a redeemed one-shot export token.
+async fn session_export_stream(
+    State(state): State<Arc<HostState>>,
+    axum::extract::Path(token): axum::extract::Path<String>,
+) -> Result<Response, (StatusCode, Json<Value>)> {
+    let owner_registry = state
+        .owner_registry
+        .lock()
+        .ok()
+        .and_then(|slot| slot.clone());
+    let path = state
+        .session_exports
+        .redeem_checked(&token, |owner, generation| {
+            owner_registry.as_ref().is_some_and(|registry| {
+                let owner_id = crate::window_owner::OwnerId::from_string(owner.to_string());
+                matches!(
+                    registry.owner_current_workspace(&owner_id),
+                    crate::window_owner::OwnerWorkspaceSnapshot::Registered {
+                        generation: current,
+                        ..
+                    } if current == generation
+                )
+            })
+        })
+        .map_err(|_| api_error(StatusCode::NOT_FOUND, "export_token_invalid"))?;
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|_| api_error(StatusCode::NOT_FOUND, "export_unavailable"))?;
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "session-export.jsonl".to_owned());
+
+    let stream = futures_util::stream::unfold(file, |mut file| async move {
+        let mut buf = vec![0u8; 64 * 1024];
+        match tokio::io::AsyncReadExt::read(&mut file, &mut buf).await {
+            Ok(0) => None,
+            Ok(n) => {
+                buf.truncate(n);
+                Some((Ok::<_, std::io::Error>(axum::body::Bytes::from(buf)), file))
+            }
+            Err(error) => Some((Err(std::io::Error::other(error)), file)),
+        }
+    });
+    Ok(Response::builder()
+        .header(CONTENT_TYPE, "application/octet-stream")
+        .header(
+            CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{file_name}\""),
+        )
+        .body(Body::from_stream(stream))
+        .expect("streaming response is well-formed"))
+}
+
+/// D8 (2026-08-29 adjudication): the legacy chat RPC surface is retired —
+/// no permanent second RPC. Callers get 410 Gone with a removal notice and
+/// an anonymous client-class hit count (no per-user/token dimensions).
+async fn rpc_retired(State(state): State<Arc<HostState>>, headers: HeaderMap) -> Response {
+    let client_class = if headers.contains_key("x-picot-desktop-capability") {
+        "desktop"
+    } else if headers.contains_key("authorization") {
+        "paired_remote"
+    } else {
+        "unpaired_browser"
+    };
+    if let Ok(mut hits) = state.legacy_rpc_gone_hits.lock() {
+        *hits.entry(client_class.to_string()).or_insert(0) += 1;
+    }
+    let mut response = (
+        StatusCode::GONE,
+        Json(json!({
+            "error": { "code": "gone" },
+            "removalNotice": "/api/rpc retired per D8 — use the v2 WebSocket surface; see the release notes.",
+            "clientClass": client_class,
+        })),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        axum::http::header::HeaderName::from_static("deprecation"),
+        HeaderValue::from_static("true"),
+    );
+    response
 }
 
 fn host_data_error_response(error: HostDataError) -> (StatusCode, Json<Value>) {
@@ -1535,6 +1706,40 @@ async fn dispatch(
                 "unauthorized_target",
                 "Registered desktop owner required".into(),
             ))?;
+            // P4-d: session export — one-shot TTL'd token bound to the owner
+            // and the resolved session file.
+            if operation == "session_export" {
+                let session_id = frame
+                    .pointer("/args/sessionId")
+                    .and_then(Value::as_str)
+                    .ok_or((
+                        "invalid_export",
+                        "sessionId is required for session_export".to_owned(),
+                    ))?;
+                let workspace_id = context
+                    .workspace_id
+                    .as_deref()
+                    .ok_or(("not_registered", "Registered workspace required".to_owned()))?;
+                let path = state
+                    .data
+                    .session_file_path(workspace_id, session_id)
+                    .ok_or(("session_unavailable", "Session file unavailable".to_owned()))?;
+                if !path.is_file() {
+                    return Err(("session_unavailable", "Session file unavailable".into()));
+                }
+                let generation = context.workspace_generation.unwrap_or_default();
+                let (token, _) = state
+                    .session_exports
+                    .issue(owner.as_str(), generation, path)
+                    .map_err(|error| ("export_quota", error))?;
+                return Ok(json!({
+                    "type": "host_response",
+                    "requestId": request_id,
+                    "operation": "session_export",
+                    "exportUrl": format!("/v2/session-export/{token}"),
+                    "expiresInSecs": state.session_exports.ttl_secs(),
+                }));
+            }
             if matches!(
                 operation.as_str(),
                 "settings_get" | "settings_put" | "agent_text_file_get" | "agent_text_file_put"
@@ -1584,9 +1789,21 @@ async fn dispatch(
                         let value = args
                             .get("value")
                             .ok_or(("invalid_config", "value is required".to_owned()))?;
+                        // Plan §14: model config keeps backup + restart notice.
+                        let requires_restart =
+                            matches!(name, "models.json" | "agent.json" | "APPEND_SYSTEM.md");
+                        if requires_restart && path.exists() {
+                            let backup = path.with_extension(format!(
+                                "{}.bak",
+                                path.extension()
+                                    .and_then(|value| value.to_str())
+                                    .unwrap_or_default()
+                            ));
+                            let _ = std::fs::copy(&path, &backup);
+                        }
                         crate::host_config::write_json(&path, value)
                             .map_err(|error| (error.code(), "Settings write failed".to_owned()))?;
-                        json!({ "saved": true })
+                        json!({ "saved": true, "restartRequired": requires_restart })
                     }
                     "agent_text_file_get" => {
                         let metadata = std::fs::metadata(&path).map_err(|_| {
@@ -1729,6 +1946,9 @@ async fn dispatch(
             let authorized = context.is_some_and(|ctx| {
                 ctx.kind == crate::host_router::ClientKind::Desktop
                     && ctx.workspace_id.as_deref() == Some(workspace_id)
+                    // Re-read registry authority: handshake context must not
+                    // keep write access across a workspace transition.
+                    && current_registered_context(state, ctx)
             });
             if !authorized {
                 return Err(("unauthorized_target", "Workspace is not authorized".into()));
@@ -1848,19 +2068,81 @@ async fn dispatch(
                         .get("expectedModifiedAtMs")
                         .and_then(Value::as_u64)
                         .map(u128::from);
+                    let key = frame.get("idempotencyKey").and_then(Value::as_str).ok_or((
+                        "idempotency_key_required",
+                        "File writes require idempotencyKey".into(),
+                    ))?;
+                    // Plan §14: writes walk the mutation/Operation Registry.
+                    let scope = operation_scope(context, "workspace-files")?;
                     let root = state
                         .data
                         .workspace_root(workspace_id)
                         .map_err(host_data_error)?;
+                    let path_for_write = path;
+                    let content_for_write = content;
+                    let (operation_id, acceptance, modified_at_ms) = state
+                        .runtimes
+                        .host_mutation(scope, key, "file_write", "workspace-files", || {
+                            crate::host_files::write(
+                                &root,
+                                path_for_write,
+                                content_for_write.as_bytes(),
+                                expected,
+                            )
+                            .map(|modified| json!(modified))
+                            .map_err(|error| (error.code(), "File write failed".to_owned()).1)
+                        })
+                        .map_err(|message| ("file_write_failed", message))?;
+                    let acceptance = match acceptance {
+                        crate::operation_registry::OperationAcceptance::Accepted => {
+                            "accepted_pending"
+                        }
+                        crate::operation_registry::OperationAcceptance::DuplicatePending => {
+                            return Err((
+                                "duplicate_pending",
+                                "File write is still pending for this idempotency key".into(),
+                            ))
+                        }
+                        crate::operation_registry::OperationAcceptance::DuplicateCompleted => {
+                            "duplicate_completed"
+                        }
+                    };
                     let modified_at_ms =
-                        crate::host_files::write(&root, path, content.as_bytes(), expected)
-                            .map_err(|error| (error.code(), "File write failed".to_owned()))?;
+                        modified_at_ms.and_then(|value| value.as_u64()).ok_or((
+                            "file_write_failed",
+                            "Completed write lost its terminal result".into(),
+                        ))?;
                     Ok(json!({
                         "type": "data_response",
                         "requestId": request_id,
                         "operation": "file_write",
+                        "operationId": operation_id,
+                        "acceptance": acceptance,
                         "path": path,
                         "modifiedAtMs": modified_at_ms,
+                    }))
+                }
+                Some("file_raw") => {
+                    let path = frame
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_path", "path is required".into()))?;
+                    let root = state
+                        .data
+                        .workspace_root(workspace_id)
+                        .map_err(host_data_error)?;
+                    let content = crate::host_files::read(&root, path)
+                        .map_err(|error| (error.code(), "File read failed".to_owned()))?;
+                    use base64::Engine;
+                    let encoded =
+                        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(content.bytes);
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "file_raw",
+                        "path": content.relative_path,
+                        "contentBase64": encoded,
+                        "modifiedAtMs": content.modified_at_ms,
                     }))
                 }
                 _ => Err((
@@ -2928,7 +3210,34 @@ mod tests {
             assert_eq!(body["error"]["code"], "unauthenticated", "route={route}");
         }
 
-        for route in ["/api/not-retained", "/api/rpc", "/api/super-agent/tasks"] {
+        // D8 (2026-08-29): /api/rpc is retired with an explicit 410 Gone +
+        // deprecation header + anonymous client-class hit counting.
+        let rpc_gone = client
+            .get(format!("{}/api/rpc", host.origin()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rpc_gone.status(), reqwest::StatusCode::GONE);
+        assert_eq!(
+            rpc_gone
+                .headers()
+                .get("deprecation")
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
+        let rpc_body: Value = rpc_gone.json().await.unwrap();
+        assert_eq!(rpc_body["error"]["code"], "gone");
+        assert!(rpc_body["removalNotice"].is_string());
+        assert!(rpc_body["clientClass"].is_string());
+        let rpc_gone_post = client
+            .post(format!("{}/api/rpc", host.origin()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rpc_gone_post.status(), reqwest::StatusCode::GONE);
+
+        // Unretained routes without a migration path fail closed (404).
+        for route in ["/api/not-retained", "/api/super-agent/tasks"] {
             for request in [
                 client.get(format!("{}{}", host.origin(), route)),
                 client.post(format!("{}{}", host.origin(), route)),

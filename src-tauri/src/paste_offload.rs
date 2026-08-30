@@ -19,6 +19,23 @@ pub enum PasteError {
     Io,
 }
 
+/// Legacy parity: `<tmp>/.gitignore` with `*` + `!.gitignore` keeps pasted
+/// content out of `git status` (legacy `paste-offload.ts:80-83`). Skipped
+/// when the entry is a symlink or unwritable — never a hard failure.
+fn maintain_self_ignore(tmp: &std::path::Path) {
+    let gitignore = tmp.join(".gitignore");
+    if gitignore
+        .symlink_metadata()
+        .is_ok_and(|meta| meta.file_type().is_symlink())
+    {
+        return;
+    }
+    if gitignore.is_file() {
+        return;
+    }
+    let _ = fs::write(&gitignore, "*\n!.gitignore\n");
+}
+
 pub fn write(workspace: &Path, content: &str, now: SystemTime) -> Result<String, PasteError> {
     if content.len() > MAX_PASTE_BYTES {
         return Err(PasteError::TooLarge);
@@ -32,6 +49,7 @@ pub fn write(workspace: &Path, content: &str, now: SystemTime) -> Result<String,
     let pi = checked_directory(&root, &root.join(".pi"))?;
     let tmp = checked_directory(&root, &pi.join("tmp"))?;
     cleanup(&tmp, now);
+    maintain_self_ignore(&tmp);
 
     let current = directory_bytes(&tmp);
     if current.saturating_add(content.len() as u64) > MAX_DIRECTORY_BYTES {

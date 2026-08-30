@@ -607,6 +607,77 @@ impl NativePiManager {
             .map(|(_, _, response)| response.unwrap_or(Value::Null))
     }
 
+    /// Run a host-side mutation through the Operation Registry (plan §14:
+    /// writes walk the mutation registry): accept with the caller's
+    /// idempotency key, execute, then complete with the terminal result or
+    /// mark indeterminate on failure. Duplicate-completed replays return the
+    /// recorded terminal result.
+    pub fn host_mutation<F>(
+        &self,
+        scope: crate::operation_registry::OperationScope,
+        idempotency_key: &str,
+        command_type: &str,
+        execution_instance_id: &str,
+        operation: F,
+    ) -> Result<
+        (
+            String,
+            crate::operation_registry::OperationAcceptance,
+            Option<Value>,
+        ),
+        String,
+    >
+    where
+        F: FnOnce() -> Result<Value, String>,
+    {
+        use crate::operation_registry::OperationAcceptance;
+        let (operation_id, acceptance) = self
+            .inner
+            .operations
+            .lock()
+            .map_err(|_| "Operation registry lock poisoned".to_string())?
+            .accept(
+                scope,
+                idempotency_key,
+                command_type,
+                execution_instance_id.to_string(),
+            )
+            .map_err(|error| format!("Operation rejected: {error:?}"))?;
+        match acceptance {
+            OperationAcceptance::DuplicateCompleted => {
+                let record = self
+                    .inner
+                    .operations
+                    .lock()
+                    .map_err(|_| "Operation registry lock poisoned".to_string())?
+                    .get(&operation_id)
+                    .map_err(|error| format!("Operation lookup rejected: {error:?}"))?
+                    .clone();
+                let terminal = record.terminal_response;
+                Ok((operation_id, acceptance, terminal))
+            }
+            OperationAcceptance::DuplicatePending => Err("Operation is still pending".into()),
+            OperationAcceptance::Accepted => match operation() {
+                Ok(result) => {
+                    let terminal = result.clone();
+                    self.inner
+                        .operations
+                        .lock()
+                        .map_err(|_| "Operation registry lock poisoned".to_string())?
+                        .complete(&operation_id, terminal)
+                        .map_err(|error| format!("Cannot complete operation: {error:?}"))?;
+                    Ok((operation_id, acceptance, Some(result)))
+                }
+                Err(error) => {
+                    if let Ok(mut registry) = self.inner.operations.lock() {
+                        let _ = registry.mark_indeterminate(&operation_id, error.clone());
+                    }
+                    Err(error)
+                }
+            },
+        }
+    }
+
     pub async fn request_scoped_receipt(
         &self,
         target: &RuntimeTarget,
