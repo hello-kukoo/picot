@@ -4,14 +4,21 @@
 
 mod broker_ws;
 mod host_capability;
+#[allow(dead_code)]
+mod host_config;
 mod host_data;
+#[allow(dead_code)]
+mod host_files;
 mod host_router;
 mod host_server;
 mod metadata_store;
 mod mutation_types;
 mod native_pi_manager;
+#[allow(dead_code)]
+mod oauth_manager;
 mod operation_registry;
 mod package_manager;
+mod paste_offload;
 mod v1_control_adapter;
 // Public API staged for the broker (Task 5) and host lifecycle (Task 7a).
 #[allow(dead_code)]
