@@ -10,6 +10,7 @@ import { repaintContextViz, setupContextViz } from "./ui/context-viz.js";
 import { createHeaderStatusBar } from "./ui/header-status-bar.js";
 import { initImageLightbox } from "./ui/image-lightbox.js";
 import "./cost/dashboard.js";
+import { installHostOriginFetch } from "./app/host-origin.js";
 import { StateManager } from "./app/state.js";
 import { initTransport } from "./app/transport.js";
 import { createAppUpdater } from "./app/updater.js";
@@ -538,6 +539,7 @@ function dismissBootSwapOverlayWhenReady() {
 }
 
 // Initialize components
+installHostOriginFetch(window);
 const wsUrl = resolveWebSocketUrl(window);
 const wsClient = new WebSocketClient(wsUrl);
 // Unified control transport: every process/window lifecycle + native op goes

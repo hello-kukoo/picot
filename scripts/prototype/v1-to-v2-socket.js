@@ -8,7 +8,12 @@
 // the CLIENT side here (contrast with the server facade, where the unmodified
 // client never learns about sequences).
 
-import { brokerCommandToV2, CONTROL_MAP } from "./control-map.js";
+import {
+  brokerCommandToV2,
+  CONTROL_MAP,
+  DEFERRED_V1_SURFACES,
+  deferredSurfaceError,
+} from "./control-map.js";
 
 let adapterCounter = 0;
 // Capability cache scoped to this module (= one page/window realm). The
@@ -122,7 +127,9 @@ export class V1ToV2Socket {
           type: "control_response",
           requestId: frame.requestId,
           ok: false,
-          error: `unimplemented_route: control "${frame.command}" has no v2 mapping yet`,
+          error: DEFERRED_V1_SURFACES.has(frame.command)
+            ? deferredSurfaceError(frame.command)
+            : `unimplemented_route: control "${frame.command}" has no v2 mapping yet`,
         });
         return;
       }
@@ -159,9 +166,14 @@ export class V1ToV2Socket {
       this.__sendV2(mapped.frame);
       return;
     }
-    // Ephemeral, terminal, git and other v1 frame families are deliberately
-    // out of prototype scope; fail loudly rather than silently forward.
-    this.__emitV1({ type: "error", error: `unmapped_v1_frame:${frame?.type}` });
+    // Deferred P4/P5/P6 families fail with stable route code. Other unknown
+    // frames remain protocol errors, never silent forwards.
+    this.__emitV1({
+      type: "error",
+      error: DEFERRED_V1_SURFACES.has(frame?.type)
+        ? deferredSurfaceError(frame.type)
+        : `unmapped_v1_frame:${frame?.type}`,
+    });
   }
 
   __targetFromRouting(frame) {

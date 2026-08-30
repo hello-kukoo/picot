@@ -1,6 +1,8 @@
 // ABOUTME: Maintains the broker WebSocket, authentication handshake, and reconnect state.
 // ABOUTME: Dispatches correlated control, session, and owner-scoped ephemeral frames.
 
+import { consumeInjectedCapability } from "./host-origin.js";
+
 /**
  * WebSocket Client - Handles connection to backend WebSocket server
  */
@@ -29,12 +31,19 @@ export function resolveBrokerWsUrl(env = globalThis.window || globalThis) {
 }
 
 export function resolveWebSocketUrl(env = globalThis.window || globalThis) {
+  const loc = env?.location || globalThis.location;
+  const hostOrigin = typeof loc?.pathname === "string" && loc.pathname.startsWith("/workspaces/");
+  // Existing-shell pages served by HostServer have one canonical transport. Do
+  // not consult brokerWs (or fall back to Pi's /ws) on this origin.
+  if (hostOrigin) {
+    const protocol = loc?.protocol === "https:" ? "wss:" : "ws:";
+    return `${protocol}//${loc?.host || "127.0.0.1:47821"}/v2/ws`;
+  }
   const brokerUrl = resolveBrokerWsUrl(env);
   if (brokerUrl.trim()) {
     return brokerUrl.trim();
   }
 
-  const loc = env?.location || globalThis.location;
   const protocol = loc?.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${loc?.host || "127.0.0.1:47821"}/ws`;
 }
@@ -51,9 +60,11 @@ export class WebSocketClient extends EventTarget {
     this.isIntentionallyClosed = false;
     this.reconnectTimer = null;
     this.connectionState = "idle";
-    this.protocolVersion = 1;
+    this.protocolVersion = url.endsWith("/v2/ws") ? 2 : 1;
+    this.clientId = null;
     this.workspaceId = null;
     this.sessionId = null;
+    this.canonicalRoute = this._readCanonicalRoute();
     this.sourcePort = null;
     this.requestCounter = 0;
     // Whether the broker advertised native (OS/window) capabilities. Updated by
@@ -70,13 +81,29 @@ export class WebSocketClient extends EventTarget {
     // control_progress frames (e.g. updater download chunks).
     this.pendingControls = new Map();
     this.controlTimeoutMs = 30000;
+    this.sequenceGapRecoveryPending = false;
+  }
+
+  _readCanonicalRoute() {
+    if (this.protocolVersion !== 2) return false;
+    const match = (globalThis.location?.pathname || "").match(
+      /^\/workspaces\/([^/]+)\/sessions\/([^/]+)/,
+    );
+    if (!match) return false;
+    this.workspaceId = decodeURIComponent(match[1]);
+    this.sessionId = decodeURIComponent(match[2]);
+    return true;
   }
 
   setRoutingContext({ workspaceId, sessionId, sourcePort }) {
-    if (typeof workspaceId === "string" && workspaceId.trim())
-      this.workspaceId = workspaceId.trim();
-    if (sessionId === null) this.sessionId = null;
-    if (typeof sessionId === "string" && sessionId.trim()) this.sessionId = sessionId.trim();
+    // Host-origin route IDs are authoritative. Legacy app.js updates must not
+    // replace them with path-derived IDs after a native navigation.
+    if (!this.canonicalRoute) {
+      if (typeof workspaceId === "string" && workspaceId.trim())
+        this.workspaceId = workspaceId.trim();
+      if (sessionId === null) this.sessionId = null;
+      if (typeof sessionId === "string" && sessionId.trim()) this.sessionId = sessionId.trim();
+    }
     if (sourcePort === null) this.sourcePort = null;
     if (typeof sourcePort === "number" && Number.isFinite(sourcePort)) {
       this.sourcePort = sourcePort;
@@ -202,18 +229,32 @@ export class WebSocketClient extends EventTarget {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       // Prefer broker envelope, while remaining backward-compatible with
       // servers that still expect raw command payloads.
+      const requestId = `req-${++this.requestCounter}`;
       const payload =
-        data && data.type === "broker_command"
-          ? data
-          : {
-              type: "broker_command",
-              protocolVersion: this.protocolVersion,
-              requestId: `req-${++this.requestCounter}`,
-              workspaceId: this.workspaceId || undefined,
-              sessionId: this.sessionId || undefined,
-              sourcePort: this.sourcePort || undefined,
-              payload: data,
-            };
+        this.protocolVersion === 2
+          ? {
+              type: "runtime_request",
+              protocolVersion: 2,
+              requestId,
+              target: {
+                workspaceId: this.workspaceId,
+                sessionId: this.sessionId,
+                instanceId: String(this.sourcePort || "primary"),
+              },
+              command: data,
+              idempotencyKey: `ui-${requestId}`,
+            }
+          : data && data.type === "broker_command"
+            ? data
+            : {
+                type: "broker_command",
+                protocolVersion: this.protocolVersion,
+                requestId,
+                workspaceId: this.workspaceId || undefined,
+                sessionId: this.sessionId || undefined,
+                sourcePort: this.sourcePort || undefined,
+                payload: data,
+              };
       console.debug("[WS route] send", {
         command: payload.payload?.type || payload.type,
         requestId: payload.requestId,
@@ -231,23 +272,8 @@ export class WebSocketClient extends EventTarget {
     }
   }
 
-  // Read the host-injected native bearer capability exactly once, then delete
-  // the global. The value is never logged or persisted to storage.
   _readNativeCapability() {
-    try {
-      const capability = globalThis.__PICOT_NATIVE_CAPABILITY__;
-      if (typeof capability === "string" && capability) {
-        try {
-          delete globalThis.__PICOT_NATIVE_CAPABILITY__;
-        } catch {
-          // ignore non-configurable globals
-        }
-        return capability;
-      }
-    } catch {
-      // ignore access errors
-    }
-    return null;
+    return consumeInjectedCapability(globalThis);
   }
 
   // Send the first-frame `client_hello`. Native clients present the injected
@@ -255,8 +281,18 @@ export class WebSocketClient extends EventTarget {
   _sendClientHello() {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     const capability = this._readNativeCapability();
-    const hello = { type: "client_hello", protocolVersion: this.protocolVersion };
-    if (capability) hello.capability = capability;
+    this._readCanonicalRoute();
+    const hello =
+      this.protocolVersion === 2
+        ? {
+            type: "hello",
+            protocolVersion: 2,
+            clientType: "desktop",
+            clientId: this.clientId || `desktop-${globalThis.crypto?.randomUUID?.() || Date.now()}`,
+            desktopCapability: capability,
+          }
+        : { type: "client_hello", protocolVersion: this.protocolVersion };
+    if (capability && this.protocolVersion !== 2) hello.capability = capability;
     try {
       this.ws.send(JSON.stringify(hello));
     } catch (err) {
@@ -344,13 +380,16 @@ export class WebSocketClient extends EventTarget {
       }
       this.pendingControls.set(requestId, entry);
 
-      const envelope = {
-        type: "broker_control",
-        protocolVersion: this.protocolVersion,
-        requestId,
-        command,
-        args: args || {},
-      };
+      const envelope =
+        this.protocolVersion === 2
+          ? this._canonicalControlEnvelope(command, requestId, args)
+          : {
+              type: "broker_control",
+              protocolVersion: this.protocolVersion,
+              requestId,
+              command,
+              args: args || {},
+            };
       try {
         this.ws.send(JSON.stringify(envelope));
       } catch (err) {
@@ -359,6 +398,74 @@ export class WebSocketClient extends EventTarget {
         reject(err);
       }
     });
+  }
+
+  _subscribeCanonicalTarget() {
+    if (this.protocolVersion !== 2 || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.workspaceId || !this.sessionId) return;
+    this.ws.send(
+      JSON.stringify({
+        type: "runtime_subscribe",
+        protocolVersion: 2,
+        requestId: `sub-${++this.requestCounter}`,
+        target: {
+          workspaceId: this.workspaceId,
+          sessionId: this.sessionId,
+          instanceId: String(this.sourcePort || "primary"),
+        },
+      }),
+    );
+  }
+
+  _requestCanonicalSnapshot() {
+    if (this.protocolVersion !== 2 || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.workspaceId || !this.sessionId) return;
+    this.ws.send(
+      JSON.stringify({
+        type: "runtime_snapshot_request",
+        protocolVersion: 2,
+        requestId: `snapshot-${++this.requestCounter}`,
+        target: {
+          workspaceId: this.workspaceId,
+          sessionId: this.sessionId,
+          instanceId: String(this.sourcePort || "primary"),
+        },
+      }),
+    );
+  }
+
+  _canonicalControlEnvelope(command, requestId, args) {
+    // Host owns process/workspace lifecycle. Keep this classification aligned
+    // with `scripts/prototype/control-map.js` and Rust `v1_control_adapter`;
+    // routing these controls as runtime requests sends them to Pi instead of
+    // the host lifecycle handler.
+    return {
+      type: "host_request",
+      protocolVersion: 2,
+      requestId,
+      operation: command,
+      args: args || {},
+      idempotencyKey: `ui-${requestId}`,
+    };
+  }
+
+  _recoverFromSequenceGap() {
+    if (this.sequenceGapRecoveryPending || this.protocolVersion !== 2) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.workspaceId || !this.sessionId) return;
+    this.sequenceGapRecoveryPending = true;
+    this.ws.send(
+      JSON.stringify({
+        type: "runtime_snapshot_request",
+        protocolVersion: 2,
+        requestId: `snapshot-gap-${++this.requestCounter}`,
+        target: {
+          workspaceId: this.workspaceId,
+          sessionId: this.sessionId,
+          instanceId: String(this.sourcePort || "primary"),
+        },
+      }),
+    );
   }
 
   resolveControl(message) {
@@ -420,9 +527,73 @@ export class WebSocketClient extends EventTarget {
     }
 
     // Broker reply for a broker_control we sent (requestId-keyed).
-    if (message.type === "control_response") {
-      this.resolveControl(message);
-      this.dispatchEvent(new CustomEvent("controlResponse", { detail: message }));
+    if (
+      message.type === "control_response" ||
+      message.type === "runtime_response" ||
+      message.type === "host_response" ||
+      message.type === "data_response"
+    ) {
+      // Canonical v2 uses `response` for runtime/host results; legacy callers
+      // consume `result`. Normalize only at this compatibility boundary.
+      const normalized =
+        message.result === undefined && message.response !== undefined
+          ? { ...message, result: message.response }
+          : message;
+      this.resolveControl(normalized);
+      this.dispatchEvent(new CustomEvent("controlResponse", { detail: normalized }));
+      return;
+    }
+
+    if (message.type === "error") {
+      if (message.error?.code === "event_sequence_gap") {
+        this._recoverFromSequenceGap();
+      }
+      this.resolveControl({
+        requestId: message.requestId,
+        ok: false,
+        error: message.error?.message || message.error?.code || "Request failed",
+      });
+      return;
+    }
+
+    if (message.type === "runtime_event") {
+      const route = {
+        workspaceId: message.target?.workspaceId,
+        sessionId: message.target?.sessionId,
+        sourcePort: message.target?.instanceId,
+      };
+      this.dispatchEvent(new CustomEvent("runtimeEvent", { detail: message }));
+      this.dispatchEvent(new CustomEvent("brokerEvent", { detail: message }));
+      // Existing shell owns event rendering through rpcEvent. Translate v2's
+      // sequenced envelope without dropping sequence/target metadata.
+      this.dispatchEvent(
+        new CustomEvent("rpcEvent", {
+          detail: message.event
+            ? { ...message.event, __broker: route, __sequence: message.sequence }
+            : {},
+        }),
+      );
+      return;
+    }
+
+    if (message.type === "runtime_snapshot") {
+      this.sequenceGapRecoveryPending = false;
+      const state = message.state || {};
+      const piState = state.pi && typeof state.pi === "object" ? state.pi : {};
+      const target = message.target || {};
+      this.dispatchEvent(
+        new CustomEvent("mirrorSync", {
+          detail: {
+            ...piState,
+            workspaceId: target.workspaceId,
+            sessionId: target.sessionId,
+            port: target.instanceId,
+            sequence: message.sequence,
+            messages: state.messages || [],
+            stats: state.stats || {},
+          },
+        }),
+      );
       return;
     }
 
@@ -437,6 +608,21 @@ export class WebSocketClient extends EventTarget {
     // Streamed progress for an in-flight broker_control (e.g. updater download).
     if (message.type === "control_progress") {
       this.handleControlProgress(message);
+      return;
+    }
+
+    // Host v2 acknowledges its authenticated hello directly. Legacy broker
+    // connections advertise capabilities in a second frame.
+    if (message.type === "hello_ack" && this.protocolVersion === 2) {
+      this.capabilities = { native: true, class: "native" };
+      this.authenticated = true;
+      this.dispatchEvent(new CustomEvent("capabilities", { detail: this.capabilities }));
+      this._subscribeCanonicalTarget();
+      this._requestCanonicalSnapshot();
+      if (this._pendingConnect) {
+        this._pendingConnect = false;
+        this.dispatchEvent(new CustomEvent("connected"));
+      }
       return;
     }
 

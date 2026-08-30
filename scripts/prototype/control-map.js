@@ -37,39 +37,66 @@ export function isV2MutationCommand(commandType) {
  * table intentionally covers one representative control per authority class so
  * the prototype can measure per-class translation cost, not the whole surface.
  */
+// P3 deliberately proves only core chat transport. Deferred P4/P5/P6 wire
+// families fail with one stable route error instead of falling through to a
+// generic v2 request or pretending parity exists.
+export const DEFERRED_V1_SURFACES = new Set([
+  // P4: data/session/cost compatibility.
+  "get_messages",
+  "get_state",
+  "get_session_stats",
+  "get_session_tree",
+  "list_models",
+  "list_auth",
+  "get_auth",
+  "cost_dashboard",
+  "export_html",
+  // P5: file/config and OAuth lifecycle.
+  "list_files",
+  "read_file",
+  "write_file",
+  "file_read",
+  "file_write",
+  "get_agent_config",
+  "save_agent_config",
+  "oauth_login",
+  "oauth_cancel",
+  "oauth_status",
+  "oauth_logout",
+  // P6: integrations, streaming, and temporary-runtime families.
+  "terminal_command",
+  "super_agent_command",
+  "telegram_command",
+  "ephemeral_command",
+  "ephemeral_snapshot_request",
+]);
+
+export function deferredSurfaceError(surface) {
+  return `unimplemented_route: ${surface} is deferred to P4/P5/P6`;
+}
+
 export const CONTROL_MAP = {
-  // ── session routing class ─────────────────────────────────────────────────
-  new_session: {
-    kind: "runtime",
-    mutation: true,
-    category: "session-routing",
-    toV2: (args, ctx) => ({
-      type: "runtime_request",
-      command: { type: "new_session", port: args.port ?? ctx?.sourcePort ?? null },
-      target: ctx.target,
-    }),
-  },
-  fork: {
-    kind: "runtime",
-    mutation: true,
-    category: "session-routing",
-    toV2: (args, ctx) => ({
-      type: "runtime_request",
-      command: { type: "fork", entryId: args.entryId },
-      target: ctx.target,
-    }),
-  },
-  navigate_tree: {
-    kind: "runtime",
-    mutation: true,
-    category: "session-routing",
-    // `summarize:false` must survive translation (session-tree invariant).
-    toV2: (args, ctx) => ({
-      type: "runtime_request",
-      command: { type: "navigate_tree", entryId: args.entryId, summarize: args.summarize ?? false },
-      target: ctx.target,
-    }),
-  },
+  // ── host lifecycle class ──────────────────────────────────────────────────
+  // Workspace/process lifecycle belongs to Rust host, not Pi runtime arm.
+  ...Object.fromEntries(
+    [
+      "open_workspace",
+      "new_session",
+      "switch_session",
+      "fork",
+      "navigate_tree",
+      "stop_instance",
+      "spawn_session_process",
+    ].map((operation) => [
+      operation,
+      {
+        kind: "host",
+        mutation: true,
+        category: "session-routing",
+        toV2: (args) => ({ type: "host_request", operation, args: args || {} }),
+      },
+    ]),
+  ),
   // ── picker class (OS dialogs; NativeDesktop only) ─────────────────────────
   pick_folder: {
     kind: "host",
@@ -133,6 +160,9 @@ export function brokerCommandToV2(payload, requestId, ctx) {
   const commandType = payload?.type;
   if (typeof commandType !== "string" || !commandType) {
     return { error: "invalid_command" };
+  }
+  if (DEFERRED_V1_SURFACES.has(commandType)) {
+    return { error: deferredSurfaceError(commandType) };
   }
   if (commandType === "mirror_sync_request") {
     // v1 snapshot request → v2 snapshot request; the reply is translated back

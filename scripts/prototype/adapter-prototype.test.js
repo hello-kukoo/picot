@@ -62,7 +62,9 @@ function createFacadeClient({ host, remoteDeviceToken = null }) {
     instanceId: WORKSPACE.instanceId,
   });
   const v2Wire = [];
-  const client = new WebSocketClient(`ws://host/v2/ws`);
+  // Prototype adapters expose legacy v1 wire to production client; v2 route is
+  // adapter-internal, not client-visible.
+  const client = new WebSocketClient(`ws://host/ws`);
   const session = facade.createSession({ onClose: (code) => closedWith.push(code) });
   const closedWith = [];
   // Record the v2 frames the facade emits, for wire-shape assertions.
@@ -125,7 +127,8 @@ function createWrapClient({ host }) {
     },
   };
   const restore = installV2Adapter(globalThis, wire);
-  const client = new WebSocketClient("ws://host/v2/ws");
+  // Keep production client on legacy v1 contract; adapter translates wire to v2.
+  const client = new WebSocketClient("ws://host/ws");
   client.setRoutingContext({
     workspaceId: WORKSPACE.workspaceId,
     sessionId: WORKSPACE.sessionId,
@@ -316,32 +319,22 @@ describe("hello/capability mapping", () => {
 // ── 2. control mapping (per control, both paths) ────────────────────────────
 
 describe("control mapping — facade path", () => {
-  test("session-routing class: new_session → runtime_request with idempotencyKey + resolved target", async () => {
+  test.each([
+    "open_workspace",
+    "new_session",
+    "switch_session",
+    "fork",
+    "navigate_tree",
+    "stop_instance",
+    "spawn_session_process",
+  ])("session lifecycle control %s → host_request, never runtime_request", async (command) => {
     const fixture = createHostFixture();
     const harness = await connectFacadeNative(fixture);
-    const result = harness.client.sendControl("new_session", { port: WORKSPACE.port });
-    await expect(result).resolves.toEqual({ ok: true, command: "new_session" });
-    const frame = harness.v2Wire.find((f) => f.type === "runtime_request");
-    expect(frame).toMatchObject({
-      command: { type: "new_session", port: WORKSPACE.port },
-      target: {
-        workspaceId: WORKSPACE.workspaceId,
-        sessionId: WORKSPACE.sessionId,
-        instanceId: WORKSPACE.instanceId,
-      },
+    await harness.client.sendControl(command, { entryId: "entry-9", port: WORKSPACE.port });
+    expect(harness.v2Wire.find((f) => f.type === "host_request")).toMatchObject({
+      operation: command,
     });
-    expect(frame.idempotencyKey).toMatch(/^v1-ctl-ctl-\d+$/);
-  });
-
-  test("navigate_tree preserves summarize:false and entryId", async () => {
-    const fixture = createHostFixture();
-    const harness = await connectFacadeNative(fixture);
-    await harness.client.sendControl("navigate_tree", { entryId: "entry-9", summarize: false });
-    expect(harness.v2Wire.find((f) => f.type === "runtime_request")?.command).toEqual({
-      type: "navigate_tree",
-      entryId: "entry-9",
-      summarize: false,
-    });
+    expect(harness.v2Wire.some((f) => f.type === "runtime_request")).toBe(false);
   });
 
   test("picker class: pick_folder → host_request; remote client denied forbidden_class", async () => {
@@ -417,7 +410,7 @@ describe("control mapping — wrap path", () => {
     const fixture = createHostFixture();
     const harness = await connectWrapNative(fixture);
     restoreWrap = harness.restore;
-    // Host controls resolve directly; runtime controls need the seeded target.
+    // Host controls, including session/process lifecycle, resolve through host.
     await expect(harness.client.sendControl("pick_folder")).resolves.toEqual({
       path: "/tmp/picked-folder",
     });
@@ -426,17 +419,14 @@ describe("control mapping — wrap path", () => {
     ).resolves.toEqual({ opened: true });
     await expect(
       harness.client.sendControl("fork", { entryId: "e1", port: WORKSPACE.port }),
-    ).resolves.toMatchObject({ ok: true, command: "fork" });
-    const runtimeFrames = harness.v2Wire.filter((f) => f.type === "runtime_request");
-    expect(runtimeFrames.length).toBeGreaterThan(0);
-    for (const frame of runtimeFrames) {
-      expect(frame.idempotencyKey).toMatch(/^v1-ctl-/);
-    }
-    // Subscriptions precede runtime traffic on this connection.
-    const firstSub = harness.v2Wire.findIndex((f) => f.type === "runtime_subscribe");
-    const firstReq = harness.v2Wire.findIndex((f) => f.type === "runtime_request");
-    expect(firstSub).toBeGreaterThanOrEqual(0);
-    expect(firstSub).toBeLessThan(firstReq);
+    ).resolves.toEqual({});
+    const hostFrames = harness.v2Wire.filter((f) => f.type === "host_request");
+    expect(hostFrames.map((frame) => frame.operation)).toEqual([
+      "pick_folder",
+      "open_external",
+      "fork",
+    ]);
+    expect(harness.v2Wire.some((f) => f.type === "runtime_request")).toBe(false);
   });
 });
 
@@ -497,6 +487,21 @@ describe("broker_command prompt stream", () => {
       "message_end",
       "agent_end",
     ]);
+  });
+
+  test("P4/P5/P6 deferred runtime surfaces fail with stable unimplemented_route", async () => {
+    const fixture = createHostFixture();
+    const harness = await connectFacadeNative(fixture);
+    harness.client.setRoutingContext({
+      workspaceId: WORKSPACE.workspaceId,
+      sessionId: WORKSPACE.sessionId,
+      sourcePort: WORKSPACE.port,
+    });
+    const undeliverable = eventOnce(harness.client, "commandUndeliverable");
+    harness.client.send({ type: "get_messages" });
+    await expect(undeliverable).resolves.toMatchObject({
+      reason: expect.stringContaining("unimplemented_route"),
+    });
   });
 
   test("unknown runtime event passes through without breaking later events", async () => {

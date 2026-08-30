@@ -15,6 +15,13 @@ import { isV2MutationCommand } from "./control-map.js";
 export const V2_PROTOCOL_VERSION = 2;
 
 const HOST_OPERATIONS = new Set([
+  "open_workspace",
+  "new_session",
+  "switch_session",
+  "fork",
+  "navigate_tree",
+  "stop_instance",
+  "spawn_session_process",
   "pick_folder",
   "open_in_app",
   "open_external",

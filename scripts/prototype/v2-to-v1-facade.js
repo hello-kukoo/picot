@@ -8,7 +8,12 @@
 // v1 client never sees a sequence concept. Production notes and measured costs
 // go in docs/superpowers/specs/2026-08-27-adapter-prototype-evidence.md.
 
-import { brokerCommandToV2, CONTROL_MAP } from "./control-map.js";
+import {
+  brokerCommandToV2,
+  CONTROL_MAP,
+  DEFERRED_V1_SURFACES,
+  deferredSurfaceError,
+} from "./control-map.js";
 
 const V1_PROTOCOL_VERSION = 1;
 
@@ -371,8 +376,14 @@ export class V1Facade {
         });
         return;
       }
-      // Unknown v1 frame: explicit error, never silence.
-      reply({ type: "error", error: `unmapped_v1_frame:${type}` });
+      // Deferred P4/P5/P6 families fail with stable route code. Other
+      // unknown frames remain protocol errors, never silence.
+      reply({
+        type: "error",
+        error: DEFERRED_V1_SURFACES.has(type)
+          ? deferredSurfaceError(type)
+          : `unmapped_v1_frame:${type}`,
+      });
     }
 
     function drain() {

@@ -24,6 +24,7 @@
     "fetch:cjk-font": "bun run scripts/fetch-cjk-font.js",
     "smoke:pi-rpc": "bun run scripts/smoke-pi-rpc.js",
     "smoke:gate-c": "bun run scripts/gate-c-parity-smoke.mjs",
+    "smoke:host-origin-p3": "bun run scripts/smoke-host-origin-p3.mjs",
     "build:extensions": "bun run scripts/build-extensions.js",
     "sign:pi": "bash scripts/sign-pi-resources.sh",
     "build:frontend": "node scripts/build-frontend.js",
@@ -51,6 +52,7 @@
     "rehearsal:recovery": "bun run scripts/recovery-rehearsal.mjs --out docs/superpowers/specs/2026-08-28-registry-runtime-recovery-rehearsal.md",
     "check:rehearsal": "bun run scripts/recovery-rehearsal.mjs --check",
     "perf:baseline": "bun run scripts/perf-baseline.mjs",
+    "perf:p3": "bun run scripts/perf-p3.mjs",
     "check:rust": "bash scripts/check-rust.sh"
   },
   "dependencies": {

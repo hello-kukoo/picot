@@ -84,6 +84,24 @@ describe("WebSocketClient control commands", () => {
     await expect(result).resolves.toBe("1.2.3");
   });
 
+  test.each([
+    "open_workspace",
+    "new_session",
+    "switch_session",
+    "fork",
+    "navigate_tree",
+    "stop_instance",
+    "spawn_session_process",
+  ])("canonicalizes %s as host lifecycle control", (command) => {
+    const { client, sent } = openClient();
+    client.protocolVersion = 2;
+    client.workspaceId = "workspace-a";
+    client.sessionId = "session-a";
+    client.sendControl(command, {});
+    expect(sent[0]).toMatchObject({ type: "host_request", operation: command });
+    expect(sent[0].type).not.toBe("runtime_request");
+  });
+
   test("sendControl rejects on an error control_response", async () => {
     const { client } = openClient();
     const result = client.sendControl("new_session", {});
@@ -380,6 +398,74 @@ describe("WebSocketClient broker routing", () => {
         sessionId: "/tmp/project/session-a.jsonl",
       },
     ]);
+  });
+
+  test("normalizes v2 responses and forwards sequenced runtime events to legacy listeners", async () => {
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
+    client.setRoutingContext({
+      workspaceId: "workspace-a",
+      sessionId: "session-a",
+      sourcePort: 47821,
+    });
+    const events = [];
+    const syncs = [];
+    client.addEventListener("rpcEvent", (event) => events.push(event.detail));
+    client.addEventListener("mirrorSync", (event) => syncs.push(event.detail));
+    client.handleMessage({
+      type: "runtime_event",
+      sequence: 4,
+      target: { workspaceId: "workspace-a", sessionId: "session-a", instanceId: "47821" },
+      event: { type: "message_update", text_delta: "hi" },
+    });
+    client.handleMessage({
+      type: "runtime_snapshot",
+      sequence: 5,
+      target: { workspaceId: "workspace-a", sessionId: "session-a", instanceId: "47821" },
+      state: { pi: { isStreaming: false }, messages: [{ role: "user" }], stats: { total: 1 } },
+    });
+    expect(events[0]).toMatchObject({ type: "message_update", text_delta: "hi", __sequence: 4 });
+    expect(syncs[0]).toMatchObject({
+      sequence: 5,
+      messages: [{ role: "user" }],
+      stats: { total: 1 },
+    });
+
+    client.ws = { readyState: WebSocket.OPEN, send: () => {} };
+    const result = client.sendControl("get_pi_version", {});
+    client.handleMessage({
+      type: "host_response",
+      requestId: "ctl-1",
+      operation: "get_pi_version",
+      response: { version: "0.84.2" },
+    });
+    await expect(result).resolves.toEqual({ version: "0.84.2" });
+  });
+
+  test("sequence gap requests one authoritative snapshot for current target", () => {
+    const sent = [];
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
+    client.ws = {
+      readyState: WebSocket.OPEN,
+      send: (message) => sent.push(JSON.parse(message)),
+    };
+    client.setRoutingContext({
+      workspaceId: "workspace-a",
+      sessionId: "session-a",
+      sourcePort: 47821,
+    });
+    client.handleMessage({
+      type: "error",
+      error: { code: "event_sequence_gap", message: "missed" },
+    });
+    client.handleMessage({
+      type: "error",
+      error: { code: "event_sequence_gap", message: "missed again" },
+    });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      type: "runtime_snapshot_request",
+      target: { workspaceId: "workspace-a", sessionId: "session-a", instanceId: "47821" },
+    });
   });
 
   test("wraps commands with the active source port", () => {

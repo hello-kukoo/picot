@@ -213,154 +213,172 @@
       "text": "const response = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {"
     },
     {
-      "id": "public/app.js:165",
+      "id": "public/app.js:166",
       "file": "public/app.js",
-      "line": 165,
+      "line": 166,
       "text": "const res = await fetch(\"/api/instances\");"
     },
     {
-      "id": "public/app.js:406",
+      "id": "public/app.js:407",
       "file": "public/app.js",
-      "line": 406,
+      "line": 407,
       "text": "const res = await fetch(`/api/workspace-info?${params}`);"
     },
     {
-      "id": "public/app.js:544",
+      "id": "public/app.js:546",
       "file": "public/app.js",
-      "line": 544,
+      "line": 546,
       "text": "// through the broker WebSocket (broker_control). No Tauri IPC hooks — the"
     },
     {
-      "id": "public/app.js:586",
+      "id": "public/app.js:588",
       "file": "public/app.js",
-      "line": 586,
+      "line": 588,
       "text": "return fetch(\"/api/open\", {"
     },
     {
-      "id": "public/app.js:649",
+      "id": "public/app.js:651",
       "file": "public/app.js",
-      "line": 649,
+      "line": 651,
       "text": "const res = await fetch(\"/api/home\");"
     },
     {
-      "id": "public/app.js:801",
+      "id": "public/app.js:803",
       "file": "public/app.js",
-      "line": 801,
+      "line": 803,
       "text": "const response = await fetch("
     },
     {
-      "id": "public/app.js:1027",
+      "id": "public/app.js:1029",
       "file": "public/app.js",
-      "line": 1027,
+      "line": 1029,
       "text": "const res = await fetch(`/api/git-branch${params.size ? `?${params.toString()}` : \"\"}`);"
     },
     {
-      "id": "public/app.js:1191",
+      "id": "public/app.js:1193",
       "file": "public/app.js",
-      "line": 1191,
+      "line": 1193,
       "text": "fetch(\"/api/open\", {"
     },
     {
-      "id": "public/app.js:1836",
+      "id": "public/app.js:1838",
       "file": "public/app.js",
-      "line": 1836,
+      "line": 1838,
       "text": "const res = await fetch(`/api/workspace-info?${params.toString()}`);"
     },
     {
-      "id": "public/app.js:1899",
+      "id": "public/app.js:1901",
       "file": "public/app.js",
-      "line": 1899,
+      "line": 1901,
       "text": "fetch(\"/api/open\", {"
     },
     {
-      "id": "public/app.js:2793",
+      "id": "public/app.js:2795",
       "file": "public/app.js",
-      "line": 2793,
+      "line": 2795,
       "text": "await fetch(`http://localhost:${port}/api/rpc`, {"
     },
     {
-      "id": "public/app.js:2811",
+      "id": "public/app.js:2813",
       "file": "public/app.js",
-      "line": 2811,
+      "line": 2813,
       "text": "await fetch(`http://localhost:${port}/api/rpc`, {"
     },
     {
-      "id": "public/app.js:2845",
+      "id": "public/app.js:2847",
       "file": "public/app.js",
-      "line": 2845,
+      "line": 2847,
       "text": "const res = await fetch(`http://localhost:${port}/api/super-agent/tasks`);"
     },
     {
-      "id": "public/app.js:2852",
+      "id": "public/app.js:2854",
       "file": "public/app.js",
-      "line": 2852,
+      "line": 2854,
       "text": "await fetch(`http://localhost:${port}/api/super-agent/tasks`, {"
     },
     {
-      "id": "public/app.js:3455",
+      "id": "public/app.js:3457",
       "file": "public/app.js",
-      "line": 3455,
+      "line": 3457,
       "text": "const response = await fetch(\"/api/paste-offload\", {"
     },
     {
-      "id": "public/app.js:3720",
+      "id": "public/app.js:3722",
       "file": "public/app.js",
-      "line": 3720,
+      "line": 3722,
       "text": "const resp = await fetch(\"/api/rpc\", {"
     },
     {
-      "id": "public/app.js:3861",
+      "id": "public/app.js:3863",
       "file": "public/app.js",
-      "line": 3861,
+      "line": 3863,
       "text": "fetch(\"/api/rpc\", {"
     },
     {
-      "id": "public/app.js:3866",
+      "id": "public/app.js:3868",
       "file": "public/app.js",
-      "line": 3866,
+      "line": 3868,
       "text": "fetch(\"/api/rpc\", {"
     },
     {
-      "id": "public/app.js:4957",
+      "id": "public/app.js:4959",
       "file": "public/app.js",
-      "line": 4957,
+      "line": 4959,
       "text": "const res = await fetch(url);"
     },
     {
-      "id": "public/app.js:5000",
+      "id": "public/app.js:5002",
       "file": "public/app.js",
-      "line": 5000,
+      "line": 5002,
       "text": "const res = await fetch("
     },
     {
-      "id": "public/app.js:5047",
+      "id": "public/app.js:5049",
       "file": "public/app.js",
-      "line": 5047,
+      "line": 5049,
       "text": "const res = await fetch(\"/api/sessions/switch\", {"
     },
     {
-      "id": "public/app.js:5297",
+      "id": "public/app.js:5299",
       "file": "public/app.js",
-      "line": 5297,
+      "line": 5299,
       "text": "const res = await fetch(\"/api/instances\");"
     },
     {
-      "id": "public/app.js:5739",
+      "id": "public/app.js:5741",
       "file": "public/app.js",
-      "line": 5739,
+      "line": 5741,
       "text": "const res = await fetch(\"/api/lan-qr\");"
     },
     {
-      "id": "public/app.js:5775",
+      "id": "public/app.js:5777",
       "file": "public/app.js",
-      "line": 5775,
+      "line": 5777,
       "text": "const res = await fetch(\"/api/health\");"
     },
     {
-      "id": "public/app.js:6224",
+      "id": "public/app.js:6226",
       "file": "public/app.js",
-      "line": 6224,
+      "line": 6226,
       "text": "const resp = await fetch(\"/api/rpc\", {"
+    },
+    {
+      "id": "public/app/host-origin.test.js:30",
+      "file": "public/app/host-origin.test.js",
+      "line": 30,
+      "text": "await env.fetch(\"/api/files\", { headers: { Accept: \"application/json\" } });"
+    },
+    {
+      "id": "public/app/host-origin.test.js:57",
+      "file": "public/app/host-origin.test.js",
+      "line": 57,
+      "text": "await env.fetch(\"/api/files\");"
+    },
+    {
+      "id": "public/app/host-origin.test.js:58",
+      "file": "public/app/host-origin.test.js",
+      "line": 58,
+      "text": "await env.fetch(\"http://remote.example/api/files\");"
     },
     {
       "id": "public/app/transport.js:12",
@@ -375,33 +393,33 @@
       "text": "return this.wsClient.sendControl(command, args, options);"
     },
     {
-      "id": "public/app/websocket-client.js:68",
+      "id": "public/app/websocket-client.js:79",
       "file": "public/app/websocket-client.js",
-      "line": 68,
+      "line": 79,
       "text": "// the promise returned by sendControl() when a matching control_response"
     },
     {
-      "id": "public/app/websocket-client.js:321",
+      "id": "public/app/websocket-client.js:357",
       "file": "public/app/websocket-client.js",
-      "line": 321,
+      "line": 357,
       "text": "sendControl(command, args = {}, options = {}) {"
     },
     {
-      "id": "public/app/websocket-client.js:348",
+      "id": "public/app/websocket-client.js:387",
       "file": "public/app/websocket-client.js",
-      "line": 348,
+      "line": 387,
       "text": "type: \"broker_control\","
     },
     {
-      "id": "public/app/websocket-client.js:422",
+      "id": "public/app/websocket-client.js:529",
       "file": "public/app/websocket-client.js",
-      "line": 422,
+      "line": 529,
       "text": "// Broker reply for a broker_control we sent (requestId-keyed)."
     },
     {
-      "id": "public/app/websocket-client.js:437",
+      "id": "public/app/websocket-client.js:608",
       "file": "public/app/websocket-client.js",
-      "line": 437,
+      "line": 608,
       "text": "// Streamed progress for an in-flight broker_control (e.g. updater download)."
     },
     {
@@ -423,21 +441,33 @@
       "text": "type: \"broker_control\","
     },
     {
-      "id": "public/app/websocket-client.test.js:89",
+      "id": "public/app/websocket-client.test.js:100",
       "file": "public/app/websocket-client.test.js",
-      "line": 89,
+      "line": 100,
+      "text": "client.sendControl(command, {});"
+    },
+    {
+      "id": "public/app/websocket-client.test.js:107",
+      "file": "public/app/websocket-client.test.js",
+      "line": 107,
       "text": "const result = client.sendControl(\"new_session\", {});"
     },
     {
-      "id": "public/app/websocket-client.test.js:102",
+      "id": "public/app/websocket-client.test.js:120",
       "file": "public/app/websocket-client.test.js",
-      "line": 102,
+      "line": 120,
       "text": "const result = client.sendControl("
     },
     {
-      "id": "public/app/websocket-client.test.js:208",
+      "id": "public/app/websocket-client.test.js:226",
       "file": "public/app/websocket-client.test.js",
-      "line": 208,
+      "line": 226,
+      "text": "const result = client.sendControl(\"get_pi_version\", {});"
+    },
+    {
+      "id": "public/app/websocket-client.test.js:434",
+      "file": "public/app/websocket-client.test.js",
+      "line": 434,
       "text": "const result = client.sendControl(\"get_pi_version\", {});"
     },
     {
@@ -936,7 +966,7 @@
   "counts": {
     "embeddedHttp": 37,
     "embeddedCommands": 43,
-    "callers": 139,
+    "callers": 144,
     "brokerControls": 6,
     "hostFrames": 6
   }
