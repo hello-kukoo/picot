@@ -4,7 +4,6 @@
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
-
 pub const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,10 +64,17 @@ pub fn read(root: &Path, relative: &str) -> Result<FileContent, FileError> {
         return Err(FileError::TooLarge);
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    // The stat above can race a concurrent writer (the workspace's own Pi
+    // agent edits files); take() keeps the read bounded even when the file
+    // grows between the check and the read.
     fs::File::open(&path)
         .map_err(io_error)?
+        .take(MAX_FILE_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(io_error)?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(FileError::TooLarge);
+    }
     Ok(FileContent {
         relative_path: relative.replace('\\', "/"),
         bytes,

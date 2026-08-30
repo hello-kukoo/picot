@@ -39,7 +39,10 @@ use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 const MAX_HTTP_BODY_BYTES: usize = HTTP_DEFAULT_BODY_BYTES;
-const MAX_PASTE_BODY_BYTES: usize = 4 * 1024 * 1024 + 64 * 1024;
+// JSON string escaping can inflate each payload byte up to sixfold
+// (\uXXXX); the semantic paste bound in paste_offload stays authoritative,
+// so the transport limit only needs headroom for the encoded form.
+const MAX_PASTE_BODY_BYTES: usize = crate::paste_offload::MAX_PASTE_BYTES * 6 + 64 * 1024;
 const MAX_WS_MESSAGE_BYTES: usize = WS_PHYSICAL_FRAME_BYTES;
 
 fn bind_is_loopback(address: std::net::IpAddr) -> bool {
@@ -1562,7 +1565,11 @@ async fn dispatch(
                         .workspace_root(workspace_id)
                         .map_err(host_data_error)?
                 };
-                if name.contains('/') || name.contains('\\') || name.is_empty() {
+                if name.contains('/')
+                    || name.contains('\\')
+                    || name.is_empty()
+                    || matches!(name, "." | "..")
+                {
                     return Err((
                         "invalid_config_path",
                         "Config path is not allowed".to_owned(),
@@ -1582,6 +1589,15 @@ async fn dispatch(
                         json!({ "saved": true })
                     }
                     "agent_text_file_get" => {
+                        let metadata = std::fs::metadata(&path).map_err(|_| {
+                            ("config_not_found", "Config file unavailable".to_owned())
+                        })?;
+                        if metadata.len() as usize > crate::host_config::MAX_CONFIG_BYTES {
+                            return Err((
+                                "config_too_large",
+                                "Config file exceeds the text bound".to_owned(),
+                            ));
+                        }
                         let content = std::fs::read_to_string(&path).map_err(|_| {
                             ("config_not_found", "Config file unavailable".to_owned())
                         })?;
@@ -1616,24 +1632,18 @@ async fn dispatch(
                     .map_err(|_| ("oauth_unavailable", "OAuth manager unavailable".to_owned()))?;
                 let args = frame.get("args").cloned().unwrap_or_else(|| json!({}));
                 let generation = oauth.generation();
+                // The v2 OAuth surface is fail-closed until the CP7 Pi
+                // device-code bridge lands: capabilities must not advertise a
+                // provider whose login cannot complete, and start/logout must
+                // fail loudly instead of fabricating a pending operation or a
+                // completed logout. Cancel/status stay real host-side state.
                 let response = match operation.as_str() {
-                    "get_oauth_login_capabilities" => json!({ "providers": ["openai-codex"] }),
+                    "get_oauth_login_capabilities" => json!({ "providers": [] }),
                     "start_oauth_login" => {
-                        let operation_id = args
-                            .get("operationId")
-                            .and_then(Value::as_str)
-                            .filter(|value| !value.is_empty())
-                            .unwrap_or("oauth-operation")
-                            .to_owned();
-                        let record = oauth
-                            .start(
-                                crate::oauth_manager::OAuthClient::Desktop,
-                                owner.as_str(),
-                                operation_id,
-                                Duration::from_secs(300),
-                            )
-                            .map_err(|error| (error.code(), "OAuth start rejected".to_owned()))?;
-                        json!({ "operationId": record.id, "generation": record.generation, "status": "pending" })
+                        return Err((
+                            "oauth_pi_bridge_unavailable",
+                            "OAuth login requires the Pi device-code bridge (CP7); no operation was created".to_owned(),
+                        ));
                     }
                     "cancel_oauth_login" => {
                         let operation_id = args
@@ -1658,7 +1668,10 @@ async fn dispatch(
                         json!({ "operationId": operation_id, "status": format!("{status:?}").to_ascii_lowercase() })
                     }
                     "logout_oauth_login" => {
-                        json!({ "provider": "openai-codex", "status": "completed" })
+                        return Err((
+                            "oauth_pi_bridge_unavailable",
+                            "OAuth logout requires the Pi device-code bridge (CP7); credentials were not revoked".to_owned(),
+                        ));
                     }
                     _ => unreachable!(),
                 };
@@ -1980,6 +1993,106 @@ mod tests {
             Err(crate::oauth_manager::OAuthError::OperationNotFound)
         );
         assert!(second_generation > first_generation);
+    }
+
+    #[tokio::test]
+    async fn oauth_host_controls_fail_closed_until_pi_bridge_lands() {
+        use tokio_tungstenite::tungstenite::Message;
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-oauth-{nonce}"));
+        let workspace = temp.join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        let public = temp.join("public");
+        fs::create_dir_all(&public).unwrap();
+        fs::write(public.join("index.html"), "Picot").unwrap();
+        let metadata = Arc::new(Mutex::new(
+            MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
+        ));
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
+        let registry = Arc::new(crate::window_owner::WindowOwnerRegistry::default());
+        let host = HostServer::start(public, NativePiManager::new(8), auth, metadata)
+            .await
+            .expect("host server starts");
+        let (_owner, capability) = registry
+            .create_owner_with_workspace(
+                "oauth-contract-window".into(),
+                workspace,
+                0,
+                host.origin().into(),
+                Some("oauth-workspace".into()),
+                crate::window_owner::TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        host.set_owner_registry(registry);
+        host.runtime_started().expect("generation advances");
+        let (mut socket, _) = tokio_tungstenite::connect_async(
+            host.origin().replacen("http://", "ws://", 1) + "/v2/ws",
+        )
+        .await
+        .unwrap();
+        socket
+            .send(Message::Text(
+                json!({
+                    "type": "hello", "protocolVersion": 2, "clientType": "desktop",
+                    "clientId": "oauth-contract-window", "desktopCapability": capability
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let ack: Value =
+            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(ack["type"], "hello_ack");
+        let request = |operation: &str| {
+            json!({
+                "type": "host_request", "requestId": format!("oauth-{operation}"),
+                "operation": operation, "args": {}
+            })
+            .to_string()
+        };
+        socket
+            .send(Message::Text(request("get_oauth_login_capabilities")))
+            .await
+            .unwrap();
+        let response: Value =
+            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(response["type"], "host_response");
+        assert_eq!(response["response"]["providers"], json!([]));
+        for operation in ["start_oauth_login", "logout_oauth_login"] {
+            socket
+                .send(Message::Text(request(operation)))
+                .await
+                .unwrap();
+            let error: Value =
+                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
+                    .unwrap();
+            assert_eq!(
+                error["type"], "error",
+                "{operation} must fail closed: {error}"
+            );
+            assert_eq!(error["error"]["code"], "oauth_pi_bridge_unavailable");
+        }
+        socket
+            .send(Message::Text(
+                json!({
+                    "type": "host_request", "requestId": "oauth-cancel-unknown",
+                    "operation": "cancel_oauth_login",
+                    "args": { "operationId": "ghost" }
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let error: Value =
+            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(error["error"]["code"], "oauth_operation_not_found");
+        let _ = socket.close(None).await;
+        host.stop();
+        let _ = fs::remove_dir_all(temp);
     }
 
     #[tokio::test]

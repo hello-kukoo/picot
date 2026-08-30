@@ -61,6 +61,17 @@ pub fn write(workspace: &Path, content: &str, now: SystemTime) -> Result<String,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(_) => return Err(PasteError::Io),
         };
+        // The directory containment checks ran before the open; a directory
+        // swapped for a symlink in between would redirect this file outside
+        // the workspace. Re-resolve before any content is written so a
+        // redirected paste never leaves secret bytes outside the workspace.
+        if !std::fs::canonicalize(&path)
+            .map_err(|_| PasteError::Io)?
+            .starts_with(&tmp)
+        {
+            let _ = fs::remove_file(&path);
+            return Err(PasteError::Symlink);
+        }
         if file
             .write_all(content.as_bytes())
             .and_then(|_| file.sync_all())

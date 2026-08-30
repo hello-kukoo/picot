@@ -172,10 +172,20 @@ impl HostDataPlane {
         let Some(session_root) = &self.session_root else {
             return None;
         };
-        if let Some(encoded) = Self::encode_session_dir_name(workspace_root) {
-            let candidate = session_root.join(&encoded);
-            if candidate.is_dir() {
-                return Some(candidate);
+        // Pi encodes path.resolve(cwd); a canonicalized registry path can
+        // drift from the directory spelling Pi actually created, so try both
+        // spellings (mirrors the legacy alternateSpellings contract).
+        let canonical = workspace_root
+            .canonicalize()
+            .unwrap_or_else(|_| workspace_root.to_path_buf());
+        let mut candidates = vec![workspace_root.to_path_buf(), canonical.clone()];
+        candidates.dedup();
+        for candidate in &candidates {
+            if let Some(encoded) = Self::encode_session_dir_name(candidate) {
+                let dir = session_root.join(&encoded);
+                if dir.is_dir() {
+                    return Some(dir);
+                }
             }
         }
         // Header-sample fallback: majority recorded cwd must canonicalize to
@@ -194,7 +204,7 @@ impl HostDataPlane {
                 .filter_map(|file| parse_session_metrics(&file.path()).ok())
                 .flatten()
                 .filter_map(|metrics| metrics.cwd)
-                .any(|cwd| cwd == workspace_root);
+                .any(|cwd| cwd == canonical);
             if matches {
                 return Some(dir_path);
             }
@@ -672,6 +682,95 @@ fn search_session_file(
     }))
 }
 
+/// One-shot, TTL'd, owner-scoped export tokens backing the P4
+/// `session_export` control and the streaming
+/// `GET /v2/session-export/{token}` route.
+///
+/// Substrate only: the v2 control wiring has not landed yet, so nothing
+/// constructs this registry outside tests.
+#[allow(dead_code)]
+pub struct SessionExportRegistry {
+    tokens: std::sync::Mutex<HashMap<String, (std::path::PathBuf, String, std::time::Instant)>>,
+    max_per_owner: usize,
+    ttl: std::time::Duration,
+}
+
+#[allow(dead_code)]
+impl SessionExportRegistry {
+    pub fn new(max_per_owner: usize, ttl: std::time::Duration) -> Self {
+        Self {
+            tokens: std::sync::Mutex::new(HashMap::new()),
+            max_per_owner,
+            ttl,
+        }
+    }
+
+    pub fn ttl_secs(&self) -> u64 {
+        self.ttl.as_secs()
+    }
+
+    /// Mint a one-shot token bound to an owner and a validated session file.
+    pub fn issue(
+        &self,
+        owner: &str,
+        file_path: std::path::PathBuf,
+    ) -> Result<(String, std::time::Instant), String> {
+        let mut tokens = self
+            .tokens
+            .lock()
+            .map_err(|_| "export registry lock poisoned".to_string())?;
+        // Expire stale entries for the owner first so the quota reflects
+        // only live grants.
+        tokens.retain(|_, (_, _, expires)| *expires > std::time::Instant::now());
+        let outstanding = tokens
+            .values()
+            .filter(|(_, owner_id, _)| owner_id == owner)
+            .count();
+        if outstanding >= self.max_per_owner {
+            return Err("export token quota reached".to_string());
+        }
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        let expires = std::time::Instant::now() + self.ttl;
+        tokens.insert(token.clone(), (file_path, owner.to_string(), expires));
+        Ok((token, expires))
+    }
+
+    /// Redeem a token: one-shot. Expired or unknown tokens are rejected and
+    /// removed.
+    pub fn redeem(&self, token: &str) -> Result<std::path::PathBuf, String> {
+        let (_, (file_path, _, expires)) = self
+            .tokens
+            .lock()
+            .map_err(|_| "export registry lock poisoned".to_string())?
+            .remove_entry(token)
+            .ok_or_else(|| "export token is invalid or expired".to_string())?;
+        if expires <= std::time::Instant::now() {
+            return Err("export token is invalid or expired".to_string());
+        }
+        Ok(file_path)
+    }
+
+    /// Owner destruction hygiene: drop every outstanding grant.
+    pub fn revoke_owner(&self, owner: &str) {
+        if let Ok(mut tokens) = self.tokens.lock() {
+            tokens.retain(|_, (_, owner_id, _)| owner_id != owner);
+        }
+    }
+
+    #[cfg(test)]
+    pub fn outstanding_for(&self, owner: &str) -> usize {
+        self.tokens
+            .lock()
+            .map(|tokens| {
+                tokens
+                    .values()
+                    .filter(|(_, owner_id, _)| owner_id == owner)
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+}
+
 pub(crate) fn parse_session_metrics(path: &Path) -> Result<Option<SessionMetrics>, HostDataError> {
     let file = std::fs::File::open(path).map_err(|error| HostDataError::Io(error.to_string()))?;
     let mut metrics = SessionMetrics {
@@ -870,6 +969,10 @@ fn parse_session_summary(
     workspace_id: &str,
     workspace: &Path,
 ) -> Result<Option<SessionSummary>, HostDataError> {
+    // Summary fields live in the session header by construction; the hard
+    // line cap bounds work on pathological files where no user text block
+    // ever appears (the 50-line early exit requires first_message).
+    const MAX_SUMMARY_LINES: usize = 200;
     let file = std::fs::File::open(path).map_err(|error| HostDataError::Io(error.to_string()))?;
     let mut id = None;
     let mut timestamp = String::new();
@@ -924,6 +1027,9 @@ fn parse_session_summary(
             _ => {}
         }
         if line_count > 50 && first_message.is_some() {
+            break;
+        }
+        if line_count >= MAX_SUMMARY_LINES {
             break;
         }
     }
@@ -1024,7 +1130,7 @@ mod tests {
         let outside = temp.join("outside.jsonl");
         fs::write(&outside, "{}").unwrap();
 
-        let (data, workspace_id) = test_data(&workspace);
+        let (data, _workspace_id) = test_data(&workspace);
         let data = data.with_session_root(sessions.clone());
 
         let result = data
@@ -1049,6 +1155,35 @@ mod tests {
     }
 
     #[test]
+    fn session_export_registry_is_one_shot_quota_bound_and_revocable() {
+        use super::SessionExportRegistry;
+        use std::time::{Duration, Instant};
+
+        let registry = SessionExportRegistry::new(1, Duration::from_secs(60));
+        assert_eq!(registry.ttl_secs(), 60);
+        let file = std::path::PathBuf::from("/tmp/session.jsonl");
+        let (token, expires) = registry
+            .issue("owner", file.clone())
+            .expect("first grant is issued");
+        assert!(expires > Instant::now());
+        assert_eq!(registry.outstanding_for("owner"), 1);
+        // Quota is per-owner and counts only live grants.
+        assert!(registry.issue("owner", file.clone()).is_err());
+        assert!(registry.issue("other", file.clone()).is_ok());
+        // One-shot: a redeemed token cannot be redeemed twice.
+        assert_eq!(registry.redeem(&token), Ok(file));
+        assert!(registry.redeem(&token).is_err());
+        registry.revoke_owner("other");
+        assert_eq!(registry.outstanding_for("other"), 0);
+
+        let expired = SessionExportRegistry::new(4, Duration::ZERO);
+        let (stale, _) = expired
+            .issue("owner", std::path::PathBuf::from("/tmp/session.jsonl"))
+            .expect("grant is issued");
+        assert!(expired.redeem(&stale).is_err(), "zero-ttl grant is expired");
+    }
+
+    #[test]
     fn session_dir_for_workspace_resolves_by_encoding_then_header_sample() {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1056,6 +1191,7 @@ mod tests {
             .as_nanos();
         let temp = std::env::temp_dir().join(format!("picot-p4-dir-{nonce}"));
         let workspace = temp.join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
         let encoded = format!(
             "--{}--",
             workspace
@@ -1069,7 +1205,7 @@ mod tests {
         fs::write(
             sampled.join("session-x.jsonl"),
             format!(
-                "{{\"type\":\"session\",\"id\":\"x\",\"cwd\":{}\n",
+                "{{\"type\":\"session\",\"id\":\"x\",\"cwd\":{}}}\n",
                 serde_json::to_string(&workspace.to_string_lossy()).unwrap()
             ),
         )

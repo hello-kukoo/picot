@@ -16,6 +16,7 @@ pub enum OAuthError {
     DesktopOwnerRequired,
     StaleGeneration,
     OperationNotFound,
+    OperationLimit,
 }
 impl OAuthError {
     pub fn code(&self) -> &'static str {
@@ -23,6 +24,7 @@ impl OAuthError {
             Self::DesktopOwnerRequired => "desktop_owner_required",
             Self::StaleGeneration => "stale_generation",
             Self::OperationNotFound => "oauth_operation_not_found",
+            Self::OperationLimit => "oauth_operation_limit",
         }
     }
 }
@@ -30,6 +32,8 @@ impl OAuthError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OAuthStatus {
     Pending,
+    /// Only the Pi device-code bridge (deferred to the CP7 runtime
+    /// integration) transitions an operation to Succeeded.
     Succeeded,
     Cancelled,
     Failed,
@@ -49,6 +53,11 @@ pub struct OAuthManager {
     generation: u64,
     operations: HashMap<String, OAuthOperation>,
 }
+
+/// Upper bound on tracked operations. Without it a desktop client could
+/// enqueue unbounded distinct operation ids that never expire-sweep
+/// because nothing polls them.
+const MAX_OPERATIONS: usize = 32;
 
 impl OAuthManager {
     pub fn generation(&self) -> u64 {
@@ -72,12 +81,20 @@ impl OAuthManager {
         if client != OAuthClient::Desktop {
             return Err(OAuthError::DesktopOwnerRequired);
         }
+        let now = Instant::now();
+        // Expired-but-unpolled operations must not linger: sweep on every
+        // start so unpolled ids cannot accumulate for the process lifetime.
+        self.operations
+            .retain(|_, operation| now < operation.expires_at);
+        if self.operations.len() >= MAX_OPERATIONS {
+            return Err(OAuthError::OperationLimit);
+        }
         let operation = OAuthOperation {
             id: id.into(),
             owner_id: owner_id.into(),
             generation: self.generation,
             status: OAuthStatus::Pending,
-            expires_at: Instant::now() + ttl,
+            expires_at: now + ttl,
         };
         self.operations
             .insert(operation.id.clone(), operation.clone());
@@ -168,5 +185,41 @@ mod tests {
             Err(OAuthError::DesktopOwnerRequired)
         );
         assert_eq!(manager.operations.len(), 0);
+    }
+    #[test]
+    fn sweeps_expired_on_start_and_enforces_operation_limit() {
+        let mut manager = OAuthManager::default();
+        manager.runtime_started();
+        assert!(manager
+            .start(OAuthClient::Desktop, "owner", "expired", Duration::ZERO)
+            .is_ok());
+        // Expired operations are swept by the next start, not accumulated.
+        assert!(manager
+            .start(
+                OAuthClient::Desktop,
+                "owner",
+                "fresh",
+                Duration::from_secs(60)
+            )
+            .is_ok());
+        assert_eq!(manager.operations.len(), 1);
+        for index in 0..MAX_OPERATIONS {
+            let id = format!("batch-{index}");
+            if manager
+                .start(OAuthClient::Desktop, "owner", id, Duration::from_secs(60))
+                .is_err()
+            {
+                break;
+            }
+        }
+        assert_eq!(
+            manager.start(
+                OAuthClient::Desktop,
+                "owner",
+                "over-limit",
+                Duration::from_secs(60)
+            ),
+            Err(OAuthError::OperationLimit)
+        );
     }
 }
