@@ -1242,40 +1242,6 @@ fn registered_native_startup_workspace(
         .map(|row| (row.workspace_id, PathBuf::from(row.canonical_path))))
 }
 
-fn native_runtime_enabled(app: &tauri::App) -> bool {
-    // Native v2 surface is an explicitly opt-in development surface. Release
-    // binaries must remain on the legacy startup path regardless of stale DB
-    // preferences or inherited environment.
-    if !cfg!(debug_assertions) || std::env::var("PICOT_RUNTIME").as_deref() != Ok("native") {
-        return false;
-    }
-    let Ok(path) = app
-        .path()
-        .app_data_dir()
-        .map(|dir| dir.join("picot.sqlite3"))
-    else {
-        log::warn!("[picot-runtime] rollout preference unavailable; using legacy");
-        return false;
-    };
-    let Ok(mut store) = MetadataStore::open(&path) else {
-        log::warn!("[picot-runtime] rollout preference unavailable; using legacy");
-        return false;
-    };
-    if store.runtime_pref_get(Some(&metadata_store::rollout_authorization())) != Some(true) {
-        return false;
-    }
-    // Default ~/.pi/tmp is Temporary and has no v2 target identity. Native
-    // startup therefore opts into the registered path only; an empty registry
-    // falls back to legacy startup, which owns the explicit temporary policy.
-    match store.list_workspaces_and_prune() {
-        Ok((workspaces, _)) => !workspaces.is_empty(),
-        Err(error) => {
-            log::warn!("[picot-runtime] workspace registry unavailable; using legacy: {error}");
-            false
-        }
-    }
-}
-
 fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(), String> {
     let metadata_path = app
         .path()
@@ -3168,11 +3134,13 @@ fn main() {
         )
         .setup(|app| {
             let static_dir = find_static_dir(app);
-            if native_runtime_enabled(app) {
-                setup_native_runtime(app, static_dir).map_err(std::io::Error::other)?;
-                return Ok(());
-            }
-            let manager = Arc::new(PiManager::new(static_dir));
+            // P8: Native runtime is the only startup path.
+            // Legacy (embedded-server + PiManager) is retired per D8/D10.
+            let legacy_static_dir = static_dir.clone();
+            setup_native_runtime(app, static_dir).map_err(std::io::Error::other)?;
+            #[allow(unreachable_code)]
+            {
+                let manager = Arc::new(PiManager::new(legacy_static_dir));
             let broker = Arc::new(BrokerWs::start().expect("failed to start broker websocket"));
             let owner_registry = Arc::new(WindowOwnerRegistry::default());
             let ephemeral_registry = Arc::new(EphemeralRegistry::default());
@@ -3443,7 +3411,8 @@ fn main() {
                 });
             }
 
-            Ok(())
+                Ok(())
+            }
         })
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {

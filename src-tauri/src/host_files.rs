@@ -1,8 +1,14 @@
 // ABOUTME: Owner-independent filesystem contract for registered workspace data.
 // ABOUTME: Enforces canonical containment, bounded reads, and atomic owner-safe writes.
 
+#[cfg(unix)]
+use std::ffi::CString;
 use std::fs;
 use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
+use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::path::{Component, Path, PathBuf};
 pub const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
 
@@ -100,8 +106,11 @@ pub fn write(
             return Err(FileError::OutsideWorkspace);
         }
     }
-    if path.exists() {
-        let metadata = fs::metadata(&path).map_err(io_error)?;
+    let existing = fs::symlink_metadata(&path).ok();
+    if let Some(metadata) = existing {
+        if metadata.file_type().is_symlink() {
+            return Err(FileError::OutsideWorkspace);
+        }
         if metadata.is_dir() {
             return Err(FileError::IsDirectory);
         }
@@ -113,21 +122,128 @@ pub fn write(
     } else if expected_modified_at_ms.is_some() {
         return Err(FileError::Conflict);
     }
-    let temporary = path.with_file_name(format!(
-        ".{}.picot-tmp-{}",
-        path.file_name().unwrap_or_default().to_string_lossy(),
-        uuid::Uuid::new_v4()
-    ));
-    fs::write(&temporary, bytes).map_err(io_error)?;
-    if let Err(error) = restrict_permissions(&temporary) {
-        let _ = fs::remove_file(&temporary);
-        return Err(error);
+    #[cfg(unix)]
+    {
+        atomic_replace_unix(&root, relative, bytes)
     }
-    if let Err(error) = fs::rename(&temporary, &path) {
-        let _ = fs::remove_file(&temporary);
+    #[cfg(not(unix))]
+    let file_name = path.file_name().ok_or(FileError::InvalidPath)?;
+    #[cfg(not(unix))]
+    {
+        let temporary = path.with_file_name(format!(
+            ".{}.picot-tmp-{}",
+            file_name.to_string_lossy(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::write(&temporary, bytes).map_err(io_error)?;
+        if let Err(error) = restrict_permissions(&temporary) {
+            let _ = fs::remove_file(&temporary);
+            return Err(error);
+        }
+        if let Err(error) = fs::rename(&temporary, &path) {
+            let _ = fs::remove_file(&temporary);
+            return Err(io_error(error));
+        }
+        let resolved = path.canonicalize().map_err(io_error)?;
+        if resolved.strip_prefix(&root).is_err() {
+            return Err(FileError::OutsideWorkspace);
+        }
+        Ok(modified_ms(&fs::metadata(&resolved).map_err(io_error)?))
+    }
+}
+
+#[cfg(unix)]
+fn atomic_replace_unix(root: &Path, relative: &str, bytes: &[u8]) -> Result<u128, FileError> {
+    use std::io::Write;
+
+    let root_bytes =
+        CString::new(root.as_os_str().as_bytes()).map_err(|_| FileError::InvalidPath)?;
+    let root_fd = unsafe {
+        libc::open(
+            root_bytes.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if root_fd < 0 {
+        return Err(io_error(std::io::Error::last_os_error()));
+    }
+    let mut directory = unsafe { std::fs::File::from_raw_fd(root_fd) };
+    let components: Vec<_> = Path::new(relative).components().collect();
+    let file_name = components
+        .last()
+        .and_then(|component| match component {
+            Component::Normal(name) => Some(*name),
+            _ => None,
+        })
+        .ok_or(FileError::InvalidPath)?;
+    for component in &components[..components.len() - 1] {
+        let Component::Normal(name) = component else {
+            continue;
+        };
+        let name = CString::new(name.as_bytes()).map_err(|_| FileError::InvalidPath)?;
+        let fd = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(io_error(std::io::Error::last_os_error()));
+        }
+        directory = unsafe { std::fs::File::from_raw_fd(fd) };
+    }
+    let temp_name = format!(
+        ".{}.picot-tmp-{}",
+        file_name.to_string_lossy(),
+        uuid::Uuid::new_v4()
+    );
+    let temp_name = CString::new(temp_name.as_bytes()).map_err(|_| FileError::InvalidPath)?;
+    let target_name = CString::new(file_name.as_bytes()).map_err(|_| FileError::InvalidPath)?;
+    let temp_fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            temp_name.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    if temp_fd < 0 {
+        return Err(io_error(std::io::Error::last_os_error()));
+    }
+    let mut temporary = unsafe { std::fs::File::from_raw_fd(temp_fd) };
+    if let Err(error) = temporary
+        .write_all(bytes)
+        .and_then(|_| temporary.sync_all())
+    {
+        unsafe { libc::unlinkat(directory.as_raw_fd(), temp_name.as_ptr(), 0) };
         return Err(io_error(error));
     }
-    Ok(modified_ms(&fs::metadata(&path).map_err(io_error)?))
+    drop(temporary);
+    if unsafe {
+        libc::renameat(
+            directory.as_raw_fd(),
+            temp_name.as_ptr(),
+            directory.as_raw_fd(),
+            target_name.as_ptr(),
+        )
+    } < 0
+    {
+        unsafe { libc::unlinkat(directory.as_raw_fd(), temp_name.as_ptr(), 0) };
+        return Err(io_error(std::io::Error::last_os_error()));
+    }
+    let target_fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            target_name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if target_fd < 0 {
+        return Err(io_error(std::io::Error::last_os_error()));
+    }
+    let target = unsafe { std::fs::File::from_raw_fd(target_fd) };
+    Ok(modified_ms(&target.metadata().map_err(io_error)?))
 }
 
 fn validate_relative(value: &str) -> Result<(), FileError> {
@@ -189,6 +305,22 @@ mod tests {
             resolve_existing(&root, "link/secret"),
             Err(FileError::OutsideWorkspace)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_rejects_final_symlink_without_touching_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        let outside = dir.path().join("outside.txt");
+        fs::create_dir(&root).unwrap();
+        fs::write(&outside, b"outside").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("target.txt")).unwrap();
+        assert_eq!(
+            write(&root, "target.txt", b"inside", None),
+            Err(FileError::OutsideWorkspace)
+        );
+        assert_eq!(fs::read(&outside).unwrap(), b"outside");
     }
 
     #[test]

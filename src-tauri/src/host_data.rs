@@ -281,12 +281,42 @@ impl HostDataPlane {
     /// (`<sessions>/<encoded-workspace>/<session-id>.jsonl`).
     pub fn session_file_path(&self, workspace_id: &str, session_id: &str) -> Option<PathBuf> {
         let root = self.workspace_root(workspace_id).ok()?;
-        let encoded = Self::encode_session_dir_name(&root)?;
-        self.session_root.as_ref().map(|session_root| {
-            session_root
-                .join(encoded)
-                .join(format!("{session_id}.jsonl"))
-        })
+        self.session_file_path_for_root(&root, session_id)
+    }
+
+    /// Resolve only a session identifier, never a caller-supplied path. The
+    /// bucket must be one of this workspace's known buckets and the final
+    /// file must remain inside the canonical session root.
+    pub fn session_file_path_for_root(&self, root: &Path, session_id: &str) -> Option<PathBuf> {
+        if session_id.is_empty()
+            || session_id.contains('/')
+            || session_id.contains('\\')
+            || session_id.contains("..")
+            || session_id.contains('\0')
+        {
+            return None;
+        }
+        let session_root = self.session_root.as_ref()?;
+        let canonical_workspace = root.canonicalize().ok()?;
+        let encoded = Self::encode_session_dir_name(&canonical_workspace)?;
+        let bucket = session_root.join(encoded);
+        let canonical_root = session_root.canonicalize().ok()?;
+        let canonical_bucket = bucket.canonicalize().ok()?;
+        if canonical_bucket.strip_prefix(&canonical_root).is_err() {
+            return None;
+        }
+        let path = bucket.join(format!("{session_id}.jsonl"));
+        let resolved = path.canonicalize().ok()?;
+        if resolved.strip_prefix(&canonical_bucket).is_err() || !resolved.is_file() {
+            return None;
+        }
+        // Session IDs are file stems in Pi's on-disk format. Require header
+        // identity to match too; a same-named arbitrary JSONL is not a session.
+        let header = parse_session_header(&resolved)?;
+        if header.id != session_id {
+            return None;
+        }
+        Some(resolved)
     }
 
     /// Append a `session_info` name record to a session file (rename).
@@ -1438,6 +1468,39 @@ mod tests {
             expired.redeem(&stale, "owner", 1).is_err(),
             "zero-ttl grant is expired"
         );
+    }
+
+    #[test]
+    fn session_file_path_rejects_traversal_and_outside_bucket() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let sessions = temp.path().join("sessions");
+        fs::create_dir_all(&workspace).unwrap();
+        let (data, workspace_id) = test_data(&workspace);
+        let root = workspace.canonicalize().unwrap();
+        let bucket_name = HostDataPlane::encode_session_dir_name(&root).unwrap();
+        let bucket = sessions.join(&bucket_name);
+        fs::create_dir_all(&bucket).unwrap();
+        fs::write(
+            bucket.join("safe.jsonl"),
+            format!(
+                "{{\"type\":\"session\",\"id\":\"safe\",\"cwd\":{}}}\n{{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":\"hello\"}}}}\n",
+                serde_json::to_string(&root.to_string_lossy()).unwrap()
+            ),
+        )
+        .unwrap();
+        let data = data.with_session_root(sessions);
+        let resolved = data.session_file_path_for_root(&root, "safe");
+        assert!(
+            resolved.is_some(),
+            "root={root:?} bucket={bucket:?} resolved={resolved:?}"
+        );
+        for invalid in ["../outside", "nested/name", r"nested\\name", "..secret"] {
+            assert!(
+                data.session_file_path(&workspace_id, invalid).is_none(),
+                "{invalid}"
+            );
+        }
     }
 
     #[test]

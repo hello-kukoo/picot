@@ -22,6 +22,15 @@ describe("WsTransport", () => {
     );
   });
 
+  test("exportSession sends a session_export control command", async () => {
+    const ws = fakeWsClient();
+    const transport = createTransport({ wsClient: ws, env: {} });
+
+    await transport.exportSession("session-123");
+
+    expect(ws.sendControl).toHaveBeenCalledWith("session_export", { sessionId: "session-123" }, {});
+  });
+
   test("create new session sends a new_session control command", async () => {
     const ws = fakeWsClient();
     const transport = createTransport({ wsClient: ws, env: {} });

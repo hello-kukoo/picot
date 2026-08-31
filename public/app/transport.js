@@ -228,6 +228,10 @@ export class WsTransport {
     return this._control("get_cached_models", {});
   }
 
+  exportSession(sessionId) {
+    return this._control("session_export", { sessionId });
+  }
+
   loadSessionUiProfile(expectedSessionId) {
     return this._control("session_ui_profile_load", { expectedSessionId });
   }

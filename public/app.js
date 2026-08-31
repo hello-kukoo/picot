@@ -917,7 +917,7 @@ let contextVizController = null;
 const compactCoordinator = createCompactCoordinator({
   // An RPC acknowledgement only confirms dispatch. Keep status ownership with
   // the lifecycle coordinator rather than briefly reporting it as completed.
-  send: () => rpcCommand({ type: "compact" }, undefined, true),
+  send: () => wsClient.send({ type: "compact" }),
   onState: () => syncCompactControls(),
 });
 let mirrorActiveSessionFile = null; // The live session file path from the TUI
@@ -3752,17 +3752,51 @@ async function rpcCommand(cmd, statusMsg, silent = false) {
 }
 
 async function rpcExportHtml() {
-  const data = await rpcCommand({ type: "export_html" }, t("status.exporting"));
-  if (data?.success && data.data?.path) {
-    statusText.textContent = t("status.exported", { path: data.data.path });
-    setTimeout(() => {
-      statusText.textContent = t("status.connected");
-    }, 4000);
+  const sessionFile = mirrorActiveSessionFile || sidebar.activeSessionFile || null;
+  const session = sidebar.projects
+    .flatMap((project) => project.sessions || [])
+    .find((candidate) => candidate.filePath === sessionFile);
+  const sessionId = session?.id || (sessionFile && !sessionFile.includes("/") ? sessionFile : null);
+  if (!sessionId) {
+    statusText.textContent = t("status.failed");
+    return;
   }
+  try {
+    statusText.textContent = t("status.exporting");
+    const result = await transport.exportSession(sessionId);
+    const exportUrl = result?.exportUrl;
+    if (!exportUrl) throw new Error("Session export URL unavailable");
+    const response = await fetch(exportUrl);
+    if (!response.ok) throw new Error(`Session export failed (${response.status})`);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${sessionId}.html`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    statusText.textContent = t("status.done");
+  } catch (error) {
+    console.error("session export failed:", error);
+    statusText.textContent = t("status.failed");
+  }
+  setTimeout(() => {
+    statusText.textContent = t("status.connected");
+  }, 4000);
 }
 
 async function showSessionStats() {
-  const data = await rpcCommand({ type: "get_session_stats" }, t("status.loadingStats"));
+  let data;
+  try {
+    statusText.textContent = t("status.loadingStats");
+    data = await wsRequest({ type: "get_session_stats" });
+  } catch (error) {
+    console.error("session stats failed:", error);
+    statusText.textContent = t("status.failed");
+    return;
+  }
   if (data?.success && data.data) {
     const s = data.data;
     const lines = [

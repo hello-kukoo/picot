@@ -1237,26 +1237,25 @@ export class SessionSidebar {
     });
   }
 
-  async exportSession(_session) {
+  async exportSession(session) {
     try {
-      const data = await (
-        await fetch("/api/rpc", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type: "export_html" }),
-        })
-      ).json();
-      if (data?.success && data.data?.path) {
-        const downloadUrl = `/api/sessions/${encodeURIComponent(data.data.path)}`;
-        const anchor = document.createElement("a");
-        anchor.href = downloadUrl;
-        anchor.download = "";
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-      }
-    } catch {
-      /* silent */
+      const sessionId = session?.id;
+      if (!sessionId || !this.transport?.exportSession) return;
+      const result = await this.transport.exportSession(sessionId);
+      if (!result?.exportUrl) return;
+      const response = await fetch(result.exportUrl);
+      if (!response.ok) return;
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${sessionId}.html`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("[Sidebar] session export failed:", error);
     }
   }
 

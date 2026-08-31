@@ -32,6 +32,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::oneshot;
@@ -96,6 +97,7 @@ fn fingerprint_static_dir(static_dir: &std::path::Path) -> String {
 
 struct HostState {
     router: Mutex<HostRouter>,
+    static_dir: PathBuf,
     #[allow(dead_code)]
     desktop_capabilities: Mutex<HostCapabilityStore>,
     owner_registry: Mutex<Option<Arc<WindowOwnerRegistry>>>,
@@ -149,6 +151,7 @@ impl HostServer {
         }
         let state = Arc::new(HostState {
             router: Mutex::new(HostRouter::new()),
+            static_dir: static_dir.clone(),
             desktop_capabilities: Mutex::new(HostCapabilityStore::default()),
             owner_registry: Mutex::new(None),
             runtimes,
@@ -858,7 +861,7 @@ async fn session_export_stream(
     let file_name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "session-export.jsonl".to_owned());
+        .unwrap_or_else(|| "session-export.html".to_owned());
 
     let stream = futures_util::stream::unfold(file, |mut file| async move {
         let mut buf = vec![0u8; 64 * 1024];
@@ -872,7 +875,7 @@ async fn session_export_stream(
         }
     });
     Ok(Response::builder()
-        .header(CONTENT_TYPE, "application/octet-stream")
+        .header(CONTENT_TYPE, "text/html; charset=utf-8")
         .header(
             CONTENT_DISPOSITION,
             format!("attachment; filename=\"{file_name}\""),
@@ -1720,17 +1723,55 @@ async fn dispatch(
                     .workspace_id
                     .as_deref()
                     .ok_or(("not_registered", "Registered workspace required".to_owned()))?;
-                let path = state
+                let session_path = state
                     .data
                     .session_file_path(workspace_id, session_id)
                     .ok_or(("session_unavailable", "Session file unavailable".to_owned()))?;
-                if !path.is_file() {
-                    return Err(("session_unavailable", "Session file unavailable".into()));
+                // session_file_path performs identifier validation, bucket
+                // membership, canonical containment, and regular-file checks.
+                let html_path = session_path.with_extension("html");
+                if std::fs::symlink_metadata(&html_path)
+                    .map(|metadata| metadata.file_type().is_symlink() || metadata.is_dir())
+                    .unwrap_or(false)
+                {
+                    return Err((
+                        "export_unavailable",
+                        "Export target is not a regular file".into(),
+                    ));
+                }
+                let pi = crate::pi_launch::resolve_bundled_pi(&state.static_dir)
+                    .map_err(|error| ("export_unavailable", error))?;
+                let output = Command::new(pi)
+                    .arg("--export")
+                    .arg(&session_path)
+                    .arg(&html_path)
+                    .current_dir(
+                        state
+                            .data
+                            .workspace_root(workspace_id)
+                            .map_err(host_data_error)?,
+                    )
+                    .output()
+                    .map_err(|error| ("export_unavailable", format!("Export failed: {error}")))?;
+                if !output.status.success() {
+                    return Err(("export_unavailable", "Embedded Pi export failed".into()));
+                }
+                let bucket = session_path
+                    .parent()
+                    .ok_or(("export_unavailable", "Session bucket unavailable".into()))?;
+                let resolved_html = html_path
+                    .canonicalize()
+                    .map_err(|_| ("export_unavailable", "Export output unavailable".into()))?;
+                if resolved_html.strip_prefix(bucket).is_err() || !resolved_html.is_file() {
+                    return Err((
+                        "export_unavailable",
+                        "Export output escaped session bucket".into(),
+                    ));
                 }
                 let generation = context.workspace_generation.unwrap_or_default();
                 let (token, _) = state
                     .session_exports
-                    .issue(owner.as_str(), generation, path)
+                    .issue(owner.as_str(), generation, resolved_html)
                     .map_err(|error| ("export_quota", error))?;
                 return Ok(json!({
                     "type": "host_response",
@@ -1806,17 +1847,27 @@ async fn dispatch(
                         json!({ "saved": true, "restartRequired": requires_restart })
                     }
                     "agent_text_file_get" => {
-                        let metadata = std::fs::metadata(&path).map_err(|_| {
+                        let file = std::fs::File::open(&path).map_err(|_| {
                             ("config_not_found", "Config file unavailable".to_owned())
                         })?;
-                        if metadata.len() as usize > crate::host_config::MAX_CONFIG_BYTES {
+                        let mut bytes = Vec::new();
+                        use std::io::Read;
+                        file.take(crate::host_config::MAX_CONFIG_BYTES as u64 + 1)
+                            .read_to_end(&mut bytes)
+                            .map_err(|_| {
+                                ("config_not_found", "Config file unavailable".to_owned())
+                            })?;
+                        if bytes.len() > crate::host_config::MAX_CONFIG_BYTES {
                             return Err((
                                 "config_too_large",
                                 "Config file exceeds the text bound".to_owned(),
                             ));
                         }
-                        let content = std::fs::read_to_string(&path).map_err(|_| {
-                            ("config_not_found", "Config file unavailable".to_owned())
+                        let content = String::from_utf8(bytes).map_err(|_| {
+                            (
+                                "config_invalid_encoding",
+                                "Config file is not UTF-8".to_owned(),
+                            )
                         })?;
                         json!({ "content": content })
                     }
@@ -1867,10 +1918,10 @@ async fn dispatch(
                             .get("operationId")
                             .and_then(Value::as_str)
                             .ok_or(("invalid_operation", "operationId is required".to_owned()))?;
-                        oauth
+                        let status = oauth
                             .cancel(owner.as_str(), generation, operation_id)
                             .map_err(|error| (error.code(), "OAuth cancel rejected".to_owned()))?;
-                        json!({ "operationId": operation_id, "status": "cancelled" })
+                        json!({ "operationId": operation_id, "status": format!("{status:?}").to_ascii_lowercase() })
                     }
                     "get_oauth_login_status" => {
                         let operation_id = args

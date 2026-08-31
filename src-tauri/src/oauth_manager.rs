@@ -123,19 +123,35 @@ impl OAuthManager {
         }
         Ok(operation.status.clone())
     }
-    pub fn cancel(&mut self, owner_id: &str, generation: u64, id: &str) -> Result<(), OAuthError> {
+    pub fn cancel(
+        &mut self,
+        owner_id: &str,
+        generation: u64,
+        id: &str,
+    ) -> Result<OAuthStatus, OAuthError> {
         let operation = self
             .operations
-            .get_mut(id)
+            .get(id)
             .ok_or(OAuthError::OperationNotFound)?;
-        if operation.owner_id != owner_id
-            || operation.generation != generation
-            || generation != self.generation
-        {
+        if operation.owner_id != owner_id {
+            // Match status(): foreign owners must not learn operation existence.
+            return Err(OAuthError::OperationNotFound);
+        }
+        if operation.generation != generation || generation != self.generation {
             return Err(OAuthError::StaleGeneration);
         }
-        operation.status = OAuthStatus::Cancelled;
-        Ok(())
+        if Instant::now() >= operation.expires_at {
+            self.operations.remove(id);
+            // Expiry wins over cancellation. Return the same terminal state as
+            // status(), then forget the operation so a second query is absent.
+            self.operations.remove(id);
+            return Ok(OAuthStatus::Failed);
+        }
+        self.operations
+            .get_mut(id)
+            .expect("operation checked above")
+            .status = OAuthStatus::Cancelled;
+        Ok(OAuthStatus::Cancelled)
     }
     fn revoke_prior(&mut self) {
         self.operations
@@ -188,6 +204,23 @@ mod tests {
         );
         assert_eq!(manager.operations.len(), 0);
     }
+    #[test]
+    fn cancel_expired_operation_matches_status_expiry_precedence() {
+        let mut manager = OAuthManager::default();
+        let generation = manager.runtime_started();
+        let operation = manager
+            .start(OAuthClient::Desktop, "owner", "expired", Duration::ZERO)
+            .unwrap();
+        assert_eq!(
+            manager.cancel("owner", generation, &operation.id),
+            Ok(OAuthStatus::Failed)
+        );
+        assert_eq!(
+            manager.status("owner", generation, &operation.id),
+            Err(OAuthError::OperationNotFound)
+        );
+    }
+
     #[test]
     fn sweeps_expired_on_start_and_enforces_operation_limit() {
         let mut manager = OAuthManager::default();

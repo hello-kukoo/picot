@@ -86,8 +86,20 @@
       "steer",
       "switch_session"
     ],
-    "websocket": ["/ws", "browser connection", "extension_ui_response", "OAuth commands"],
-    "brokerControls": ["commit", "commit_diff", "diff", "log", "log_detail", "status"],
+    "websocket": [
+      "/ws",
+      "browser connection",
+      "extension_ui_response",
+      "OAuth commands"
+    ],
+    "brokerControls": [
+      "commit",
+      "commit_diff",
+      "diff",
+      "log",
+      "log_detail",
+      "status"
+    ],
     "hostFrames": [
       "hello",
       "host_request",
@@ -309,57 +321,63 @@
       "text": "const resp = await fetch(\"/api/rpc\", {"
     },
     {
-      "id": "public/app.js:3863",
+      "id": "public/app.js:3769",
       "file": "public/app.js",
-      "line": 3863,
+      "line": 3769,
+      "text": "const response = await fetch(exportUrl);"
+    },
+    {
+      "id": "public/app.js:3897",
+      "file": "public/app.js",
+      "line": 3897,
       "text": "fetch(\"/api/rpc\", {"
     },
     {
-      "id": "public/app.js:3868",
+      "id": "public/app.js:3902",
       "file": "public/app.js",
-      "line": 3868,
+      "line": 3902,
       "text": "fetch(\"/api/rpc\", {"
     },
     {
-      "id": "public/app.js:4959",
+      "id": "public/app.js:4993",
       "file": "public/app.js",
-      "line": 4959,
+      "line": 4993,
       "text": "const res = await fetch(url);"
     },
     {
-      "id": "public/app.js:5002",
+      "id": "public/app.js:5036",
       "file": "public/app.js",
-      "line": 5002,
+      "line": 5036,
       "text": "const res = await fetch("
     },
     {
-      "id": "public/app.js:5049",
+      "id": "public/app.js:5083",
       "file": "public/app.js",
-      "line": 5049,
+      "line": 5083,
       "text": "const res = await fetch(\"/api/sessions/switch\", {"
     },
     {
-      "id": "public/app.js:5299",
+      "id": "public/app.js:5333",
       "file": "public/app.js",
-      "line": 5299,
+      "line": 5333,
       "text": "const res = await fetch(\"/api/instances\");"
     },
     {
-      "id": "public/app.js:5741",
+      "id": "public/app.js:5775",
       "file": "public/app.js",
-      "line": 5741,
+      "line": 5775,
       "text": "const res = await fetch(\"/api/lan-qr\");"
     },
     {
-      "id": "public/app.js:5777",
+      "id": "public/app.js:5811",
       "file": "public/app.js",
-      "line": 5777,
+      "line": 5811,
       "text": "const res = await fetch(\"/api/health\");"
     },
     {
-      "id": "public/app.js:6226",
+      "id": "public/app.js:6260",
       "file": "public/app.js",
-      "line": 6226,
+      "line": 6260,
       "text": "const resp = await fetch(\"/api/rpc\", {"
     },
     {
@@ -723,10 +741,10 @@
       "text": "const response = await fetch(\"/api/sessions/rename\", {"
     },
     {
-      "id": "public/sidebar/index.js:1243",
+      "id": "public/sidebar/index.js:1246",
       "file": "public/sidebar/index.js",
-      "line": 1243,
-      "text": "await fetch(\"/api/rpc\", {"
+      "line": 1246,
+      "text": "const response = await fetch(result.exportUrl);"
     },
     {
       "id": "public/vendor/pdf.js:4653",
@@ -966,7 +984,7 @@
   "counts": {
     "embeddedHttp": 37,
     "embeddedCommands": 43,
-    "callers": 144,
+    "callers": 145,
     "brokerControls": 6,
     "hostFrames": 6
   }

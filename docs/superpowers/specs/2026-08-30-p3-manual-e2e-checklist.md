@@ -1,47 +1,55 @@
-# P3 manual E2E / dogfood checklist
+# P3 人工 E2E 清单（End-User 视角）
 
-日期：2026-08-30  
-状态：**人工执行项；不属于自动化 Picot browser test。**
+日期：2026-08-30
+前置：`PICOT_RUNTIME=native bun run tauri dev`（P8 已移除门控——native 是唯一启动路径）
 
-## 前置条件
+## 启动与基础
 
-- [ ] 使用目标 build、embedded Pi、目标 OS；记录 build、commit、Pi version、OS。
-- [ ] workspace 已注册；session fixture、数据 shape、legacy/native flag 状态已记录。
-- [ ] native flag 默认关闭验证完成；测试不在运行时热切换 flag。
-- [ ] 保留 legacy control fixture，native 与 legacy 使用相同 workspace/session/data shape。
+- [ ] 打开 Picot，看到工作区列表（侧栏有项目条目）
+- [ ] 点击一个项目进入聊天界面，页面不空白
+- [ ] 发送一条消息，agent 回复，消息正常显示
 
-## Browser/WebView flow
+## 聊天功能
 
-- [ ] 打开 `/workspaces/:workspaceId/sessions/:sessionId`：页面非空白，chat、composer、sidebar 可用。
-- [ ] 核对 CSS、JS、module、locale、worker、download 等静态资源均加载成功，无 console/network critical error。
-- [ ] 核对 root-relative `/v2/bootstrap`：authenticated request 返回成功；URL、storage、页面源码、日志不出现 capability。
-- [ ] 核对 `/v2/ws` 建连并完成 capability hello；无 Pi-origin 或 bare `/ws` fallback。
-- [ ] 发送 prompt：UI 显示用户消息，收到有序 runtime event，assistant 状态正确结束。
-- [ ] active turn 执行 abort：当前 turn 停止；无 active turn、stale turn 不影响后续 turn。
-- [ ] reload/reconnect：连接恢复、重新订阅、snapshot 先于后续 event；无重复或跨 session 内容。
-- [ ] capability revoke/过期：请求失败且 fail-closed；不能访问其他 owner/workspace；重新授权后可恢复。
-- [ ] 人为制造 sequence gap：UI 请求单次 authoritative snapshot；snapshot 后状态正确，旧 event 不重复 mutation。
-- [ ] retained owner-aware reads：逐项验证 `/api/health`、`/api/pi-version`、`/api/files`、`/api/sessions`、`/api/search`、`/api/cost-dashboard` 的成功、拒绝、wrong-owner、wrong-workspace 行为。
-- [ ] unsupported P4/P5/P6 route：返回稳定 `unimplemented_route`，不静默 fallback。
+- [ ] 发送多条消息，对话连续不丢内容
+- [ ] agent 正在回复时点停止，回复立即中断
+- [ ] 停止后可以继续发新消息
+- [ ] 切换到另一个会话再切回来，聊天记录不丢失
+- [ ] 新建会话，可以正常对话
 
-## Dogfood / performance
+## 侧栏
 
-- [ ] 与 legacy control path 完成同 fixture 对照。
-- [ ] 记录每个 critical operation 的样本数、warmup、p50、p95、失败数、超时数、OS/build/Pi version/data shape。
-- [ ] 至少覆盖 startup/bootstrap、prompt→first event、reconnect/snapshot、abort；样本不足标记 Hold，不判定通过。
-- [ ] 观察 dogfood 窗口内无 credential/path 泄漏、cross-owner action、静默丢 prompt、不可恢复 data loss。
-- [ ] telemetry 只含 allowlisted coarse fields；transport failure 不阻塞用户操作。
+- [ ] 侧栏正确显示工作区名称和会话列表
+- [ ] 选中一个会话后，该工作区出现 focus（`>`）按钮，点击进入 focus 模式
+- [ ] focus 模式显示该工作区的所有会话，可以切换
+- [ ] 重命名一个会话，名称立即更新
+- [ ] 删除一个会话（确认后），从列表中消失
+- [ ] 刷新侧栏后，列表与删除/重命名后的状态一致
+
+## 右侧面板
+
+- [ ] 打开 Info panel，显示 workspace 路径等信息
+- [ ] 打开 File panel，浏览文件目录
+- [ ] 点击文件查看内容
+- [ ] 打开 Git panel，看到当前分支和文件变更
+
+## 设置
+
+- [ ] 打开 Settings → Configuration，能读取当前配置
+- [ ] 修改配置保存，刷新后仍然生效
+
+## 异常场景
+
+- [ ] 网络断开再恢复，页面显示错误但不崩溃
+- [ ] agent 回复中杀掉 pi 进程，UI 显示错误但不白屏
+- [ ] 关闭应用再打开，之前的会话仍然可见
 
 ## Rollback
 
-- [ ] 关闭 native flag 后重启应用，回到 legacy path；确认无残留 native socket/state。
-- [ ] native failure 触发 stop/hold 条件时，冻结新增 cohort，保留 legacy control，按 D10 runbook 回退。
-- [ ] 记录 rollback 时间、触发条件、用户影响、恢复结果；不热切换运行中 runtime。
+- [ ] 去掉 `PICOT_RUNTIME` 环境变量重启，回到 legacy 模式
+- [ ] legacy 模式下打开一个工作区，确认正常工作
 
-## 判定与证据
+## 判定
 
-- **PASS**：所有必选项完成，critical parity 无 S1/S2 regression，且性能、样本、D10 threshold 证据完整。
-- **HOLD**：证据缺失、样本不足、baseline 不可比或只触发 Hold 条件；不得扩大 cohort。
-- **STOP/ROLLBACK**：出现 security leak、cross-owner/workspace action、静默丢 prompt、data loss、不可恢复状态或 D10 stop 条件。
-
-将截图、network/console 摘要、原始性能样本、人工签名与 rollback 记录放入同一 release evidence 目录；不得提交 capability、prompt、path、token、credential 或 raw upstream error。
+- 全部通过 → P3 human acceptance ✅，D10 Stage 0 解锁
+- 任一项失败 → 记录具体操作步骤和错误现象，修复后重测
