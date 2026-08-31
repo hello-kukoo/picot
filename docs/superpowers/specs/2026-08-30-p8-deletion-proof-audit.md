@@ -30,31 +30,40 @@
 
 ## 退役（D8）
 
-- [x] `/api/rpc` → 410 Gone + `Deprecation: true` + 匿名 client-class 计数
+- [x] `/api/rpc` → 410 Gone + `Deprecation: true` + 匿名 client-class 计数（**前端的 rpcCommand / fetchModelInfo / Settings get_state 已不再 POST 此面**）
+- [x] `/api/agent-config`、`/api/models-config`、`/api/agents-md`、`/api/append-system-md` → 410 Gone；ConfigGateway 改走 host 控制 op `agent_text_file_get`/`agent_text_file_put`（按文件名分 target，models.json 亦为文本面）
+- [x] `/api/file-mentions` → 410 Gone；两个 composer 改走数据 op `file_mentions`
+- [x] `/api/paste-offload` → 410 Gone；两个 composer 改走 `/v2/paste-offload`
+- [x] `/api/open` → 410 Gone；工作区/文件管理器打开改走控制 op `open_in_app`，URL 走 `open_external`
+- [x] `/api/chat-telegram/{op}`、`/api/skill-install-{links,scan}`、`/api/super-agent/{projects,tasks}`、`/api/lan-qr` → 410 Gone（scope 已移除）
+
+## 能力缺口（native 尚无实现，前端已显式报错或降级）
+
+| 面 | 现状 | 需要决定 |
+| --- | --- | --- |
+| `/api/files/content`、`/api/files/raw` | 410 Gone；`file_read`/`file_write`/`file_raw` 数据 op 已存在但预览面板未接 | Office 预览（MarkItDown）在 host 侧无 op；图像/PDF 需定 blob URL 还是 token 下载路由 |
+| `/api/git-branch` | 410 Gone；指示器降级为空 | 用 `git_status` 快照的 branch 字段驱动，还是补 `git_branch` op |
+| `/api/chat-config` + Super Agent/Telegram 组件 | 410 Gone；组件仍在 DOM | 移除死 UI，还是重议 scope |
+| `/api/rpc` 的 5 个 provider op（catalog / set_api_key / remove_api_key / check_model_health / set_model_visibility） | ConfigGateway 返回 `no native runtime implementation` | 需 host 侧凭证/目录 op（Pi credential store 投影） |
+| `list_skills`、`list_skill_inventory`、`set_skill_enabled`、`list_package_skill_inventory`、`set_default_thinking_level` | `rpcCommand` 返回显式失败 | 需 host 数据/控制 op（skills 清单、thinking 默认值） |
 
 ## 未迁移——P8 物理删除候选（删除前置：deprecated usage = 0）
 
 | 路由 | 唯一 production caller | 说明 |
 | --- | --- | --- |
-| `/api/agent-config` | `settings/config-gateway-legacy.js` | P5 scope |
-| `/api/models-config` | `settings/config-gateway-legacy.js` | P5 scope |
-| `/api/chat-config` | `chat-settings-panel.js` + `sa-chat-header.js` | P6 deferred |
-| `/api/chat-telegram/{bind,doctor,validate}` | `chat-settings-panel.js` | P6 deferred |
-| `/api/file-mentions` | `app.js` + `ephemeral-chat-view.js` | v2 data op 已有（file_mentions） |
-| `/api/files/content` | `file-preview-panel.js` | v2 file_read/file_raw 已有 |
-| `/api/files/raw` | `file-preview-panel.js` | v2 file_raw 已有 |
-| `/api/git-branch` | `app.js` | P6 deferred |
-| `/api/lan-qr` | `sa-chat-header.js` | P6 deferred |
-| `/api/open` | 12 文件（generic URL opener） | 不是 workspace-open；是浏览器打开 URL |
-| `/api/paste-offload` | `ephemeral-chat-view.js` | `/v2/paste-offload` 已有 |
-| `/api/skill-install-{links,scan}` | `app.js` | P6 deferred |
-| `/api/super-agent/{projects,tasks}` | `super-agent-runtime.js` | P6 deferred |
+| `/api/files/content` | `file-preview-panel.js` | v2 `file_read`/`file_write` 已有，缺 Office 转换 |
+| `/api/files/raw` | `file-preview-renderers.js` + `file-pdf-preview.js` | v2 `file_raw`（base64）已有，缺 URL 形态决策 |
+| `/api/git-branch` | `app.js` | 可用 `git_status` 快照替代 |
+| `/api/chat-config` | `chat-settings-panel.js` + `sa-chat-header.js` | scope 移除待决 |
 
 ## 结论
 
 **15/37 已迁移 + 1 退役 = 16/37 有 native 等价物。** 剩余 21 条路由中：
 
-- 6 条已有 v2 等价 op（file-mentions → `file_mentions`、files/content → `file_read`、files/raw → `file_raw`、paste-offload → `/v2/paste-offload`）——前端切换后即可从删除清单移入已迁移
+- 6 条已有 v2 等价 op（file-mentions → `file_mentions`、files/content → `file_read`、files/raw → `file_raw`、paste-offload → `/v2/paste-offload`）——**本轮已完成 file-mentions / paste-offload / open / agent·models·agents·append-system 配置面的前端切换**；files/content·raw 因 Office 预览与 URL 形态待决而保留 410
+
+> 本段以下数字为 P8-1 审计当时快照，已被上一段与「能力缺口」表取代。
+
 - 15 条属 P6 延迟行（Telegram、git-branch、super-agent、skills、lan-qr、open、agent/models-config）
 
 **P8 物理删除前置**：deprecated usage telemetry（D10 Stage 2+）必须显示上述 21 条路由在两个稳定 release 周期内零命中。

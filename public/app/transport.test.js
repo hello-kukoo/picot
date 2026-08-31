@@ -5,6 +5,7 @@ function fakeWsClient(capabilities = { native: true }) {
   return {
     capabilities,
     sendControl: vi.fn((command) => Promise.resolve(`ok:${command}`)),
+    sendData: vi.fn((operation) => Promise.resolve({ operation })),
   };
 }
 
@@ -29,6 +30,15 @@ describe("WsTransport", () => {
     await transport.exportSession("session-123");
 
     expect(ws.sendControl).toHaveBeenCalledWith("session_export", { sessionId: "session-123" }, {});
+  });
+
+  test("fileMentions sends a file_mentions data request", async () => {
+    const ws = fakeWsClient();
+    const transport = createTransport({ wsClient: ws, env: {} });
+
+    await transport.fileMentions("src/comp");
+
+    expect(ws.sendData).toHaveBeenCalledWith("file_mentions", { query: "src/comp" });
   });
 
   test("create new session sends a new_session control command", async () => {

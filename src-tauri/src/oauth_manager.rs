@@ -141,7 +141,6 @@ impl OAuthManager {
             return Err(OAuthError::StaleGeneration);
         }
         if Instant::now() >= operation.expires_at {
-            self.operations.remove(id);
             // Expiry wins over cancellation. Return the same terminal state as
             // status(), then forget the operation so a second query is absent.
             self.operations.remove(id);

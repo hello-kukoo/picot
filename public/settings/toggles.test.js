@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { JSDOM } from "jsdom";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { SUPER_AGENT_ENABLED_STORAGE_KEY } from "../super-agent/settings.js";
 import { renderThinkingEffort, setupSettingsToggles } from "./toggles.js";
 
 describe("thinking effort cycle controls", () => {
@@ -239,48 +238,5 @@ describe("thinking effort cycle controls", () => {
     expect(thinkingTagRule).toContain("color: var(--text-dim)");
     expect(thinkingTagRule).not.toContain("--thinking-accent");
     expect(composerThinkingTagRule).toContain("border-color: transparent");
-  });
-
-  test("moves Super Agent startup setting out of General", () => {
-    const html = readFileSync(join(process.cwd(), "public/index.html"), "utf8");
-    const dom = new JSDOM(html);
-    const { document } = dom.window;
-
-    expect(document.querySelector('[data-settings-tab="chat"]')?.textContent.trim()).toBe(
-      "Agent Inbox",
-    );
-    expect(
-      document.querySelector('[data-settings-panel="general"] #setting-super-agent'),
-    ).toBeNull();
-  });
-
-  test("persists Super Agent startup toggle and notifies the app", async () => {
-    const dom = new JSDOM('<button id="toggle-super-agent" class="settings-toggle"></button>', {
-      url: "http://localhost",
-    });
-    const toggle = dom.window.document.querySelector("#toggle-super-agent");
-    const onSuperAgentEnabledChanged = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("localStorage", dom.window.localStorage);
-
-    setupSettingsToggles({
-      toggleAutoCompact: null,
-      thinkingSteps: null,
-      thinkingMarker: null,
-      toggleShowThinking: null,
-      toggleSuperAgent: toggle,
-      rpcCommand: vi.fn(),
-      getDefaultThinkingLevel: () => "medium",
-      setDefaultThinkingLevel: vi.fn(),
-      onSuperAgentEnabledChanged,
-    });
-
-    expect(toggle.classList.contains("on")).toBe(false);
-
-    toggle.click();
-    await Promise.resolve();
-
-    expect(localStorage.getItem(SUPER_AGENT_ENABLED_STORAGE_KEY)).toBe("true");
-    expect(toggle.classList.contains("on")).toBe(true);
-    expect(onSuperAgentEnabledChanged).toHaveBeenCalledWith(true);
   });
 });

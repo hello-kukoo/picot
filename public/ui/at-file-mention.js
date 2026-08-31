@@ -1,5 +1,5 @@
 // ABOUTME: Shared @-file-mention textarea listbox controller for Main, Side, and Quick Chat.
-// ABOUTME: Pure DOM + Fetch; owns parsing, popup, caret replacement, IME-safe keys, and teardown.
+// ABOUTME: Owns parsing, popup, caret replacement, IME-safe keys, teardown, host mention search.
 import { t } from "../i18n.js";
 
 const TOKEN_DELIMITERS = new Set([" ", "\t", "=", "'", '"']);
@@ -45,6 +45,49 @@ export function activeAtMention(input) {
  * idempotent controller whose keydown listener must be registered before any
  * composer send handler.
  */
+/**
+ * Build a mention candidate from a resolved workspace path. Mirrors the Pi TUI
+ * `@<absolute-path>` semantics: directories keep the trailing slash and paths
+ * containing spaces are quoted, so the inserted token parses as one mention.
+ */
+export function buildMentionCandidate(displayPath, isDirectory) {
+  const valuePath = isDirectory ? `${displayPath}/` : displayPath;
+  const name = displayPath.split("/").filter(Boolean).pop() || displayPath;
+  const needsQuotes = valuePath.includes(" ");
+  return {
+    value: needsQuotes ? `@"${valuePath}"` : `@${valuePath}`,
+    label: `${name}${isDirectory ? "/" : ""}`,
+    description: displayPath,
+    isDirectory,
+  };
+}
+
+/**
+ * `searchFiles` implementation over the host v2 data plane. The host answers
+ * with workspace-relative entries, so the absolute display path is rebuilt
+ * here from the caller's live workspace root.
+ */
+/**
+ * `searchFiles` implementation over the host v2 data plane. The host answers
+ * with workspace-relative entries, so the absolute display path is rebuilt
+ * here from the caller's live workspace root. `getTransport` is resolved per
+ * call because ephemeral runtimes swap or drop their transport on teardown.
+ */
+export function createHostFileMentionSearch(getTransport) {
+  return async (workspaceRoot, query) => {
+    const transport = typeof getTransport === "function" ? getTransport() : getTransport;
+    if (!transport?.fileMentions || !workspaceRoot) return { items: [] };
+    const response = await transport.fileMentions(query);
+    const entries = Array.isArray(response?.entries) ? response.entries : [];
+    const root = String(workspaceRoot).replace(/\/+$/, "");
+    return {
+      items: entries.map((entry) =>
+        buildMentionCandidate(`${root}/${entry.relativePath ?? ""}`, entry.kind === "directory"),
+      ),
+    };
+  };
+}
+
 export function setupAtFileMention(options) {
   const { input, container, getWorkspaceRoot, searchFiles } = options;
   const doc = options.document ?? document;

@@ -918,6 +918,7 @@
     "close": "Close",
     "confirmDiscard": "This temporary chat is not saved. Discard it?",
     "confirmCloseSummary": "Close and discard unsaved files and temporary chats?",
+    "exportUnavailable": "Temporary chats cannot be exported",
     "generating": "Generating",
     "unread": "Unread",
     "resize": "Resize Quick Chat",

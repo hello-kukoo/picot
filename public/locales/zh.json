@@ -918,6 +918,7 @@
     "close": "关闭",
     "confirmDiscard": "此临时对话不会保存。确认丢弃？",
     "confirmCloseSummary": "关闭并丢弃未保存的文件和临时对话？",
+    "exportUnavailable": "临时对话不支持导出",
     "generating": "生成中",
     "unread": "未读",
     "resize": "调整快速聊天大小",

@@ -1265,6 +1265,34 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
     // this same handler; it must not grow a parallel OS-control implementation.
     let broker = Arc::new(BrokerWs::start()?);
     let legacy_manager = Arc::new(PiManager::new(static_dir.clone()));
+    let skill_source_registry = Arc::new(SkillSourceRegistry::new());
+    let git_service = Arc::new(git_service::GitService::new());
+    if let Ok(binary) = legacy_manager.bundled_pi_path() {
+        broker.set_git_pi_binary(binary);
+    }
+    let terminal_state_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Cannot resolve Picot app data directory: {error}"))?
+        .join("terminal");
+    let terminal_manager = Arc::new(TerminalManager::new(
+        TerminalRegistry::new(15),
+        TerminalStateStore::new(terminal_state_dir),
+    ));
+    let broker_for_terminal_events = broker.clone();
+    terminal_manager.set_event_sink(Arc::new(move |owner, event| {
+        broker_for_terminal_events.send_owner_event(owner, event);
+    }));
+    broker.set_terminal_manager(terminal_manager.clone());
+    let descriptor_registry = ephemeral_registry.clone();
+    broker.set_ephemeral_descriptor_provider(Arc::new(move |owner| {
+        serde_json::to_value(descriptor_registry.descriptors(owner))
+            .unwrap_or_else(|_| serde_json::Value::Array(Vec::new()))
+    }));
+    std::env::set_var("PI_STUDIO_BROKER_PORT", broker.port().to_string());
+    app.manage(skill_source_registry.clone());
+    app.manage(git_service);
+    app.manage(terminal_manager.clone());
     let session_ui_profiles = Arc::new(SessionUiProfileStore::open(
         app.path()
             .app_data_dir()
@@ -3136,283 +3164,9 @@ fn main() {
             let static_dir = find_static_dir(app);
             // P8: Native runtime is the only startup path.
             // Legacy (embedded-server + PiManager) is retired per D8/D10.
-            let legacy_static_dir = static_dir.clone();
             setup_native_runtime(app, static_dir).map_err(std::io::Error::other)?;
-            #[allow(unreachable_code)]
-            {
-                let manager = Arc::new(PiManager::new(legacy_static_dir));
-            let broker = Arc::new(BrokerWs::start().expect("failed to start broker websocket"));
-            let owner_registry = Arc::new(WindowOwnerRegistry::default());
-            let ephemeral_registry = Arc::new(EphemeralRegistry::default());
-            let skill_source_registry = Arc::new(SkillSourceRegistry::new());
-            broker.set_owner_registry(owner_registry.clone());
-            let git_service = Arc::new(git_service::GitService::new());
-            broker.set_git_service(git_service.clone());
-            if let Ok(binary) = manager.bundled_pi_path() {
-                broker.set_git_pi_binary(binary);
-            }
-
-            let terminal_state_dir = app
-                .path()
-                .app_data_dir()
-                .map(|dir| dir.join("terminal"))
-                .unwrap_or_else(|_| std::env::temp_dir());
-            let terminal_manager = Arc::new(TerminalManager::new(
-                TerminalRegistry::new(15),
-                TerminalStateStore::new(terminal_state_dir),
-            ));
-            let broker_for_terminal_events = broker.clone();
-            terminal_manager.set_event_sink(Arc::new(move |owner, event| {
-                broker_for_terminal_events.send_owner_event(owner, event);
-            }));
-            broker.set_terminal_manager(terminal_manager.clone());
-            let descriptor_registry = ephemeral_registry.clone();
-            broker.set_ephemeral_descriptor_provider(Arc::new(move |owner| {
-                serde_json::to_value(descriptor_registry.descriptors(owner))
-                    .unwrap_or_else(|_| Value::Array(Vec::new()))
-            }));
-            std::env::set_var("PI_STUDIO_BROKER_PORT", broker.port().to_string());
-            let profile_path = app
-                .path()
-                .app_data_dir()
-                .map_err(|error| format!("Cannot resolve Picot app data directory: {error}"))?
-                .join("session-ui-profiles.json");
-            let session_ui_profiles = Arc::new(SessionUiProfileStore::open(profile_path)?);
-            let metadata_path = app
-                .path()
-                .app_data_dir()
-                .map_err(|error| format!("Cannot resolve Picot app data directory: {error}"))?
-                .join("picot.sqlite3");
-            let shared_metadata: SharedMetadataStore =
-                Arc::new(Mutex::new(MetadataStore::open(&metadata_path)?));
-            app.manage(shared_metadata.clone());
-            log::info!(
-                "[pi-desktop] metadata store ready at {}",
-                metadata_path.display()
-            );
-            install_control_handler(
-                &broker,
-                manager.clone(),
-                owner_registry.clone(),
-                ephemeral_registry.clone(),
-                session_ui_profiles.clone(),
-                shared_metadata,
-                app.handle().clone(),
-            );
-
-            let manager_for_rpc_output = manager.clone();
-            let mut rpc_output_rx = manager.subscribe_rpc_outputs();
-            let broker_for_rpc_output = broker.clone();
-            tauri::async_runtime::spawn(async move {
-                loop {
-                    match rpc_output_rx.recv().await {
-                        Ok(output) => {
-                            // Forward extension UI requests to the broker.
-                            broker_for_rpc_output
-                                .publish_rpc_output(output.port, output.payload.clone());
-                            // Diagnostic: log set_model / set_thinking_level
-                            // responses so we can see whether Side Chat's
-                            // startup profile RPCs reach Pi and succeed.
-                            let cmd = output
-                                .payload
-                                .get("command")
-                                .and_then(Value::as_str)
-                                .unwrap_or("");
-                            if cmd == "set_model" || cmd == "set_thinking_level" {
-                                let success = output
-                                    .payload
-                                    .get("success")
-                                    .and_then(Value::as_bool)
-                                    .unwrap_or(false);
-                                let model_id = output
-                                    .payload
-                                    .pointer("/data/model/id")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("");
-                                log::info!(
-                                    "[pi-desktop] rpc response port={} cmd={} success={} model={}",
-                                    output.port,
-                                    cmd,
-                                    success,
-                                    model_id
-                                );
-                            }
-                            // Capture get_available_models responses to populate
-                            // the shared model cache. The cache lets Side Chat,
-                            // Quick Chat, and new sessions render dropdowns
-                            // instantly without each re-querying Pi.
-                            if let Some(models) = output.payload.get("data").and_then(|d| d.get("models")) {
-                                if output
-                                    .payload
-                                    .get("command")
-                                    .and_then(Value::as_str)
-                                    == Some("get_available_models")
-                                {
-                                    manager_for_rpc_output.store_cached_models(
-                                        output.port,
-                                        serde_json::json!({ "models": models.clone() }),
-                                    );
-                                }
-                            }
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            });
-
-            let mut exit_rx = manager.subscribe_exits();
-            let manager_for_exit = manager.clone();
-            let broker_for_exit = broker.clone();
-            let ephemeral_for_exit = ephemeral_registry.clone();
-            let app_for_exit = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                loop {
-                    match exit_rx.recv().await {
-                        Ok(exit) => {
-                            if let Some(lease) = ephemeral_for_exit
-                                .process_exit_cleanup(exit.port, exit.pid, exit.identity)
-                            {
-                                cleanup_ephemeral_lease(
-                                    &manager_for_exit,
-                                    &broker_for_exit,
-                                    &ephemeral_for_exit,
-                                    lease,
-                                );
-                            } else if !manager_for_exit.cleanup_exited_standby(exit) {
-                                broker_for_exit.unregister_port(exit.port);
-                            }
-                            // A terminated Pi port must never remain usable as a
-                            // target for a previously issued local skill source.
-                            // Registry lookup itself is owner/generation bound,
-                            // and this closes the process-lifetime dimension.
-                            if let Some(skill_sources) = app_for_exit.try_state::<SkillSourceRegistryState>() {
-                                skill_sources.revoke_port(exit.port);
-                            }
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            });
-
-            // Fresh startup always lands in the private ~/.pi/tmp root with a
-            // brand-new session. History remains available via the registry.
-            let home_cwd = pi_manager::ensure_picot_tmp_root()?
-                .to_string_lossy()
-                .to_string();
-            let mut cwd = home_cwd.clone();
-            let mut session_path: Option<String> = None;
-            log::info!(
-                "[pi-desktop] fresh startup workspace selected: cwd={}",
-                cwd
-            );
-
-            // Pick the first free port at/above 47821. We deliberately do NOT
-            // reuse a port that is already in use, even if "something pi-shaped"
-            // is listening on it, because:
-            //
-            //   1. We can't drive that process: `cmd_new_session` /
-            //      `cmd_switch_session` write to *our* `PiManager.processes`
-            //      map. A pi we didn't spawn (e.g. left over from an installed
-            //      Picot still running, or a previous `bun run dev` whose
-            //      Rust side crashed without taking its children with it) is
-            //      not in that map, so every RPC fails with
-            //      `No pi instance on port <p>` and the UI looks broken.
-            //
-            //   2. Even if we could control it, the WebView would be talking
-            //      to a completely different pi process with a different cwd
-            //      and a different session history. That's strictly worse
-            //      than starting our own.
-            //
-            // Allocating a fresh port for *this* Picot instance is the
-            // simple invariant that avoids both classes of confusion. The
-            // tradeoff is that `http://localhost:47821` is no longer a
-            // guaranteed entry point — but Picot doesn't promise that;
-            // the WebView discovers its port via the window URL.
-            let mut initial_port = manager.next_port();
-
-            let mut startup_ok = true;
-            if initial_port != 47821 {
-                log::warn!(
-                    "[pi-desktop] port 47821 unavailable, using {} instead (likely another Picot instance is running)",
-                    initial_port
-                );
-            }
-            if let Err(err) = manager.spawn(&cwd, initial_port, session_path.as_deref()) {
-                if is_invalid_working_directory_error(&err) && cwd != home_cwd {
-                    log::warn!(
-                        "[pi-desktop] startup cwd rejected by Windows; retrying from home: cwd={} error={}",
-                        cwd,
-                        err
-                    );
-                    cwd = home_cwd;
-                    session_path = None;
-                    initial_port = manager.next_port();
-                    log::info!(
-                        "[pi-desktop] retrying startup from home on port={}",
-                        initial_port
-                    );
-                    if let Err(retry_error) = manager.spawn(&cwd, initial_port, None) {
-                        startup_ok = false;
-                        report_startup_spawn_error(app, &retry_error);
-                    }
-                } else {
-                    startup_ok = false;
-                    report_startup_spawn_error(app, &err);
-                }
-            }
-
-            app.manage(manager.clone());
-            app.manage(broker.clone());
-            app.manage(owner_registry.clone());
-            app.manage(skill_source_registry.clone());
-            app.manage(ephemeral_registry.clone());
-            app.manage(session_ui_profiles.clone());
-            app.manage(terminal_manager.clone());
-            app.manage(git_service.clone());
-
-            if startup_ok {
-                let app_handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(e) = wait_for_pi_health(initial_port, 30).await {
-                        let message = startup_health_failure_message(&e);
-                        log::error!("Pi failed to start: {}", message);
-                        if let Some(manager) = app_handle.try_state::<PiManagerState>() {
-                            manager.kill(initial_port);
-                        }
-                        if let Err(window_error) = open_bootstrap_window(&app_handle, &message) {
-                            log::error!(
-                                "Failed to open startup error window after Pi health failure: {}",
-                                window_error
-                            );
-                        }
-                    } else if let Some(broker) = app_handle.try_state::<BrokerWsState>() {
-                        // Register only after the embedded server owns the port;
-                        // otherwise BrokerWs logs expected connection-refused
-                        // retries during every normal startup.
-                        broker.register_session(
-                            initial_port,
-                            session_path.as_deref().unwrap_or(""),
-                        );
-                        if let Some(manager) = app_handle.try_state::<PiManagerState>() {
-                            warm_model_cache(&manager, initial_port);
-                            warm_quick_chat_standby(manager.inner().clone());
-                            warm_side_chat_standby(manager.inner().clone(), PathBuf::from(&cwd));
-                        }
-                        if let Err(e) =
-                            open_workspace_window(&app_handle, initial_port, &cwd, &broker.url())
-                        {
-                            log::error!("Failed to open window: {}", e);
-                        }
-                    } else {
-                        log::error!("Failed to open window: broker websocket state missing");
-                    }
-                });
-            }
-
-                Ok(())
-            }
+            return Ok(());
+            Ok(())
         })
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {

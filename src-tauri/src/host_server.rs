@@ -247,6 +247,26 @@ impl HostServer {
             .route("/api/sessions/switch", post(compat_sessions_switch))
             .route("/api/sessions/{dir_name}/{file}", get(compat_session_file))
             .route("/api/workspace/open", post(compat_workspace_open))
+            // Route-only compat: these surfaces have a v2 equivalent (data op or
+            // control), so the HTTP entry stays an explicit 410 instead of a
+            // silently diverging second implementation.
+            .route("/api/files/content", any(api_gone))
+            .route("/api/files/raw", any(api_gone))
+            .route("/api/file-mentions", any(api_gone))
+            .route("/api/git-branch", any(api_gone))
+            .route("/api/open", any(api_gone))
+            .route("/api/paste-offload", any(api_gone))
+            .route("/api/models-config", any(api_gone))
+            .route("/api/agent-config", any(api_gone))
+            .route("/api/agents-md", any(api_gone))
+            .route("/api/append-system-md", any(api_gone))
+            .route("/api/chat-config", any(api_gone))
+            .route("/api/chat-telegram/{operation}", any(api_gone))
+            .route("/api/lan-qr", get(api_gone))
+            .route("/api/skill-install-links", post(api_gone))
+            .route("/api/skill-install-scan", post(api_gone))
+            .route("/api/super-agent/projects", get(api_gone))
+            .route("/api/super-agent/tasks", get(api_gone).put(api_gone))
             .route("/v2/session-export/{token}", get(session_export_stream))
             .route("/api/rpc", any(rpc_retired))
             .route("/v2/ws", get(websocket_upgrade))
@@ -819,6 +839,17 @@ async fn compat_workspace_open(
         .map_err(|_| api_error(StatusCode::NOT_FOUND, "workspace_not_found"))?;
     open_directory_in_file_manager(&canonical);
     Ok(Json(json!({ "success": true })))
+}
+
+/// D8 scope removal: retired routes return 410 Gone uniformly.
+async fn api_gone() -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::GONE,
+        Json(json!({
+            "error": { "code": "gone" },
+            "removalNotice": "This endpoint has been retired per D8.",
+        })),
+    )
 }
 
 fn open_directory_in_file_manager(path: &std::path::Path) {
@@ -1442,6 +1473,19 @@ fn operation_scope(
     ))
 }
 
+fn read_bounded_utf8(path: &Path) -> Result<String, &'static str> {
+    let file = fs::File::open(path).map_err(|_| "config_not_found")?;
+    let mut bytes = Vec::new();
+    use std::io::Read;
+    file.take(crate::host_config::MAX_CONFIG_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "config_not_found")?;
+    if bytes.len() > crate::host_config::MAX_CONFIG_BYTES {
+        return Err("config_too_large");
+    }
+    String::from_utf8(bytes).map_err(|_| "config_invalid_encoding")
+}
+
 async fn dispatch(
     action: RoutedAction,
     state: &HostState,
@@ -1731,7 +1775,7 @@ async fn dispatch(
                 // membership, canonical containment, and regular-file checks.
                 let html_path = session_path.with_extension("html");
                 if std::fs::symlink_metadata(&html_path)
-                    .map(|metadata| metadata.file_type().is_symlink() || metadata.is_dir())
+                    .map(|metadata| !metadata.file_type().is_file())
                     .unwrap_or(false)
                 {
                     return Err((
@@ -1777,8 +1821,13 @@ async fn dispatch(
                     "type": "host_response",
                     "requestId": request_id,
                     "operation": "session_export",
-                    "exportUrl": format!("/v2/session-export/{token}"),
-                    "expiresInSecs": state.session_exports.ttl_secs(),
+                    // Every host op delivers its payload under `response`; the
+                    // client resolves the promise with that object. A top-level
+                    // field here would silently resolve to undefined.
+                    "response": {
+                        "exportUrl": format!("/v2/session-export/{token}"),
+                        "expiresInSecs": state.session_exports.ttl_secs(),
+                    },
                 }));
             }
             if matches!(
@@ -1824,7 +1873,7 @@ async fn dispatch(
                 let path = root.join(name);
                 let response = match operation.as_str() {
                     "settings_get" => crate::host_config::read_json(&path)
-                        .map(|value| json!({ "value": value }))
+                        .map(|value| json!({ "value": value, "path": path.display().to_string() }))
                         .map_err(|error| (error.code(), "Settings read failed".to_owned()))?,
                     "settings_put" => {
                         let value = args
@@ -1844,32 +1893,23 @@ async fn dispatch(
                         }
                         crate::host_config::write_json(&path, value)
                             .map_err(|error| (error.code(), "Settings write failed".to_owned()))?;
-                        json!({ "saved": true, "restartRequired": requires_restart })
+                        json!({
+                            "saved": true,
+                            "path": path.display().to_string(),
+                            "restartRequired": requires_restart,
+                        })
                     }
                     "agent_text_file_get" => {
-                        let file = std::fs::File::open(&path).map_err(|_| {
-                            ("config_not_found", "Config file unavailable".to_owned())
+                        let content = read_bounded_utf8(&path).map_err(|code| match code {
+                            "config_too_large" => {
+                                (code, "Config file exceeds the text bound".to_owned())
+                            }
+                            "config_invalid_encoding" => {
+                                (code, "Config file is not UTF-8".to_owned())
+                            }
+                            _ => ("config_not_found", "Config file unavailable".to_owned()),
                         })?;
-                        let mut bytes = Vec::new();
-                        use std::io::Read;
-                        file.take(crate::host_config::MAX_CONFIG_BYTES as u64 + 1)
-                            .read_to_end(&mut bytes)
-                            .map_err(|_| {
-                                ("config_not_found", "Config file unavailable".to_owned())
-                            })?;
-                        if bytes.len() > crate::host_config::MAX_CONFIG_BYTES {
-                            return Err((
-                                "config_too_large",
-                                "Config file exceeds the text bound".to_owned(),
-                            ));
-                        }
-                        let content = String::from_utf8(bytes).map_err(|_| {
-                            (
-                                "config_invalid_encoding",
-                                "Config file is not UTF-8".to_owned(),
-                            )
-                        })?;
-                        json!({ "content": content })
+                        json!({ "content": content, "path": path.display().to_string() })
                     }
                     "agent_text_file_put" => {
                         let content = args
@@ -1878,7 +1918,7 @@ async fn dispatch(
                             .ok_or(("invalid_config", "content is required".to_owned()))?;
                         crate::host_config::write_text(&path, content)
                             .map_err(|error| (error.code(), "Config write failed".to_owned()))?;
-                        json!({ "saved": true })
+                        json!({ "saved": true, "path": path.display().to_string() })
                     }
                     _ => unreachable!(),
                 };
@@ -2294,7 +2334,7 @@ fn now_seconds() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{bind_is_loopback, dialog_response_allowed, HostServer};
+    use super::{bind_is_loopback, dialog_response_allowed, read_bounded_utf8, HostServer};
     use crate::host_router::HostClientContext;
     use crate::metadata_store::MetadataStore;
     use crate::native_pi_manager::NativePiManager;
@@ -3287,8 +3327,16 @@ mod tests {
             .unwrap();
         assert_eq!(rpc_gone_post.status(), reqwest::StatusCode::GONE);
 
+        // P6 scope removal: /api/super-agent/tasks is 410 Gone (retired).
+        let sa_gone = client
+            .get(format!("{}/api/super-agent/tasks", host.origin()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(sa_gone.status(), reqwest::StatusCode::GONE);
+
         // Unretained routes without a migration path fail closed (404).
-        for route in ["/api/not-retained", "/api/super-agent/tasks"] {
+        for route in ["/api/not-retained"] {
             for request in [
                 client.get(format!("{}{}", host.origin(), route)),
                 client.post(format!("{}{}", host.origin(), route)),
@@ -3644,6 +3692,24 @@ mod tests {
 
         host.stop();
         fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn bounded_agent_text_reader_rejects_growth_beyond_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("AGENTS.md");
+        fs::write(&path, vec![b'x'; crate::host_config::MAX_CONFIG_BYTES + 1]).unwrap();
+
+        assert_eq!(read_bounded_utf8(&path), Err("config_too_large"));
+    }
+
+    #[test]
+    fn bounded_agent_text_reader_rejects_invalid_utf8() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("AGENTS.md");
+        fs::write(&path, [0xff, 0xfe]).unwrap();
+
+        assert_eq!(read_bounded_utf8(&path), Err("config_invalid_encoding"));
     }
 
     #[tokio::test]

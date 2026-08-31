@@ -1,18 +1,4 @@
-import { isSuperAgentEnabled, setSuperAgentEnabled } from "../super-agent/settings.js";
-
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"];
-
-export function bindSuperAgentStartupToggle(toggleSuperAgent, onSuperAgentEnabledChanged) {
-  if (!toggleSuperAgent || toggleSuperAgent.dataset.superAgentToggleBound === "true") return;
-  toggleSuperAgent.dataset.superAgentToggleBound = "true";
-  toggleSuperAgent.className = `settings-toggle${isSuperAgentEnabled() ? " on" : ""}`;
-  toggleSuperAgent.addEventListener("click", async () => {
-    const enabled = !toggleSuperAgent.classList.contains("on");
-    setSuperAgentEnabled(enabled);
-    toggleSuperAgent.className = `settings-toggle${enabled ? " on" : ""}`;
-    await onSuperAgentEnabledChanged?.(enabled);
-  });
-}
 
 /**
  * Reflect the current thinking level on the Faster↔Smarter segmented slider:
@@ -48,12 +34,10 @@ export function setupSettingsToggles({
   thinkingMarker,
   thinkingName,
   toggleShowThinking,
-  toggleSuperAgent,
   rpcCommand,
   getDefaultThinkingLevel,
   setDefaultThinkingLevel,
   onRuntimeLevelChanged,
-  onSuperAgentEnabledChanged,
 }) {
   toggleAutoCompact?.addEventListener("click", async () => {
     const isOn = toggleAutoCompact.classList.contains("on");
@@ -123,8 +107,6 @@ export function setupSettingsToggles({
     document.body.classList.toggle("hide-thinking", isOn);
     localStorage.setItem("pi-studio-show-thinking", !isOn);
   });
-
-  bindSuperAgentStartupToggle(toggleSuperAgent, onSuperAgentEnabledChanged);
 
   // Check-and-reset: openSettings consumes the marker when its get_state
   // response arrives, so the guard protects exactly one in-flight snapshot

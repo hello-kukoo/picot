@@ -76,11 +76,7 @@ import { setupSettingsConfig } from "./settings/settings-config.js";
 import { setupSkillsInstallTab } from "./settings/skills-install-tab.js";
 import { setupSkillsPage } from "./settings/skills-page.js";
 import { setupSkillsTabShell } from "./settings/skills-tab-shell.js";
-import {
-  bindSuperAgentStartupToggle,
-  renderThinkingEffort,
-  setupSettingsToggles,
-} from "./settings/toggles.js";
+import { renderThinkingEffort, setupSettingsToggles } from "./settings/toggles.js";
 import { SideChatManager } from "./side-chat-manager.js";
 import { buildSessionItem } from "./sidebar/build-session-item.js";
 import {
@@ -93,18 +89,6 @@ import { SessionSidebar } from "./sidebar/index.js";
 import { setupSidebarSearchControl } from "./sidebar/search-control.js";
 import { WorkspaceFocusSidebar } from "./sidebar/workspace-focus-sidebar.js";
 import { createSidebarResizer } from "./sidebar-resizer.js";
-import { ensureSuperAgentSession } from "./super-agent/bootstrap.js";
-import { dispatchSuperAgentTask as dispatchSuperAgentTaskCore } from "./super-agent/dispatch.js";
-import { installSuperAgentSessionNavigationReset } from "./super-agent/navigation.js";
-import { getRunningSuperAgentPorts, isSuperAgentSession } from "./super-agent/session.js";
-import { isSuperAgentEnabled } from "./super-agent/settings.js";
-import { planSuperAgentShutdown } from "./super-agent/stop-plan.js";
-import {
-  buildSuperAgentNotificationPrompt,
-  buildTaskComposerPrompt,
-  markTaskFinished,
-  normalizeSuperAgentTasks,
-} from "./super-agent/task-state.js";
 import { TerminalClient } from "./terminal-client.js";
 import {
   DEFAULT_TERMINAL_FONT_SIZE,
@@ -121,7 +105,7 @@ import {
 } from "./terminal-tab.js";
 import { applyTheme, getCurrentTheme, themes } from "./themes.js";
 import { renderTurnFileChips } from "./turn-file-chips.js";
-import { setupAtFileMention } from "./ui/at-file-mention.js";
+import { createHostFileMentionSearch, setupAtFileMention } from "./ui/at-file-mention.js";
 import { DialogHandler } from "./ui/dialogs.js";
 import { setupMessagesInsets } from "./ui/layout-insets.js";
 import { MessageRenderer } from "./ui/message-renderer.js";
@@ -567,8 +551,6 @@ const dialogHandler = new DialogHandler({
   notificationContainer: document.getElementById("messages"),
   send: (message) => wsClient.send(message),
 });
-let superAgentPath = "";
-let superAgentAddonsActive = false;
 
 function clearConversationRenderers() {
   messageRenderer.clear();
@@ -585,11 +567,7 @@ const sidebar = new SessionSidebar(
     transport,
     onOpenProject: (project) => {
       if (!project?.path) return handleOpenFolder();
-      return fetch("/api/open", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filePath: project.path }),
-      });
+      return transport.openInApp(project.path);
     },
     onWorkspaceFocus: (project) => enterFocus(project),
     isCurrentWorkspace: (project) => project?.path === getCurrentWorkspacePath(),
@@ -632,130 +610,7 @@ window.__saNav = {
   startInWindowNewSession,
 };
 
-// <super-agent-runtime> fires 'sa-dispatch' when the user approves a task.
-document.addEventListener("sa-dispatch", (e) => dispatchSuperAgentTask(e.detail));
-document.addEventListener("sa-ask", (e) => notifySuperAgentClarification(e.detail));
-document.addEventListener("sa-prompt-task", (e) => insertTaskPrompt(e.detail));
-document.addEventListener("sa-view-session", (e) => viewSuperAgentChildSession(e.detail));
-installSuperAgentSessionNavigationReset(document);
-
-// <sa-chat-header> service buttons open Settings. The Agent Inbox tab is
-// temporarily disabled, so route to the default Settings page instead.
-window.__saOpenSettings = () => {
-  void openSettings();
-};
-// ── end Super Agent wiring ───────────────────────────────────────────────────
-
-async function initSuperAgentPath() {
-  try {
-    const res = await fetch("/api/home");
-    if (!res.ok) return;
-    const data = await res.json();
-    if (!data?.home) return;
-    superAgentPath = `${data.home}/.pi/agent/super-agent`;
-    sidebar.superAgentPath = superAgentPath;
-  } catch (error) {
-    console.warn("[SuperAgent] failed to resolve home directory:", error);
-  }
-}
-
-function updateSuperAgentActiveState(session = null, project = null) {
-  const active = isSuperAgentSession(session, project, superAgentPath);
-  document.body.classList.toggle("super-agent-active", active);
-  document.getElementById("super-agent-chat-header")?.classList.toggle("hidden", !active);
-  if (active && !superAgentAddonsActive && localStorage.getItem("sa-runtime-collapsed") === "0") {
-    document.querySelector("super-agent-runtime")?.classList.remove("collapsed");
-  }
-  superAgentAddonsActive = active;
-}
-
-function updateSuperAgentActiveStateFromWorkspace() {
-  updateSuperAgentActiveState(null, { path: getCurrentWorkspacePath() });
-}
-
-async function loadSessionsWithSuperAgentBootstrap() {
-  const projects = await sidebar.loadSessions();
-  if (!isSuperAgentEnabled()) return projects;
-
-  const created = await ensureSuperAgentSession({
-    superAgentPath,
-    projects,
-    transport,
-  }).catch((error) => {
-    console.warn("[SuperAgent] failed to ensure fixed session:", error);
-    return false;
-  });
-  if (created) {
-    await pollInstances().catch(() => {});
-    return sidebar.loadSessions();
-  }
-  return projects;
-}
-
-async function stopSuperAgentInstances() {
-  const instances = await fetchInstances();
-  const ports = getRunningSuperAgentPorts({
-    projects: sidebar.projects,
-    instances,
-    superAgentPath,
-  });
-  const shutdown = planSuperAgentShutdown({
-    currentPort: getCurrentPort(),
-    superAgentPorts: ports,
-    instances,
-    superAgentPath,
-  });
-  await Promise.all(
-    shutdown.portsToStopBeforeNavigation.map((port) =>
-      transport.stopInstance(port).catch((error) => {
-        console.warn(`[SuperAgent] failed to stop instance on port ${port}:`, error);
-      }),
-    ),
-  );
-  if (shutdown.navigateToPort) {
-    const dismiss = showSwapOverlay("Closing Agent Inbox…");
-    try {
-      const url = new URL(withBrokerWs(buildWorkspaceUrl(shutdown.navigateToPort), transport));
-      if (shutdown.portsToStopAfterNavigation.length > 0) {
-        url.searchParams.set("stopSuperAgentPorts", shutdown.portsToStopAfterNavigation.join(","));
-      }
-      navigateInWindow(url.toString());
-      return;
-    } catch (error) {
-      dismiss();
-      console.warn("[SuperAgent] failed to navigate away before shutdown:", error);
-    }
-  }
-  await pollInstances().catch(() => {});
-  await sidebar.loadSessions().catch(() => {});
-  updateSuperAgentActiveStateFromWorkspace();
-  updateUI();
-}
-
-async function stopSuperAgentPortsFromUrl() {
-  const params = new URLSearchParams(window.location.search);
-  const rawPorts = params.get("stopSuperAgentPorts");
-  if (!rawPorts) return;
-  params.delete("stopSuperAgentPorts");
-  const nextQuery = params.toString();
-  const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash}`;
-  window.history.replaceState({}, "", nextUrl);
-
-  const ports = rawPorts
-    .split(",")
-    .map((port) => Number(port))
-    .filter((port) => Number.isFinite(port) && port > 0 && port !== getCurrentPort());
-  if (ports.length === 0) return;
-
-  await Promise.all(
-    ports.map((port) =>
-      transport.stopInstance(port).catch((error) => {
-        console.warn(`[SuperAgent] failed to stop pending instance on port ${port}:`, error);
-      }),
-    ),
-  );
-  await pollInstances().catch(() => {});
-}
+// ── Settings and dialogs ───────────────────────────────────────────────────
 
 // UI elements
 const messageInput = document.getElementById("message-input");
@@ -799,24 +654,9 @@ setupAtFileMention({
   input: messageInput,
   container: atFileMentionMenu,
   getWorkspaceRoot: () => getCurrentWorkspacePath(),
-  searchFiles: async (workspaceRoot, query, signal) => {
-    const response = await fetch(
-      `/api/file-mentions?workspaceRoot=${encodeURIComponent(workspaceRoot)}&query=${encodeURIComponent(query)}`,
-      { signal },
-    );
-    if (!response.ok) throw new Error(`File mention search failed: ${response.status}`);
-    return response.json();
-  },
+  searchFiles: createHostFileMentionSearch(() => transport),
 });
 
-function insertTaskPrompt(task) {
-  if (!task) return;
-  const draft = messageInput.value.trim();
-  messageInput.value = `${buildTaskComposerPrompt(task)}${draft ? `\n${draft}` : ""}`;
-  messageInput.style.height = "auto";
-  messageInput.style.height = `${Math.min(messageInput.scrollHeight, 160)}px`;
-  messageInput.focus();
-}
 const addProjectBtn = document.getElementById("add-project-btn");
 if (addProjectBtn) {
   setButtonIcon(addProjectBtn, "folder-plus", { size: 16 });
@@ -965,9 +805,6 @@ let infoTreeDirty = false;
 let lastRenderedWelcomeWorkspacePath = null;
 // Maps port -> sessionFile for each pi process we're tracking
 const portSessionMap = new Map();
-// Maps port -> { taskId, superAgentPort, title } for dispatched Super Agent tasks
-const dispatchedTasks = new Map();
-// The port that wsClient is currently connected to (the "foreground" session)
 let foregroundPort = getCurrentPort();
 let foregroundWorkspacePath = "";
 const getActivePort = () => foregroundPort;
@@ -1057,7 +894,6 @@ function syncWorkspaceIndicatorFromInstances() {
   const workspacePath = getWorkspacePathForPort(liveInstances, foregroundPort);
   if (workspacePath) foregroundWorkspacePath = workspacePath;
   updateWorkspaceIndicator(workspacePath || foregroundWorkspacePath);
-  updateSuperAgentActiveStateFromWorkspace();
   refreshFileBrowserForWorkspace(workspacePath || foregroundWorkspacePath);
   refreshGitBranch();
 }
@@ -1117,7 +953,6 @@ for (const [button, iconName, size] of [
   [infoPanelRefresh, "refresh-cw", 16],
   [gitPanelRefresh, "refresh-cw", 16],
   [fileSidebarFinder, "folder-open", 16],
-  [document.getElementById("lan-qr-modal-close"), "x", 14],
   [document.getElementById("config-editor-close"), "x", 14],
 ]) {
   if (button) setButtonIcon(button, iconName, { size });
@@ -1170,6 +1005,7 @@ const fileBrowser = new FileBrowser(fileList, fileSidebarPath, messageInput, {
     void filePreviewPanel.openFile(filePath, metadata);
   },
   onShowHiddenChange: syncFileSidebarHiddenToggle,
+  openPath: (filePath) => transport.openInApp(filePath),
 });
 setupResizablePanel(fileSidebar, {
   storageKey: "pi-studio-file-sidebar-width",
@@ -1188,12 +1024,11 @@ const filePreviewPanel = new FilePreviewPanel({
   tabBar: document.getElementById("file-preview-tabs"),
   content: document.getElementById("file-preview-content"),
   mainContainer: document.querySelector(".main"),
+  transport,
   onStateChange: syncSideChatButton,
   onOpenDesktop: (filePath) => {
-    fetch("/api/open", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePath }),
+    transport.openInApp(filePath).catch((error) => {
+      console.error("[App] open in desktop failed:", error);
     });
   },
 });
@@ -1898,10 +1733,8 @@ fileSidebarUp.addEventListener("click", () => {
 
 document.getElementById("file-sidebar-finder").addEventListener("click", () => {
   if (fileBrowser.currentPath) {
-    fetch("/api/open", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePath: fileBrowser.currentPath }),
+    transport.openInApp(fileBrowser.currentPath).catch((error) => {
+      console.error("[App] reveal in file manager failed:", error);
     });
   }
 });
@@ -2027,6 +1860,11 @@ const infoPanelEl = document.getElementById("info-panel");
 
 /** Correlated request/response over the shared WS command channel. */
 function wsRequest(command, timeoutMs = 15000) {
+  // v2 has no `commandResponse` event: the reply is a requestId-correlated
+  // `runtime_response`, so the client's own pending map owns the correlation.
+  if (wsClient.protocolVersion === 2) {
+    return wsClient.sendRuntime(command, { timeoutMs });
+  }
   return new Promise((resolve, reject) => {
     const requestId = wsClient.send(command);
     if (!requestId) {
@@ -2731,14 +2569,6 @@ function handleBackgroundRPCEvent(sessionFile, event) {
       sidebar.markUnread(sessionFile);
       sidebar.loadSessions({ quiet: true }).catch(() => {});
       pollInstances().catch(() => {});
-      // Check if this background session was a dispatched Super Agent task
-      const srcPort = event?.__broker?.sourcePort;
-      if (srcPort && dispatchedTasks.has(srcPort)) {
-        const taskMeta = dispatchedTasks.get(srcPort); // ast-grep-ignore no-case-declarations-js — case already has block braces
-        dispatchedTasks.delete(srcPort);
-        // agent_end carries no exit status — always mark done and let Super Agent handle
-        notifySuperAgent(taskMeta.superAgentPort, taskMeta.taskId, taskMeta.title, "done", null);
-      }
       break;
     }
     case "message_end":
@@ -2758,105 +2588,6 @@ function handleCompactionStart() {
   el.replaceChildren(spinner, document.createTextNode(` ${t("status.compacting")}`));
   messagesContainer.appendChild(el);
   scrollToBottom();
-}
-
-async function dispatchSuperAgentTask(task) {
-  await dispatchSuperAgentTaskCore({
-    task,
-    transport,
-    getCurrentPort,
-    updateSuperAgentTask,
-    dispatchedTasks,
-  });
-}
-
-async function notifySuperAgent(port, taskId, title, status, failReason) {
-  if (!port) return;
-  const summary =
-    status === "done"
-      ? "Project agent ended. Review the child session for details."
-      : failReason || "Project agent reported a failure.";
-  let updatedTask = null;
-  // Update the task status in tasks.json directly.
-  try {
-    updatedTask = await updateSuperAgentTask(port, taskId, (task) =>
-      markTaskFinished(task, { status, summary, failReason }),
-    );
-  } catch (e) {
-    console.warn("[SuperAgent] task status update failed:", e);
-  }
-  // Also notify the SA agent via chat so it can reply to the original sender
-  const msg = buildSuperAgentNotificationPrompt(updatedTask || { id: taskId, title }, {
-    status,
-    summary,
-    failReason,
-  });
-  try {
-    await fetch(`http://localhost:${port}/api/rpc`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "prompt", message: msg }),
-    });
-  } catch (e) {
-    console.warn("[SuperAgent] notify failed:", e);
-  }
-}
-
-async function notifySuperAgentClarification(task) {
-  const port = task?.dispatch?.superAgentPort || task?.superAgentPort || getCurrentPort();
-  if (!port || !task) return;
-  const msg = buildSuperAgentNotificationPrompt(task, {
-    status: "needs_input",
-    failReason: task.result?.failReason || task.failReason,
-  });
-  try {
-    await fetch(`http://localhost:${port}/api/rpc`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "prompt", message: msg }),
-    });
-  } catch (e) {
-    console.warn("[SuperAgent] clarification notify failed:", e);
-  }
-}
-
-async function viewSuperAgentChildSession(task) {
-  const childPort = Number(task?.dispatch?.childPort || task?.childPort);
-  if (!Number.isFinite(childPort) || childPort <= 0) return;
-
-  await pollInstances().catch(() => {});
-  const childInstance = liveInstances.find((instance) => instance?.port === childPort);
-  if (!childInstance) return;
-
-  const sessionFile = childInstance.sessionFile;
-  if (sessionFile) {
-    const projects = await sidebar.loadSessions().catch(() => sidebar.projects || []);
-    for (const project of projects || []) {
-      const session = (project.sessions || []).find((item) => item.filePath === sessionFile);
-      if (session) {
-        await switchSession(sessionFile, session, project);
-        return;
-      }
-    }
-  }
-
-  navigateInWindow(withBrokerWs(buildWorkspaceUrl(childPort), transport));
-}
-
-async function updateSuperAgentTask(port, taskId, updateTask) {
-  const res = await fetch(`http://localhost:${port}/api/super-agent/tasks`);
-  if (!res.ok) return null;
-  const data = await res.json();
-  const tasks = normalizeSuperAgentTasks(data.tasks || []);
-  const index = tasks.findIndex((task) => task.id === taskId);
-  if (index < 0) return null;
-  tasks[index] = updateTask(tasks[index]);
-  await fetch(`http://localhost:${port}/api/super-agent/tasks`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...data, tasks }),
-  });
-  return tasks[index];
 }
 
 function handleCompactionEnd(event) {
@@ -3454,13 +3185,16 @@ const mainPasteOffload = setupComposerPasteOffload({
   textarea: messageInput,
   container: composerCard,
   offload: async (content) => {
-    const response = await fetch("/api/paste-offload", {
+    const response = await fetch("/v2/paste-offload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content }),
     });
     const result = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(result?.error || `Paste offload failed: ${response.status}`);
+    if (!response.ok)
+      throw new Error(
+        result?.error?.code || result?.error || `Paste offload failed: ${response.status}`,
+      );
     return result?.path;
   },
   t,
@@ -3716,15 +3450,71 @@ const mainCommandMenu = setupComposerCommandMenu({
 });
 commandPaletteOverlay.addEventListener("click", mainCommandMenu.close);
 
+// Commands the embedded Pi RPC protocol answers directly (pi `docs/rpc.md`).
+// The native runtime forwards these as a v2 `runtime_request`; there is no
+// longer an in-Pi HTTP handler to POST them to.
+const RUNTIME_RPC_COMMANDS = new Set([
+  "set_model",
+  "cycle_model",
+  "get_available_models",
+  "get_available_thinking_levels",
+  "set_thinking_level",
+  "cycle_thinking_level",
+  "set_auto_compaction",
+  "set_session_name",
+  "get_session_stats",
+  "get_state",
+  "new_session",
+]);
+
+// Commands owned by the Rust host control plane rather than the runtime. A Map
+// keeps the lookup prototype-free without depending on `Object.hasOwn`, which is
+// newer than the WebKit baseline this WebView targets.
+const HOST_CONTROL_COMMANDS = new Map([
+  ["get_pi_version", () => transport.getPiVersion()],
+  ["get_app_version", () => transport.getAppVersion()],
+  ["is_dev", () => transport.isDev()],
+]);
+
+// No native implementation exists yet for these legacy `/api/rpc` commands.
+// They fail loudly (visible status + console) instead of returning an empty
+// success, which is how the retired embedded-server surface used to mask gaps.
+const UNSUPPORTED_RPC_COMMANDS = new Set([
+  "list_skills",
+  "list_skill_inventory",
+  "set_skill_enabled",
+  "list_package_skill_inventory",
+  "set_default_thinking_level",
+]);
+
+function nativeRpcCommand(cmd) {
+  const type = cmd?.type;
+  if (RUNTIME_RPC_COMMANDS.has(type)) {
+    return wsRequest(cmd).then(
+      (data) => ({ success: true, data: data ?? {} }),
+      (error) => ({ success: false, error: error?.message || String(error) }),
+    );
+  }
+  const control = HOST_CONTROL_COMMANDS.get(type);
+  if (control) {
+    return Promise.resolve(control()).then(
+      (data) => ({ success: true, data: data ?? {} }),
+      (error) => ({ success: false, error: error?.message || String(error) }),
+    );
+  }
+  if (UNSUPPORTED_RPC_COMMANDS.has(type) || typeof type !== "string") {
+    return Promise.resolve({
+      success: false,
+      error: `${type || "command"} has no native runtime implementation`,
+    });
+  }
+  return Promise.resolve({ success: false, error: `Unknown command: ${type}` });
+}
+
 async function rpcCommand(cmd, statusMsg, silent = false) {
   try {
     if (statusMsg && !silent) statusText.textContent = statusMsg;
-    const resp = await fetch("/api/rpc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(cmd),
-    });
-    const data = await resp.json();
+    const data = await nativeRpcCommand(cmd);
     if (data.success && !silent) {
       statusText.textContent = t("status.done");
       setTimeout(() => {
@@ -3893,20 +3683,12 @@ async function fetchModelInfo() {
       // Cache miss or host not ready — fall through to the live query below.
     }
 
-    const [modelsResp, stateResp] = await Promise.all([
-      fetch("/api/rpc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "get_available_models" }),
-      }),
-      fetch("/api/rpc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "get_state" }),
-      }),
+    const [modelsResult, stateResult] = await Promise.all([
+      rpcCommand({ type: "get_available_models" }, null, true),
+      rpcCommand({ type: "get_state" }, null, true),
     ]);
-    const modelsData = await modelsResp.json();
-    const stateData = await stateResp.json();
+    const modelsData = modelsResult || {};
+    const stateData = stateResult || {};
 
     if (modelsData.success && Array.isArray(modelsData.data?.models)) {
       availableModels = modelsData.data.models;
@@ -4212,16 +3994,6 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "ArrowDown" && (e.metaKey || e.ctrlKey) && !isInInput()) {
     e.preventDefault();
     jumpToNextConversationOrBottom();
-  }
-
-  // Cmd+Shift+T (macOS) / Ctrl+Shift+T — Toggle Agent Inbox (Runtime panel).
-  if ((e.key === "t" || e.key === "T") && (e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey) {
-    e.preventDefault();
-    const runtimePanel = document.querySelector("super-agent-runtime");
-    if (runtimePanel) {
-      const collapsed = runtimePanel.classList.toggle("collapsed");
-      localStorage.setItem("sa-runtime-collapsed", collapsed ? "1" : "0");
-    }
   }
 });
 
@@ -4541,7 +4313,6 @@ async function resetUiForNewSession() {
   renderWorkspaceWelcome();
   sidebar.clearActive();
   resolveAndApplyFocus();
-  updateSuperAgentActiveState(null, null);
   mirrorActiveSessionFile = null;
   viewingActiveSession = true;
   pendingSessionSwitchPath = null;
@@ -4586,11 +4357,6 @@ async function activateNewParallelSession(port, cwd) {
 }
 
 async function newSession() {
-  if (isSuperAgentSession(null, { path: getCurrentWorkspacePath() }, superAgentPath)) {
-    messageRenderer.renderSystemMessage("Agent Inbox uses one shared session.");
-    return;
-  }
-
   if (nativeAvailable()) {
     // Always create the new chat in-place on the current pi process: pi's
     // `new_session` RPC aborts/settles any active stream safely (it persists
@@ -4754,7 +4520,6 @@ async function handleSessionSelectImpl(session, project) {
   sidebar.setActive(session.filePath);
   restoreSessionUiState(session.filePath);
   resolveAndApplyFocus();
-  updateSuperAgentActiveState(session, project);
   const targetLiveInstance = liveInstances.find(
     (instance) => instance.sessionFile === session.filePath,
   );
@@ -4778,7 +4543,6 @@ async function handleSessionSelectImpl(session, project) {
   if (selectedWorkspacePath && selectedWorkspacePath !== fileBrowserWorkspacePath) {
     foregroundWorkspacePath = selectedWorkspacePath;
     updateWorkspaceIndicator(selectedWorkspacePath);
-    updateSuperAgentActiveStateFromWorkspace();
     // When the target workspace has no persisted file tabs, collapse the
     // editor panel immediately instead of waiting ~2-3s for mirror_sync to
     // drive setWorkspaceRoot. hasPersistedTabs peeks storage without
@@ -5190,7 +4954,6 @@ function handleMirrorSync(data) {
   if (syncWorkspacePath) {
     foregroundWorkspacePath = syncWorkspacePath;
     updateWorkspaceIndicator(syncWorkspacePath);
-    updateSuperAgentActiveStateFromWorkspace();
     infoPanel?.updateWorkspace(syncWorkspacePath);
   }
   if (pendingWorkspace) {
@@ -5744,68 +5507,6 @@ let tailscaleUrl = "";
 let lanUrl = "";
 let lanUrls = [];
 
-const lanQrBtn = document.getElementById("lan-qr-btn");
-setButtonIcon(lanQrBtn, "smartphone", { size: 16 });
-const lanQrModal = document.getElementById("lan-qr-modal");
-const lanQrModalBackdrop = document.getElementById("lan-qr-modal-backdrop");
-const lanQrModalClose = document.getElementById("lan-qr-modal-close");
-const lanQrLoading = document.getElementById("lan-qr-loading");
-const lanQrImage = document.getElementById("lan-qr-image");
-const lanQrOpenLink = document.getElementById("lan-qr-open-link");
-replaceButtonGlyph(lanQrOpenLink, "external-link", { size: 14 });
-let lanQrUrl = "";
-
-function updateLanQrButton(url = "") {
-  if (!lanQrBtn) return;
-  if (url) {
-    lanQrBtn.classList.remove("hidden");
-  } else {
-    lanQrBtn.classList.add("hidden");
-  }
-}
-
-async function openLanQrModal() {
-  if (!lanQrModal) return;
-  lanQrModal.classList.remove("hidden");
-  if (lanQrLoading) lanQrLoading.style.display = "";
-  if (lanQrImage) lanQrImage.classList.add("hidden");
-  if (lanQrOpenLink) lanQrOpenLink.classList.add("hidden");
-  lanQrUrl = "";
-  try {
-    const res = await fetch("/api/lan-qr");
-    if (!res.ok) throw new Error("unavailable");
-    const data = await res.json();
-    if (lanQrImage) {
-      lanQrImage.src = data.dataUrl;
-      lanQrImage.classList.remove("hidden");
-    }
-    if (typeof data.url === "string" && data.url) {
-      lanQrUrl = data.url;
-      if (lanQrOpenLink) lanQrOpenLink.classList.remove("hidden");
-    }
-    if (lanQrLoading) lanQrLoading.style.display = "none";
-  } catch {
-    if (lanQrLoading) lanQrLoading.textContent = t("misc.qrUnavailable");
-  }
-}
-
-function closeLanQrModal() {
-  if (lanQrModal) lanQrModal.classList.add("hidden");
-}
-
-if (lanQrBtn) lanQrBtn.addEventListener("click", openLanQrModal);
-if (lanQrModalBackdrop) lanQrModalBackdrop.addEventListener("click", closeLanQrModal);
-if (lanQrModalClose) lanQrModalClose.addEventListener("click", closeLanQrModal);
-if (lanQrOpenLink)
-  lanQrOpenLink.addEventListener("click", () => {
-    if (lanQrUrl) openExternalLink(lanQrUrl);
-  });
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && lanQrModal && !lanQrModal.classList.contains("hidden")) {
-    closeLanQrModal();
-  }
-});
-
 async function refreshLanUrl() {
   try {
     const res = await fetch("/api/health");
@@ -5826,9 +5527,8 @@ async function refreshLanUrl() {
       statusText.textContent = t("status.connectedLAN");
       statusText.title = lanUrl;
     }
-    updateLanQrButton(lanUrl);
   } catch {
-    updateLanQrButton("");
+    /* LAN/Tailscale fields are optional: the plain connected label stays. */
   }
 }
 
@@ -5927,7 +5627,6 @@ const thinkingEffortSteps = document.getElementById("thinking-effort-steps");
 const thinkingEffortMarker = document.getElementById("thinking-effort-marker");
 const thinkingEffortName = document.getElementById("thinking-effort-name");
 const toggleShowThinking = document.getElementById("toggle-show-thinking");
-let toggleSuperAgent = document.getElementById("toggle-super-agent");
 const piVersionValue = document.getElementById("setting-pi-version-value");
 let piVersionCache = null;
 let piVersionInflight = null;
@@ -5937,17 +5636,6 @@ let loadAppendSystemMdEditor = async () => {};
 let modelsPage = { activate: async () => {} };
 let extensionsTabs = null;
 let packageManager = null;
-
-async function handleSuperAgentEnabledChanged(enabled) {
-  if (!enabled) {
-    await stopSuperAgentInstances();
-    return;
-  }
-  await loadSessionsWithSuperAgentBootstrap();
-  sessionsLoaded = true;
-  updateUI();
-  resolveAndApplyFocus();
-}
 
 function selectSettingsTab(tabKey = "general") {
   const targetTabKey = tabKey === "auth" ? "configuration" : tabKey;
@@ -5973,10 +5661,6 @@ function selectSettingsTab(tabKey = "general") {
   }
   if (targetTabKey === "skills") {
     void skillsPage.activate();
-  }
-  if (targetTabKey === "chat") {
-    toggleSuperAgent = document.getElementById("toggle-super-agent");
-    bindSuperAgentStartupToggle(toggleSuperAgent, handleSuperAgentEnabledChanged);
   }
 }
 
@@ -6257,12 +5941,7 @@ async function openSettings(tabKey = "general", options = {}) {
   void refreshLanUrl();
   // Fetch current state for toggles
   try {
-    const resp = await fetch("/api/rpc", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "get_state" }),
-    });
-    const data = await resp.json();
+    const data = await rpcCommand({ type: "get_state" }, null, true);
     if (data.success && data.data) {
       const s = data.data;
       // Auto-compaction toggle
@@ -6336,7 +6015,6 @@ const settingsToggles = setupSettingsToggles({
   thinkingMarker: thinkingEffortMarker,
   thinkingName: thinkingEffortName,
   toggleShowThinking,
-  toggleSuperAgent,
   rpcCommand,
   getDefaultThinkingLevel: () => currentDefaultThinkingLevel,
   setDefaultThinkingLevel: (level) => {
@@ -6346,10 +6024,9 @@ const settingsToggles = setupSettingsToggles({
     currentThinkingLevel = level;
     updateThinkingBtn();
   },
-  onSuperAgentEnabledChanged: handleSuperAgentEnabledChanged,
 });
 
-const configGateway = new LegacyConfigGateway();
+const configGateway = new LegacyConfigGateway({ transport });
 ({ loadInlineConfigEditor, loadAgentsMdEditor, loadAppendSystemMdEditor } = setupSettingsConfig({
   configGateway,
   clearSettingsSaveMessage,
@@ -6587,61 +6264,57 @@ if (cachedProjects) {
 }
 
 renderWorkspaceWelcome();
-initSuperAgentPath()
-  .catch(() => {})
-  .then(() => stopSuperAgentPortsFromUrl())
-  .then(() => loadSessionsWithSuperAgentBootstrap())
-  .then((projects) => {
-    sessionsLoaded = true;
-    // Cache the fresh sidebar data for the next cross-port navigation (C).
-    try {
-      cacheSidebarProjects(projects || sidebar.projects);
-    } catch {
-      /* best-effort */
-    }
-    updateUI();
-    // Restore the navigation snapshot now that sidebar + chat are rendered (B).
-    try {
-      const navState = consumeNavState();
-      if (navState) {
-        if (navState.sidebarScroll != null && sidebarEl) {
-          requestAnimationFrame(() => {
-            sidebarEl.scrollTop = navState.sidebarScroll;
-          });
-        }
-        if (navState.expandedWorkspaces.size > 0 && sidebar) {
-          for (const id of navState.expandedWorkspaces) {
-            sidebar.expandedWorkspaces.add(id);
-          }
-          sidebar.render();
-        }
-        if (navState.searchQuery && sidebar) {
-          sidebar.searchQuery = navState.searchQuery;
-          sidebar.render();
-        }
-        if (navState.messageScroll != null && messagesContainer) {
-          requestAnimationFrame(() => {
-            messagesContainer.scrollTop = navState.messageScroll;
-          });
-        }
-        if (navState.inputDraft && messageInput && !messageInput.value) {
-          messageInput.value = navState.inputDraft;
-        }
+sidebar.loadSessions().then((projects) => {
+  sessionsLoaded = true;
+  // Cache the fresh sidebar data for the next cross-port navigation (C).
+  try {
+    cacheSidebarProjects(projects || sidebar.projects);
+  } catch {
+    /* best-effort */
+  }
+  updateUI();
+  // Restore the navigation snapshot now that sidebar + chat are rendered (B).
+  try {
+    const navState = consumeNavState();
+    if (navState) {
+      if (navState.sidebarScroll != null && sidebarEl) {
+        requestAnimationFrame(() => {
+          sidebarEl.scrollTop = navState.sidebarScroll;
+        });
       }
-    } catch {
-      /* restore is best-effort */
+      if (navState.expandedWorkspaces.size > 0 && sidebar) {
+        for (const id of navState.expandedWorkspaces) {
+          sidebar.expandedWorkspaces.add(id);
+        }
+        sidebar.render();
+      }
+      if (navState.searchQuery && sidebar) {
+        sidebar.searchQuery = navState.searchQuery;
+        sidebar.render();
+      }
+      if (navState.messageScroll != null && messagesContainer) {
+        requestAnimationFrame(() => {
+          messagesContainer.scrollTop = navState.messageScroll;
+        });
+      }
+      if (navState.inputDraft && messageInput && !messageInput.value) {
+        messageInput.value = navState.inputDraft;
+      }
     }
-    if (!hasAnySessionsLoaded()) {
-      renderWorkspaceWelcome();
-    }
-    if (deferredMirrorSync) {
-      const syncData = deferredMirrorSync;
-      deferredMirrorSync = null;
-      handleMirrorSync(syncData);
-    }
-    if (isMirrorMode) updateMirrorLiveIndicator();
-    resolveAndApplyFocus();
-  });
+  } catch {
+    /* restore is best-effort */
+  }
+  if (!hasAnySessionsLoaded()) {
+    renderWorkspaceWelcome();
+  }
+  if (deferredMirrorSync) {
+    const syncData = deferredMirrorSync;
+    deferredMirrorSync = null;
+    handleMirrorSync(syncData);
+  }
+  if (isMirrorMode) updateMirrorLiveIndicator();
+  resolveAndApplyFocus();
+});
 
 // Dismiss mobile splash screen
 const splash = document.getElementById("mobile-splash");

@@ -8,8 +8,6 @@
 import { onLocaleChange, t } from "../i18n.js";
 import { createIcon } from "../icons.js";
 import { buildSidebarSection, buildSidebarWorkspaceGroup } from "../sidebar-workspace-group.js";
-import { getSuperAgentProject, isSuperAgentProjectPath } from "../super-agent/session.js";
-import { isSuperAgentEnabled } from "../super-agent/settings.js";
 import { cacheSidebarProjects } from "../workspace/nav-state-cache.js";
 import { basenameLocalPath } from "../workspace/path-utils.js";
 import {
@@ -72,7 +70,6 @@ export class SessionSidebar {
     this.onFocusRefresh = options.onFocusRefresh || null;
     this.onWorkspaceFocus = options.onWorkspaceFocus || null;
     this.isCurrentWorkspace = options.isCurrentWorkspace || null;
-    this.superAgentPath = options.superAgentPath || "";
     this.activeSessionFile = null;
     this.projects = [];
     // Instance-level fold state. Workspaces default to collapsed (empty set =
@@ -642,9 +639,7 @@ export class SessionSidebar {
       // Scope full-text search to the currently listed project paths so the
       // result surface matches what the sidebar shows.
       const scopePaths = this.projects
-        .filter(
-          (project) => !isSuperAgentProjectPath(project.path, this.superAgentPath) && project.path,
-        )
+        .filter((project) => project.path)
         .map((project) => project.path)
         .slice(0, 100);
       const suffix =
@@ -1284,42 +1279,6 @@ export class SessionSidebar {
     });
   }
 
-  /**
-   * Pins the latest Super Agent session at the top of the sidebar as the
-   * "Agent Inbox" entry. Only the most recent session is shown; the rest of
-   * the Super Agent project's history stays out of the regular project list.
-   */
-  buildPinnedSuperAgentGroup(pinned) {
-    if (!pinned) return null;
-
-    const group = document.createElement("div");
-    group.className = "super-agent-pinned-group";
-    group.dataset.projectSearchText = this.getProjectSearchText(pinned.project);
-
-    const header = document.createElement("div");
-    header.className = "project-header super-agent-pinned-header";
-    const star = document.createElement("span");
-    star.className = "fav-star";
-    const starIcon = createActionIcon("pin", 14);
-    if (starIcon) star.appendChild(starIcon);
-    const title = document.createElement("span");
-    title.textContent = "Agent Inbox";
-    const count = document.createElement("span");
-    count.className = "project-count";
-    count.textContent = "Pinned";
-    header.append(star, title, count);
-    group.appendChild(header);
-
-    const sessionsDiv = document.createElement("div");
-    sessionsDiv.className = "project-sessions";
-    sessionsDiv.appendChild(
-      this.buildSessionItem(pinned.session, pinned.project, { showDeleteButton: false }),
-    );
-    group.appendChild(sessionsDiv);
-
-    return group;
-  }
-
   getProjectVisibilityKey(project) {
     return project?.path || project?.dirName || "";
   }
@@ -1522,10 +1481,8 @@ export class SessionSidebar {
    * signature returns the previous DOM node so hover state, scroll position
    * inside long lists, and quick-info overlays survive routine refreshes.
    */
-  projectRowNode(project, pinnedSessionFile) {
-    const visibleSessions = (project.sessions || []).filter(
-      (session) => session.filePath !== pinnedSessionFile,
-    );
+  projectRowNode(project) {
+    const visibleSessions = project.sessions || [];
     // Pagination ("show more") mutates only the visible slice; include it in
     // the signature so those clicks still rebuild/reuse the correct DOM.
     const visibleCount = this.getProjectVisibleSessionCount(project, visibleSessions.length);
@@ -1611,17 +1568,7 @@ export class SessionSidebar {
       this.onFocusRefresh();
       return;
     }
-    const pinnedSuperAgent = isSuperAgentEnabled()
-      ? getSuperAgentProject(this.projects, this.superAgentPath)
-      : null;
-    const pinnedSessionFile = pinnedSuperAgent?.session?.filePath || null;
-
     this.container.replaceChildren();
-
-    const pinnedSuperAgentGroup = this.buildPinnedSuperAgentGroup(pinnedSuperAgent);
-    if (pinnedSuperAgentGroup) {
-      this.container.appendChild(pinnedSuperAgentGroup);
-    }
 
     this.renderPinnedSection();
 
@@ -1637,9 +1584,8 @@ export class SessionSidebar {
     projectsSection.className = `projects-group ${projectsSection.className}`;
     const seenRowKeys = new Set();
     for (const project of this.projects) {
-      if (isSuperAgentProjectPath(project.path, this.superAgentPath)) continue;
       seenRowKeys.add(project.workspaceId);
-      const { group } = this.projectRowNode(project, pinnedSessionFile);
+      const { group } = this.projectRowNode(project);
       projectsGroup.appendChild(group);
     }
     // Drop cached nodes for rows that disappeared (removed live rows, etc.)
@@ -1648,15 +1594,8 @@ export class SessionSidebar {
     }
     this.container.appendChild(projectsSection);
 
-    const nonSuperAgentProjects = this.projects.filter(
-      (project) => !isSuperAgentProjectPath(project.path, this.superAgentPath),
-    );
     const pinState = this.getRenderablePinState();
-    if (
-      !pinnedSuperAgent &&
-      nonSuperAgentProjects.length === 0 &&
-      pinState.workspaces.length === 0
-    ) {
+    if (this.projects.length === 0 && pinState.workspaces.length === 0) {
       this.renderEmptyState({ append: true });
     }
     for (const [cacheKey, cached] of this._projectRowCache) {

@@ -485,4 +485,123 @@ describe("WebSocketClient broker routing", () => {
 
     expect(sent[0].sourcePort).toBe(47822);
   });
+
+  test("sendRuntime correlates the v2 runtime reply and yields its data", async () => {
+    const sent = [];
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
+    client.ws = {
+      readyState: WebSocket.OPEN,
+      send: (message) => sent.push(JSON.parse(message)),
+    };
+    client.setRoutingContext({
+      workspaceId: "workspace-a",
+      sessionId: "session-a",
+      sourcePort: 47821,
+    });
+
+    const pending = client.sendRuntime({ type: "set_model", provider: "p", modelId: "m" });
+    // Protocol shape comes from the host's RoutedAction::Runtime reply: the Pi
+    // answer sits under `response`, next to acceptance/operationId.
+    expect(sent[0]).toMatchObject({
+      type: "runtime_request",
+      protocolVersion: 2,
+      target: { workspaceId: "workspace-a", sessionId: "session-a", instanceId: "47821" },
+      command: { type: "set_model", provider: "p", modelId: "m" },
+    });
+    expect(sent[0].idempotencyKey).toBe(`ui-${sent[0].requestId}`);
+    client.handleMessage({
+      type: "runtime_response",
+      requestId: sent[0].requestId,
+      acceptance: "accepted_pending",
+      operationId: "op-1",
+      response: { type: "response", command: "set_model", success: true, data: { model: "m" } },
+    });
+
+    await expect(pending).resolves.toEqual({ model: "m" });
+    expect(client.pendingControls.size).toBe(0);
+  });
+
+  test("sendRuntime rejects with the runtime error text so retry logic still matches", async () => {
+    const sent = [];
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
+    client.ws = {
+      readyState: WebSocket.OPEN,
+      send: (message) => sent.push(JSON.parse(message)),
+    };
+    client.setRoutingContext({ workspaceId: "workspace-a", sessionId: "session-a" });
+
+    const pending = client.sendRuntime({ type: "set_model" });
+    client.handleMessage({
+      type: "runtime_response",
+      requestId: sent[0].requestId,
+      response: { success: false, error: "No context available" },
+    });
+
+    await expect(pending).rejects.toThrow("No context available");
+  });
+
+  test("sendData yields the data_response payload without its envelope", async () => {
+    const sent = [];
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
+    client.ws = {
+      readyState: WebSocket.OPEN,
+      send: (message) => sent.push(JSON.parse(message)),
+    };
+    client.setRoutingContext({ workspaceId: "workspace-a", sessionId: "session-a" });
+
+    const pending = client.sendData("file_mentions", { query: "src" });
+    expect(sent[0]).toMatchObject({
+      type: "data_request",
+      protocolVersion: 2,
+      operation: "file_mentions",
+      workspaceId: "workspace-a",
+      query: "src",
+    });
+    client.handleMessage({
+      type: "data_response",
+      requestId: sent[0].requestId,
+      operation: "file_mentions",
+      entries: [{ name: "a.ts", relativePath: "src/a.ts", kind: "file" }],
+    });
+
+    await expect(pending).resolves.toEqual({
+      operation: "file_mentions",
+      entries: [{ name: "a.ts", relativePath: "src/a.ts", kind: "file" }],
+    });
+  });
+
+  test("structured error frames expose the machine code to callers", async () => {
+    const sent = [];
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
+    client.ws = {
+      readyState: WebSocket.OPEN,
+      send: (message) => sent.push(JSON.parse(message)),
+    };
+    client.setRoutingContext({ workspaceId: "workspace-a", sessionId: "session-a" });
+
+    const pending = client.sendData("file_write", { path: "a.ts" });
+    client.handleMessage({
+      type: "error",
+      requestId: sent[0].requestId,
+      error: { code: "file_conflict", message: "File changed on disk" },
+    });
+
+    const error = await pending.catch((err) => err);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toBe("File changed on disk");
+    // The preview panel branches on the code, never on the human message.
+    expect(error.code).toBe("file_conflict");
+  });
+
+  test("v1 clients refuse data and runtime request helpers", async () => {
+    const client = new WebSocketClient("ws://127.0.0.1:49000/ui-ws");
+    client.ws = { readyState: WebSocket.OPEN, send: () => {} };
+
+    await expect(client.sendData("file_read", {})).rejects.toThrow(
+      'Data operation "file_read" requires protocol v2',
+    );
+    await expect(client.sendRuntime({ type: "get_state" })).rejects.toThrow(
+      "Runtime requests require protocol v2",
+    );
+  });
 });

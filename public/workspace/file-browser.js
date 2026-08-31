@@ -20,6 +20,9 @@ export class FileBrowser {
     this.messageInput = messageInput;
     this.onFileSelect = options.onFileSelect || null;
     this.onShowHiddenChange = options.onShowHiddenChange || null;
+    // Native reveal/open is a host control, never an HTTP route: an ephemeral or
+    // host-origin window has no Pi HTTP server to POST `/api/open` to.
+    this.openPath = options.openPath || null;
     this.showHidden = false;
     this.currentPath = null;
     this.workspaceRoot = "";
@@ -315,11 +318,8 @@ export class FileBrowser {
 
   async openNatively(filePath) {
     try {
-      await fetch("/api/open", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filePath }),
-      });
+      if (!this.openPath) throw new Error("Host open control unavailable");
+      await this.openPath(filePath);
     } catch (err) {
       console.error("[FileBrowser] Failed to open:", err);
     }

@@ -61,6 +61,23 @@ fn native_runtime_enabled(app) -> bool {
 | `/v2/session-export/:token` | HTTP GET | 一次性令牌（owner + generation 绑定） | 会话导出流 |
 | `/v2/paste-offload` | HTTP POST | desktop capability | ≥4 MiB paste 卸载 |
 
+### 兼容路由的唯一实现规则
+
+`/api/*` 兼容条目是**冻结集合**：只允许继续服务已在 host 内实现的路由，不再新增 handler。
+需要新能力时一律接 v2 面（`data_request` 数据 op 或 `broker_control` 控制 op），由
+`host_router` 的 `current_registered_context` 做代数复核；在 HTTP 侧另写一份 handler 会
+造成两份契约（已发生过的错位见 `docs/superpowers/specs/2026-08-30-p8-deletion-proof-audit.md`）。
+
+已被 native 取代或 scope 移除的入口保留显式失败，避免静默 fallback：
+
+| 状态 | 条目 | 响应 |
+| --- | --- | --- |
+| 退役（D8） | `/api/rpc` | `410 Gone` + `Deprecation: true` + 匿名 client-class 计数 |
+| 已有 v2 等价 op | `/api/files/content` `/api/files/raw` `/api/file-mentions` `/api/paste-offload` `/api/open` `/api/git-branch` | `410 Gone`（`api_gone`）；前端改走 `file_read`/`file_raw`/`file_mentions`/`/v2/paste-offload`/`open_in_app` |
+| scope 移除（P5/P6） | `/api/models-config` `/api/agent-config` `/api/agents-md` `/api/append-system-md` `/api/chat-config` `/api/chat-telegram/{op}` `/api/skill-install-{links,scan}` `/api/super-agent/{projects,tasks}` `/api/lan-qr` | `410 Gone`（`api_gone`） |
+
+删除前置条件不变：D10 Stage 2+ 遥测需显示这些条目在两个稳定 release 周期内零命中。
+
 **LAN 边界**：HostServer 仅绑定 `127.0.0.1`（loopback-only）。D4 未显式启用前不暴露 LAN。
 
 ## 授权模型

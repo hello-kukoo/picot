@@ -3,7 +3,12 @@ import { join } from "node:path";
 import { JSDOM } from "jsdom";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { initI18n } from "../i18n.js";
-import { activeAtMention, setupAtFileMention } from "./at-file-mention.js";
+import {
+  activeAtMention,
+  buildMentionCandidate,
+  createHostFileMentionSearch,
+  setupAtFileMention,
+} from "./at-file-mention.js";
 
 const enMessages = JSON.parse(readFileSync(join(process.cwd(), "public/locales/en.json"), "utf8"));
 
@@ -496,5 +501,66 @@ describe("at-file-mention", () => {
     await pending;
     expect(container.classList.contains("hidden")).toBe(true);
     expect(container.children.length).toBe(0);
+  });
+});
+
+describe("host file-mention search", () => {
+  test("maps workspace-relative entries onto absolute mention candidates", async () => {
+    const transport = {
+      fileMentions: vi.fn(async () => ({
+        operation: "file_mentions",
+        entries: [
+          { name: "a.ts", relativePath: "src/a.ts", kind: "file" },
+          { name: "pkg", relativePath: "src/pkg", kind: "directory" },
+          { name: "b md", relativePath: "docs/b md", kind: "file" },
+        ],
+      })),
+    };
+    const search = createHostFileMentionSearch(() => transport);
+
+    const result = await search("/repo/", "a");
+
+    // Pi TUI mention semantics are absolute paths; directories keep the trailing
+    // slash and paths with spaces are quoted so the token stays whole.
+    expect(transport.fileMentions).toHaveBeenCalledWith("a");
+    expect(result.items).toEqual([
+      {
+        value: "@/repo/src/a.ts",
+        label: "a.ts",
+        description: "/repo/src/a.ts",
+        isDirectory: false,
+      },
+      {
+        value: "@/repo/src/pkg/",
+        label: "pkg/",
+        description: "/repo/src/pkg",
+        isDirectory: true,
+      },
+      {
+        value: `@"/repo/docs/b md"`,
+        label: "b md",
+        description: "/repo/docs/b md",
+        isDirectory: false,
+      },
+    ]);
+  });
+
+  test("returns an empty list when the transport or workspace root is unavailable", async () => {
+    // Ephemeral runtimes clear their transport on teardown; the search must
+    // degrade to no candidates instead of throwing inside the popup.
+    const search = createHostFileMentionSearch(() => null);
+
+    await expect(search("/repo", "a")).resolves.toEqual({ items: [] });
+    await expect(createHostFileMentionSearch(() => ({}))("/repo", "a")).resolves.toEqual({
+      items: [],
+    });
+  });
+
+  test("candidate label uses the basename even for nested paths", () => {
+    expect(buildMentionCandidate("/repo/src/deep/file.rs", false)).toMatchObject({
+      value: "@/repo/src/deep/file.rs",
+      label: "file.rs",
+      isDirectory: false,
+    });
   });
 });

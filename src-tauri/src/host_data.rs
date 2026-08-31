@@ -783,8 +783,8 @@ fn search_session_file(
 /// `session_export` control and the streaming
 /// `GET /v2/session-export/{token}` route.
 ///
-/// Substrate only: the v2 control wiring has not landed yet, so nothing
-/// constructs this registry outside tests.
+/// Host control issues grants after validating session identity and
+/// containment; this registry owns token lifecycle and redemption.
 #[allow(dead_code)]
 pub struct SessionExportRegistry {
     tokens: std::sync::Mutex<HashMap<String, ExportGrant>>,

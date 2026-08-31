@@ -37,6 +37,7 @@ const locale = {
     statusStreaming: "Generating",
     statusError: "Error",
     statusDisconnected: "Disconnected",
+    exportUnavailable: "Temporary chats cannot be exported",
   },
   input: {
     switchModel: "Switch model",
@@ -89,6 +90,21 @@ function makeRuntime() {
 }
 
 describe("EphemeralChatView", () => {
+  it("keeps export visible but explains temporary chats cannot be exported", () => {
+    const view = new EphemeralChatView({
+      runtime: makeRuntime(),
+      kind: "side-chat",
+      toolsEnabled: true,
+    });
+    const exportCommand = view._sideCommands().find((command) => command.label === "Export HTML");
+
+    expect(exportCommand).toMatchObject({
+      disabled: true,
+      desc: "Temporary chats cannot be exported",
+    });
+    view.destroy();
+  });
+
   it("exposes an element and renders snapshot messages", () => {
     const runtime = makeRuntime();
     const view = new EphemeralChatView({ runtime, kind: "side-chat", toolsEnabled: true });

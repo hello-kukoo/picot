@@ -400,6 +400,103 @@ export class WebSocketClient extends EventTarget {
     });
   }
 
+  // Host data-plane request (`data_request` → `data_response`). Shares the
+  // requestId correlation pool with control commands; the reply payload is
+  // delivered at the top level of `data_response`, so `unwrap` strips the
+  // envelope keys instead of reading `result`.
+  sendData(operation, args = {}, options = {}) {
+    if (this.protocolVersion !== 2) {
+      return Promise.reject(new Error(`Data operation "${operation}" requires protocol v2`));
+    }
+    return this._sendRequest(
+      (requestId) => ({
+        type: "data_request",
+        protocolVersion: 2,
+        requestId,
+        operation,
+        workspaceId: this.workspaceId || undefined,
+        ...args,
+      }),
+      { label: `Data operation "${operation}"`, timeoutMs: options.timeoutMs },
+    );
+  }
+
+  // Runtime command that needs a correlated reply (`runtime_request` →
+  // `runtime_response`). `send()` stays fire-and-forget for prompt-style calls
+  // whose result arrives as events; this path registers the requestId so the
+  // Pi reply's `{success, data}` envelope resolves it. Resolves with the inner
+  // `data` (legacy `wsRequest` contract) and rejects on `success: false` so
+  // callers keep seeing the runtime's own error text.
+  sendRuntime(command, { timeoutMs } = {}) {
+    if (this.protocolVersion !== 2) {
+      return Promise.reject(new Error("Runtime requests require protocol v2"));
+    }
+    return this._sendRequest(
+      (requestId) => ({
+        type: "runtime_request",
+        protocolVersion: 2,
+        requestId,
+        target: {
+          workspaceId: this.workspaceId,
+          sessionId: this.sessionId,
+          instanceId: String(this.sourcePort || "primary"),
+        },
+        command,
+        idempotencyKey: `ui-${requestId}`,
+      }),
+      {
+        label: `Runtime command "${command?.type || "unknown"}"`,
+        timeoutMs,
+        // Pi replies `{ success, data }`; the pending map already hands us that
+        // object, so unwrap only the inner payload.
+        unwrap: (reply) => reply?.data ?? null,
+        rejectOnFailure: true,
+      },
+    );
+  }
+
+  _sendRequest(envelopeFor, { label, timeoutMs, unwrap, rejectOnFailure = false }) {
+    const deliver = () =>
+      new Promise((resolve, reject) => {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+          reject(new Error(`WebSocket not connected; cannot send ${label}`));
+          return;
+        }
+        const requestId = `req-${++this.requestCounter}`;
+        const effectiveTimeout = typeof timeoutMs === "number" ? timeoutMs : this.controlTimeoutMs;
+        const entry = {
+          resolve: (payload) => {
+            if (rejectOnFailure && payload && payload.success === false) {
+              reject(new Error(payload.error || `${label} failed`));
+              return;
+            }
+            resolve(typeof unwrap === "function" ? unwrap(payload) : payload);
+          },
+          reject,
+          onProgress: null,
+          timer: null,
+        };
+        if (effectiveTimeout > 0) {
+          entry.timer = setTimeout(() => {
+            if (this.pendingControls.has(requestId)) {
+              this.pendingControls.delete(requestId);
+              reject(new Error(`${label} timed out`));
+            }
+          }, effectiveTimeout);
+        }
+        this.pendingControls.set(requestId, entry);
+        try {
+          this.ws.send(JSON.stringify(envelopeFor(requestId)));
+        } catch (err) {
+          if (entry.timer) clearTimeout(entry.timer);
+          this.pendingControls.delete(requestId);
+          reject(err);
+        }
+      });
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) return deliver();
+    return this.waitForOpen().then(deliver);
+  }
+
   _subscribeCanonicalTarget() {
     if (this.protocolVersion !== 2 || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     if (!this.workspaceId || !this.sessionId) return;
@@ -476,7 +573,9 @@ export class WebSocketClient extends EventTarget {
     this.pendingControls.delete(requestId);
     if (pending.timer) clearTimeout(pending.timer);
     if (message.ok === false) {
-      pending.reject(new Error(message.error || "Control command failed"));
+      const error = new Error(message.error || "Control command failed");
+      if (message.errorCode) error.code = message.errorCode;
+      pending.reject(error);
     } else {
       pending.resolve(message.result);
     }
@@ -534,11 +633,16 @@ export class WebSocketClient extends EventTarget {
       message.type === "data_response"
     ) {
       // Canonical v2 uses `response` for runtime/host results; legacy callers
-      // consume `result`. Normalize only at this compatibility boundary.
-      const normalized =
-        message.result === undefined && message.response !== undefined
-          ? { ...message, result: message.response }
-          : message;
+      // consume `result`. Data replies carry their payload at the top level, so
+      // the envelope (minus type/requestId/ok) is the result. Normalize only at
+      // this compatibility boundary.
+      let normalized = message;
+      if (message.result === undefined && message.response !== undefined) {
+        normalized = { ...message, result: message.response };
+      } else if (message.type === "data_response" && message.result === undefined) {
+        const { type, requestId, ok, ...payload } = message;
+        normalized = { ...message, result: payload };
+      }
       this.resolveControl(normalized);
       this.dispatchEvent(new CustomEvent("controlResponse", { detail: normalized }));
       return;
@@ -551,6 +655,9 @@ export class WebSocketClient extends EventTarget {
       this.resolveControl({
         requestId: message.requestId,
         ok: false,
+        // Keep the machine code alongside the human message: callers such as the
+        // file preview panel must distinguish a conflict from any other failure.
+        errorCode: message.error?.code,
         error: message.error?.message || message.error?.code || "Request failed",
       });
       return;

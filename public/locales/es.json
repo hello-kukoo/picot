@@ -918,6 +918,7 @@
     "close": "Cerrar",
     "confirmDiscard": "Este chat temporal no se guardará. ¿Descartar?",
     "confirmCloseSummary": "¿Cerrar y descartar archivos sin guardar y chats temporales?",
+    "exportUnavailable": "Los chats temporales no se pueden exportar",
     "generating": "Generando",
     "unread": "No leído",
     "resize": "Redimensionar chat rápido",

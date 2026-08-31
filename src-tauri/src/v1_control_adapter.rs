@@ -42,6 +42,12 @@ const REGISTRY_CONTROLS: &[(&str, bool)] = &[
     ("preference.set", true),
     ("preference.delete", true),
     ("preference.list", false),
+    // Provider auth mutations (P5: sole ownership)
+    ("set_api_key", true),
+    ("remove_api_key", true),
+    ("set_model_visibility", true),
+    ("set_default_thinking_level", true),
+    ("set_skill_enabled", true),
 ];
 
 const HOST_CONTROLS: &[(&str, bool)] = &[

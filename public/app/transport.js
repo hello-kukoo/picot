@@ -232,6 +232,44 @@ export class WsTransport {
     return this._control("session_export", { sessionId });
   }
 
+  // ── Host data plane (v2 `data_request`) ──────────────────────────────────────
+  // Paths are workspace-relative; `workspaceId` is carried by the envelope from
+  // the client's own authoritative route. `file_read`/`file_write`/`file_raw`
+  // helpers land together with the preview-panel migration that needs them.
+
+  fileMentions(query) {
+    return this.wsClient.sendData("file_mentions", { query });
+  }
+
+  // Agent/config text files are host-owned: the read/write keeps the exact bytes
+  // the editor showed, and the lock + atomic replace stay in `host_config`.
+  agentTextFileGet(name, scope = "global") {
+    return this._control("agent_text_file_get", { name, scope });
+  }
+
+  agentTextFilePut(name, content, scope = "global") {
+    return this._control("agent_text_file_put", { name, content, scope });
+  }
+
+  // JSON config files additionally get Pi's lock protocol and, for model config,
+  // the host-side backup plus restart notice.
+  settingsGet(name, scope = "global") {
+    return this._control("settings_get", { name, scope });
+  }
+
+  settingsPut(name, value, scope = "global") {
+    return this._control("settings_put", { name, value, scope });
+  }
+
+  // Pi owns the credential store; the host only projects its native login flow.
+  getOauthLoginCapabilities() {
+    return this._control("get_oauth_login_capabilities", {});
+  }
+
+  logoutOauthLogin(params = {}) {
+    return this._control("logout_oauth_login", params);
+  }
+
   loadSessionUiProfile(expectedSessionId) {
     return this._control("session_ui_profile_load", { expectedSessionId });
   }

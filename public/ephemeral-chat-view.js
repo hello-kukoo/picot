@@ -8,7 +8,7 @@ import { setupComposerPasteOffload } from "./composer-paste-offload.js";
 import { onLocaleChange, t } from "./i18n.js";
 import { createIcon } from "./icons.js";
 import { processImageFile, processImagePayload } from "./image-attachments.js";
-import { setupAtFileMention } from "./ui/at-file-mention.js";
+import { createHostFileMentionSearch, setupAtFileMention } from "./ui/at-file-mention.js";
 import { DialogHandler } from "./ui/dialogs.js";
 import { MessageRenderer } from "./ui/message-renderer.js";
 import { ToolCardRenderer } from "./ui/tool-card.js";
@@ -36,16 +36,9 @@ export class EphemeralChatView {
     // Live owner-workspace lookup for @-file mentions. Never cached, never the
     // Quick Chat temporary cwd — supplied by the manager via app.js.
     this._getWorkspaceRoot = getWorkspaceRoot || (() => null);
-    this._searchFiles =
-      searchFiles ||
-      (async (workspaceRoot, query, signal) => {
-        const response = await fetch(
-          `/api/file-mentions?workspaceRoot=${encodeURIComponent(workspaceRoot)}&query=${encodeURIComponent(query)}`,
-          { signal },
-        );
-        if (!response.ok) throw new Error(`File mention search failed: ${response.status}`);
-        return response.json();
-      });
+    // Mention completion comes from the host data plane. An ephemeral Pi has no
+    // HTTP origin of its own, so a fetch against the Pi port could never work.
+    this._searchFiles = searchFiles || createHostFileMentionSearch(() => this.runtime?.transport);
 
     const doc = globalThis.document;
     this._doc = doc;
@@ -186,14 +179,16 @@ export class EphemeralChatView {
       container: this._composer,
       document: doc,
       offload: async (content) => {
-        const response = await fetch("/api/paste-offload", {
+        const response = await fetch("/v2/paste-offload", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ content }),
         });
         const result = await response.json().catch(() => null);
         if (!response.ok)
-          throw new Error(result?.error || `Paste offload failed: ${response.status}`);
+          throw new Error(
+            result?.error?.code || result?.error || `Paste offload failed: ${response.status}`,
+          );
         return result?.path;
       },
       t,
@@ -392,7 +387,7 @@ export class EphemeralChatView {
       {
         icon: "clipboard",
         label: t("input.exportHtml"),
-        desc: t("input.exportHtmlDesc"),
+        desc: t("ephemeral.exportUnavailable"),
         action: () => {},
         disabled: true,
       },

@@ -918,6 +918,7 @@
     "close": "閉じる",
     "confirmDiscard": "この一時チャットは保存されません。破棄しますか？",
     "confirmCloseSummary": "未保存のファイルと一時チャットを閉じて破棄しますか？",
+    "exportUnavailable": "一時チャットはエクスポートできません",
     "generating": "生成中",
     "unread": "未読",
     "resize": "クイックチャットのサイズを変更",
