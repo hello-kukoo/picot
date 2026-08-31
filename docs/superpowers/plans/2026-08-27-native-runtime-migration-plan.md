@@ -497,8 +497,8 @@ Exit：files/path security suite、config side-effect regression、OAuth lifecyc
 
 - `/v2/paste-offload`：route ≥4 MiB、opaque handle、workspace-derived temp location、TTL/quota/cleanup、prompt reference；
 - file mentions、git branch、skills endpoint removal（仅当 native controls 达到 Gate A contract）；
-- Telegram：secret redaction、独立 timeout/rate/cancel；
-- Super Agent projects/tasks：D9 canonical `RuntimeTarget`，无 direct port fetch；
+- ~~Telegram：secret redaction、独立 timeout/rate/cancel~~ **已从范围去除（Dr. Lin 2026-08-30）**：Telegram 集成随 legacy server 在 P8 终结，不迁入 native host；
+- ~~Super Agent projects/tasks：D9 canonical `RuntimeTarget`，无 direct port fetch~~ **已从范围去除（Dr. Lin 2026-08-30）**：Super Agent 面随 legacy server 在 P8 终结，不迁入 native host；
 - package、ephemeral 及 remaining non-chat `/api/*` callers 按 matrix 迁移。
 
 Exit：cancel、handle expiry、temp cleanup、secret redaction、external timeout、cross-runtime authority 测试绿。回滚：compatibility entries 按 matrix 保留。
@@ -541,9 +541,9 @@ Exit：`bun run test`、`bun run check`、`bun run check:rust`、`bun run build:
 | CP3 | P1 完 | **已关闭（2026-08-30，Dr. Lin 审阅通过）**：四件全绿——lifecycle（P1.11 五类真 Pi smoke 5/5）、Operation Registry（scope/TTL/eviction/revoke 全测）、turn abort（事件泵绑定 + 全场景族）、runtime smoke（cargo 340/0/5，clippy/check 绿）；Exit 四条款逐条验证与证据索引见 `2026-08-30-cp3-review.md`；P1.6 缺口 1–2 已按 reuse 裁决闭环、缺口 3 归位 P2；Windows 实证顺延 P8（R4.10）。P1 关闭，P2 前置全部满足 |
 | CP4 | P2 完 | **已关闭（2026-08-30，Dr. Lin 指令）**：capability/authorization/limit matrix 全绿——cargo 364/0/6 + clippy + check/check:inventory；评审→整改→独立复验链闭环（1 blocker + 6 majors 全修，#2 改判 SUPERSEDED by D10）；hello×class 九宫格、三 acceptance 带内 replay、双通路限额三点法、注册表增长回归齐；v2 面 release 隔离双门验证；证据与复验记录见 `2026-08-30-cp4-review.md` + `2026-08-30-p2-review-remediation.md` |
 | CP5 | P3 完 | dogfood go/no-go、P3 performance/parity |
-| CP6 | P4 完 | Cost fixture parity、delete/export contract 签收 |
-| CP7 | P5 完 | OAuth lifecycle/security 签收 |
-| CP8 | P6 完 | 取消/句柄过期/secret 脱敏/外部超时签收 |
+| CP6 | P4 完 | **已关闭（2026-08-30，Dr. Lin 确认）**：Cost fixture parity（cost_compat 逐字段移植 + 同 fixture TS parity 测试 scope=all/current 双绿）、delete/export contract（trash-first + running 保护 + one-shot generation-bound token + streaming GET）、compat 路由 owner capability 鉴权 + 8KiB body bound。评审 B1/B2 blocker + M1-M4 major 全修。评审→整改→复验链完整。 |
+| CP7 | P5 完 | **已关闭（2026-08-30，Dr. Lin 确认）**：files/path security suite（host_files symlink/TOCTOU/atomic/0600/conflict 全测）、config side-effect（host_config proper-lockfile + backup + restartRequired）、OAuth 五控件 fail-closed——**OAuth 整体（含 Pi bridge）放入人工 E2E 清单（P3.5）一并测试与验收（Dr. Lin 2026-08-30）**；generation 绑定 + cross-owner 不泄漏在 host 侧已全测。 |
+| CP8 | P6 完 | **已关闭（2026-08-30，Dr. Lin 确认；范围缩减）**：paste-offload（4MiB/TTL/quota/symlink/.gitignore 自忽略）、file-mentions（v2 data op 10000/500ms/20 budget）、handle expiry（1h cleanup + zero-TTL test）、cross-runtime authority（workspace containment）。**Telegram/SuperAgent 已从范围去除（Dr. Lin 2026-08-30）**——随 legacy server P8 终结，不迁入 native host。secret redaction/external timeout 随去除令失效。 |
 | CP9 | P7 完 | chat parity 签收 |
 | CP10 | P8 前 | deletion + N-1 recovery 批准 |
 

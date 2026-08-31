@@ -10,6 +10,10 @@ A local desktop GUI for the [Pi](https://github.com/badlogic/pi-mono) coding age
 
 Picot ships a known-good build of the `pi` runtime **inside the .app bundle**, so there's no separate `pi` install to manage, no PATH shenanigans, and no version drift between Picot and the agent it talks to. Open any project folder, start chatting with the agent, browse sessions and files — no terminal required. Multiple projects run in parallel, each in its own window with its own isolated agent process.
 
+### Architecture (Post-Migration)
+
+Picot has completed its native runtime migration. Each workspace spawns a headless `pi --mode rpc` process managed by a Rust `HostServer` (loopback-only) that enforces workspace isolation, owner-scoped authorization (capability-based), and a crash-safe operation registry. The frontend communicates via a v2 WebSocket protocol. See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full architecture document.
+
 <p align="center">
   <img width="1200" alt="Picot hero" src="docs/images/hero.webp" />
 </p>

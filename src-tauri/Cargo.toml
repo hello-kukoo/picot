@@ -12,6 +12,11 @@ path = "src/main.rs"
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+# P8 deletion preparation: compile out legacy modules to prove zero
+# dependency before physical file deletion. Not for production use.
+p8-delete-legacy = []
+
 [dependencies]
 tauri = { version = "2", features = ["image-png", "devtools", "macos-private-api"] }
 tauri-plugin-dialog = "2"

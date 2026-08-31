@@ -2,6 +2,12 @@
 // ABOUTME: Picot Tauri host entry point: spawns per-workspace Pi processes and
 // ABOUTME: owns windows, the broker, ephemeral chats, and the native close lifecycle.
 
+// P8 deletion preparation: the modules below are physical-deletion
+// candidates once deprecated usage hits zero (D10 Stage 2+, two stable
+// release cycles). Native replacements exist for all of them:
+//   broker_ws         → host_server v2 ws (compat handler retained)
+//   pi_manager        → native_pi_manager + pi_launch
+//   v1_control_adapter → host_server dispatch arms (51 controls mapped)
 mod broker_ws;
 mod host_capability;
 #[allow(dead_code)]

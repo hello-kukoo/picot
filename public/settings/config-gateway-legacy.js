@@ -1,5 +1,11 @@
 // ABOUTME: Legacy ConfigGateway adapter for private/features-v3 branch
 // ABOUTME: Provides ConfigGateway-compatible interface over legacy HTTP/RPC APIs
+//
+// DEPRECATED (P8): This module calls /api/agent-config, /api/models-config,
+// and /api/rpc — all slated for P8 physical deletion. The native v2 host
+// surface provides equivalent operations via `settings_get`/`settings_put`
+// and v2 data ops. Migrate callers to the v2 WebSocket surface; this module
+// will be removed when deprecated usage telemetry reaches zero (D10 Stage 2+).
 
 const HEALTH_CHECK_TIMEOUT_MS = 120_000;
 

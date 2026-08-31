@@ -175,24 +175,24 @@ Generated counts: HTTP 37, commands 43, callers 144, broker controls 6, host fra
 - A-CALLER-076 `public/file-preview-panel.js:1159` — const res = await fetch("/api/files/content", {
 - A-CALLER-077 `public/i18n.js:108` — const res = await fetch(`/locales/${locale}.json`, { cache: "no-store" });
 - A-CALLER-078 `public/native/app.js:102` — const response = await fetch(`/v2/bootstrap?${query}`);
-- A-CALLER-079 `public/settings/config-gateway-legacy.js:6` — async function postRpc(operation, params) {
-- A-CALLER-080 `public/settings/config-gateway-legacy.js:7` — const resp = await fetch("/api/rpc", {
-- A-CALLER-081 `public/settings/config-gateway-legacy.js:30` — const resp = await withTimeout(postRpc(operation), timeoutMs, operation);
-- A-CALLER-082 `public/settings/config-gateway-legacy.js:38` — const resp = await withTimeout(fetch("/api/models-config"), timeoutMs, operation);
-- A-CALLER-083 `public/settings/config-gateway-legacy.js:48` — fetch("/api/models-config", {
-- A-CALLER-084 `public/settings/config-gateway-legacy.js:61` — const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);
-- A-CALLER-085 `public/settings/config-gateway-legacy.js:66` — const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);
-- A-CALLER-086 `public/settings/config-gateway-legacy.js:71` — const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);
-- A-CALLER-087 `public/settings/config-gateway-legacy.js:79` — const resp = await withTimeout(postRpc(operation), timeoutMs, operation);
-- A-CALLER-088 `public/settings/config-gateway-legacy.js:87` — const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);
-- A-CALLER-089 `public/settings/config-gateway-legacy.js:92` — const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);
-- A-CALLER-090 `public/settings/config-gateway-legacy.js:97` — const resp = await withTimeout(fetch("/api/agent-config"), timeoutMs, operation);
-- A-CALLER-091 `public/settings/config-gateway-legacy.js:107` — fetch("/api/agent-config", {
-- A-CALLER-092 `public/settings/config-gateway-legacy.js:120` — const resp = await withTimeout(fetch("/api/agents-md"), timeoutMs, operation);
-- A-CALLER-093 `public/settings/config-gateway-legacy.js:133` — fetch("/api/agents-md", {
-- A-CALLER-094 `public/settings/config-gateway-legacy.js:146` — const resp = await withTimeout(fetch("/api/append-system-md"), timeoutMs, operation);
-- A-CALLER-095 `public/settings/config-gateway-legacy.js:159` — fetch("/api/append-system-md", {
-- A-CALLER-096 `public/settings/config-gateway-legacy.js:173` — fetch("/api/open", {
+- A-CALLER-079 `public/settings/config-gateway-legacy.js:12` — async function postRpc(operation, params) {
+- A-CALLER-080 `public/settings/config-gateway-legacy.js:13` — const resp = await fetch("/api/rpc", {
+- A-CALLER-081 `public/settings/config-gateway-legacy.js:36` — const resp = await withTimeout(postRpc(operation), timeoutMs, operation);
+- A-CALLER-082 `public/settings/config-gateway-legacy.js:44` — const resp = await withTimeout(fetch("/api/models-config"), timeoutMs, operation);
+- A-CALLER-083 `public/settings/config-gateway-legacy.js:54` — fetch("/api/models-config", {
+- A-CALLER-084 `public/settings/config-gateway-legacy.js:67` — const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);
+- A-CALLER-085 `public/settings/config-gateway-legacy.js:72` — const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);
+- A-CALLER-086 `public/settings/config-gateway-legacy.js:77` — const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);
+- A-CALLER-087 `public/settings/config-gateway-legacy.js:85` — const resp = await withTimeout(postRpc(operation), timeoutMs, operation);
+- A-CALLER-088 `public/settings/config-gateway-legacy.js:93` — const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);
+- A-CALLER-089 `public/settings/config-gateway-legacy.js:98` — const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);
+- A-CALLER-090 `public/settings/config-gateway-legacy.js:103` — const resp = await withTimeout(fetch("/api/agent-config"), timeoutMs, operation);
+- A-CALLER-091 `public/settings/config-gateway-legacy.js:113` — fetch("/api/agent-config", {
+- A-CALLER-092 `public/settings/config-gateway-legacy.js:126` — const resp = await withTimeout(fetch("/api/agents-md"), timeoutMs, operation);
+- A-CALLER-093 `public/settings/config-gateway-legacy.js:139` — fetch("/api/agents-md", {
+- A-CALLER-094 `public/settings/config-gateway-legacy.js:152` — const resp = await withTimeout(fetch("/api/append-system-md"), timeoutMs, operation);
+- A-CALLER-095 `public/settings/config-gateway-legacy.js:165` — fetch("/api/append-system-md", {
+- A-CALLER-096 `public/settings/config-gateway-legacy.js:179` — fetch("/api/open", {
 - A-CALLER-097 `public/settings/package-browse.js:84` — const res = await fetch(PKG_CATALOG_URL, { headers: { Accept: "application/json" } });
 - A-CALLER-098 `public/sidebar/index.js:197` — const res = await fetch("/api/sessions/delete-batch", {
 - A-CALLER-099 `public/sidebar/index.js:466` — const res = await fetch(

@@ -567,111 +567,111 @@
       "text": "const response = await fetch(`/v2/bootstrap?${query}`);"
     },
     {
-      "id": "public/settings/config-gateway-legacy.js:6",
+      "id": "public/settings/config-gateway-legacy.js:12",
       "file": "public/settings/config-gateway-legacy.js",
-      "line": 6,
+      "line": 12,
       "text": "async function postRpc(operation, params) {"
     },
     {
-      "id": "public/settings/config-gateway-legacy.js:7",
+      "id": "public/settings/config-gateway-legacy.js:13",
       "file": "public/settings/config-gateway-legacy.js",
-      "line": 7,
+      "line": 13,
       "text": "const resp = await fetch(\"/api/rpc\", {"
     },
     {
-      "id": "public/settings/config-gateway-legacy.js:30",
+      "id": "public/settings/config-gateway-legacy.js:36",
       "file": "public/settings/config-gateway-legacy.js",
-      "line": 30,
+      "line": 36,
       "text": "const resp = await withTimeout(postRpc(operation), timeoutMs, operation);"
     },
     {
-      "id": "public/settings/config-gateway-legacy.js:38",
+      "id": "public/settings/config-gateway-legacy.js:44",
       "file": "public/settings/config-gateway-legacy.js",
-      "line": 38,
+      "line": 44,
       "text": "const resp = await withTimeout(fetch(\"/api/models-config\"), timeoutMs, operation);"
     },
     {
-      "id": "public/settings/config-gateway-legacy.js:48",
+      "id": "public/settings/config-gateway-legacy.js:54",
       "file": "public/settings/config-gateway-legacy.js",
-      "line": 48,
+      "line": 54,
       "text": "fetch(\"/api/models-config\", {"
     },
     {
-      "id": "public/settings/config-gateway-legacy.js:61",
+      "id": "public/settings/config-gateway-legacy.js:67",
       "file": "public/settings/config-gateway-legacy.js",
-      "line": 61,
+      "line": 67,
       "text": "const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);"
     },
     {
-      "id": "public/settings/config-gateway-legacy.js:66",
+      "id": "public/settings/config-gateway-legacy.js:72",
       "file": "public/settings/config-gateway-legacy.js",
-      "line": 66,
+      "line": 72,
       "text": "const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);"
     },
     {
-      "id": "public/settings/config-gateway-legacy.js:71",
+      "id": "public/settings/config-gateway-legacy.js:77",
       "file": "public/settings/config-gateway-legacy.js",
-      "line": 71,
+      "line": 77,
       "text": "const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);"
     },
     {
-      "id": "public/settings/config-gateway-legacy.js:79",
+      "id": "public/settings/config-gateway-legacy.js:85",
       "file": "public/settings/config-gateway-legacy.js",
-      "line": 79,
+      "line": 85,
       "text": "const resp = await withTimeout(postRpc(operation), timeoutMs, operation);"
     },
     {
-      "id": "public/settings/config-gateway-legacy.js:87",
+      "id": "public/settings/config-gateway-legacy.js:93",
       "file": "public/settings/config-gateway-legacy.js",
-      "line": 87,
+      "line": 93,
       "text": "const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);"
     },
     {
-      "id": "public/settings/config-gateway-legacy.js:92",
+      "id": "public/settings/config-gateway-legacy.js:98",
       "file": "public/settings/config-gateway-legacy.js",
-      "line": 92,
+      "line": 98,
       "text": "const resp = await withTimeout(postRpc(operation, params), timeoutMs, operation);"
     },
     {
-      "id": "public/settings/config-gateway-legacy.js:97",
+      "id": "public/settings/config-gateway-legacy.js:103",
       "file": "public/settings/config-gateway-legacy.js",
-      "line": 97,
+      "line": 103,
       "text": "const resp = await withTimeout(fetch(\"/api/agent-config\"), timeoutMs, operation);"
     },
     {
-      "id": "public/settings/config-gateway-legacy.js:107",
+      "id": "public/settings/config-gateway-legacy.js:113",
       "file": "public/settings/config-gateway-legacy.js",
-      "line": 107,
+      "line": 113,
       "text": "fetch(\"/api/agent-config\", {"
     },
     {
-      "id": "public/settings/config-gateway-legacy.js:120",
+      "id": "public/settings/config-gateway-legacy.js:126",
       "file": "public/settings/config-gateway-legacy.js",
-      "line": 120,
+      "line": 126,
       "text": "const resp = await withTimeout(fetch(\"/api/agents-md\"), timeoutMs, operation);"
     },
     {
-      "id": "public/settings/config-gateway-legacy.js:133",
+      "id": "public/settings/config-gateway-legacy.js:139",
       "file": "public/settings/config-gateway-legacy.js",
-      "line": 133,
+      "line": 139,
       "text": "fetch(\"/api/agents-md\", {"
     },
     {
-      "id": "public/settings/config-gateway-legacy.js:146",
+      "id": "public/settings/config-gateway-legacy.js:152",
       "file": "public/settings/config-gateway-legacy.js",
-      "line": 146,
+      "line": 152,
       "text": "const resp = await withTimeout(fetch(\"/api/append-system-md\"), timeoutMs, operation);"
     },
     {
-      "id": "public/settings/config-gateway-legacy.js:159",
+      "id": "public/settings/config-gateway-legacy.js:165",
       "file": "public/settings/config-gateway-legacy.js",
-      "line": 159,
+      "line": 165,
       "text": "fetch(\"/api/append-system-md\", {"
     },
     {
-      "id": "public/settings/config-gateway-legacy.js:173",
+      "id": "public/settings/config-gateway-legacy.js:179",
       "file": "public/settings/config-gateway-legacy.js",
-      "line": 173,
+      "line": 179,
       "text": "fetch(\"/api/open\", {"
     },
     {
