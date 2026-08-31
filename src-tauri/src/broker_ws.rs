@@ -1,6 +1,6 @@
 // ABOUTME: Multiplexes authenticated WebSocket clients to Pi upstreams and host controls.
 // ABOUTME: Enforces owner-scoped ephemeral routing, bounded replay, and command policy.
-
+#![allow(dead_code)] // DEPRECATED: legacy embedded-server stack, physical deletion at D10 Stage 2 (all live call sites removed)
 use crate::command_policy::{classify_core_command, EphemeralPermission};
 use crate::git_pi_runner::GitPiRunner;
 use crate::git_service::GitService;

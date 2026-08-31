@@ -1,6 +1,6 @@
 // ABOUTME: Owns in-memory ephemeral chat records per window owner: quotas, state
 // ABOUTME: transitions, generation-checked create/replace/close, and redacted descriptors.
-
+#![allow(dead_code)] // DEPRECATED: legacy embedded-server stack, physical deletion at D10 Stage 2 (all live call sites removed)
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

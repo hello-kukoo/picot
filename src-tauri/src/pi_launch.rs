@@ -1,6 +1,6 @@
 // ABOUTME: Shared Pi launch contract helpers for binary, arguments, paths, stderr, and environment.
 // ABOUTME: Keeps legacy and native launch inputs behaviorally identical.
-
+#![allow(dead_code)] // DEPRECATED: legacy embedded-server stack, physical deletion at D10 Stage 2 (all live call sites removed)
 use std::io::{BufRead, BufReader};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;

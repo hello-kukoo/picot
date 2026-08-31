@@ -52,20 +52,13 @@ mod window_owner;
 mod workspace_controls;
 
 use broker_ws::BrokerWs;
-use ephemeral_registry::{
-    CleanupLease, CreateReservation, EphemeralKind, EphemeralRegistry, EphemeralUiPatch,
-    OwnedProcess,
-};
+use ephemeral_registry::EphemeralRegistry;
 use git_service::GitService;
 use host_server::HostServer;
 use metadata_store::{MetadataStore, SharedMetadataStore};
 use native_pi_manager::NativePiManager;
-use pi_launch::{locked_pi_version, redact_child_diagnostic, PiSpawnSpec};
-use pi_manager::{
-    build_ephemeral_environment, canonical_temp_root, cleanup_quick_chat_dir,
-    create_quick_chat_temp_dir, wait_for_endpoint, wait_for_health as wait_for_pi_health,
-    PiManager,
-};
+use pi_launch::locked_pi_version;
+use pi_manager::{canonical_temp_root, cleanup_quick_chat_dir};
 use remote_auth::RemoteAuth;
 use runtime_coordinator::RuntimeTarget;
 use serde_json::Value;
@@ -75,17 +68,14 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 use tauri::image::Image;
-use tauri::{AppHandle, Manager, State, TitleBarStyle, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, TitleBarStyle, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
-use tauri_plugin_dialog::MessageDialogKind;
 use terminal_manager::TerminalManager;
 use terminal_registry::TerminalRegistry;
 use terminal_state_store::TerminalStateStore;
 use window_owner::WindowOwnerRegistry;
 
-type PiManagerState = Arc<PiManager>;
 type BrokerWsState = Arc<BrokerWs>;
 type NativePiManagerState = NativePiManager;
 #[allow(dead_code)]
@@ -97,117 +87,6 @@ type EphemeralRegistryState = Arc<EphemeralRegistry>;
 
 // ─── Tauri Commands ───────────────────────────────────────────────────────────
 
-/// Create a new session within the current workspace (RPC command to existing pi)
-fn new_session_core(port: u16, manager: &PiManager, broker: &BrokerWs) -> Result<(), String> {
-    let result = manager.send_rpc(port, serde_json::json!({ "type": "new_session" }));
-    if result.is_ok() {
-        broker.set_active_port(port);
-    }
-    result
-}
-
-/// Ask the Pi instance at `port` for its available models. The response lands
-/// on stdout and is captured by the RPC output subscriber loop, which stores
-/// it in the shared model cache. Called once per session registration so the
-/// cache is populated by the time any Side Chat / Quick Chat / new session
-/// needs to render a model dropdown.
-fn warm_model_cache(manager: &PiManager, port: u16) {
-    if manager.cached_models().is_some() {
-        return; // already populated by an earlier session
-    }
-    let cmd = serde_json::json!({ "type": "get_available_models" });
-    if let Err(e) = manager.send_rpc(port, cmd) {
-        log::warn!("[pi-desktop] model cache warm-up rpc failed: {}", e);
-    }
-}
-
-/// Pre-spawn a Side Chat standby pi so the next "New Side Chat" feels
-/// instant. The standby uses the workspace cwd and keeps tools enabled.
-/// It's parked in the standby pool until adopted by ephemeral_create.
-/// Called after the main session registers; failures are logged but never
-/// surfaced — the synchronous fallback path still works if warming fails.
-fn warm_side_chat_standby(manager: Arc<PiManager>, cwd: PathBuf) {
-    let Some(lease) = manager.begin_standby_warm(Some(&cwd), false) else {
-        return;
-    };
-    tauri::async_runtime::spawn(async move {
-        let env = build_ephemeral_environment("side-chat", "standby", 0);
-        match manager.spawn_standby(lease, cwd.clone(), false, None, env) {
-            Ok(()) => log::info!("[pi-desktop] side-chat standby warmed"),
-            Err(e) => log::warn!("[pi-desktop] side-chat standby warm failed: {}", e),
-        }
-    });
-}
-
-/// Pre-spawn a Quick Chat standby pi. Quick Chat uses a throwaway temp dir
-/// as cwd (it has --no-tools, so the cwd is just an isolated scratch space).
-/// We pre-create the temp dir, spawn the standby against it, and store the
-/// dir alongside the standby so cleanup works after adoption. Warming a
-/// Quick Chat standby is best-effort: if it fails, ephemeral_create falls
-/// back to the synchronous spawn path.
-fn warm_quick_chat_standby(manager: Arc<PiManager>) {
-    let Some(lease) = manager.begin_standby_warm(None, true) else {
-        return;
-    };
-    tauri::async_runtime::spawn(async move {
-        // Pre-create the temp dir here so the standby's cwd matches the dir
-        // the caller would have created. If temp-dir creation fails we skip
-        // warming; the synchronous fallback will create its own.
-        let created = match create_quick_chat_temp_dir() {
-            Ok(c) => c,
-            Err(e) => {
-                manager.cancel_standby_warm(&lease);
-                log::warn!("[pi-desktop] quick-chat standby temp dir failed: {}", e);
-                return;
-            }
-        };
-        let cwd = created.0.clone();
-        let env = build_ephemeral_environment("quick-chat", "standby", 0);
-        match manager.spawn_standby(lease, cwd.clone(), true, Some(created), env) {
-            Ok(()) => log::info!("[pi-desktop] quick-chat standby warmed"),
-            Err(e) => log::warn!("[pi-desktop] quick-chat standby warm failed: {}", e),
-        }
-    });
-}
-/// Resume (switch to) an existing session file within the current workspace
-fn switch_session_core(
-    port: u16,
-    session_path: &str,
-    manager: &PiManager,
-    broker: &BrokerWs,
-) -> Result<(), String> {
-    let result = manager.send_rpc(
-        port,
-        serde_json::json!({ "type": "switch_session", "sessionPath": session_path }),
-    );
-    if result.is_ok() {
-        broker.register_session(port, session_path);
-        warm_model_cache(manager, port);
-    }
-    result
-}
-
-/// Fork the current session from a specific user entry within the workspace.
-/// pi handles `fork` natively over its RPC channel (it replaces the active
-/// session in-process and emits `session_start { reason: "fork" }`), so we just
-/// forward the command to the existing pi like new_session/switch_session do.
-/// The process/port is unchanged (fork is in-place), so the active port stays.
-fn fork_session_core(
-    port: u16,
-    entry_id: &str,
-    manager: &PiManager,
-    broker: &BrokerWs,
-) -> Result<(), String> {
-    let result = manager.send_rpc(
-        port,
-        serde_json::json!({ "type": "fork", "entryId": entry_id }),
-    );
-    if result.is_ok() {
-        broker.set_active_port(port);
-    }
-    result
-}
-
 /// Build the slash-command message that drives in-place tree navigation.
 /// pi's stdin RPC has no native `navigate_tree` command; the picot-bridge
 /// extension registers `/picot-navigate-tree`, whose handler runs with pi's
@@ -216,168 +95,59 @@ fn fork_session_core(
 /// send the navigation request as a prompt. `summarize: false` keeps the GUI
 /// path deterministic (no hidden LLM branch-summary call; pi's own summary
 /// flow stays available when invoked from pi itself).
+#[allow(dead_code)] // pending native ephemeral/tree work package
 fn navigate_tree_message(entry_id: &str, summarize: bool) -> String {
     let args = serde_json::json!({ "targetId": entry_id, "summarize": summarize });
     format!("/picot-navigate-tree {args}")
 }
 
-/// Navigate the active session's tree in place (Info panel "Resume branch"
-/// and user-message "Edit"). Unlike fork, no new session file is created:
-/// pi moves the active leaf, updates its in-memory agent context, and emits
-/// `session_tree { newLeafId, oldLeafId }`, which embedded-server forwards to
-/// the WebView. The prompt response only acknowledges dispatch; errors from
-/// the command surface later as `extension_error` events.
-fn navigate_tree_core(
-    port: u16,
-    entry_id: &str,
-    summarize: bool,
-    manager: &PiManager,
-    broker: &BrokerWs,
-) -> Result<(), String> {
-    let result = manager.send_rpc(
-        port,
-        serde_json::json!({ "type": "prompt", "message": navigate_tree_message(entry_id, summarize) }),
-    );
-    if result.is_ok() {
-        broker.set_active_port(port);
+/// Run the bundled pi CLI with the desktop environment (PATH, agent root).
+/// Free-standing so the package controls never depend on the legacy manager.
+fn run_bundled_pi_command(
+    static_dir: &std::path::Path,
+    args: &[String],
+    cwd: Option<&std::path::Path>,
+) -> Result<String, String> {
+    use std::process::{Command, Stdio};
+    let pi_bin = pi_launch::resolve_bundled_pi(static_dir)?;
+    let pi_bin_str = pi_launch::strip_verbatim_prefix(&pi_bin.to_string_lossy());
+    let augmented_path = pi_launch::build_augmented_path();
+    let agent_root = pi_launch::resolve_pi_agent_root()?;
+    let mut command = Command::new(&pi_bin_str);
+    pi_launch::configure_child_process_for_windows(&mut command);
+    command
+        .args(args)
+        .env("PATH", augmented_path)
+        .env("PI_CODING_AGENT_DIR", agent_root);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
     }
-    result
-}
-
-/// Open a workspace directory by spawning a separate pi process.
-/// When `open_window` is true (default) a new OS window is opened for the new pi.
-/// When false, the pi process is spawned headlessly and the caller is expected to
-/// navigate the current window to the returned port.
-#[allow(clippy::too_many_arguments)]
-async fn open_workspace_core(
-    cwd: &str,
-    session_path: Option<&str>,
-    force_new_session: bool,
-    open_window: bool,
-    wait_for_health: bool,
-    wait_for_sessions: bool,
-    manager: &PiManager,
-    broker: &BrokerWs,
-    app: Option<&AppHandle>,
-) -> Result<u16, String> {
-    let started_at = Instant::now();
-    let port = manager.next_port();
-    let spawn_started_at = Instant::now();
-    manager.spawn(cwd, port, session_path)?;
-    log::info!(
-        "[pi-desktop] open_workspace spawn complete: port={} cwd={} elapsed_ms={}",
-        port,
-        cwd,
-        spawn_started_at.elapsed().as_millis()
-    );
-
-    if wait_for_health {
-        // Brief pause then check if the process crashed immediately (fast-fail
-        // instead of waiting the full 30-second health timeout).
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        if let Some(status) = manager.check_exited(port) {
-            return Err(format!(
-                "Pi process exited immediately (port {}, status: {}). \
-                 Check stderr for crash details.",
-                port, status
-            ));
-        }
-
-        let health_started_at = Instant::now();
-        match wait_for_pi_health(port, 30).await {
-            Ok(_) => {}
-            Err(e) => {
-                let extra = if let Some(status) = manager.check_exited(port) {
-                    format!(" Process has exited with status: {}.", status)
-                } else {
-                    String::new()
-                };
-                return Err(format!("{}{}", e, extra));
-            }
-        }
-        log::info!(
-            "[pi-desktop] open_workspace health ready: port={} elapsed_ms={}",
-            port,
-            health_started_at.elapsed().as_millis()
-        );
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = command.output().map_err(|e| {
+        format!(
+            "Failed to run embedded pi command ({} {:?}): {}",
+            pi_bin_str, args, e
+        )
+    })?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
     }
-    // Register with the broker only after the process is confirmed reachable
-    // (or, when health checks are skipped, right before we start driving it).
-    // Registering earlier would start the upstream reconnect loop against a
-    // port that may never come up, leaking a 750ms-interval reconnect spinner
-    // on any spawn failure path that returns without unregistering.
-    if open_window {
-        broker.register_session(port, session_path.unwrap_or(""));
-        warm_model_cache(manager, port);
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let details = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
     } else {
-        broker.track_background_session(port, session_path.unwrap_or(""));
-    }
-    if force_new_session {
-        let new_session_started_at = Instant::now();
-        manager.send_rpc(port, serde_json::json!({ "type": "new_session" }))?;
-        log::info!(
-            "[pi-desktop] open_workspace new_session sent: port={} elapsed_ms={}",
-            port,
-            new_session_started_at.elapsed().as_millis()
-        );
-    }
-    if wait_for_sessions {
-        let sessions_started_at = Instant::now();
-        match wait_for_endpoint(port, "/api/sessions", 4).await {
-            Ok(_) => log::info!(
-                "[pi-desktop] open_workspace sessions ready: port={} elapsed_ms={}",
-                port,
-                sessions_started_at.elapsed().as_millis()
-            ),
-            Err(err) => log::warn!(
-                "[pi-desktop] open_workspace sessions warmup skipped: port={} error={}",
-                port,
-                err
-            ),
-        }
-    }
-    if open_window {
-        if let Some(app) = app {
-            open_workspace_window(app, port, cwd, &broker.url())?;
-        } else {
-            log::warn!(
-                "[pi-desktop] open_workspace requested a window but no AppHandle is available (port {})",
-                port
-            );
-        }
-    }
-    log::info!(
-        "[pi-desktop] open_workspace complete: port={} total_elapsed_ms={}",
-        port,
-        started_at.elapsed().as_millis()
-    );
-    Ok(port)
-}
-
-/// Stop (kill) a pi instance
-fn stop_instance_core(port: u16, manager: &PiManager, broker: &BrokerWs) {
-    manager.kill(port);
-    broker.unregister_port(port);
-}
-
-/// Spawn (or reuse) a dedicated pi process for a specific session file so it
-/// can run concurrently with the workspace's primary process.
-/// Returns the port the dedicated process is listening on.
-async fn spawn_session_process_core(
-    workspace_port: u16,
-    session_file: &str,
-    cwd: &str,
-    manager: &PiManager,
-    broker: &BrokerWs,
-) -> Result<u16, String> {
-    let port = manager.spawn_session_dedicated(workspace_port, session_file.to_string(), cwd)?;
-    wait_for_pi_health(port, 15).await?;
-    // Use track_background_session instead of register_session so the dedicated
-    // process is routable by session ID but does NOT become the default
-    // active_port — that would silently misroute commands from the session the
-    // user is currently viewing.
-    broker.track_background_session(port, session_file);
-    Ok(port)
+        format!("exit status {}", output.status)
+    };
+    Err(format!(
+        "Embedded pi command failed: {} {:?}: {}",
+        pi_bin_str, args, details
+    ))
 }
 
 /// Native folder picker dialog
@@ -702,15 +472,6 @@ fn open_in_app_core(
         })
 }
 
-fn open_devtools_core(port: u16, app: &AppHandle) -> Result<(), String> {
-    let label = format!("workspace-{}", port);
-    let window = app
-        .get_webview_window(&label)
-        .ok_or_else(|| format!("No workspace window found for port {}", port))?;
-    window.open_devtools();
-    Ok(())
-}
-
 /// Open a URL in the user's default system browser. Uses the platform opener
 /// (`open` / `start` / `xdg-open`) directly so we don't depend on the
 /// deprecated shell-plugin `open`.
@@ -743,84 +504,6 @@ fn open_external_core(url: &str) -> Result<(), String> {
 }
 
 // ─── Window helpers ───────────────────────────────────────────────────────────
-
-fn encode_query_value(value: &str) -> String {
-    // Encode everything that isn't an unreserved URL character so the value is
-    // safe in a query string regardless of its contents.
-    percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC).to_string()
-}
-
-fn open_workspace_window(
-    app: &AppHandle,
-    port: u16,
-    cwd: &str,
-    broker_ws_url: &str,
-) -> Result<(), String> {
-    let label = format!("workspace-{}", port);
-    let url = format!(
-        "http://localhost:{}?brokerWs={}",
-        port,
-        encode_query_value(broker_ws_url)
-    );
-    let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))
-        .map_err(|e| format!("Failed to load window icon: {}", e))?;
-
-    // Create the window owner before build so the capability and exact-origin
-    // navigation boundary exist for the first document load. The owner binds
-    // this window label, its canonical workspace cwd, and its primary Pi origin.
-    let Some(registry) = app.try_state::<OwnerRegistryState>() else {
-        return Err("owner registry is not available".to_string());
-    };
-    let registry = registry.inner().clone();
-    let canonical_cwd = fs::canonicalize(cwd).unwrap_or_else(|_| PathBuf::from(cwd));
-    let origin = format!("http://localhost:{port}");
-    let workspace_id = app.try_state::<SharedMetadataStore>().and_then(|metadata| {
-        metadata
-            .inner()
-            .lock()
-            .ok()
-            .and_then(|store| store.workspace_id_for_canonical_root(&canonical_cwd).ok())
-    });
-    let (owner, capability) = registry
-        .create_owner_with_workspace(
-            label.clone(),
-            canonical_cwd,
-            port,
-            origin,
-            workspace_id,
-            window_owner::TemporaryKind::DefaultStartup,
-        )
-        .map_err(|e| format!("Failed to create window owner: {e}"))?;
-    let init_script = window_owner::capability_initialization_script(&capability);
-
-    let nav_registry = registry.clone();
-    let nav_owner = owner.clone();
-    let builder =
-        WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url.parse().unwrap()))
-            .title("Picot")
-            .inner_size(1300.0, 860.0)
-            .min_inner_size(800.0, 600.0)
-            .icon(icon)
-            .map_err(|e| e.to_string())?
-            .initialization_script(init_script)
-            .on_navigation(move |url| nav_registry.authorize_navigation(&nav_owner, url))
-            .on_new_window(|_url, _features| tauri::webview::NewWindowResponse::Deny);
-
-    // macOS: extend WebView into title bar; traffic lights float on top.
-    #[cfg(target_os = "macos")]
-    let builder = builder
-        .decorations(true)
-        .title_bar_style(TitleBarStyle::Overlay)
-        .hidden_title(true);
-
-    // Non-macOS: keep standard native decorations.
-    #[cfg(not(target_os = "macos"))]
-    let builder = builder.decorations(true);
-
-    builder.build().map_err(|e| e.to_string())?;
-
-    Ok(())
-}
 
 fn open_native_workspace_window(
     app: &AppHandle,
@@ -864,64 +547,6 @@ fn open_native_workspace_window(
     #[cfg(not(target_os = "macos"))]
     let builder = builder.decorations(true);
     builder.build().map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-fn startup_health_failure_message(error: &str) -> String {
-    let safe_error = redact_child_diagnostic(error);
-    format!(
-        "The embedded Pi did not become healthy.\n\n{safe_error}\n\nCheck the Picot log for lines prefixed with '[pi-desktop] pi stderr'."
-    )
-}
-
-fn report_startup_spawn_error(app: &tauri::App, error: &str) {
-    let safe_error = redact_child_diagnostic(error);
-    log::error!("[pi-desktop] startup failed to spawn pi: {}", safe_error);
-    if let Err(window_err) = open_bootstrap_window(&app.handle().clone(), &safe_error) {
-        log::error!(
-            "[pi-desktop] failed to open bootstrap window after startup error: {}",
-            window_err
-        );
-        app.dialog()
-            .message(format!(
-                "Picot could not start the embedded pi runtime.\n\n{}\n\nThe Picot installation may be incomplete or corrupted. Please reinstall Picot and try again.",
-                safe_error
-            ))
-            .title("Picot startup failed")
-            .kind(MessageDialogKind::Error)
-            .show(|_| {});
-    }
-}
-
-fn open_bootstrap_window(app: &AppHandle, startup_error: &str) -> Result<(), String> {
-    let label = "bootstrap";
-    let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))
-        .map_err(|e| format!("Failed to load window icon: {}", e))?;
-    // Strictly encode bootstrap diagnostics so error text cannot alter URL query.
-    let safe_error = redact_child_diagnostic(startup_error);
-    let url = format!(
-        "bootstrap.html?startupError={}",
-        encode_query_value(&safe_error)
-    );
-
-    let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
-        .title("Picot")
-        .inner_size(900.0, 640.0)
-        .min_inner_size(700.0, 480.0)
-        .icon(icon)
-        .map_err(|e| e.to_string())?;
-
-    #[cfg(target_os = "macos")]
-    let builder = builder
-        .decorations(true)
-        .title_bar_style(TitleBarStyle::Overlay)
-        .hidden_title(true);
-
-    #[cfg(not(target_os = "macos"))]
-    let builder = builder.decorations(true);
-
-    builder.build().map_err(|e| e.to_string())?;
-
     Ok(())
 }
 
@@ -1222,10 +847,6 @@ fn extract_session_cwd(session_path: &PathBuf) -> Option<String> {
     None
 }
 
-fn is_invalid_working_directory_error(error: &str) -> bool {
-    error.contains("(os error 267)")
-}
-
 /// Read native rollout state once at launch. Storage, schema, authorization,
 /// JSON, and value failures all select legacy; debug env is not release
 /// authority.
@@ -1264,12 +885,11 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
     // Keep one native host-control authority. Host-origin v2 dispatch invokes
     // this same handler; it must not grow a parallel OS-control implementation.
     let broker = Arc::new(BrokerWs::start()?);
-    let legacy_manager = Arc::new(PiManager::new(static_dir.clone()));
-    let skill_source_registry = Arc::new(SkillSourceRegistry::new());
-    let git_service = Arc::new(git_service::GitService::new());
-    if let Ok(binary) = legacy_manager.bundled_pi_path() {
+    if let Ok(binary) = pi_launch::resolve_bundled_pi(&static_dir) {
         broker.set_git_pi_binary(binary);
     }
+    let skill_source_registry = Arc::new(SkillSourceRegistry::new());
+    let git_service = Arc::new(git_service::GitService::new());
     let terminal_state_dir = app
         .path()
         .app_data_dir()
@@ -1300,7 +920,7 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
             .join("session-ui-profiles.json"),
     )?);
     let host = tauri::async_runtime::block_on(HostServer::start(
-        static_dir,
+        static_dir.clone(),
         runtimes.clone(),
         remote_auth,
         Arc::clone(&shared_metadata),
@@ -1318,7 +938,9 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
     host.set_owner_registry(owner_registry.clone());
     install_control_handler(
         &broker,
-        legacy_manager,
+        runtimes.clone(),
+        host.origin().to_string(),
+        static_dir.clone(),
         owner_registry.clone(),
         ephemeral_registry.clone(),
         session_ui_profiles,
@@ -1362,24 +984,6 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
     app.manage(owner_registry);
     app.manage(ephemeral_registry);
     Ok(())
-}
-
-#[tauri::command]
-async fn cmd_retry_startup(
-    manager: State<'_, PiManagerState>,
-    broker: State<'_, BrokerWsState>,
-) -> Result<u16, String> {
-    let cwd = pi_manager::ensure_picot_tmp_root()?
-        .to_string_lossy()
-        .to_string();
-    let session_path: Option<String> = None;
-    // Mirror the main setup hook: never adopt a port we don't own. Always
-    // claim a fresh one so the resulting pi is driveable via our PiManager.
-    let initial_port = manager.next_port();
-    manager.spawn(&cwd, initial_port, session_path.as_deref())?;
-    broker.register_session(initial_port, session_path.as_deref().unwrap_or(""));
-    warm_model_cache(&manager, initial_port);
-    Ok(initial_port)
 }
 
 // ─── Auto-updater cores ─────────────────────────────────────────────────────
@@ -1494,58 +1098,23 @@ fn touch_registered_workspace(metadata: &SharedMetadataStore, host_cwd: Option<S
 
 fn current_owner_session(
     owner_registry: &WindowOwnerRegistry,
-    broker: &BrokerWs,
     owner: &window_owner::OwnerId,
     expected_session: Option<&str>,
 ) -> Result<String, String> {
-    let (workspace, primary_port) = owner_registry
+    let (workspace, _) = owner_registry
         .current_workspace(owner)
         .ok_or("workspace is not available")?;
-    let session = if let Some(expected) = expected_session {
-        let port = broker
-            .port_for_session(expected)
-            .ok_or("session route is not available")?;
-        let session = broker
-            .session_for_port(port)
-            .ok_or("session route is not available")?;
-        if session != expected {
-            return Err("session route changed; retry profile operation".to_string());
-        }
-        session
-    } else {
-        broker
-            .session_for_port(primary_port)
-            .ok_or("current session route is not available")?
-    };
-    let session_path = std::path::Path::new(&session);
+    // Native mode has no broker port routing: the expected session file path
+    // is the identity, validated against the owner's workspace boundary.
+    let expected = expected_session.ok_or("expectedSessionId is required")?;
+    let session_path = std::path::Path::new(expected);
     let session_workspace = extract_session_cwd(&session_path.to_path_buf())
         .map(PathBuf::from)
         .ok_or("session workspace is not available")?;
     if fs::canonicalize(session_workspace).ok() != fs::canonicalize(workspace).ok() {
         return Err("session is outside the verified workspace".to_string());
     }
-    Ok(session)
-}
-
-/// Resolve a control command's target port: prefer the explicit port from the
-/// request, else fall back to the broker's active port.
-fn resolve_control_port(port: Option<u16>, broker: &BrokerWs) -> Result<u16, String> {
-    if let Some(port) = port {
-        return Ok(port);
-    }
-    // No explicit target. Falling back to the global active_port is only safe
-    // when a single pi process is live; with several (multi-window) it belongs
-    // to whichever window registered last, so a lifecycle op (new_session /
-    // switch_session / stop_instance) could land on the wrong workspace (F4).
-    if broker.live_upstream_count() > 1 {
-        return Err(
-            "Ambiguous target: multiple pi instances are running; a port must be specified"
-                .to_string(),
-        );
-    }
-    broker
-        .active_port()
-        .ok_or_else(|| "No active pi instance".to_string())
+    Ok(expected.to_string())
 }
 
 /// Build + install the async handler the broker uses to execute `broker_control`
@@ -1554,167 +1123,12 @@ fn resolve_control_port(port: Option<u16>, broker: &BrokerWs) -> Result<u16, Str
 /// regardless of transport. Native ops (folder picker, devtools, updater,
 /// open-in-app/external) require an OS host and are only meaningful when this
 /// handler is installed — which is exactly what `capabilities.native` advertises.
-fn parse_skill_install_control_args(
-    args: &Value,
-) -> Result<(String, String, String, Value), String> {
-    let object = args
-        .as_object()
-        .ok_or_else(|| "invalid skill install request".to_string())?;
-    if object
-        .keys()
-        .any(|key| !["sourceId", "scope", "scanRevision", "selection"].contains(&key.as_str()))
-    {
-        return Err("invalid skill install request".to_string());
-    }
-    let source_id = object
-        .get("sourceId")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty() && value.len() <= 128)
-        .ok_or_else(|| "invalid skill install request".to_string())?
-        .to_string();
-    let scope = object
-        .get("scope")
-        .and_then(Value::as_str)
-        .filter(|value| *value == "global" || *value == "project")
-        .ok_or_else(|| "invalid skill install request".to_string())?
-        .to_string();
-    let revision = object
-        .get("scanRevision")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty() && value.len() <= 128)
-        .ok_or_else(|| "invalid skill install request".to_string())?
-        .to_string();
-    let selection = object
-        .get("selection")
-        .filter(|value| value.is_array())
-        .filter(|value| {
-            value.as_array().is_some_and(|items| {
-                !items.is_empty()
-                    && items.len() <= 2_000
-                    && items.iter().all(|item| {
-                        let Some(candidate) = item.as_object() else {
-                            return false;
-                        };
-                        let valid_kind = matches!(
-                            candidate.get("kind").and_then(Value::as_str),
-                            Some("skill" | "group")
-                        );
-                        let valid_id = candidate
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .is_some_and(|id| !id.is_empty() && id.len() <= 128);
-                        valid_kind && valid_id
-                    })
-                    && {
-                        let mut seen = std::collections::HashSet::new();
-                        items.iter().all(|item| {
-                            let candidate = item.as_object().expect("checked above");
-                            seen.insert((
-                                candidate
-                                    .get("kind")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or_default(),
-                                candidate
-                                    .get("id")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or_default(),
-                            ))
-                        })
-                    }
-            })
-        })
-        .cloned()
-        .ok_or_else(|| "invalid skill install request".to_string())?;
-    Ok((source_id, scope, revision, selection))
-}
-
-async fn scan_skill_source_via_primary(
-    port: u16,
-    source_id: &str,
-    canonical_path: &std::path::Path,
-    install_secret: &str,
-) -> Result<Value, String> {
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|_| "skill source scan failed".to_string())?;
-    let response = client
-        .post(format!("http://127.0.0.1:{port}/api/skill-install-scan"))
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!("Bearer {install_secret}"),
-        )
-        .json(&serde_json::json!({
-            "sourceId": source_id,
-            "canonicalPath": canonical_path,
-        }))
-        .send()
-        .await
-        .map_err(|_| "skill source scan failed".to_string())?;
-    if !response.status().is_success() {
-        return Err("skill source scan failed".to_string());
-    }
-    let body: Value = response
-        .json()
-        .await
-        .map_err(|_| "skill source scan failed".to_string())?;
-    if body.get("success").and_then(Value::as_bool) != Some(true) {
-        return Err("skill source scan failed".to_string());
-    }
-    body.get("data")
-        .cloned()
-        .ok_or_else(|| "skill source scan failed".to_string())
-}
-
-async fn install_skill_links_via_primary(
-    port: u16,
-    source_id: &str,
-    canonical_path: &std::path::Path,
-    scope: &str,
-    scan_revision: &str,
-    selection: Value,
-    install_secret: &str,
-) -> Result<Value, String> {
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|_| "skill install failed".to_string())?;
-    let response = client
-        .post(format!("http://127.0.0.1:{port}/api/skill-install-links"))
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!("Bearer {install_secret}"),
-        )
-        .json(&serde_json::json!({
-            "sourceId": source_id,
-            "canonicalPath": canonical_path,
-            "scope": scope,
-            "scanRevision": scan_revision,
-            "selection": selection,
-        }))
-        .send()
-        .await
-        .map_err(|_| "skill install failed".to_string())?;
-    if !response.status().is_success() {
-        return Err("skill install failed".to_string());
-    }
-    let body: Value = response
-        .json()
-        .await
-        .map_err(|_| "skill install failed".to_string())?;
-    if body.get("success").and_then(Value::as_bool) != Some(true) {
-        return Err("skill install failed".to_string());
-    }
-    body.get("data")
-        .cloned()
-        .ok_or_else(|| "skill install failed".to_string())
-}
-
+#[allow(clippy::too_many_arguments)] // control surface: plumbing captures are explicit
 fn install_control_handler(
     broker: &Arc<BrokerWs>,
-    manager: Arc<PiManager>,
+    runtimes: NativePiManager,
+    host_origin: String,
+    static_dir: PathBuf,
     owner_registry: Arc<WindowOwnerRegistry>,
     ephemeral_registry: Arc<EphemeralRegistry>,
     session_ui_profiles: Arc<SessionUiProfileStore>,
@@ -1760,7 +1174,9 @@ fn install_control_handler(
                 ),
                 _ => (String::new(), Value::Null),
             };
-            let manager = manager.clone();
+            let runtimes = runtimes.clone();
+            let host_origin = host_origin.clone();
+            let static_dir = static_dir.clone();
             let broker = broker_for_handler.clone();
             let owner_registry = owner_registry.clone();
             let ephemeral_registry = ephemeral_registry.clone();
@@ -1770,7 +1186,7 @@ fn install_control_handler(
             Box::pin(async move {
                 let arg = |key: &str| args.get(key).cloned().unwrap_or(Value::Null);
                 let arg_str = |key: &str| arg(key).as_str().map(|s| s.to_string());
-                let arg_u16 = |key: &str| {
+                let _arg_u16 = |key: &str| {
                     args.get(key)
                         .and_then(Value::as_u64)
                         .and_then(|n| u16::try_from(n).ok())
@@ -1796,73 +1212,107 @@ fn install_control_handler(
                 match command.as_str() {
                     "open_workspace" => {
                         let cwd = arg_str("cwd").ok_or("cwd is required")?;
+                        let canonical =
+                            fs::canonicalize(&cwd).map_err(|e| format!("Invalid cwd: {e}"))?;
                         let session_path = arg_str("sessionPath");
-                        let port = open_workspace_core(
-                            &cwd,
+                        // Registry authority: only registered workspace roots may
+                        // become native workspace targets (fail closed otherwise).
+                        let workspace_id = metadata
+                            .lock()
+                            .map_err(|_| "metadata store unavailable".to_string())?
+                            .workspace_id_for_canonical_root(&canonical)
+                            .map_err(|_| "workspace is not registered".to_string())?;
+                        let session_id = format!("session-{}", uuid::Uuid::new_v4().simple());
+                        let launch = pi_launch::native_launch_spec(
+                            &static_dir,
+                            &canonical.to_string_lossy(),
                             session_path.as_deref(),
-                            arg_bool("forceNewSession").unwrap_or(false),
-                            arg_bool("openWindow").unwrap_or(true),
-                            arg_bool("waitForHealth").unwrap_or(true),
-                            arg_bool("waitForSessions").unwrap_or(false),
-                            &manager,
-                            &broker,
-                            Some(&app),
-                        )
-                        .await?;
-                        warm_side_chat_standby(manager.clone(), PathBuf::from(&cwd));
-                        warm_quick_chat_standby(manager.clone());
-                        // Spawn+health+window all succeeded above; the process
-                        // record now holds the authoritative spawn cwd.
-                        touch_registered_workspace(&metadata, manager.cwd_for_port(port));
-                        Ok(Value::from(port))
+                        )?;
+                        let (owner, capability) = owner_registry.create_owner_with_workspace(
+                            format!("native-workspace-{workspace_id}"),
+                            canonical.clone(),
+                            0,
+                            host_origin.clone(),
+                            Some(workspace_id.clone()),
+                            window_owner::TemporaryKind::DefaultStartup,
+                        )?;
+                        let target = RuntimeTarget::with_owner(
+                            workspace_id.clone(),
+                            session_id.clone(),
+                            format!("instance-{}", uuid::Uuid::new_v4().simple()),
+                            owner.as_str(),
+                            0,
+                        );
+                        if let Err(error) = runtimes.spawn(target.clone(), launch) {
+                            owner_registry.revoke_owner(&owner);
+                            return Err(error);
+                        }
+                        if arg_bool("forceNewSession").unwrap_or(false) {
+                            if let Err(error) = runtimes
+                                .request(
+                                    &target,
+                                    serde_json::json!({ "type": "new_session" }),
+                                    None,
+                                    std::time::Duration::from_secs(10),
+                                )
+                                .await
+                            {
+                                let _ = runtimes.stop(&target);
+                                owner_registry.revoke_owner(&owner);
+                                return Err(error);
+                            }
+                        }
+                        if arg_bool("openWindow").unwrap_or(true) {
+                            if let Err(error) = open_native_workspace_window(
+                                &app,
+                                &host_origin,
+                                &target,
+                                owner_registry.clone(),
+                                owner.clone(),
+                                &capability,
+                            ) {
+                                let _ = runtimes.stop(&target);
+                                owner_registry.revoke_owner(&owner);
+                                return Err(error);
+                            }
+                        }
+                        touch_registered_workspace(
+                            &metadata,
+                            Some(canonical.to_string_lossy().to_string()),
+                        );
+                        log::info!(
+                            "[picot-native] open_workspace: workspace_id={} session_id={}",
+                            workspace_id,
+                            session_id
+                        );
+                        Ok(serde_json::json!({
+                            "workspaceId": workspace_id,
+                            "sessionId": session_id,
+                        }))
                     }
-                    "new_session" => {
-                        let port = resolve_control_port(arg_u16("port"), &broker)?;
-                        new_session_core(port, &manager, &broker)?;
-                        Ok(Value::Null)
-                    }
-                    "switch_session" => {
-                        let session_path =
-                            arg_str("sessionPath").ok_or("sessionPath is required")?;
-                        let port = resolve_control_port(arg_u16("port"), &broker)?;
-                        switch_session_core(port, &session_path, &manager, &broker)?;
-                        touch_registered_workspace(&metadata, manager.cwd_for_port(port));
-                        Ok(Value::Null)
-                    }
+                    "new_session" => Err(
+                        "new_session retired: use a runtime_request over the v2 transport"
+                            .to_string(),
+                    ),
+                    "switch_session" => Err(
+                        "switch_session retired: use a runtime_request over the v2 transport"
+                            .to_string(),
+                    ),
                     "fork" => {
-                        let entry_id = arg_str("entryId").ok_or("entryId is required")?;
-                        let port = resolve_control_port(arg_u16("port"), &broker)?;
-                        fork_session_core(port, &entry_id, &manager, &broker)?;
-                        Ok(Value::Null)
+                        Err("fork retired: use a runtime_request over the v2 transport".to_string())
                     }
-                    "navigate_tree" => {
-                        let entry_id = arg_str("entryId").ok_or("entryId is required")?;
-                        let summarize = arg_bool("summarize").unwrap_or(false);
-                        let port = resolve_control_port(arg_u16("port"), &broker)?;
-                        navigate_tree_core(port, &entry_id, summarize, &manager, &broker)?;
-                        Ok(Value::Null)
-                    }
-                    "stop_instance" => {
-                        let port = resolve_control_port(arg_u16("port"), &broker)?;
-                        stop_instance_core(port, &manager, &broker);
-                        Ok(Value::Null)
-                    }
-                    "spawn_session_process" => {
-                        let session_file =
-                            arg_str("sessionFile").ok_or("sessionFile is required")?;
-                        let cwd = arg_str("cwd").ok_or("cwd is required")?;
-                        let workspace_port =
-                            resolve_control_port(arg_u16("workspacePort"), &broker)?;
-                        let port = spawn_session_process_core(
-                            workspace_port,
-                            &session_file,
-                            &cwd,
-                            &manager,
-                            &broker,
-                        )
-                        .await?;
-                        Ok(Value::from(port))
-                    }
+                    "navigate_tree" => Err(
+                        "navigate_tree retired: use a runtime_request over the v2 transport"
+                            .to_string(),
+                    ),
+                    "stop_instance" => Err(
+                        "stop_instance retired: native runtimes stop via owner/window lifecycle"
+                            .to_string(),
+                    ),
+                    "spawn_session_process" => Err(
+                        "spawn_session_process retired: native sessions switch in-process"
+                            .to_string(),
+                    ),
                     "get_pi_version" => Ok(Value::from(locked_pi_version())),
                     "get_app_version" => Ok(Value::from(env!("CARGO_PKG_VERSION"))),
                     "is_dev" => Ok(Value::from(cfg!(debug_assertions))),
@@ -1924,88 +1374,27 @@ fn install_control_handler(
                         Ok(Value::Null)
                     }
                     "open_devtools" => {
-                        let port = resolve_control_port(arg_u16("port"), &broker)?;
-                        open_devtools_core(port, &app)?;
+                        let owner = ctx
+                            .owner_id
+                            .as_ref()
+                            .ok_or("verified window owner required")?;
+                        let label = owner_registry
+                            .label_for_owner(owner)
+                            .ok_or("verified window owner required")?;
+                        let window = app
+                            .get_webview_window(&label)
+                            .ok_or_else(|| format!("No window found for {label}"))?;
+                        window.open_devtools();
                         Ok(Value::Null)
                     }
-                    "skill_scan_install_source" => {
-                        if ctx.class != broker_ws::ClientClass::Native {
-                            return Err("native desktop owner required".to_string());
-                        }
-                        let owner = ctx.owner_id.ok_or("verified window owner required")?;
-                        let source_id = arg_str("sourceId").ok_or("sourceId is required")?;
-                        let window_label = owner_registry
-                            .label_for_owner(&owner)
-                            .ok_or("verified window owner required")?;
-                        let (workspace_root, workspace_port) = owner_registry
-                            .current_workspace(&owner)
-                            .ok_or("workspace is not available")?;
-                        let generation = owner_registry
-                            .current_workspace_generation(&owner)
-                            .ok_or("workspace is not available")?;
-                        let registry = app
-                            .try_state::<SkillSourceRegistryState>()
-                            .ok_or("skill source registry is not available")?;
-                        let binding = registry.resolve(
-                            &source_id,
-                            &owner,
-                            &window_label,
-                            &workspace_root,
-                            generation,
-                        )?;
-                        if binding.workspace_port != workspace_port {
-                            return Err("invalid or expired skill source".to_string());
-                        }
-                        scan_skill_source_via_primary(
-                            workspace_port,
-                            &binding.source_id,
-                            &binding.canonical_path,
-                            manager.install_secret(),
-                        )
-                        .await
-                    }
-                    "skill_install_links" => {
-                        if ctx.class != broker_ws::ClientClass::Native {
-                            return Err("native desktop owner required".to_string());
-                        }
-                        let owner = ctx.owner_id.ok_or("verified window owner required")?;
-                        let (source_id, scope, scan_revision, selection) =
-                            parse_skill_install_control_args(&args)?;
-                        let window_label = owner_registry
-                            .label_for_owner(&owner)
-                            .ok_or("verified window owner required")?;
-                        let (workspace_root, workspace_port) = owner_registry
-                            .current_workspace(&owner)
-                            .ok_or("workspace is not available")?;
-                        let generation = owner_registry
-                            .current_workspace_generation(&owner)
-                            .ok_or("workspace is not available")?;
-                        let registry = app
-                            .try_state::<SkillSourceRegistryState>()
-                            .ok_or("skill source registry is not available")?;
-                        let binding = registry.resolve(
-                            &source_id,
-                            &owner,
-                            &window_label,
-                            &workspace_root,
-                            generation,
-                        )?;
-                        if binding.workspace_port != workspace_port {
-                            return Err("invalid or expired skill source".to_string());
-                        }
-                        let result = install_skill_links_via_primary(
-                            workspace_port,
-                            &binding.source_id,
-                            &binding.canonical_path,
-                            &scope,
-                            &scan_revision,
-                            selection,
-                            manager.install_secret(),
-                        )
-                        .await?;
-                        registry.consume(&binding.source_id, &owner, generation)?;
-                        Ok(result)
-                    }
+                    "skill_scan_install_source" => Err(
+                        "skill source scan requires the native skill install surface (pending)"
+                            .to_string(),
+                    ),
+                    "skill_install_links" => Err(
+                        "skill install links require the native skill install surface (pending)"
+                            .to_string(),
+                    ),
                     "list_pi_packages" => {
                         require_native_owner(&ctx)?;
                         let owner = ctx
@@ -2016,7 +1405,8 @@ fn install_control_handler(
                             .current_workspace(owner)
                             .ok_or("workspace is not available")?;
                         let locations = package_manager::locations_for_workspace(Some(&workspace))?;
-                        let output = manager.run_pi_command_at(
+                        let output = run_bundled_pi_command(
+                            &static_dir,
                             &["list".to_string(), "--approve".to_string()],
                             Some(&workspace),
                         )?;
@@ -2034,7 +1424,8 @@ fn install_control_handler(
                             .current_workspace(owner)
                             .ok_or("workspace is not available")?;
                         let locations = package_manager::locations_for_workspace(Some(&workspace))?;
-                        let output = manager.run_pi_command_at(
+                        let output = run_bundled_pi_command(
+                            &static_dir,
                             &["list".to_string(), "--approve".to_string()],
                             Some(&workspace),
                         )?;
@@ -2044,10 +1435,10 @@ fn install_control_handler(
                             package_manager::check_available_updates(&packages, &locations).await;
                         serde_json::to_value(updates).map_err(|error| error.to_string())
                     }
-                    "get_cached_models" => Ok(manager
-                        .cached_models()
-                        .map(|c| c.payload)
-                        .unwrap_or(Value::Null)),
+                    "get_cached_models" => {
+                        Err("get_cached_models retired: models load via runtime_request"
+                            .to_string())
+                    }
                     "session_ui_profile_load" => {
                         require_native_owner(&ctx)?;
                         let owner = ctx
@@ -2057,12 +1448,8 @@ fn install_control_handler(
                         let expected =
                             arg_str("expectedSessionId").ok_or("expectedSessionId is required")?;
                         validate_session_path(&expected)?;
-                        let session_path = current_owner_session(
-                            &owner_registry,
-                            &broker,
-                            owner,
-                            Some(&expected),
-                        )?;
+                        let session_path =
+                            current_owner_session(&owner_registry, owner, Some(&expected))?;
                         serde_json::to_value(session_ui_profiles.load(&session_path)?)
                             .map_err(|error| error.to_string())
                     }
@@ -2075,12 +1462,8 @@ fn install_control_handler(
                         let expected =
                             arg_str("expectedSessionId").ok_or("expectedSessionId is required")?;
                         validate_session_path(&expected)?;
-                        let session_path = current_owner_session(
-                            &owner_registry,
-                            &broker,
-                            owner,
-                            Some(&expected),
-                        )?;
+                        let session_path =
+                            current_owner_session(&owner_registry, owner, Some(&expected))?;
                         let provider = arg_str("provider").ok_or("provider is required")?;
                         let model_id = arg_str("modelId").ok_or("modelId is required")?;
                         let thinking =
@@ -2114,23 +1497,17 @@ fn install_control_handler(
                         } else {
                             None
                         };
-                        let operation = command.as_str();
-                        match operation {
-                            "install_pi_package" => manager.install_package_source_scoped(
-                                source.trim(),
-                                local,
-                                workspace.as_deref(),
-                            )?,
-                            "remove_pi_package" => manager.remove_package_source_scoped(
-                                source.trim(),
-                                local,
-                                workspace.as_deref(),
-                            )?,
-                            "update_pi_package" => manager
-                                .update_package_source(source.trim(), workspace.as_deref())?,
-                            _ => unreachable!(),
-                        }
-                        manager.invalidate_cached_models();
+                        let sub = match command.as_str() {
+                            "install_pi_package" => "install",
+                            "remove_pi_package" => "remove",
+                            _ => "update",
+                        };
+                        let args =
+                            vec![sub.to_string(), source.trim().to_string(), "-l".to_string()];
+                        // `pi install/remove` accept `-l` for workspace scope;
+                        // global installs ignore it.
+                        let args = if local { args } else { args[..2].to_vec() };
+                        run_bundled_pi_command(&static_dir, &args, workspace.as_deref())?;
                         Ok(Value::Null)
                     }
                     "set_pi_package_disabled" => {
@@ -2153,7 +1530,7 @@ fn install_control_handler(
                             source.trim(),
                             disabled,
                         )?;
-                        manager.invalidate_cached_models();
+                        // Legacy model cache retired: models load per runtime via v2.
                         Ok(serde_json::json!({ "changed": changed }))
                     }
                     "restart_runtime" => {
@@ -2165,305 +1542,85 @@ fn install_control_handler(
                         if owner_registry.workspace_transition_in_progress(owner) {
                             return Err("workspace transition is in progress".to_string());
                         }
-                        let (workspace, old_port) = owner_registry
+                        let (workspace_cwd, _) = owner_registry
                             .current_workspace(owner)
                             .ok_or("workspace is not available")?;
-                        let session = broker
-                            .session_for_port(old_port)
-                            .filter(|value| !value.is_empty());
-                        let new_port = open_workspace_core(
-                            &workspace.to_string_lossy(),
-                            session.as_deref(),
-                            false,
-                            false,
-                            true,
-                            false,
-                            &manager,
-                            &broker,
+                        let old_target = runtimes
+                            .running_targets()
+                            .into_iter()
+                            .find(|t| t.owner_id.as_deref() == Some(owner.as_str()))
+                            .ok_or("no running runtime for owner")?;
+                        runtimes.mark_host_restart("manual restart")?;
+                        runtimes.stop(&old_target)?;
+                        let launch = pi_launch::native_launch_spec(
+                            &static_dir,
+                            &workspace_cwd.to_string_lossy(),
                             None,
-                        )
-                        .await?;
-                        stop_instance_core(old_port, &manager, &broker);
-                        touch_registered_workspace(&metadata, manager.cwd_for_port(new_port));
-                        owner_registry.replace_primary_port(owner, new_port)?;
-                        Ok(serde_json::json!({ "instanceId": new_port.to_string() }))
+                        )?;
+                        let new_target = RuntimeTarget::with_owner(
+                            old_target.workspace_id.clone(),
+                            old_target.session_id.clone(),
+                            format!("instance-{}", uuid::Uuid::new_v4().simple()),
+                            owner.as_str(),
+                            old_target.workspace_generation,
+                        );
+                        runtimes.spawn(new_target.clone(), launch)?;
+                        log::info!(
+                            "[picot-native] restart_runtime: workspace_id={} instance_id={}",
+                            new_target.workspace_id,
+                            new_target.instance_id
+                        );
+                        Ok(serde_json::json!({ "instanceId": new_target.instance_id }))
                     }
                     "check_for_update" => check_for_update_core(&app).await,
                     "download_and_install_update" => {
                         download_and_install_update_core(&app, progress).await
                     }
                     "rpc_extension_ui_response" => {
-                        let port = arg_u16("port").ok_or("port is required")?;
+                        let owner = ctx
+                            .owner_id
+                            .as_ref()
+                            .ok_or("verified window owner required")?;
+                        let target = runtimes
+                            .running_targets()
+                            .into_iter()
+                            .find(|t| t.owner_id.as_deref() == Some(owner.as_str()))
+                            .ok_or("no running runtime for owner")?;
                         let response = arg("response");
                         if response.get("type").and_then(Value::as_str)
                             != Some("extension_ui_response")
                         {
                             return Err("invalid extension UI response".to_string());
                         }
-                        manager.send_rpc(port, response)?;
+                        runtimes
+                            .request(&target, response, None, std::time::Duration::from_secs(10))
+                            .await?;
                         Ok(Value::Null)
                     }
-                    "ephemeral_extension_ui_response" => {
-                        let Some(owner) = ctx.owner_id.clone() else {
-                            return Err("ephemeral chats require a native owner".to_string());
-                        };
-                        let instance_id = arg_str("instanceId").ok_or("instanceId is required")?;
-                        let generation =
-                            arg("generation").as_u64().ok_or("generation is required")?;
-                        let port = broker
-                            .ephemeral_port(&owner, &instance_id, generation)
-                            .ok_or("ephemeral instance is unavailable")?;
-                        let response = arg("response");
-                        if response.get("type").and_then(Value::as_str)
-                            != Some("extension_ui_response")
-                        {
-                            return Err("invalid extension UI response".to_string());
-                        }
-                        manager.send_rpc(port, response)?;
-                        Ok(Value::Null)
-                    }
-                    "ephemeral_create" => {
-                        let Some(owner) = ctx.owner_id.clone() else {
-                            return Err("ephemeral chats require a native owner".to_string());
-                        };
-                        let kind_str = arg_str("kind").unwrap_or_default();
-                        let kind = match kind_str.as_str() {
-                            "side-chat" => EphemeralKind::SideChat,
-                            "quick-chat" => EphemeralKind::QuickChat,
-                            _ => return Err("invalid ephemeral kind".to_string()),
-                        };
-                        if owner_registry.workspace_transition_in_progress(&owner) {
-                            return Err("workspace transition is in progress".to_string());
-                        }
-                        let reservation = ephemeral_registry.reserve_create(&owner, kind)?;
-                        let transition_generation = owner_registry
-                            .current_workspace_generation(&owner)
-                            .unwrap_or(0);
-                        let (cwd, temp_dir) = match kind {
-                            EphemeralKind::SideChat => {
-                                let (ws_cwd, _) = owner_registry
-                                    .current_workspace(&owner)
-                                    .ok_or("owner has no workspace")?;
-                                (ws_cwd, None)
-                            }
-                            EphemeralKind::QuickChat => {
-                                let created = create_quick_chat_temp_dir()?;
-                                let cwd = created.0.clone();
-                                (cwd, Some(created))
-                            }
-                        };
-                        let startup_profile = if kind == EphemeralKind::SideChat {
-                            let profile = arg("startupProfile");
-                            let provider = profile.get("provider").and_then(Value::as_str);
-                            let model_id = profile.get("modelId").and_then(Value::as_str);
-                            match (provider, model_id) {
-                                (Some(provider), Some(model_id))
-                                    if !provider.trim().is_empty()
-                                        && !model_id.trim().is_empty() =>
-                                {
-                                    let thinking = profile
-                                        .get("thinkingLevel")
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("off");
-                                    Some(serde_json::json!({
-                                        "provider": provider.trim(),
-                                        "modelId": model_id.trim(),
-                                        "thinkingLevel": thinking,
-                                    }))
-                                }
-                                _ => None,
-                            }
-                        } else {
-                            None
-                        };
-                        let no_tools = kind == EphemeralKind::QuickChat;
-                        // Try to adopt a pre-warmed standby pi first. The
-                        // standby was spawned with the same cwd and no_tools
-                        // flags but a placeholder ephemeral env; the broker
-                        // route (registered below) maps its port to the real
-                        // instance id, so the placeholder never leaks to the
-                        // frontend. If no standby matches, fall back to a
-                        // synchronous spawn + health-wait.
-                        let standby = manager.take_standby(&cwd, no_tools);
-                        let cwd_for_refill = cwd.clone();
-                        let descriptor = if let Some((spawned, standby_temp_dir)) = standby {
-                            log::info!(
-                                "[pi-desktop] adopting standby pi: port={} kind={}",
-                                spawned.port,
-                                kind_str
-                            );
-                            // Use the standby's pre-created temp dir for Quick
-                            // Chat; for Side Chat the temp_dir from the caller
-                            // is None and the standby also carries None. If
-                            // the standby carries its own temp dir (Quick Chat
-                            // standby), clean up the one the caller created to
-                            // avoid leaking it.
-                            let adopted_temp_dir = if standby_temp_dir.is_some() {
-                                if let Some((path, token)) = &temp_dir {
-                                    let _ =
-                                        cleanup_quick_chat_dir(&canonical_temp_root(), path, token);
-                                }
-                                standby_temp_dir
-                            } else {
-                                temp_dir
-                            };
-                            // The standby's cwd is what pi actually runs in.
-                            // Override the caller's cwd so the registry records
-                            // the real one.
-                            let adopted_cwd = if adopted_temp_dir.is_some() {
-                                adopted_temp_dir
-                                    .as_ref()
-                                    .map(|(p, _)| p.clone())
-                                    .unwrap_or(cwd.clone())
-                            } else {
-                                cwd.clone()
-                            };
-                            ephemeral_adopt_standby(
-                                &manager,
-                                &broker,
-                                &ephemeral_registry,
-                                &reservation,
-                                spawned,
-                                adopted_temp_dir,
-                                transition_generation,
-                                adopted_cwd.clone(),
-                                startup_profile,
-                            )
-                            .await?
-                        } else {
-                            let port = manager.next_port();
-                            let env = build_ephemeral_environment(
-                                &kind_str,
-                                &reservation.instance_id,
-                                reservation.generation,
-                            );
-                            let spec = PiSpawnSpec {
-                                cwd,
-                                port,
-                                session_path: None,
-                                no_session: true,
-                                no_tools,
-                                environment: env,
-                            };
-                            ephemeral_spawn_commit(
-                                &manager,
-                                &broker,
-                                &ephemeral_registry,
-                                &reservation,
-                                spec,
-                                port,
-                                temp_dir,
-                                transition_generation,
-                                startup_profile,
-                            )
-                            .await?
-                        };
-                        // Refill the standby pool after consumption so the
-                        // next Side/Quick Chat is also instant.
-                        if kind == EphemeralKind::SideChat {
-                            warm_side_chat_standby(manager.clone(), cwd_for_refill);
-                        } else {
-                            warm_quick_chat_standby(manager.clone());
-                        }
-                        Ok(serde_json::to_value(descriptor).map_err(|e| e.to_string())?)
-                    }
-                    "ephemeral_replace_quick" => {
-                        let Some(owner) = ctx.owner_id.clone() else {
-                            return Err("ephemeral chats require a native owner".to_string());
-                        };
-                        if owner_registry.workspace_transition_in_progress(&owner) {
-                            return Err("workspace transition is in progress".to_string());
-                        }
-                        let replacement = ephemeral_registry.reserve_quick_replacement(&owner)?;
-                        let (old_id, old_gen) = replacement
-                            .old_instance
-                            .clone()
-                            .ok_or("no quick chat to replace")?;
-                        let candidate = replacement.candidate.clone();
-                        let created = create_quick_chat_temp_dir()?;
-                        let cwd = created.0.clone();
-                        let port = manager.next_port();
-                        let env = build_ephemeral_environment(
-                            "quick-chat",
-                            &candidate.instance_id,
-                            candidate.generation,
-                        );
-                        let spec = PiSpawnSpec {
-                            cwd,
-                            port,
-                            session_path: None,
-                            no_session: true,
-                            no_tools: true,
-                            environment: env,
-                        };
-                        let transition_generation = owner_registry
-                            .current_workspace_generation(&owner)
-                            .unwrap_or(0);
-                        let descriptor = ephemeral_spawn_commit(
-                            &manager,
-                            &broker,
-                            &ephemeral_registry,
-                            &candidate,
-                            spec,
-                            port,
-                            Some(created),
-                            transition_generation,
-                            None,
-                        )
-                        .await?;
-                        close_ephemeral_instance(
-                            &manager,
-                            &broker,
-                            &ephemeral_registry,
-                            &owner,
-                            &old_id,
-                            old_gen,
-                        );
-                        Ok(serde_json::to_value(descriptor).map_err(|e| e.to_string())?)
-                    }
-                    "ephemeral_close" => {
-                        let Some(owner) = ctx.owner_id.clone() else {
-                            return Err("ephemeral chats require a native owner".to_string());
-                        };
-                        let instance_id = arg_str("instanceId").ok_or("instanceId is required")?;
-                        let generation =
-                            arg("generation").as_u64().ok_or("generation is required")?;
-                        close_ephemeral_instance(
-                            &manager,
-                            &broker,
-                            &ephemeral_registry,
-                            &owner,
-                            &instance_id,
-                            generation,
-                        );
-                        Ok(Value::Null)
-                    }
-                    "ephemeral_bootstrap" => {
-                        let Some(owner) = ctx.owner_id.clone() else {
-                            return Err("ephemeral chats require a native owner".to_string());
-                        };
-                        Ok(serde_json::to_value(ephemeral_registry.descriptors(&owner))
-                            .map_err(|e| e.to_string())?)
-                    }
-                    "ephemeral_update_ui" => {
-                        let Some(owner) = ctx.owner_id.clone() else {
-                            return Err("ephemeral chats require a native owner".to_string());
-                        };
-                        let instance_id = arg_str("instanceId").ok_or("instanceId is required")?;
-                        let generation =
-                            arg("generation").as_u64().ok_or("generation is required")?;
-                        let patch = EphemeralUiPatch {
-                            title: arg_str("title"),
-                            unread: arg_bool("unread"),
-                        };
-                        ephemeral_registry.update_ui_metadata(
-                            &owner,
-                            &instance_id,
-                            generation,
-                            patch,
-                        )?;
-                        Ok(Value::Null)
-                    }
+                    "ephemeral_extension_ui_response" => Err(
+                        "ephemeral extension UI requires the native ephemeral runtime (pending)"
+                            .to_string(),
+                    ),
+                    "ephemeral_create" => Err(
+                        "ephemeral chats require the native ephemeral runtime (pending)"
+                            .to_string(),
+                    ),
+                    "ephemeral_replace_quick" => Err(
+                        "ephemeral chats require the native ephemeral runtime (pending)"
+                            .to_string(),
+                    ),
+                    "ephemeral_close" => Err(
+                        "ephemeral chats require the native ephemeral runtime (pending)"
+                            .to_string(),
+                    ),
+                    "ephemeral_bootstrap" => Err(
+                        "ephemeral chats require the native ephemeral runtime (pending)"
+                            .to_string(),
+                    ),
+                    "ephemeral_update_ui" => Err(
+                        "ephemeral chats require the native ephemeral runtime (pending)"
+                            .to_string(),
+                    ),
                     "workspace_target_prepare" => {
                         let Some(owner) = ctx.owner_id.clone() else {
                             return Err("workspace navigation requires a native owner".to_string());
@@ -2472,52 +1629,67 @@ fn install_control_handler(
                         let canonical_target = fs::canonicalize(&target_cwd)
                             .map_err(|e| format!("Invalid targetCwd: {e}"))?;
                         let session_path = arg_str("sessionPath");
-                        let force_new = arg_bool("forceNewSession").unwrap_or(false);
-                        let (current_cwd, _) = owner_registry
-                            .current_workspace(&owner)
-                            .ok_or("owner has no workspace")?;
-                        let target_port = if let Some(existing_port) = arg_u16("targetPort") {
-                            if !manager.owns_process(existing_port) {
-                                return Err("target process is not owned by Picot".to_string());
+                        let workspace_id = metadata
+                            .lock()
+                            .map_err(|_| "metadata store unavailable".to_string())?
+                            .workspace_id_for_canonical_root(&canonical_target)
+                            .map_err(|_| "workspace is not registered".to_string())?;
+                        // Reuse the owner's running runtime for the target
+                        // workspace, else spawn a windowless native runtime.
+                        let target = match runtimes.running_targets().into_iter().find(|t| {
+                            t.workspace_id == workspace_id
+                                && t.owner_id.as_deref() == Some(owner.as_str())
+                        }) {
+                            Some(existing) => existing,
+                            None => {
+                                let session_id =
+                                    format!("session-{}", uuid::Uuid::new_v4().simple());
+                                let launch = pi_launch::native_launch_spec(
+                                    &static_dir,
+                                    &canonical_target.to_string_lossy(),
+                                    session_path.as_deref(),
+                                )?;
+                                let new_target = RuntimeTarget::with_owner(
+                                    workspace_id.clone(),
+                                    session_id,
+                                    format!("instance-{}", uuid::Uuid::new_v4().simple()),
+                                    owner.as_str(),
+                                    0,
+                                );
+                                runtimes.spawn(new_target.clone(), launch)?;
+                                new_target
                             }
-                            if let Some(status) = manager.check_exited(existing_port) {
-                                return Err(format!(
-                                    "Target Pi process exited (port {existing_port}, status: {status})"
-                                ));
-                            }
-                            wait_for_pi_health(existing_port, 30).await?;
-                            existing_port
-                        } else {
-                            spawn_target_process(
-                                &canonical_target.to_string_lossy(),
-                                session_path.as_deref(),
-                                force_new,
-                                &manager,
-                                &broker,
-                            )
-                            .await?
                         };
-                        let target_origin = format!("http://localhost:{target_port}");
+                        let current_cwd = owner_registry
+                            .current_workspace(&owner)
+                            .map(|(cwd, _)| cwd)
+                            .ok_or("owner has no workspace")?;
                         let same_cwd = canonical_target == current_cwd;
+                        // Native windows all share the HostServer origin; the
+                        // target URL is a workspace path on the same origin.
+                        let target_url = format!(
+                            "{}/workspaces/{}/{}",
+                            host_origin, target.workspace_id, target.session_id
+                        );
                         let transition_generation = if same_cwd {
                             owner_registry.prepare_navigation(
                                 &owner,
-                                target_port,
+                                0,
                                 canonical_target.clone(),
-                                target_origin.clone(),
+                                target_url.clone(),
                                 std::time::Duration::from_secs(30),
                             )?
                         } else {
                             let gen = owner_registry.begin_workspace_transition(
                                 &owner,
                                 canonical_target.clone(),
-                                target_port,
+                                0,
                             )?;
                             owner_registry.prepare_navigation(
                                 &owner,
-                                target_port,
+                                0,
                                 canonical_target.clone(),
-                                target_origin.clone(),
+                                target_url.clone(),
                                 std::time::Duration::from_secs(30),
                             )?;
                             gen
@@ -2525,7 +1697,9 @@ fn install_control_handler(
                         Ok(serde_json::json!({
                             "classification": if same_cwd { "same" } else { "cross" },
                             "transitionGeneration": transition_generation,
-                            "targetOrigin": target_origin,
+                            "targetOrigin": target_url,
+                            "targetWorkspaceId": target.workspace_id,
+                            "targetSessionId": target.session_id,
                             "settleRequired": !same_cwd,
                         }))
                     }
@@ -2556,32 +1730,18 @@ fn install_control_handler(
                             let stray =
                                 ephemeral_registry.side_chat_cleanup_for_transition(&owner, gen);
                             for lease in stray {
-                                cleanup_ephemeral_lease(
-                                    &manager,
-                                    &broker,
-                                    &ephemeral_registry,
-                                    lease,
-                                );
+                                if let Some((path, token)) = &lease.temporary_directory {
+                                    let _ =
+                                        cleanup_quick_chat_dir(&canonical_temp_root(), path, token);
+                                }
+                                ephemeral_registry.finish_cleanup(&lease);
                             }
-                        }
-                        // Also discard any Side Chat standby pre-warmed for
-                        // the old workspace cwd — they'd never be adopted now.
-                        if let Some((old_cwd, _)) = owner_registry.current_workspace(&owner) {
-                            manager.kill_standby_for_cwd(&old_cwd);
-                        }
-                        // Pre-warm a Side Chat standby for the new workspace
-                        // so the first Side Chat after the transition is instant.
-                        if let Some(target_cwd) = owner_registry.pending_target_cwd(&owner) {
-                            warm_side_chat_standby(manager.clone(), target_cwd);
                         }
                         let prior_generation = owner_registry
                             .current_workspace_generation(&owner)
                             .ok_or("workspace is not available")?;
                         let target_origin = owner_registry
                             .pending_target_origin(&owner)
-                            .ok_or("no pending workspace transition")?;
-                        let target_port = owner_registry
-                            .pending_target_port(&owner)
                             .ok_or("no pending workspace transition")?;
                         let target_workspace_id = metadata.lock().ok().and_then(|store| {
                             owner_registry
@@ -2601,8 +1761,6 @@ fn install_control_handler(
                         if let Some(git_service) = app.try_state::<Arc<GitService>>() {
                             git_service.inner().clear_workspace_state(owner.as_str());
                         }
-                        broker.refresh_owner_bootstrap(&owner);
-                        broker.set_active_port(target_port);
                         Ok(serde_json::json!({
                             "targetOrigin": target_origin,
                             "workspaceGeneration": gen
@@ -2616,9 +1774,20 @@ fn install_control_handler(
                             .as_u64()
                             .ok_or("transitionGeneration is required")?;
                         owner_registry.validate_workspace_transition_generation(&owner, gen)?;
-                        if let Some(target_port) = owner_registry.pending_target_port(&owner) {
-                            manager.kill(target_port);
-                            broker.unregister_port(target_port);
+                        // Stop the native runtime spawned by prepare (identified
+                        // through the pending target workspace, owner-bound).
+                        if let Some(target_cwd) = owner_registry.pending_target_cwd(&owner) {
+                            if let Some(workspace_id) = metadata.lock().ok().and_then(|store| {
+                                store.workspace_id_for_canonical_root(&target_cwd).ok()
+                            }) {
+                                for target in runtimes.running_targets() {
+                                    if target.workspace_id == workspace_id
+                                        && target.owner_id.as_deref() == Some(owner.as_str())
+                                    {
+                                        let _ = runtimes.stop(&target);
+                                    }
+                                }
+                            }
                         }
                         owner_registry.cancel_workspace_transition(&owner, gen)?;
                         if let Some(git_service) = app.try_state::<Arc<GitService>>() {
@@ -2677,165 +1846,18 @@ fn install_control_handler(
     broker.set_control_handler(handler);
 }
 
-/// Spawn a workspace Pi process for an in-window navigation WITHOUT promoting
-/// it to the broker active_port; the target only becomes the main session once
-/// the workspace transition commits. Mirrors open_workspace_core's spawn +
-/// readiness checks but registers the upstream as a background session.
-async fn spawn_target_process(
-    cwd: &str,
-    session_path: Option<&str>,
-    force_new_session: bool,
-    manager: &PiManager,
-    broker: &BrokerWs,
-) -> Result<u16, String> {
-    let port = manager.next_port();
-    manager.spawn(cwd, port, session_path)?;
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    if let Some(status) = manager.check_exited(port) {
-        return Err(format!(
-            "Pi process exited immediately (port {port}, status: {status})"
-        ));
-    }
-    wait_for_pi_health(port, 30).await?;
-    if force_new_session {
-        manager.send_rpc(port, serde_json::json!({ "type": "new_session" }))?;
-    }
-    broker.track_background_session(port, session_path.unwrap_or(""));
-    Ok(port)
-}
-
 /// Spawn an ephemeral candidate, wait for readiness, and compare-and-commit it.
 /// On any failure the candidate process, broker route, registry record, and
 /// (for Quick Chat) temp directory are cleaned up before returning the error.
 #[allow(clippy::too_many_arguments)]
-async fn ephemeral_spawn_commit(
-    manager: &PiManager,
-    broker: &BrokerWs,
-    registry: &EphemeralRegistry,
-    reservation: &CreateReservation,
-    spec: PiSpawnSpec,
-    port: u16,
-    temp_dir: Option<(PathBuf, String)>,
-    transition_generation: u64,
-    startup_profile: Option<Value>,
-) -> Result<ephemeral_registry::EphemeralDescriptor, String> {
-    let owner = reservation.owner_id.clone();
-    let spawned = match manager.spawn_with_spec(&spec) {
-        Ok(spawned) => spawned,
-        Err(e) => {
-            cleanup_ephemeral_candidate(
-                registry,
-                &owner,
-                &reservation.instance_id,
-                reservation.generation,
-                temp_dir,
-            );
-            return Err(e);
-        }
-    };
-    if let Err(e) = wait_for_pi_health(port, 30).await {
-        manager.kill(port);
-        cleanup_ephemeral_candidate(
-            registry,
-            &owner,
-            &reservation.instance_id,
-            reservation.generation,
-            temp_dir,
-        );
-        return Err(e);
-    }
-    let process = OwnedProcess {
-        port,
-        pid: spawned.pid,
-        child_identity: spawned.identity,
-        canonical_cwd: spec.cwd.clone(),
-        transition_generation,
-        temporary_directory: temp_dir.clone(),
-    };
-    let descriptor = match registry.commit_ready(reservation, process) {
-        Ok(descriptor) => descriptor,
-        Err(e) => {
-            manager.kill(port);
-            cleanup_ephemeral_candidate(
-                registry,
-                &owner,
-                &reservation.instance_id,
-                reservation.generation,
-                temp_dir,
-            );
-            return Err(e);
-        }
-    };
-    let _ = broker.register_ephemeral_route(broker_ws::EphemeralRoute {
-        owner_id: owner,
-        instance_id: reservation.instance_id.clone(),
-        generation: reservation.generation,
-        port,
-    });
-    // Defer set_model until after the frontend's initial runtime snapshot
-    // has been processed. The snapshot — fired when the descriptor arrives
-    // — reads Pi's advisor-restored model. Sending set_model before the
-    // snapshot returns means the Side Chat initially shows Pi's default
-    // model, not the inherited one. The 400ms delay lets the snapshot
-    // settle first; the set_model then sticks and a later state refresh
-    // picks up the new model.
-    apply_side_chat_startup_profile(manager, port, startup_profile);
-    Ok(descriptor)
-}
-
 /// Adopt a pre-warmed standby pi for an ephemeral chat. The standby is
 /// already spawned and healthy; we only register it with the broker and
 /// registry, then apply the startup profile. This is the fast path
 /// (~milliseconds) compared to spawn + health-wait (~seconds).
-#[allow(clippy::too_many_arguments)]
-async fn ephemeral_adopt_standby(
-    manager: &PiManager,
-    broker: &BrokerWs,
-    registry: &EphemeralRegistry,
-    reservation: &CreateReservation,
-    spawned: pi_manager::SpawnedPi,
-    temp_dir: Option<(PathBuf, String)>,
-    transition_generation: u64,
-    cwd: PathBuf,
-    startup_profile: Option<Value>,
-) -> Result<ephemeral_registry::EphemeralDescriptor, String> {
-    let owner = reservation.owner_id.clone();
-    let port = spawned.port;
-    let process = OwnedProcess {
-        port,
-        pid: spawned.pid,
-        child_identity: spawned.identity,
-        canonical_cwd: cwd,
-        transition_generation,
-        temporary_directory: temp_dir.clone(),
-    };
-    let descriptor = match registry.commit_ready(reservation, process) {
-        Ok(descriptor) => descriptor,
-        Err(e) => {
-            manager.kill(port);
-            cleanup_ephemeral_candidate(
-                registry,
-                &owner,
-                &reservation.instance_id,
-                reservation.generation,
-                temp_dir,
-            );
-            return Err(e);
-        }
-    };
-    let _ = broker.register_ephemeral_route(broker_ws::EphemeralRoute {
-        owner_id: owner,
-        instance_id: reservation.instance_id.clone(),
-        generation: reservation.generation,
-        port,
-    });
-    apply_side_chat_startup_profile(manager, port, startup_profile);
-    Ok(descriptor)
-}
-
 /// Build the RPC commands that mirror the active workspace session's model
 /// and thinking level into a freshly spawned Side Chat. Returns None when the
 /// profile is missing or incomplete so the caller can skip the round-trip.
+#[allow(dead_code)] // pending native ephemeral work package
 fn side_chat_startup_rpc_commands(profile: &Value) -> Vec<Value> {
     let mut commands = Vec::new();
     let provider = profile.get("provider").and_then(Value::as_str);
@@ -2861,95 +1883,11 @@ fn side_chat_startup_rpc_commands(profile: &Value) -> Vec<Value> {
     commands
 }
 
-fn apply_side_chat_startup_profile(manager: &PiManager, port: u16, startup_profile: Option<Value>) {
-    let Some(profile) = startup_profile else {
-        return;
-    };
-    let commands = side_chat_startup_rpc_commands(&profile);
-    if commands.is_empty() {
-        log::info!(
-            "[pi-desktop] side-chat startup profile incomplete; skipping model RPC (port={})",
-            port
-        );
-        return;
-    }
-    let model = commands
-        .iter()
-        .find(|c| c.get("type").and_then(Value::as_str) == Some("set_model"))
-        .and_then(|c| c.get("modelId").and_then(Value::as_str))
-        .unwrap_or("");
-    log::info!(
-        "[pi-desktop] applying side-chat startup profile: port={} model={}",
-        port,
-        model
-    );
-    for cmd in commands {
-        if let Err(e) = manager.send_rpc(port, cmd) {
-            log::warn!("[pi-desktop] side-chat startup rpc failed: {}", e);
-        }
-    }
-}
-
 /// Remove an uncommitted/failed candidate: generation-checked registry cleanup
 /// plus exact Quick Chat temp directory deletion. Never touches another record.
-fn cleanup_ephemeral_candidate(
-    registry: &EphemeralRegistry,
-    owner: &window_owner::OwnerId,
-    instance_id: &str,
-    generation: u64,
-    temp_dir: Option<(PathBuf, String)>,
-) {
-    if let Ok(Some(lease)) = registry.begin_close(owner, instance_id, generation) {
-        registry.finish_cleanup(&lease);
-    }
-    if let Some((path, token)) = temp_dir {
-        let _ = cleanup_quick_chat_dir(&canonical_temp_root(), &path, &token);
-    }
-}
-
 /// Generation-checked close of a live ephemeral instance: mark closing, kill the
 /// exact (port, pid), unregister the route, delete an owned temp directory, and
 /// remove the record only when identity still matches.
-fn close_ephemeral_instance(
-    manager: &PiManager,
-    broker: &BrokerWs,
-    registry: &EphemeralRegistry,
-    owner: &window_owner::OwnerId,
-    instance_id: &str,
-    generation: u64,
-) {
-    let Ok(Some(lease)) = registry.begin_close(owner, instance_id, generation) else {
-        return;
-    };
-    cleanup_ephemeral_lease(manager, broker, registry, lease);
-}
-
-fn cleanup_ephemeral_lease(
-    manager: &PiManager,
-    broker: &BrokerWs,
-    registry: &EphemeralRegistry,
-    lease: CleanupLease,
-) {
-    // Stop the broker's reconnect loop before killing the child. Otherwise its
-    // next connect attempt races the intentional port shutdown and logs a
-    // spurious connection-refused warning.
-    broker.unregister_ephemeral_route(
-        &lease.owner_id,
-        &lease.instance_id,
-        lease.generation,
-        lease.port,
-    );
-    if lease.port != 0
-        && manager.matches_process_identity(lease.port, lease.pid, lease.child_identity)
-    {
-        manager.kill(lease.port);
-    }
-    if let Some((path, token)) = &lease.temporary_directory {
-        let _ = cleanup_quick_chat_dir(&canonical_temp_root(), path, token);
-    }
-    registry.finish_cleanup(&lease);
-}
-
 /// A pending window-close transaction: the request id issued to the frontend
 /// coordinator and whether its final approval has been received.
 #[derive(Clone)]
@@ -3068,20 +2006,9 @@ fn handle_window_destroyed(window: &tauri::Window) {
         }
         return;
     }
-    if let Some(port_str) = label.strip_prefix("workspace-") {
-        if let Ok(port) = port_str.parse::<u16>() {
-            if let Some(manager) = window.try_state::<PiManagerState>() {
-                manager.kill_workspace_dedicated(port);
-                manager.kill(port);
-            }
-            if let Some(broker) = window.try_state::<BrokerWsState>() {
-                broker.unregister_port(port);
-            }
-            if let Some(skill_sources) = window.try_state::<SkillSourceRegistryState>() {
-                skill_sources.revoke_port(port);
-            }
-        }
-    }
+    // Legacy `workspace-{port}` windows no longer exist: native-only startup
+    // labels every window `native-workspace-{workspace_id}`, and the native
+    // branch above owns the full destroy cleanup.
 
     let Some(registry) = window.try_state::<OwnerRegistryState>() else {
         return;
@@ -3090,30 +2017,11 @@ fn handle_window_destroyed(window: &tauri::Window) {
     let Some(owner) = registry.owner_for_label(label) else {
         return;
     };
-    if let Some(manager) = window.try_state::<PiManagerState>() {
-        if let Some((cwd, _)) = registry.current_workspace(&owner) {
-            manager.kill_standby_for_cwd(&cwd);
-        }
-        manager.kill_quick_standby();
-    }
     if let Some(ephemeral) = window.try_state::<EphemeralRegistryState>() {
         for lease in ephemeral.owner_cleanup(&owner) {
-            if let Some(broker) = window.try_state::<BrokerWsState>() {
-                broker.unregister_ephemeral_route(
-                    &owner,
-                    &lease.instance_id,
-                    lease.generation,
-                    lease.port,
-                );
-            }
-            if lease.port != 0 {
-                if let Some(manager) = window.try_state::<PiManagerState>() {
-                    if manager.matches_process_identity(lease.port, lease.pid, lease.child_identity)
-                    {
-                        manager.kill(lease.port);
-                    }
-                }
-            }
+            // Native ephemeral runtimes were already stopped by the native
+            // branch's stop_for_owner; legacy port-based kill paths no longer
+            // exist.
             if let Some((path, token)) = &lease.temporary_directory {
                 let _ = cleanup_quick_chat_dir(&canonical_temp_root(), path, token);
             }
@@ -3165,7 +2073,6 @@ fn main() {
             // P8: Native runtime is the only startup path.
             // Legacy (embedded-server + PiManager) is retired per D8/D10.
             setup_native_runtime(app, static_dir).map_err(std::io::Error::other)?;
-            return Ok(());
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -3181,17 +2088,13 @@ fn main() {
         // (`broker_control`); the only remaining Tauri IPC command is
         // `cmd_retry_startup`, used by the native bootstrap error window
         // (bootstrap.html) which is not part of the decoupled web UI.
-        .invoke_handler(tauri::generate_handler![cmd_retry_startup])
+        .invoke_handler(tauri::generate_handler![])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle: &tauri::AppHandle, event| {
             if let tauri::RunEvent::Exit = event {
                 if let Some(manager) = app_handle.try_state::<NativePiManagerState>() {
                     manager.stop_for_app_exit();
-                }
-                if let Some(manager) = app_handle.try_state::<PiManagerState>() {
-                    manager.kill_all_standby();
-                    manager.kill_all();
                 }
                 if let Some(terminal_manager) = app_handle.try_state::<TerminalManagerState>() {
                     terminal_manager.kill_all();
@@ -3202,7 +2105,6 @@ fn main() {
 
 #[cfg(test)]
 mod startup_tests {
-    use super::{is_invalid_working_directory_error, startup_health_failure_message};
     use crate::pi_manager::{create_quick_chat_temp_dir_in, ensure_picot_tmp_root_in};
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
@@ -3246,34 +2148,5 @@ mod startup_tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("picot-startup-{label}-{suffix}"))
-    }
-
-    #[test]
-    fn detects_windows_invalid_working_directory_spawn_error() {
-        assert!(is_invalid_working_directory_error(
-            "Failed to spawn embedded pi: 目录名称无效。 (os error 267)"
-        ));
-        assert!(!is_invalid_working_directory_error(
-            "Failed to spawn embedded pi: Access is denied. (os error 5)"
-        ));
-    }
-
-    #[test]
-    fn bootstrap_diagnostics_redact_raw_pi_paths_and_tokens() {
-        let message = startup_health_failure_message(
-            "failed /Users/lin/.pi/auth.json PI_STUDIO_SKILL_INSTALL_SECRET=secret",
-        );
-        assert!(!message.contains("/Users/lin"));
-        assert!(!message.contains("secret"));
-    }
-
-    #[test]
-    fn startup_health_failure_message_explains_where_to_find_pi_logs() {
-        let message =
-            startup_health_failure_message("Timed out waiting for /api/health on port 47821");
-
-        assert!(message.contains("Timed out waiting for /api/health on port 47821"));
-        assert!(message.contains("Picot log"));
-        assert!(message.contains("embedded Pi"));
     }
 }

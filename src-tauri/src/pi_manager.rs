@@ -1,6 +1,6 @@
 // ABOUTME: Owns embedded Pi child processes, ports, identities, and RPC pipes.
 // ABOUTME: Provides safe spawn, routing, exit observation, and exact cleanup.
-
+#![allow(dead_code)] // DEPRECATED: legacy embedded-server stack, physical deletion at D10 Stage 2 (all live call sites removed)
 pub(crate) use crate::pi_launch::locked_pi_version;
 use crate::pi_launch::{
     build_augmented_path, build_pi_args, build_spawn_environment,

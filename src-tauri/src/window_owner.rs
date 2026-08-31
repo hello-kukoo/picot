@@ -398,6 +398,7 @@ impl WindowOwnerRegistry {
         state.owners.get(owner).map(|r| r.workspace_generation)
     }
 
+    #[allow(dead_code)] // legacy port routing API: removed with the D10 deletion cycle
     pub fn replace_primary_port(&self, owner: &OwnerId, port: u16) -> Result<(), String> {
         let mut state = self.inner.lock().expect("owner registry lock poisoned");
         let record = state
@@ -419,6 +420,7 @@ impl WindowOwnerRegistry {
     }
 
     /// The pending navigation permit's target port, if one is prepared.
+    #[allow(dead_code)] // legacy port routing API: removed with the D10 deletion cycle
     pub fn pending_target_port(&self, owner: &OwnerId) -> Option<u16> {
         let state = self.inner.lock().expect("owner registry lock poisoned");
         state

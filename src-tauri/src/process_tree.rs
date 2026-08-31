@@ -1,6 +1,6 @@
 // ABOUTME: Owns platform-specific process-tree membership and termination.
 // ABOUTME: Provides exact-child identity guards with bounded graceful escalation.
-
+#![allow(dead_code)] // DEPRECATED: legacy embedded-server stack, physical deletion at D10 Stage 2 (all live call sites removed)
 use std::process::{Child, ExitStatus};
 use std::time::Duration;
 
