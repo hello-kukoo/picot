@@ -22,15 +22,6 @@ function isSearchShortcut(event) {
   return event.metaKey || event.ctrlKey;
 }
 
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
 function normalizeQuery(query) {
   return String(query ?? "")
     .toLowerCase()
@@ -52,11 +43,28 @@ function formatMeta(session) {
   return [session?.projectName, session?.projectPath].filter(Boolean).join(" · ");
 }
 
-function highlight(text, query) {
-  const escaped = escapeHtml(text);
-  if (!query) return escaped;
+/** Append text to `parent`, wrapping case-insensitive query matches in <mark>. */
+function appendHighlighted(parent, text, query) {
+  if (!query) {
+    parent.appendChild(document.createTextNode(text));
+    return;
+  }
   const re = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
-  return escaped.replace(re, "<mark>$1</mark>");
+  let lastIndex = 0;
+  let match = re.exec(text);
+  while (match !== null) {
+    if (match.index > lastIndex) {
+      parent.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+    }
+    const mark = document.createElement("mark");
+    mark.textContent = match[0];
+    parent.appendChild(mark);
+    lastIndex = match.index + match[0].length;
+    match = re.exec(text);
+  }
+  if (lastIndex < text.length) {
+    parent.appendChild(document.createTextNode(text.slice(lastIndex)));
+  }
 }
 
 export function setupSessionSearchDialog({
@@ -129,13 +137,28 @@ export function setupSessionSearchDialog({
     button.className = "session-search-result";
     button.dataset.sessionId = sessionId;
     button.setAttribute("role", "option");
-    button.innerHTML = `
-      <span class="session-search-result-icon">${escapeHtml(icon)}</span>
-      <span class="session-search-result-copy">
-        <span class="session-search-result-title">${highlight(title, query)}</span>
-        ${snippet ? `<span class="session-search-result-snippet">${highlight(snippet, query)}</span>` : ""}
-        ${meta ? `<span class="session-search-result-meta">${escapeHtml(meta)}</span>` : ""}
-      </span>`;
+    const iconEl = document.createElement("span");
+    iconEl.className = "session-search-result-icon";
+    iconEl.textContent = icon;
+    const copy = document.createElement("span");
+    copy.className = "session-search-result-copy";
+    const titleEl = document.createElement("span");
+    titleEl.className = "session-search-result-title";
+    appendHighlighted(titleEl, title, query);
+    copy.appendChild(titleEl);
+    if (snippet) {
+      const snippetEl = document.createElement("span");
+      snippetEl.className = "session-search-result-snippet";
+      appendHighlighted(snippetEl, snippet, query);
+      copy.appendChild(snippetEl);
+    }
+    if (meta) {
+      const metaEl = document.createElement("span");
+      metaEl.className = "session-search-result-meta";
+      metaEl.textContent = meta;
+      copy.appendChild(metaEl);
+    }
+    button.append(iconEl, copy);
     button.addEventListener("click", () => selectSession(sessionId));
     return button;
   }

@@ -108,6 +108,12 @@ function commandIcon(command) {
   return cubeIcon();
 }
 
+/** Parse a fixed local SVG literal into a live <svg> element. */
+function svgElement(markup) {
+  const doc = new DOMParser().parseFromString(markup, "image/svg+xml");
+  return doc.documentElement;
+}
+
 /**
  * True when the command is known to need the real terminal — pi-gui calls this
  * "terminal-only". Picot learns it the first time a command's TUI surface fails
@@ -284,16 +290,23 @@ export function setupComposerSlashMenu({ input, container, commandButton = null,
         option.classList.toggle("selected", index === selectedIndex);
         option.setAttribute("role", "option");
         option.setAttribute("aria-selected", String(index === selectedIndex));
-        option.innerHTML = `
-          <span class="skill-slash-icon">${commandIcon(command)}</span>
-          <span class="skill-slash-name"></span>
-          <span class="skill-slash-description"></span>
-          <span class="skill-slash-badge"></span>
-          <span class="skill-slash-scope"></span>`;
+        const icon = document.createElement("span");
+        icon.className = "skill-slash-icon";
+        // commandIcon returns a fixed local SVG literal — parse it into a node
+        // instead of assigning innerHTML so no markup path stays open here.
+        icon.appendChild(document.importNode(svgElement(commandIcon(command)), true));
+        const name = document.createElement("span");
+        name.className = "skill-slash-name";
+        const description = document.createElement("span");
+        description.className = "skill-slash-description";
+        const badge = document.createElement("span");
+        badge.className = "skill-slash-badge";
+        const scope = document.createElement("span");
+        scope.className = "skill-slash-scope";
+        option.append(icon, name, description, badge, scope);
         option.querySelector(".skill-slash-name").textContent = titleCaseCommandName(command.name);
         option.querySelector(".skill-slash-description").textContent =
           command.description || typeLabel(command);
-        const badge = option.querySelector(".skill-slash-badge");
         if (isTerminalOnly(command)) {
           badge.textContent = t(
             "migrated.native.composer.composerSlashMenu.textcontent.terminalOnly",

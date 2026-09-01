@@ -83,10 +83,11 @@ describe("session info", () => {
 
   it("copies the requested session field", async () => {
     const panel = document.getElementById("panel");
-    panel.insertAdjacentHTML(
-      "beforeend",
-      '<button data-copy-session-field="file"></button><button data-copy-session-field="id"></button>',
-    );
+    for (const field of ["file", "id"]) {
+      const button = document.createElement("button");
+      button.dataset.copySessionField = field;
+      panel.appendChild(button);
+    }
     const writeText = vi.fn().mockResolvedValue(undefined);
     setupSessionInfo({
       toggle: document.getElementById("toggle"),

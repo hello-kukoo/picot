@@ -40,6 +40,9 @@ export function registerHostUiCapabilityReporter(pi: ExtensionAPI): void {
   const patched = new WeakSet<object>();
 
   const ensurePatched = (ctx: ExtensionContext): void => {
+    // SAFETY: ExtensionContext.ui exposes the same terminal surfaces as
+    // PatchableUi at runtime; the cast only widens the static type so the
+    // patch can wrap the original methods pi ships.
     const ui = ctx.ui as unknown as PatchableUi;
     if (!ui || patched.has(ui)) return;
     patched.add(ui);
