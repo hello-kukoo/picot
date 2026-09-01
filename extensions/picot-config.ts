@@ -18,7 +18,24 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createAgentSession, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+  buildModelsJsonProviderEntry,
+  detectProviderProtocol,
+  fetchUpstreamModels,
+  type ModelsJsonDocument,
+  mergeProviderIntoModelsJson,
+  normalizeBaseUrl,
+  type ProbeModel,
+  type ProviderProtocol,
+  resolveProviderId,
+  testProviderConnectivity,
+} from "./custom-provider-probe";
+import {
+  createOAuthLoginOperationManager,
+  type OAuthOperationEvent,
+} from "./oauth-login-operations";
 import { buildPackageSkillInventory } from "./package-skill-inventory";
+import { writePasteOffloadFile } from "./paste-offload";
 import {
   buildTelegramDmConfig,
   buildTelegramDoctorReport,
@@ -28,6 +45,7 @@ import {
   type TelegramBotIdentity,
   type TelegramWorkerStatusLike,
 } from "./pi-chat-setup";
+import { createPiOAuthLoginAdapter } from "./pi-oauth-login-adapter";
 import { generateTitleForSession } from "./session-title";
 import {
   buildSkillInventory,
@@ -55,6 +73,9 @@ type CatalogModel = {
   id?: string;
   name?: string;
   contextWindow?: number;
+  api?: string;
+  baseUrl?: string;
+  apiKey?: string;
 };
 
 type CatalogRegistry = {
@@ -67,9 +88,18 @@ type CatalogRegistry = {
   };
   getProviderDisplayName: (provider: string) => string;
   refresh: () => void | Promise<void>;
+  getApiKeyForProvider?: (provider: string) => Promise<string | undefined>;
+  getApiKeyAndHeaders?: (model: CatalogModel) => Promise<{
+    ok?: boolean;
+    apiKey?: string;
+  }>;
 };
 
 const MODEL_REGISTRY_REFRESH_TIMEOUT_MS = 2_000;
+
+// One active Codex login per embedded pi process; the in-memory map is the
+// sole operation registry (design §1) — unknown ids resolve to expired.
+const oauthLoginManager = createOAuthLoginOperationManager();
 
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -78,10 +108,22 @@ type ConfigContext = {
   cwd?: string;
   model?: unknown;
   sessionManager?: { getSessionFile: () => string | undefined };
+  navigateTree?: (
+    targetId: string,
+    options?: {
+      summarize?: boolean;
+      customInstructions?: string;
+      replaceInstructions?: boolean;
+      label?: string;
+    },
+  ) => Promise<{ cancelled?: boolean } | undefined>;
+  /** Stream an OAuth operation event to the initiating request's envelope. */
+  oauthNotify?: (event: unknown) => void;
   isProjectTrusted?: () => boolean;
 };
 
 type ListedSession = { path?: string };
+type JsonObject = Record<string, unknown>;
 
 async function renameHistoricalSession(filePath: unknown, requestedName: unknown) {
   if (typeof filePath !== "string" || typeof requestedName !== "string") {
@@ -128,10 +170,12 @@ type CredentialStoreLike = {
     fn: (current: unknown) => Promise<ApiKeyCredential | undefined>,
   ) => Promise<unknown>;
   delete?: (provider: string) => Promise<void>;
+  read?: (provider: string) => Promise<unknown>;
 };
 
 type RegistryInternals = {
   runtime?: { credentials?: CredentialStoreLike };
+  credentials?: CredentialStoreLike;
   authStorage?: {
     set?: (provider: string, value: ApiKeyCredential) => void | Promise<void>;
     remove?: (provider: string) => void | Promise<void>;
@@ -365,50 +409,208 @@ async function buildModelCatalog(registry: CatalogRegistry, preferences: ModelPr
   };
 }
 
+function protocolFromModelApi(api: unknown): ProviderProtocol | null {
+  const value = String(api || "").trim();
+  if (value === "anthropic-messages") return "anthropic-messages";
+  if (
+    value === "openai-completions" ||
+    value === "openai-responses" ||
+    value === "azure-openai-responses" ||
+    value === "mistral-conversations"
+  ) {
+    return "openai-completions";
+  }
+  return null;
+}
+
+function credentialKey(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const cred = value as { type?: string; key?: unknown; access?: unknown };
+  if (cred.type === "api_key" && typeof cred.key === "string" && cred.key.trim()) {
+    return cred.key.trim();
+  }
+  if (cred.type === "oauth" && typeof cred.access === "string" && cred.access.trim()) {
+    return cred.access.trim();
+  }
+  return undefined;
+}
+
+async function resolveProviderApiKeyForHealthCheck(
+  registry: CatalogRegistry,
+  provider: string,
+  model: CatalogModel,
+): Promise<string | undefined> {
+  if (typeof registry.getApiKeyForProvider === "function") {
+    try {
+      const key = await registry.getApiKeyForProvider(provider);
+      if (typeof key === "string" && key.trim()) return key.trim();
+    } catch {
+      // fall through
+    }
+  }
+  if (typeof registry.getApiKeyAndHeaders === "function") {
+    try {
+      const auth = await registry.getApiKeyAndHeaders(model);
+      if (auth?.ok !== false && typeof auth?.apiKey === "string" && auth.apiKey.trim()) {
+        return auth.apiKey.trim();
+      }
+    } catch {
+      // fall through
+    }
+  }
+  const internals = registry as CatalogRegistry & RegistryInternals;
+  const store = internals.runtime?.credentials ?? internals.credentials;
+  if (typeof store?.read === "function") {
+    try {
+      const key = credentialKey(await store.read(provider));
+      if (key) return key;
+    } catch {
+      // fall through
+    }
+  }
+  if (typeof model.apiKey === "string" && model.apiKey.trim()) return model.apiKey.trim();
+  try {
+    const key = credentialKey(readAuthConfig()[provider]);
+    if (key) return key;
+  } catch {
+    // ignore
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(MODELS_CONFIG_PATH, "utf8")) as {
+      providers?: Record<string, { apiKey?: string }>;
+    };
+    const key = parsed.providers?.[provider]?.apiKey;
+    if (typeof key === "string" && key.trim()) return key.trim();
+  } catch {
+    // ignore
+  }
+  return undefined;
+}
+
+function asProviderProtocol(value: unknown): ProviderProtocol {
+  if (value === "openai-completions" || value === "anthropic-messages") return value;
+  throw new Error("protocol must be openai-completions or anthropic-messages");
+}
+
+function parseProbeModels(params: Record<string, unknown>): ProbeModel[] {
+  const modelsRaw = params.models;
+  if (Array.isArray(modelsRaw)) {
+    return modelsRaw
+      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+      .map((item) => ({
+        id: typeof item.id === "string" ? item.id.trim() : "",
+        ...(typeof item.name === "string" ? { name: item.name } : {}),
+        ...(typeof item.contextWindow === "number" ? { contextWindow: item.contextWindow } : {}),
+        ...(typeof item.maxTokens === "number" ? { maxTokens: item.maxTokens } : {}),
+      }))
+      .filter((model) => Boolean(model.id));
+  }
+  const modelIds = params.modelIds;
+  if (!Array.isArray(modelIds)) return [];
+  return modelIds
+    .map((id) => (typeof id === "string" ? id.trim() : ""))
+    .filter(Boolean)
+    .map((id) => ({ id }));
+}
+
+async function runHttpModelHealthCheck(
+  registry: CatalogRegistry,
+  model: CatalogModel,
+): Promise<{ ok: boolean; latencyMs: number; error?: string } | null> {
+  const protocol = protocolFromModelApi(model.api);
+  const baseUrl = typeof model.baseUrl === "string" ? model.baseUrl.trim() : "";
+  const provider = typeof model.provider === "string" ? model.provider : "";
+  const modelId = typeof model.id === "string" ? model.id : "";
+  if (!protocol || !baseUrl || !provider || !modelId) return null;
+  const apiKey = await resolveProviderApiKeyForHealthCheck(registry, provider, model);
+  if (!apiKey) return null;
+  const probe = await testProviderConnectivity({
+    baseUrl,
+    apiKey,
+    protocol,
+    modelId,
+  });
+  return {
+    ok: probe.ok,
+    latencyMs: probe.latencyMs,
+    error: probe.ok
+      ? undefined
+      : probe.error || (probe.status ? `HTTP ${probe.status}` : "Health check failed"),
+  };
+}
+
+async function runSessionModelHealthCheck(model: CatalogModel): Promise<{
+  ok: boolean;
+  error?: string;
+}> {
+  let sawAssistantText = false;
+  const modelRuntime = await ModelRuntime.create();
+  const { session } = await createAgentSession({
+    model,
+    tools: [],
+    sessionManager: SessionManager.inMemory(),
+    modelRuntime,
+  } as Parameters<typeof createAgentSession>[0]);
+  try {
+    const unsubscribe = session.subscribe((event: unknown) => {
+      const evt = event as {
+        assistantMessageEvent?: { type?: string; delta?: string };
+        message?: { content?: unknown };
+      };
+      if (
+        evt.assistantMessageEvent?.type === "text_delta" &&
+        typeof evt.assistantMessageEvent.delta === "string" &&
+        evt.assistantMessageEvent.delta.length > 0
+      ) {
+        sawAssistantText = true;
+      }
+      const content = evt.message?.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (
+            block &&
+            typeof block === "object" &&
+            (block as { type?: string }).type === "text" &&
+            typeof (block as { text?: unknown }).text === "string" &&
+            (block as { text: string }).text.trim()
+          ) {
+            sawAssistantText = true;
+          }
+        }
+      }
+    });
+    try {
+      await session.prompt("Reply exactly: OK");
+    } finally {
+      unsubscribe();
+    }
+  } finally {
+    session.dispose();
+  }
+  return {
+    ok: sawAssistantText,
+    error: sawAssistantText ? undefined : "No assistant text returned",
+  };
+}
+
 async function runModelHealthCheck(
-  _registry: CatalogRegistry,
+  registry: CatalogRegistry,
   model: CatalogModel,
   preferences: ModelPreferencesStore,
 ): Promise<{ provider: string; modelId: string } & ModelHealth> {
   const provider = model.provider as string;
   const modelId = model.id as string;
   const startedAt = Date.now();
-  let sawAssistantText = false;
   try {
-    const modelRuntime = await ModelRuntime.create();
-    const { session } = await createAgentSession({
-      model,
-      thinkingLevel: "off",
-      tools: [],
-      sessionManager: SessionManager.inMemory(),
-      modelRuntime,
-    } as Parameters<typeof createAgentSession>[0]);
-    try {
-      const unsubscribe = session.subscribe((event: unknown) => {
-        const evt = event as { assistantMessageEvent?: { type?: string; delta?: string } };
-        if (
-          evt.assistantMessageEvent?.type === "text_delta" &&
-          typeof evt.assistantMessageEvent.delta === "string" &&
-          evt.assistantMessageEvent.delta.length > 0
-        ) {
-          sawAssistantText = true;
-        }
-      });
-      try {
-        await session.prompt("Reply exactly: OK");
-      } finally {
-        unsubscribe();
-      }
-    } finally {
-      session.dispose();
-    }
+    const httpProbe = await runHttpModelHealthCheck(registry, model);
+    const probe = httpProbe ?? (await runSessionModelHealthCheck(model));
     const result: { provider: string; modelId: string } & ModelHealth = {
       provider,
       modelId,
-      status: sawAssistantText ? "healthy" : "unhealthy",
+      status: probe.ok ? "healthy" : "unhealthy",
       checkedAt: new Date().toISOString(),
-      latencyMs: Date.now() - startedAt,
-      error: sawAssistantText ? undefined : "No assistant text returned",
+      latencyMs: httpProbe?.latencyMs ?? Date.now() - startedAt,
+      error: probe.ok ? undefined : sanitizeHealthError(probe.error || "Health check failed"),
     };
     preferences.setHealth(provider, modelId, result);
     return result;
@@ -634,9 +836,12 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function readJsonFile(filePath: string): unknown {
+function readJsonFile(filePath: string): JsonObject | undefined {
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const value: unknown = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? (value as JsonObject)
+      : undefined;
   } catch {
     return undefined;
   }
@@ -652,9 +857,7 @@ function getChatWorkerStatuses(): TelegramWorkerStatusLike[] {
   return entries
     .filter((entry) => entry.endsWith(".json"))
     .map((entry) => readJsonFile(path.join(CHAT_WORKER_STATUS_DIR, entry)))
-    .filter((value): value is TelegramWorkerStatusLike =>
-      Boolean(value && typeof value === "object"),
-    );
+    .filter((value): value is JsonObject & TelegramWorkerStatusLike => Boolean(value));
 }
 
 type SuperAgentProject = { name: string; cwd: string; status: string };
@@ -776,6 +979,157 @@ export async function handlePicotConfig(
 
   try {
     switch (op) {
+      case "write_paste_offload": {
+        const content = params.content;
+        if (typeof content !== "string") throw new Error("content is required");
+        if (!ctx.cwd) throw new Error("Active workspace is required");
+        const result = writePasteOffloadFile(ctx.cwd, content);
+        return { ok: true, data: { path: result.relativePath } };
+      }
+      case "get_oauth_login_capabilities": {
+        const runtime = await ModelRuntime.create();
+        const adapter = createPiOAuthLoginAdapter(runtime);
+        const capability = await adapter.getCodexCapability();
+        if (capability.kind !== "supported") {
+          // Unsupported / unavailable providers report an empty list rather
+          // than a synthesized capability (baseline protocol rule).
+          return { ok: true, data: { providers: [] } };
+        }
+        // ModelRuntime.checkAuth returns AuthCheck | undefined; an AuthCheck
+        // means Pi holds a usable credential regardless of method.
+        const configured = Boolean(await runtime.checkAuth("openai-codex"));
+        return {
+          ok: true,
+          data: { providers: [{ providerId: "openai-codex", deviceCode: true, configured }] },
+        };
+      }
+
+      case "start_oauth_login": {
+        const provider = asString(params.provider);
+        const method = asString(params.method);
+        if (provider !== "openai-codex" || method !== "device_code") {
+          throw new Error("Unsupported OAuth provider or method");
+        }
+        if (!ctx.oauthNotify) throw new Error("OAuth event channel is unavailable");
+        const started = oauthLoginManager.start();
+        const emit = (event: OAuthOperationEvent) => ctx.oauthNotify?.(event);
+        // Fire-and-forget: the response resolves immediately with the
+        // operation id; device-code/progress/terminal events stream over the
+        // config notify channel afterwards.
+        void (async () => {
+          const runtime = await ModelRuntime.create();
+          const adapter = createPiOAuthLoginAdapter(runtime);
+          let expiryTimer: ReturnType<typeof setTimeout> | null = null;
+          const clearExpiryTimer = () => {
+            if (expiryTimer) {
+              clearTimeout(expiryTimer);
+              expiryTimer = null;
+            }
+          };
+          try {
+            await adapter.startCodexDeviceCodeLogin(
+              {
+                onDeviceCode: (code) => {
+                  try {
+                    emit(oauthLoginManager.bindDeviceCode(started.operationId, code));
+                    if (code.expiresInSeconds && code.expiresInSeconds > 0) {
+                      clearExpiryTimer();
+                      expiryTimer = setTimeout(() => {
+                        expiryTimer = null;
+                        try {
+                          emit(oauthLoginManager.expire(started.operationId));
+                        } catch {
+                          // Operation already terminal.
+                        }
+                      }, code.expiresInSeconds * 1000);
+                    }
+                  } catch {
+                    // Operation already terminal; nothing to emit.
+                  }
+                },
+                onProgress: (message) => {
+                  try {
+                    emit(oauthLoginManager.bindProgress(started.operationId, message));
+                  } catch {
+                    // Operation already terminal; nothing to emit.
+                  }
+                },
+              },
+              started.signal,
+            );
+            clearExpiryTimer();
+            try {
+              emit(oauthLoginManager.complete(started.operationId));
+              if (registry) await registry.refresh();
+            } catch {
+              // Already removed (cancelled/expired) — nothing to complete.
+            }
+          } catch (error) {
+            clearExpiryTimer();
+            const aborted = (error as Error | null)?.name === "AbortError";
+            try {
+              const event = aborted
+                ? oauthLoginManager.cancel(started.operationId)
+                : oauthLoginManager.fail(started.operationId, error);
+              if (event) emit(event);
+            } catch {
+              // Already terminal; nothing to emit.
+            }
+          }
+        })().catch((error) => {
+          console.warn("[picot-config] OAuth login chain error:", error);
+        });
+        return {
+          ok: true,
+          data: { operationId: started.operationId, provider: "openai-codex", state: "starting" },
+        };
+      }
+
+      case "cancel_oauth_login": {
+        const operationId = asString(params.operationId);
+        if (!operationId) throw new Error("operationId is required");
+        // Unknown ids are a tolerated no-op (map wiped by restart/reload);
+        // the UI treats them as expired per design §5.
+        const cancelled = oauthLoginManager.cancel(operationId);
+        if (cancelled) ctx.oauthNotify?.(cancelled);
+        return { ok: true, data: { operationId } };
+      }
+
+      case "get_oauth_login_status": {
+        const operationId = asString(params.operationId);
+        if (!operationId) throw new Error("operationId is required");
+        return { ok: true, data: oauthLoginManager.getStatus(operationId) };
+      }
+
+      case "oauth_logout": {
+        const provider = asString(params.provider);
+        // Same codex-only whitelist as start_oauth_login (design §3): the
+        // op surface never forwards another provider to runtime.logout().
+        if (provider !== "openai-codex") throw new Error("Unsupported OAuth provider");
+        const runtime = await ModelRuntime.create();
+        await runtime.logout(provider);
+        if (registry) await registry.refresh();
+        return { ok: true, data: { provider } };
+      }
+
+      case "navigate_tree": {
+        const targetId = asString(params.targetId);
+        if (!targetId) throw new Error("targetId is required");
+        if (typeof ctx.navigateTree !== "function") {
+          throw new Error("Session tree navigation is unavailable.");
+        }
+        const result = await ctx.navigateTree(targetId, {
+          summarize: params.summarize === true,
+          ...(typeof params.customInstructions === "string"
+            ? { customInstructions: params.customInstructions }
+            : {}),
+          ...(typeof params.replaceInstructions === "boolean"
+            ? { replaceInstructions: params.replaceInstructions }
+            : {}),
+          ...(typeof params.label === "string" ? { label: params.label } : {}),
+        });
+        return { ok: true, data: result ?? { cancelled: false } };
+      }
       case "rename_historical_session": {
         const result = await renameHistoricalSession(params.filePath, params.name);
         return { ok: true, data: result };
@@ -937,6 +1291,90 @@ export async function handlePicotConfig(
         writeConfigFile(MODELS_CONFIG_PATH, content);
         const refreshed = await refreshRegistryBestEffort(registry);
         return { ok: true, data: { path: MODELS_CONFIG_PATH, refreshed } };
+      }
+
+      case "detect_custom_provider": {
+        const preferredRaw = asString(params.preferred) || "auto";
+        const preferred =
+          preferredRaw === "openai-completions" || preferredRaw === "anthropic-messages"
+            ? preferredRaw
+            : "auto";
+        const result = await detectProviderProtocol({
+          baseUrl: asString(params.baseUrl),
+          apiKey: asString(params.apiKey),
+          preferred,
+        });
+        return { ok: true, data: result };
+      }
+
+      case "list_custom_provider_models": {
+        const listed = await fetchUpstreamModels({
+          baseUrl: asString(params.baseUrl),
+          apiKey: asString(params.apiKey),
+          protocol: asProviderProtocol(params.protocol),
+        });
+        return { ok: true, data: listed };
+      }
+
+      case "test_custom_provider": {
+        const result = await testProviderConnectivity({
+          baseUrl: asString(params.baseUrl),
+          apiKey: asString(params.apiKey),
+          protocol: asProviderProtocol(params.protocol),
+          modelId: asString(params.modelId) || undefined,
+        });
+        return { ok: true, data: result };
+      }
+
+      case "save_custom_provider": {
+        const protocol = asProviderProtocol(params.protocol);
+        const baseUrl = normalizeBaseUrl(asString(params.baseUrl));
+        const providerId = resolveProviderId(asString(params.providerId), baseUrl);
+        const models = parseProbeModels(params);
+        if (models.length === 0) throw new Error("Select at least one model");
+        const apiKey = asString(params.apiKey);
+        const storeKey = params.storeKey !== false;
+        const includeApiKeyInFile = params.includeApiKeyInFile === true;
+        if (storeKey && !apiKey) throw new Error("apiKey is required when storeKey is true");
+        const entry = buildModelsJsonProviderEntry({
+          baseUrl,
+          protocol,
+          models,
+          apiKey,
+          includeApiKeyInFile,
+        });
+        let existing: unknown = { providers: {} };
+        if (fs.existsSync(MODELS_CONFIG_PATH)) {
+          try {
+            existing = JSON.parse(fs.readFileSync(MODELS_CONFIG_PATH, "utf8"));
+          } catch {
+            existing = { providers: {} };
+          }
+        }
+        const merged = mergeProviderIntoModelsJson(
+          existing as ModelsJsonDocument,
+          providerId,
+          entry,
+        );
+        writeConfigFile(MODELS_CONFIG_PATH, `${JSON.stringify(merged, null, 2)}\n`);
+        let keyStored = false;
+        if (storeKey && apiKey) {
+          await setStoredApiKey(registry, providerId, apiKey);
+          keyStored = true;
+        }
+        const refreshed = await refreshRegistryBestEffort(registry);
+        return {
+          ok: true,
+          data: {
+            providerId,
+            baseUrl,
+            protocol,
+            modelCount: models.length,
+            keyStored,
+            refreshed,
+            path: MODELS_CONFIG_PATH,
+          },
+        };
       }
 
       case "read_chat_config":

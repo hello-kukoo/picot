@@ -140,6 +140,7 @@ impl PiLaunchResolver {
         let augmented_path = build_augmented_path();
         let mut command = Command::new(&pi_bin_str);
         configure_child_process_for_windows(&mut command);
+        crate::appimage_env::scrub(&mut command);
         command
             .args(args)
             .env("PATH", augmented_path)
@@ -332,6 +333,7 @@ fn build_augmented_path() -> String {
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|value| std::env::split_paths(&value).collect())
         .unwrap_or_default();
+    crate::appimage_env::strip_bundle_path_entries(&mut dirs);
 
     #[cfg(not(target_os = "windows"))]
     {

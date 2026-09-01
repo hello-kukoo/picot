@@ -284,6 +284,31 @@ describe("GitPanel", () => {
     panel.closeCommitDialog();
   });
 
+  it("closes the commit dialog on Escape", () => {
+    const panel = new GitPanel({
+      container: document.querySelector("#panel"),
+      client: { command: vi.fn(), commit: vi.fn() },
+    });
+    panel.applyAiResult({ snapshotId: "ai-snap" }, "feat: add thing");
+    expect(document.body.querySelector(".git-commit-dialog")).not.toBeNull();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(document.body.querySelector(".git-commit-dialog")).toBeNull();
+  });
+
+  it("cancels the discard confirm dialog on Escape", async () => {
+    const write = vi.fn();
+    const panel = new GitPanel({
+      container: document.querySelector("#panel"),
+      client: { command: vi.fn(), write },
+    });
+    const pending = panel.discard([{ displayPath: "a.js" }]);
+    expect(document.body.querySelector(".git-confirm-dialog")).not.toBeNull();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await expect(pending).resolves.toBeNull();
+    expect(write).not.toHaveBeenCalled();
+    expect(document.body.querySelector(".git-confirm-dialog")).toBeNull();
+  });
+
   it("opens the commit dialog with an error and empty message when AI fails", () => {
     const panel = new GitPanel({
       container: document.querySelector("#panel"),

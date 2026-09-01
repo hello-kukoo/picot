@@ -29,7 +29,27 @@ Picot ships a known-good build of the `pi` runtime **inside the .app bundle**, s
 
 ## Install
 
-[Download from GitHub Releases](https://github.com/shixin-guo/picot/releases)
+macOS / Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shixin-guo/picot/main/scripts/install.sh | bash
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/shixin-guo/picot/main/scripts/install.ps1 | iex
+```
+
+The Linux installer picks a `.deb` or `.rpm` for your package manager. On distros with
+neither — or to install per-user without `sudo` — add `--appimage` to get the AppImage in
+`~/.local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shixin-guo/picot/main/scripts/install.sh | bash -s -- --appimage
+```
+
+Or [download from GitHub Releases](https://github.com/shixin-guo/picot/releases).
 
 You **do not** need to install the `pi` CLI separately — Picot bundles its own pi runtime.
 
@@ -114,7 +134,7 @@ Provide your model credentials via `pi /login` inside any workspace, or by writi
   <img width="360" alt="Picot on mobile" src="docs/images/mobile.webp" />
 </p>
 
-- **LAN QR code** — scan to open Picot on any device on the same network
+- **Settings → Remote Access** — scan the plain `/app` launcher URL on the same network; new devices request access and require desktop approval
 - Mobile-optimised URL handling and App Launcher support (installable as PWA on iOS/Android)
 
 </details>
@@ -275,7 +295,5 @@ Picot is a maintained fork of **Tau**, adapted for Pi-first, local development w
 ---
 
 ## License
-
-MIT
 
 MIT

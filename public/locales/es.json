@@ -4,6 +4,20 @@
     "welcomeHint": "Escribe un mensaje abajo para comenzar a chatear con Pi, o selecciona una sesión en la barra lateral.",
     "currentWorkspace": "Espacio de trabajo actual:"
   },
+  "launcher": {
+    "title": "Proyectos",
+    "hint": "Elige un proyecto o una sesión guardada en la barra lateral.",
+    "invalidSession": "No se puede abrir esta sesión guardada.",
+    "accessHint": "Solicita acceso desde la aplicación Picot de escritorio para cargar proyectos y sesiones.",
+    "requestAccess": "Solicitar acceso",
+    "requestingAccess": "Solicitando acceso…",
+    "waitingApproval": "Esperando la aprobación en Picot de escritorio…",
+    "accessApproved": "Acceso aprobado. Abriendo Picot…",
+    "accessDenied": "Acceso denegado. Solicítalo de nuevo para reintentar.",
+    "accessExpired": "La solicitud de acceso caducó. Solicítalo de nuevo.",
+    "accessNetworkError": "No se pudo conectar con la solicitud de acceso. Seguiremos reintentando.",
+    "composerHint": "Selecciona una sesión guardada para comenzar a chatear"
+  },
   "shortcuts": {
     "focusInput": "Enfocar entrada",
     "abort": "Cancelar"
@@ -11,7 +25,6 @@
   "nav": {
     "chat": "Chat",
     "toggleSidebar": "Alternar barra lateral",
-    "showMobileQR": "Mostrar código QR móvil",
     "openWorkspace": "Abrir espacio de trabajo",
     "openWorkspaceInApp": "Abrir espacio de trabajo en la app",
     "chooseApp": "Elegir app para abrir el espacio de trabajo",
@@ -75,9 +88,9 @@
     "output": "output",
     "cache": "cache",
     "costTitle": "costTitle",
-    "summary": "In {in} · Out {out} · Cache {cache}",
-    "inputSummary": "In {in}",
-    "outputSummary": "Out {out}",
+    "summary": "↓ {in} · ↑ {out} · Cache {cache}",
+    "inputSummary": "↓ {in}",
+    "outputSummary": "↑ {out}",
     "sessionUsageTitle": "Session tokens (input / output / cache)"
   },
   "sessionInfo": {
@@ -132,7 +145,11 @@
     "expandAllToolsDesc": "Expandir todas las tarjetas de herramientas",
     "collapseAllTools": "Colapsar todas las herramientas",
     "collapseAllToolsDesc": "Colapsar todas las tarjetas de herramientas",
-    "compacting": "Compactando…"
+    "compacting": "Compactando…",
+    "pasteDetected": "Pegado grande detectado ({size}) — ¿adjuntar como archivo?",
+    "pasteAsFile": "Adjuntar como archivo",
+    "keepInline": "Mantener en línea",
+    "pasteOffloadFailed": "No se pudo guardar el texto pegado"
   },
   "messages": {
     "attachedImage": "Imagen adjunta",
@@ -140,12 +157,18 @@
     "thinking": "Pensando",
     "copy": "Copiar",
     "copied": "¡Copiado!",
+    "forkSession": "Bifurcar sesión",
+    "editMessage": "Editar mensaje",
+    "expand": "Expandir",
+    "collapse": "Contraer",
     "scrollToBottom": "Scroll to latest message",
     "processDetails": "Detalles del proceso",
     "processStep": "{count} paso",
     "processSteps": "{count} pasos",
     "processToolCall": "{count} llamada a herramienta",
-    "processToolCalls": "{count} llamadas a herramientas"
+    "processToolCalls": "{count} llamadas a herramientas",
+    "providerError": "La solicitud al modelo falló.",
+    "turnFiles": "Archivos modificados en este turno ({count}):"
   },
   "tools": {
     "copyOutput": "Copiar salida",
@@ -321,7 +344,8 @@
     "insertExample": "Insertar ejemplo",
     "remove": "Eliminar",
     "delete": "Borrar",
-    "openLink": "Abrir enlace"
+    "openLink": "Abrir enlace",
+    "close": "Cerrar"
   },
   "status": {
     "saving": "Guardando...",
@@ -358,6 +382,7 @@
     "compactedWithSummary": "✓ Contexto compactado — {summary}"
   },
   "errors": {
+    "treeNavigateFailed": "Error al cambiar de rama: {error}",
     "newSessionOnlyNative": "La nueva sesión solo está disponible con un host nativo.",
     "newSessionPathUnavailable": "Error al iniciar nueva sesión: la ruta del espacio de trabajo no está disponible",
     "newSessionNavUnavailable": "Error al iniciar nueva sesión: la navegación no está disponible",
@@ -393,7 +418,6 @@
     "modelRequestFailed": "La solicitud al modelo falló",
     "modelRequestFailedDetail": "[{provider}/{model}] {message}",
     "newSessionCancelled": "La nueva sesión fue cancelada",
-    "mobileBrokerRequired": "Iniciar un nuevo chat en otro proyecto requiere el broker de escritorio. Vuelve a abrir el código QR móvil.",
     "abortedByUser": "Cancelado por el usuario",
     "invalidJson": "JSON inválido: {detail}",
     "modelsMustBeObject": "models.json debe ser un objeto JSON.",
@@ -591,6 +615,17 @@
     "extensions": "Extensiones",
     "usage": "Uso",
     "configuration": "Configuración avanzada",
+    "remoteAccess": "Acceso remoto",
+    "remoteAccessHelp": "Abre o escanea esta URL en un dispositivo de la misma red. Pulsa Solicitar acceso y apruébalo en Picot de escritorio.",
+    "remoteAccessUrl": "URL del lanzador LAN",
+    "remoteAccessCopy": "Copiar URL",
+    "remoteAccessRefreshQr": "Actualizar QR",
+    "remoteAccessQrRefreshed": "Código QR actualizado.",
+    "remoteAccessCopied": "URL copiada",
+    "remoteAccessCopyFailed": "No se pudo copiar",
+    "remoteAccessQrAlt": "Código QR del lanzador de Picot",
+    "remoteAccessNote": "Este QR solo abre la URL /app. No autoriza dispositivos. El acceso local usa http://<LAN-IP>:57620/app; el tráfico no está cifrado, por lo que los prompts y el código fuente podrían ser observables en la red.",
+    "remoteAccessUnavailable": "La URL del lanzador de red local no está disponible.",
     "agentInbox": "Bandeja del agente",
     "backToChat": "Volver al chat",
     "appearance": "Apariencia",
@@ -615,9 +650,13 @@
     "requireLogin": "Requerir inicio de sesión",
     "agentConfigFile": "Archivo de configuración del agente",
     "agentsMd": "AGENTS.md",
-    "agentsContextFile": "Archivo de contexto del agente (AGENTS.md)",
+    "agentsContextFile": "Contexto del agente",
+    "agentsMdHelp": "Notas de trabajo para el agente (preferencias, convenciones, comandos). Opcional. Aquí se edita el archivo global para todos los proyectos; las reglas de un repositorio van en el AGENTS.md de ese repo.",
+    "agentsMdPlaceholder": "p. ej. Responde en español. Lee los archivos relacionados antes de editar.",
     "appendSystemMd": "APPEND_SYSTEM.md",
-    "appendSystemPromptFile": "Archivo de anexo al prompt del sistema (APPEND_SYSTEM.md)",
+    "appendSystemPromptFile": "Añadir al prompt del sistema",
+    "appendSystemMdHelp": "Se añade al prompt del sistema sin reemplazar el de Pi. Para reglas de comportamiento permanentes. Opcional; déjalo vacío para conservar el comportamiento por defecto.",
+    "appendSystemMdPlaceholder": "p. ej. Sé conciso. Explica ediciones arriesgadas antes de ejecutarlas.",
     "providersFile": "Archivo de proveedores",
     "llmProviders": "Proveedores LLM",
     "browseCommunityPackages": "Explorar paquetes de la comunidad",
@@ -662,7 +701,65 @@
       "docsLink": "documentación de models.json",
       "helpPost2": "para el esquema completo. Los cambios se aplican inmediatamente — no se requiere reinicio.",
       "replaceConfirm": "¿Reemplazar el contenido actual con el ejemplo de Ollama?",
-      "docsOpenFailed": "No se pudo abrir el enlace de documentación"
+      "docsOpenFailed": "No se pudo abrir el enlace de documentación",
+      "oauth": {
+        "signInWithChatGPT": "Iniciar sesión con ChatGPT",
+        "preparing": "Preparando el inicio de sesión con ChatGPT…",
+        "completeInBrowser": "Completa la autorización en tu navegador para continuar.",
+        "openBrowser": "Abrir navegador",
+        "copyCode": "Copiar código",
+        "cancel": "Cancelar",
+        "connected": "ChatGPT conectado.",
+        "logout": "Cerrar sesión",
+        "logoutConfirm": "¿Cerrar sesión de ChatGPT? Se eliminará la credencial guardada.",
+        "cancelled": "Inicio de sesión con ChatGPT cancelado.",
+        "expired": "Este código de dispositivo ha caducado. Empieza de nuevo.",
+        "failed": "Error al iniciar sesión con ChatGPT.",
+        "tlsUntrusted": "Falló la verificación del certificado TLS. Un proxy HTTPS local (Clash, Surge o VPN) probablemente está interceptando OpenAI. Confía en la CA de ese proxy o desactiva la inspección HTTPS para OpenAI y vuelve a intentarlo.",
+        "retry": "Reintentar"
+      }
+    },
+    "providerPicker": {
+      "builtIn": "Integrados",
+      "subscriptions": "Suscripciones",
+      "custom": "Personalizado",
+      "oauth": "OAuth",
+      "customEndpoint": "Formato de endpoint personalizado",
+      "modelCount": "{count} modelos"
+    },
+    "customProvider": {
+      "title": "Añadir proveedor personalizado",
+      "subtitle": "Detecta un relay compatible con OpenAI o Anthropic, elige modelos y guarda.",
+      "id": "ID del proveedor (opcional)",
+      "idPlaceholder": "Déjalo vacío para derivarlo de la Base URL",
+      "baseUrl": "Base URL",
+      "apiKey": "Clave API",
+      "apiKeyPlaceholder": "Obligatoria para detectar / probar / guardar",
+      "protocol": "Protocolo",
+      "protocolAuto": "Detección automática",
+      "protocolOpenAi": "Compatible con OpenAI",
+      "protocolAnthropic": "Claude / Anthropic",
+      "models": "Modelos upstream",
+      "selectAll": "Seleccionar todos",
+      "deselectAll": "Deseleccionar todos",
+      "detect": "Detectar",
+      "test": "Probar conectividad",
+      "save": "Guardar proveedor",
+      "baseUrlRequired": "La Base URL es obligatoria.",
+      "keyRequired": "La clave API es obligatoria.",
+      "detectFirst": "Detecta el protocolo primero, o elígelo manualmente.",
+      "modelsRequired": "Selecciona al menos un modelo.",
+      "detecting": "Detectando protocolo…",
+      "testing": "Probando conectividad…",
+      "saving": "Guardando proveedor…",
+      "detected": "Detectado {protocol} · {count} modelos",
+      "detectFailed": "No se pudo detectar el protocolo.",
+      "testOk": "Alcanzable · {ms}ms",
+      "testFailed": "Falló la prueba de conectividad.",
+      "saved": "Guardado {id} con {count} modelos",
+      "saveFailed": "No se pudo guardar el proveedor.",
+      "keyStored": " · clave API almacenada",
+      "keyNotStored": " · la clave API no se almacenó"
     },
     "apiKeys": {
       "noProviders": "No hay proveedores conocidos.",
@@ -764,15 +861,6 @@
     "copyConfigPath": "Copiar ruta",
     "configPathCopied": "Copiado",
     "configPathCopyFailed": "Error al copiar"
-  },
-  "lanQr": {
-    "modalAriaLabel": "Código QR móvil",
-    "title": "Abrir en móvil",
-    "closeAriaLabel": "Cerrar",
-    "generating": "Generando código QR…",
-    "qrAlt": "Código QR para acceso móvil",
-    "hint": "Escanea con tu teléfono para abrir Picot en la misma red",
-    "openLink": "Abrir enlace"
   },
   "cost": {
     "documentTitle": "Picot - Uso",
@@ -900,6 +988,7 @@
         "thinkOff": "Razonamiento apagado",
         "extensions": "Extensiones",
         "skills": "Habilidades",
+        "prompts": "Indicaciones",
         "faster": "Más rápido",
         "smarter": "Más inteligente",
         "betaUpdates": "Actualizaciones beta",
@@ -936,7 +1025,8 @@
       "composer": {
         "composerSlashMenu": {
           "textcontent": {
-            "noMatchingCommands": "No hay comandos coincidentes"
+            "noMatchingCommands": "No hay comandos coincidentes",
+            "terminalOnly": "Solo terminal"
           },
           "ariaLabel": {
             "slashCommands": "Comandos slash"
@@ -1103,5 +1193,35 @@
     "chooseProjectBeforeApproval": "Elige un proyecto antes de aprobar.",
     "loadingProjects": "Cargando proyectos…",
     "projectRunning": "{name} · en ejecución"
+  },
+  "remoteApproval": {
+    "title": "Solicitud de acceso remoto",
+    "unknownDevice": "Navegador desconocido",
+    "warning": "Al aprobar, este dispositivo tendrá acceso a los proyectos, indicaciones, herramientas y archivos disponibles en Picot.",
+    "deny": "Denegar",
+    "approve": "Aprobar",
+    "error": "No se pudo gestionar la solicitud. Es posible que ya se haya decidido."
+  },
+  "infoPanel": {
+    "title": "Información",
+    "workspace": "Espacio de trabajo",
+    "copyPath": "Copiar ruta",
+    "copied": "Copiado",
+    "sessionHistory": "Historial de sesión",
+    "activePath": "Rama activa",
+    "branch": "Rama",
+    "turns": "{count} turnos",
+    "resumeBranch": "Retomar rama",
+    "resumeStreamingBlocked": "No se puede retomar mientras se genera una respuesta",
+    "actionWhileStreaming": "Espera a que termine la respuesta actual",
+    "refresh": "Actualizar historial de sesión",
+    "empty": "Aún no hay mensajes",
+    "statusError": "Error",
+    "statusAborted": "Cancelado",
+    "imageMessage": "Imagen",
+    "roleUser": "Tú",
+    "roleAssistant": "Asistente",
+    "toggleAria": "Alternar panel de información de sesión",
+    "closeAria": "Cerrar panel de información de sesión"
   }
 }

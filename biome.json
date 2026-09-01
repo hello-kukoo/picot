@@ -14,6 +14,7 @@
       "!.pi",
       "!.pi-subagents",
       "!.worktrees",
+      "!pi-gui",
       "!node_modules",
       "!public/vendor",
       "!coverage",

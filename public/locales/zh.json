@@ -4,6 +4,20 @@
     "welcomeHint": "在下方输入消息开始与 Pi 对话，或从侧边栏选择一个会话。",
     "currentWorkspace": "当前工作区："
   },
+  "launcher": {
+    "title": "项目",
+    "hint": "从侧边栏选择项目或已保存的会话。",
+    "invalidSession": "无法打开此已保存的会话。",
+    "accessHint": "请从桌面 Picot 请求访问，以加载项目和会话。",
+    "requestAccess": "请求访问",
+    "requestingAccess": "正在请求访问…",
+    "waitingApproval": "等待桌面 Picot 批准…",
+    "accessApproved": "访问已批准。正在打开 Picot…",
+    "accessDenied": "访问被拒绝。再次请求以重试。",
+    "accessExpired": "访问请求已过期。请再次请求。",
+    "accessNetworkError": "无法连接访问请求。我们将继续重试。",
+    "composerHint": "选择已保存的会话以开始聊天"
+  },
   "shortcuts": {
     "focusInput": "聚焦输入框",
     "abort": "中止"
@@ -11,7 +25,6 @@
   "nav": {
     "chat": "聊天",
     "toggleSidebar": "切换侧边栏",
-    "showMobileQR": "显示移动端二维码",
     "openWorkspace": "打开工作区",
     "openWorkspaceInApp": "在应用中打开工作区",
     "chooseApp": "选择打开工作区的应用",
@@ -72,9 +85,9 @@
     "contextTitle": "上下文用量",
     "costSub": "{amount}（订阅）",
     "sessionUsageTitle": "会话令牌（输入 / 输出 / 缓存）",
-    "summary": "入 {in} · 出 {out} · 缓存 {cache}",
-    "inputSummary": "入 {in}",
-    "outputSummary": "出 {out}",
+    "summary": "↓ {in} · ↑ {out} · 缓存 {cache}",
+    "inputSummary": "↓ {in}",
+    "outputSummary": "↑ {out}",
     "cache": "CACHE",
     "costTitle": "Session cost",
     "input": "IN",
@@ -132,7 +145,11 @@
     "expandAllToolsDesc": "展开所有工具卡片",
     "collapseAllTools": "折叠所有工具",
     "collapseAllToolsDesc": "折叠所有工具卡片",
-    "compacting": "压缩中…"
+    "compacting": "压缩中…",
+    "pasteDetected": "检测到大段粘贴（{size}）— 转存为文件？",
+    "pasteAsFile": "转存为文件",
+    "keepInline": "保留原文",
+    "pasteOffloadFailed": "粘贴内容保存失败"
   },
   "messages": {
     "attachedImage": "附加图片",
@@ -140,12 +157,18 @@
     "thinking": "思考中",
     "copy": "复制",
     "copied": "已复制！",
+    "forkSession": "复制会话",
+    "editMessage": "编辑消息",
+    "expand": "展开",
+    "collapse": "收起",
     "scrollToBottom": "滚动到最新消息",
     "processDetails": "处理详情",
     "processStep": "{count} 个步骤",
     "processSteps": "{count} 个步骤",
     "processToolCall": "{count} 次工具调用",
-    "processToolCalls": "{count} 次工具调用"
+    "processToolCalls": "{count} 次工具调用",
+    "providerError": "模型请求失败。",
+    "turnFiles": "本轮修改的文件（{count}）："
   },
   "tools": {
     "copyOutput": "复制输出",
@@ -321,7 +344,8 @@
     "insertExample": "插入示例",
     "remove": "移除",
     "delete": "删除",
-    "openLink": "打开链接"
+    "openLink": "打开链接",
+    "close": "关闭"
   },
   "status": {
     "saving": "保存中...",
@@ -358,6 +382,7 @@
     "compactedWithSummary": "✓ 上下文已压缩 — {summary}"
   },
   "errors": {
+    "treeNavigateFailed": "分支切换失败:{error}",
     "newSessionOnlyNative": "仅原生主机支持新建会话。",
     "newSessionPathUnavailable": "启动新会话失败：当前工作区路径不可用",
     "newSessionNavUnavailable": "启动新会话失败：导航不可用",
@@ -393,7 +418,6 @@
     "modelRequestFailed": "模型请求失败",
     "modelRequestFailedDetail": "[{provider}/{model}] {message}",
     "newSessionCancelled": "新会话已取消",
-    "mobileBrokerRequired": "在另一个项目中发起新聊天需要桌面端代理。请重新打开移动端二维码。",
     "abortedByUser": "已被用户中止",
     "invalidJson": "无效的 JSON：{detail}",
     "modelsMustBeObject": "models.json 必须是 JSON 对象。",
@@ -591,6 +615,17 @@
     "extensions": "扩展",
     "usage": "使用量",
     "configuration": "高级配置",
+    "remoteAccess": "远程访问",
+    "remoteAccessHelp": "在同一网络的设备上打开或扫描此启动器 URL。点击请求访问，然后在桌面 Picot 中批准。",
+    "remoteAccessUrl": "局域网启动器 URL",
+    "remoteAccessCopy": "复制 URL",
+    "remoteAccessRefreshQr": "刷新 QR",
+    "remoteAccessQrRefreshed": "QR 码已刷新。",
+    "remoteAccessCopied": "URL 已复制",
+    "remoteAccessCopyFailed": "复制失败",
+    "remoteAccessQrAlt": "Picot 启动器二维码",
+    "remoteAccessNote": "此 QR 仅打开 /app 启动器 URL，不会授权设备。本地访问使用 http://<LAN-IP>:57620/app；通信未加密，因此提示词和源代码可能在网络中被观察到。",
+    "remoteAccessUnavailable": "本地网络启动器 URL 不可用。",
     "agentInbox": "智能体收件箱",
     "backToChat": "返回聊天",
     "appearance": "外观",
@@ -615,9 +650,13 @@
     "requireLogin": "需要登录",
     "agentConfigFile": "智能体配置文件",
     "agentsMd": "AGENTS.md",
-    "agentsContextFile": "智能体上下文文件（AGENTS.md）",
+    "agentsContextFile": "智能体上下文",
+    "agentsMdHelp": "写给智能体的工作说明（偏好、约定、常用命令）。可选。此处改的是全局文件，对所有项目生效；某个仓库自己的规则请写在该仓库的 AGENTS.md。",
+    "agentsMdPlaceholder": "例如：回答用中文。改代码前先读相关文件。",
     "appendSystemMd": "APPEND_SYSTEM.md",
-    "appendSystemPromptFile": "追加系统提示文件（APPEND_SYSTEM.md）",
+    "appendSystemPromptFile": "追加系统提示",
+    "appendSystemMdHelp": "追加到系统提示末尾，不替换 Pi 默认提示。适合写始终要遵守的行为规则。可选。留空则只用默认行为。",
+    "appendSystemMdPlaceholder": "例如：回答尽量简短。执行有风险的操作前先说明。",
     "providersFile": "提供者文件",
     "llmProviders": "LLM 提供者",
     "browseCommunityPackages": "浏览社区包",
@@ -662,7 +701,65 @@
       "docsLink": "models.json 文档",
       "helpPost2": "了解完整架构。更改即时生效 — 无需重启。",
       "replaceConfirm": "用 Ollama 示例替换当前内容？",
-      "docsOpenFailed": "无法打开文档链接"
+      "docsOpenFailed": "无法打开文档链接",
+      "oauth": {
+        "signInWithChatGPT": "使用 ChatGPT 登录",
+        "preparing": "正在准备 ChatGPT 登录…",
+        "completeInBrowser": "请在浏览器中完成授权以继续。",
+        "openBrowser": "打开浏览器",
+        "copyCode": "复制代码",
+        "cancel": "取消",
+        "connected": "ChatGPT 已连接。",
+        "logout": "退出登录",
+        "logoutConfirm": "退出 ChatGPT 登录？这将移除已保存的登录凭据。",
+        "cancelled": "ChatGPT 登录已取消。",
+        "expired": "此设备代码已过期，请重新开始。",
+        "failed": "ChatGPT 登录失败。",
+        "tlsUntrusted": "TLS 证书校验失败。本地 HTTPS 代理（Clash / Surge / VPN）很可能在拦截 OpenAI 请求。请信任该代理的 CA，或对 OpenAI 关闭 HTTPS 解密后再重试。",
+        "retry": "重试"
+      }
+    },
+    "providerPicker": {
+      "builtIn": "内置",
+      "subscriptions": "订阅",
+      "custom": "自定义",
+      "oauth": "OAuth",
+      "customEndpoint": "自定义接口格式",
+      "modelCount": "{count} 个模型"
+    },
+    "customProvider": {
+      "title": "添加自定义供应商",
+      "subtitle": "识别 OpenAI 兼容或 Anthropic 中转，勾选模型后保存。",
+      "id": "供应商 ID（可选）",
+      "idPlaceholder": "留空则根据 Base URL 自动生成",
+      "baseUrl": "Base URL",
+      "apiKey": "API 密钥",
+      "apiKeyPlaceholder": "识别 / 测试 / 保存时必填",
+      "protocol": "协议",
+      "protocolAuto": "自动识别",
+      "protocolOpenAi": "OpenAI 兼容",
+      "protocolAnthropic": "Claude / Anthropic",
+      "models": "上游模型",
+      "selectAll": "全选",
+      "deselectAll": "取消全选",
+      "detect": "识别",
+      "test": "测试连通性",
+      "save": "保存供应商",
+      "baseUrlRequired": "请填写 Base URL。",
+      "keyRequired": "请填写 API 密钥。",
+      "detectFirst": "请先识别协议，或手动选择协议。",
+      "modelsRequired": "请至少选择一个模型。",
+      "detecting": "正在识别协议…",
+      "testing": "正在测试连通性…",
+      "saving": "正在保存供应商…",
+      "detected": "已识别 {protocol} · {count} 个模型",
+      "detectFailed": "无法识别协议。",
+      "testOk": "可达 · {ms}ms",
+      "testFailed": "连通性测试失败。",
+      "saved": "已保存 {id}（{count} 个模型）",
+      "saveFailed": "保存供应商失败。",
+      "keyStored": " · 密钥已写入",
+      "keyNotStored": " · 密钥未写入"
     },
     "apiKeys": {
       "noProviders": "无已知提供者。",
@@ -764,15 +861,6 @@
     "copyConfigPath": "复制路径",
     "configPathCopied": "已复制",
     "configPathCopyFailed": "复制失败"
-  },
-  "lanQr": {
-    "modalAriaLabel": "移动端二维码",
-    "title": "在手机上打开",
-    "closeAriaLabel": "关闭",
-    "generating": "正在生成二维码…",
-    "qrAlt": "用于手机访问的二维码",
-    "hint": "用手机扫描以在同一网络中打开 Picot",
-    "openLink": "打开链接"
   },
   "cost": {
     "documentTitle": "Picot - 使用量",
@@ -900,6 +988,7 @@
         "thinkOff": "思考 关闭",
         "extensions": "扩展",
         "skills": "技能",
+        "prompts": "提示词",
         "faster": "更快",
         "smarter": "更智能",
         "betaUpdates": "Beta updates",
@@ -936,7 +1025,8 @@
       "composer": {
         "composerSlashMenu": {
           "textcontent": {
-            "noMatchingCommands": "没有匹配的命令"
+            "noMatchingCommands": "没有匹配的命令",
+            "terminalOnly": "仅终端"
           },
           "ariaLabel": {
             "slashCommands": "斜杠命令"
@@ -1103,5 +1193,35 @@
     "chooseProjectBeforeApproval": "批准前请先选择项目。",
     "loadingProjects": "正在加载项目…",
     "projectRunning": "{name} · 运行中"
+  },
+  "remoteApproval": {
+    "title": "远程访问请求",
+    "unknownDevice": "未知浏览器",
+    "warning": "批准后，此设备将可以访问 Picot 中可用的项目、提示、工具和文件。",
+    "deny": "拒绝",
+    "approve": "批准",
+    "error": "无法处理该请求。它可能已经被处理。"
+  },
+  "infoPanel": {
+    "title": "信息",
+    "workspace": "工作区",
+    "copyPath": "复制路径",
+    "copied": "已复制",
+    "sessionHistory": "会话历史",
+    "activePath": "当前分支",
+    "branch": "分支",
+    "turns": "{count} 轮",
+    "resumeBranch": "恢复分支",
+    "resumeStreamingBlocked": "生成回复时无法恢复分支",
+    "actionWhileStreaming": "请等待当前回复完成",
+    "refresh": "刷新会话历史",
+    "empty": "暂无消息",
+    "statusError": "出错",
+    "statusAborted": "已中止",
+    "imageMessage": "图片",
+    "roleUser": "你",
+    "roleAssistant": "助手",
+    "toggleAria": "切换会话信息面板",
+    "closeAria": "关闭会话信息面板"
   }
 }

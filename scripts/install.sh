@@ -7,7 +7,6 @@ set -euo pipefail
 # ── Constants ─────────────────────────────────────────────────────────────────
 REPO="shixin-guo/picot"
 GITHUB_API="https://api.github.com/repos/${REPO}/releases"
-GITHUB_DL="https://github.com/${REPO}/releases/download"
 APP_NAME="Picot"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
@@ -28,12 +27,16 @@ die() { error "$*"; exit 1; }
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 PINNED_VERSION=""
+FORCE_APPIMAGE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version|-v) PINNED_VERSION="$2"; shift 2 ;;
+    --appimage)   FORCE_APPIMAGE=1; shift ;;
     --help|-h)
-      echo "Usage: install.sh [--version <tag>]"
-      echo "  --version  Install a specific release tag (e.g. v0.3.0). Defaults to latest."
+      echo "Usage: install.sh [--version <tag>] [--appimage]"
+      echo "  --version   Install a specific release tag (e.g. v0.3.0). Defaults to latest."
+      echo "  --appimage  Linux only. Install the AppImage into ~/.local/bin instead of"
+      echo "              using the system package manager. No sudo required."
       exit 0 ;;
     *) die "Unknown option: $1" ;;
   esac
@@ -81,25 +84,35 @@ case "$ARCH" in
   *)                die "Unsupported architecture: $ARCH" ;;
 esac
 
-# ── Detect Linux package manager ──────────────────────────────────────────────
-PKG_MGR=""
+if [ "$FORCE_APPIMAGE" = "1" ] && [ "$PLATFORM" != "linux" ]; then
+  die "--appimage is Linux-only; on macOS the DMG is the only bundle."
+fi
+
+# ── Pick the Linux install method ─────────────────────────────────────────────
+# The AppImage is the universal fallback: it is a self-contained binary, so it
+# covers the distros that ship none of these package managers (Arch, Alpine,
+# NixOS, Gentoo, Void, ...) and it installs per-user without sudo.
+INSTALL_METHOD=""
 if [ "$PLATFORM" = "linux" ]; then
-  if command -v apt-get &>/dev/null; then
-    PKG_MGR="apt"
+  if [ "$FORCE_APPIMAGE" = "1" ]; then
+    INSTALL_METHOD="appimage"
+  elif command -v apt-get &>/dev/null; then
+    INSTALL_METHOD="apt"
   elif command -v dpkg &>/dev/null; then
-    PKG_MGR="dpkg"
+    INSTALL_METHOD="dpkg"
   elif command -v dnf &>/dev/null; then
-    PKG_MGR="dnf"
+    INSTALL_METHOD="dnf"
   elif command -v yum &>/dev/null; then
-    PKG_MGR="yum"
+    INSTALL_METHOD="yum"
   elif command -v rpm &>/dev/null; then
-    PKG_MGR="rpm"
+    INSTALL_METHOD="rpm"
   else
-    die "No supported package manager found (apt/dpkg/dnf/yum/rpm)."
+    INSTALL_METHOD="appimage"
+    info "No apt/dpkg/dnf/yum/rpm found — falling back to the AppImage."
   fi
 fi
 
-# ── Resolve version ───────────────────────────────────────────────────────────
+# ── Resolve the release ───────────────────────────────────────────────────────
 header "🎯  ${APP_NAME} Installer"
 if is_snap_path "$(command -v curl)"; then
   if [ "$CURL_BIN" = "/usr/bin/curl" ]; then
@@ -108,46 +121,88 @@ if is_snap_path "$(command -v curl)"; then
     warn "Snap curl cannot write to /tmp or ~/.cache. Staging the download under ~/picot-install."
   fi
 fi
+
 if [ -n "$PINNED_VERSION" ]; then
   VERSION="$PINNED_VERSION"
+  [ "${VERSION#v}" = "$VERSION" ] && VERSION="v${VERSION}"
   info "Using pinned version: ${VERSION}"
+  RELEASE_URL="${GITHUB_API}/tags/${VERSION}"
 else
   info "Fetching latest release from GitHub..."
-  VERSION="$(curl_get -fsSL "${GITHUB_API}/latest" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
+  RELEASE_URL="${GITHUB_API}/latest"
+fi
+
+RELEASE_JSON="$(curl_get -fsSL "$RELEASE_URL")" \
+  || die "Failed to query the GitHub release API. Check your connection, or that ${PINNED_VERSION:-the latest release} exists."
+
+if [ -z "$PINNED_VERSION" ]; then
+  # `|| true`: `set -o pipefail` turns a non-matching grep into a failed
+  # assignment, which `set -e` would abort on before the guard below runs.
+  VERSION="$(printf '%s' "$RELEASE_JSON" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/' || true)"
   [ -n "$VERSION" ] || die "Failed to fetch latest release version."
   info "Latest version: ${VERSION}"
 fi
 
-# Strip leading 'v' for use in filenames
-VER="${VERSION#v}"
+# Never rebuild asset filenames from the tag. `scripts/release.sh` encodes
+# prerelease tags into a numeric app version (Windows MSI rejects `-beta.4`),
+# so tag `v0.4.3-beta.4` ships assets named `Picot_0.4.3-10004_*`. Matching the
+# asset list the API just handed us keeps this immune to that encoding — and to
+# any future bundler rename.
+ASSET_URLS="$(printf '%s' "$RELEASE_JSON" \
+  | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*"' \
+  | sed -E 's/.*"([^"]*)"$/\1/' || true)"
+[ -n "$ASSET_URLS" ] || die "Release ${VERSION} has no downloadable assets."
 
-# ── Build download URL ────────────────────────────────────────────────────────
+# `|| true` so a no-match returns empty rather than tripping `set -e` via
+# `pipefail` — callers decide what a missing asset means.
+pick_asset() { printf '%s\n' "$ASSET_URLS" | grep -E "$1" | head -1 || true; }
+
+case "$ARCH_NORM" in
+  x86_64) APPIMAGE_PATTERN='_amd64\.AppImage$'    ;;
+  arm64)  APPIMAGE_PATTERN='_aarch64\.AppImage$'  ;;
+esac
+
 case "$PLATFORM" in
   macos)
     case "$ARCH_NORM" in
-      arm64)  FILENAME="${APP_NAME}_${VER}_aarch64.dmg" ;;
-      x86_64) FILENAME="${APP_NAME}_${VER}_x64.dmg"     ;;
+      arm64)  PATTERN='_aarch64\.dmg$' ;;
+      x86_64) PATTERN='_x64\.dmg$'     ;;
     esac
     ;;
   linux)
-    case "$PKG_MGR" in
+    case "$INSTALL_METHOD" in
       apt|dpkg)
         case "$ARCH_NORM" in
-          x86_64) FILENAME="${APP_NAME}_${VER}_amd64.deb"  ;;
-          arm64)  FILENAME="${APP_NAME}_${VER}_arm64.deb"  ;;
+          x86_64) PATTERN='_amd64\.deb$' ;;
+          arm64)  PATTERN='_arm64\.deb$' ;;
         esac
         ;;
       dnf|yum|rpm)
         case "$ARCH_NORM" in
-          x86_64) FILENAME="${APP_NAME}-${VER}-1.x86_64.rpm"  ;;
-          arm64)  FILENAME="${APP_NAME}-${VER}-1.aarch64.rpm" ;;
+          x86_64) PATTERN='\.x86_64\.rpm$'  ;;
+          arm64)  PATTERN='\.aarch64\.rpm$' ;;
         esac
         ;;
+      appimage) PATTERN="$APPIMAGE_PATTERN" ;;
     esac
     ;;
 esac
 
-DOWNLOAD_URL="${GITHUB_DL}/${VERSION}/${FILENAME}"
+DOWNLOAD_URL="$(pick_asset "$PATTERN")"
+
+# Older releases predate the AppImage target, and a given release can miss an
+# arch for one bundle type. Fall back rather than dying on a partial release.
+if [ -z "$DOWNLOAD_URL" ] && [ "$PLATFORM" = "linux" ] && [ "$INSTALL_METHOD" != "appimage" ]; then
+  DOWNLOAD_URL="$(pick_asset "$APPIMAGE_PATTERN")"
+  if [ -n "$DOWNLOAD_URL" ]; then
+    warn "Release ${VERSION} has no ${INSTALL_METHOD} package for ${ARCH_NORM} — using the AppImage."
+    INSTALL_METHOD="appimage"
+  fi
+fi
+
+[ -n "$DOWNLOAD_URL" ] || die "Release ${VERSION} has no ${PLATFORM} asset for ${ARCH_NORM}."
+
+FILENAME="${DOWNLOAD_URL##*/}"
 
 # ── Download ──────────────────────────────────────────────────────────────────
 if is_snap_path "$CURL_BIN"; then
@@ -178,6 +233,56 @@ success "Downloaded ${FILENAME}"
 
 # ── Install ───────────────────────────────────────────────────────────────────
 header "📦  Installing"
+
+BIN_DIR="${HOME}/.local/bin"
+BIN_PATH="${BIN_DIR}/picot"
+
+install_appimage() {
+  mkdir -p "$BIN_DIR"
+  # Copy-then-rename instead of writing in place: overwriting a running
+  # AppImage fails with ETXTBSY, while rename(2) swaps it happily.
+  cp "$DEST" "${BIN_PATH}.new"
+  chmod 755 "${BIN_PATH}.new"
+  mv -f "${BIN_PATH}.new" "$BIN_PATH"
+  info "Installed AppImage to ${BIN_PATH}"
+
+  # Desktop entry + icon, so the app shows up in the launcher like the
+  # deb/rpm does. Icon extraction is best effort — `--appimage-extract` reads
+  # the bundle's own squashfs and needs no FUSE, but a missing icon is not
+  # worth failing the install over.
+  local desktop_dir="${HOME}/.local/share/applications"
+  local icon_dir="${HOME}/.local/share/icons/hicolor/256x256/apps"
+  mkdir -p "$desktop_dir" "$icon_dir"
+
+  local extracted
+  extracted="$(cd "$TMPDIR" && "$BIN_PATH" --appimage-extract 'usr/share/icons/hicolor/256x256/apps/*.png' >/dev/null 2>&1 \
+    && find "${TMPDIR}/squashfs-root" -name '*.png' | head -1 || true)"
+  if [ -n "$extracted" ] && [ -f "$extracted" ]; then
+    cp "$extracted" "${icon_dir}/picot.png"
+  fi
+
+  cat > "${desktop_dir}/picot.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=${APP_NAME}
+Exec=${BIN_PATH}
+Icon=picot
+Categories=Development;Utility;
+Terminal=false
+DESKTOP
+  update-desktop-database "$desktop_dir" &>/dev/null || true
+  info "Added launcher entry"
+
+  case ":${PATH}:" in
+    *":${BIN_DIR}:"*) ;;
+    *) warn "${BIN_DIR} is not on your PATH. Add it to your shell profile to run \`picot\` directly." ;;
+  esac
+  # FUSE 2 is what mounts an AppImage at launch. Ubuntu 24.04+ ships only
+  # FUSE 3, so point at both the fix and the no-install escape hatch.
+  if [ ! -e /dev/fuse ] || ! ldconfig -p 2>/dev/null | grep -q 'libfuse\.so\.2'; then
+    warn "FUSE 2 not detected. Install it (e.g. \`sudo apt install libfuse2t64\`), or run: ${BIN_PATH} --appimage-extract-and-run"
+  fi
+}
 
 case "$PLATFORM" in
   macos)
@@ -214,7 +319,7 @@ case "$PLATFORM" in
     ;;
 
   linux)
-    case "$PKG_MGR" in
+    case "$INSTALL_METHOD" in
       apt)
         info "Installing with apt..."
         sudo apt-get install -y "$DEST"
@@ -234,6 +339,9 @@ case "$PLATFORM" in
       rpm)
         info "Installing with rpm..."
         sudo rpm -U --force "$DEST"
+        ;;
+      appimage)
+        install_appimage
         ;;
     esac
     success "Installed ${APP_NAME}"

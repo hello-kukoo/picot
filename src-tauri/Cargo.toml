@@ -1,6 +1,6 @@
 [package]
 name = "picot"
-version = "0.4.2-10001"
+version = "0.4.3-10008"
 description = "Pi Agent Desktop - session manager for pi coding agent"
 authors = ["Pi Desktop"]
 edition = "2021"
@@ -36,7 +36,6 @@ fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }
 futures-util = "0.3"
 semver = "1"
 tokio-tungstenite = "0.24"
-percent-encoding = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
 hmac = "0.12"

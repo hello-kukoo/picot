@@ -43,12 +43,30 @@ export function normalizeLocalPath(value) {
   return joinRoot(root, parts);
 }
 
+/** Format a local path for sidebar display without changing its filesystem meaning. */
+export function displayLocalPath(value) {
+  const normalized = normalizeLocalPath(value);
+  if (!normalized || normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) {
+    return normalized;
+  }
+  return `/${normalized}`;
+}
+
 export function basenameLocalPath(value) {
   const normalized = normalizeLocalPath(value);
   if (!normalized || normalized === "/" || /^[A-Za-z]:\/$/.test(normalized)) return normalized;
   const uncRoot = normalized.match(/^\/\/[^/]+\/[^/]+$/)?.[0];
   if (uncRoot) return uncRoot;
   return normalized.slice(normalized.lastIndexOf("/") + 1);
+}
+
+/**
+ * Compact label for a workspace path: the folder name, omitting the home /
+ * drive prefix that is the same on every typical project. Hover/title should
+ * still carry the full path when those prefixes differ.
+ */
+export function compactWorkspaceLabel(value) {
+  return basenameLocalPath(value) || displayLocalPath(value);
 }
 
 export function parentLocalPath(value) {

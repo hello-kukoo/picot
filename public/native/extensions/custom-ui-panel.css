@@ -20,7 +20,8 @@
   max-width: 96vw;
   max-height: 90vh;
   overflow: auto;
-  animation: sheetIn 0.3s var(--ease);
+  /* Flex-centred, so it needs the no-static-transform keyframe. */
+  animation: sheetInCentered 0.2s var(--ease);
 }
 
 /* xterm sizes itself from the cols/rows the component asked for, so the

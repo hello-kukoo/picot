@@ -1,3 +1,5 @@
+import { bindDialogEscape } from "../../ui/dialog-escape.js";
+
 export function showNativeDialog(
   request,
   container = document.getElementById("dialog-container"),
@@ -82,12 +84,10 @@ export function showNativeDialog(
 
     dismissSignal?.then(() => finish({ cancelled: true }));
     let timeout = null;
+    let settled = false;
     if (request.timeout) timeout = setTimeout(() => finish({ cancelled: true }), request.timeout);
+    const unbindEscape = bindDialogEscape(() => finish({ cancelled: true }));
     const keyHandler = (event) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        finish({ cancelled: true });
-      }
       if (input && event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
         finish({ value: input.value });
@@ -95,7 +95,10 @@ export function showNativeDialog(
     };
     document.addEventListener("keydown", keyHandler);
     function finish(result) {
+      if (settled) return;
+      settled = true;
       if (timeout) clearTimeout(timeout);
+      unbindEscape();
       document.removeEventListener("keydown", keyHandler);
       container.replaceChildren();
       container.classList.add("hidden");

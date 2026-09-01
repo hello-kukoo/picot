@@ -4,6 +4,20 @@
     "welcomeHint": "Type a message below to start chatting with Pi, or select a session from the sidebar.",
     "currentWorkspace": "Current workspace:"
   },
+  "launcher": {
+    "title": "Projects",
+    "hint": "Choose a project or saved session from the sidebar.",
+    "invalidSession": "This saved session cannot be opened.",
+    "accessHint": "Request access from your desktop Picot app to load projects and sessions.",
+    "requestAccess": "Request access",
+    "requestingAccess": "Requesting access…",
+    "waitingApproval": "Waiting for approval in desktop Picot…",
+    "accessApproved": "Access approved. Opening Picot…",
+    "accessDenied": "Access was denied. Request again to retry.",
+    "accessExpired": "This access request expired. Request again.",
+    "accessNetworkError": "The access request could not be reached. We’ll keep retrying.",
+    "composerHint": "Select a saved session to start chatting"
+  },
   "shortcuts": {
     "focusInput": "Focus input",
     "abort": "Abort"
@@ -11,7 +25,6 @@
   "nav": {
     "chat": "Chat",
     "toggleSidebar": "Toggle sidebar",
-    "showMobileQR": "Show mobile QR code",
     "openWorkspace": "Open workspace",
     "openWorkspaceInApp": "Open workspace in app",
     "chooseApp": "Choose app to open workspace",
@@ -72,9 +85,9 @@
     "contextTitle": "Context usage",
     "costSub": "{amount} (sub)",
     "sessionUsageTitle": "Session tokens (input / output / cache)",
-    "summary": "In {in} · Out {out} · Cache {cache}",
-    "inputSummary": "In {in}",
-    "outputSummary": "Out {out}",
+    "summary": "↓ {in} · ↑ {out} · Cache {cache}",
+    "inputSummary": "↓ {in}",
+    "outputSummary": "↑ {out}",
     "input": "IN",
     "output": "OUT",
     "cache": "CACHE",
@@ -132,7 +145,11 @@
     "expandAllToolsDesc": "Expand all tool cards",
     "collapseAllTools": "Collapse All Tools",
     "collapseAllToolsDesc": "Collapse all tool cards",
-    "compacting": "Compacting…"
+    "compacting": "Compacting…",
+    "pasteDetected": "Large paste detected ({size}) — attach as file?",
+    "pasteAsFile": "Attach as file",
+    "keepInline": "Keep inline",
+    "pasteOffloadFailed": "Could not save pasted text"
   },
   "messages": {
     "attachedImage": "Attached image",
@@ -140,12 +157,18 @@
     "thinking": "Thinking",
     "copy": "Copy",
     "copied": "Copied!",
+    "forkSession": "Fork session",
+    "editMessage": "Edit message",
+    "expand": "Expand",
+    "collapse": "Collapse",
     "scrollToBottom": "Scroll to latest message",
     "processDetails": "Process details",
     "processStep": "{count} step",
     "processSteps": "{count} steps",
     "processToolCall": "{count} tool call",
-    "processToolCalls": "{count} tool calls"
+    "processToolCalls": "{count} tool calls",
+    "providerError": "The model request failed.",
+    "turnFiles": "Files changed this turn ({count}):"
   },
   "tools": {
     "copyOutput": "Copy output",
@@ -321,7 +344,8 @@
     "insertExample": "Insert example",
     "remove": "Remove",
     "delete": "Delete",
-    "openLink": "Open Link"
+    "openLink": "Open Link",
+    "close": "Close"
   },
   "status": {
     "saving": "Saving...",
@@ -358,6 +382,7 @@
     "compactedWithSummary": "✓ Context compacted — {summary}"
   },
   "errors": {
+    "treeNavigateFailed": "Branch switch failed: {error}",
     "newSessionOnlyNative": "New session is only supported with a native host.",
     "newSessionPathUnavailable": "Failed to start new session: current workspace path is unavailable",
     "newSessionNavUnavailable": "Failed to start new session: navigation is unavailable",
@@ -393,7 +418,6 @@
     "modelRequestFailed": "Model request failed",
     "modelRequestFailedDetail": "[{provider}/{model}] {message}",
     "newSessionCancelled": "New session was cancelled",
-    "mobileBrokerRequired": "Starting a new chat in another project requires the desktop broker. Reopen the mobile QR code.",
     "abortedByUser": "Aborted by user",
     "invalidJson": "Invalid JSON: {detail}",
     "modelsMustBeObject": "models.json must be a JSON object.",
@@ -591,6 +615,17 @@
     "extensions": "Extensions",
     "usage": "Usage",
     "configuration": "Advanced Configuration",
+    "remoteAccess": "Remote Access",
+    "remoteAccessHelp": "Open or scan this launcher URL on a device on the same network. Tap Request access, then approve it in desktop Picot.",
+    "remoteAccessUrl": "LAN launcher URL",
+    "remoteAccessCopy": "Copy URL",
+    "remoteAccessRefreshQr": "Refresh QR",
+    "remoteAccessQrRefreshed": "QR code refreshed.",
+    "remoteAccessCopied": "URL copied",
+    "remoteAccessCopyFailed": "Copy failed",
+    "remoteAccessQrAlt": "QR code for the Picot launcher",
+    "remoteAccessNote": "This QR only opens the plain /app launcher URL. It does not authorize a device. Local-network access uses http://<LAN-IP>:57620/app; traffic is unencrypted, so prompts and source may be observable on the network. Installed-PWA HTTPS requirements are not changed here.",
+    "remoteAccessUnavailable": "The local-network launcher URL is unavailable.",
     "agentInbox": "Agent Inbox",
     "backToChat": "Back to chat",
     "appearance": "Appearance",
@@ -615,9 +650,13 @@
     "requireLogin": "Require login",
     "agentConfigFile": "Agent config file",
     "agentsMd": "AGENTS.md",
-    "agentsContextFile": "Agent context file (AGENTS.md)",
+    "agentsContextFile": "Agent context",
+    "agentsMdHelp": "Working notes for the agent (preferences, conventions, commands). Optional. This edits the global file for all projects; put repo-specific rules in that repo's AGENTS.md.",
+    "agentsMdPlaceholder": "e.g. Reply in English. Read related files before editing.",
     "appendSystemMd": "APPEND_SYSTEM.md",
-    "appendSystemPromptFile": "Append system prompt file (APPEND_SYSTEM.md)",
+    "appendSystemPromptFile": "Append to system prompt",
+    "appendSystemMdHelp": "Appended to the system prompt without replacing Pi's defaults. Use for always-on behavioral rules. Optional; leave empty to keep the default behavior.",
+    "appendSystemMdPlaceholder": "e.g. Be concise. Explain risky edits before running them.",
     "providersFile": "Providers file",
     "llmProviders": "LLM providers",
     "browseCommunityPackages": "Browse Community Packages",
@@ -662,7 +701,65 @@
       "docsLink": "models.json docs",
       "helpPost2": "for the full schema. Changes are picked up immediately — no restart needed.",
       "replaceConfirm": "Replace current content with the Ollama example?",
-      "docsOpenFailed": "Could not open the documentation link"
+      "docsOpenFailed": "Could not open the documentation link",
+      "oauth": {
+        "signInWithChatGPT": "Sign in with ChatGPT",
+        "preparing": "Preparing ChatGPT sign-in…",
+        "completeInBrowser": "Complete authorization in your browser to continue.",
+        "openBrowser": "Open browser",
+        "copyCode": "Copy code",
+        "cancel": "Cancel",
+        "connected": "ChatGPT connected.",
+        "logout": "Logout",
+        "logoutConfirm": "Log out of ChatGPT? This removes the saved sign-in credential.",
+        "cancelled": "ChatGPT sign-in cancelled.",
+        "expired": "This device code has expired. Start again.",
+        "failed": "ChatGPT sign-in failed.",
+        "tlsUntrusted": "TLS certificate verification failed. A local HTTPS proxy (Clash, Surge, or VPN) is likely intercepting OpenAI. Trust that proxy’s CA, or disable HTTPS inspection for OpenAI, then retry.",
+        "retry": "Try again"
+      }
+    },
+    "providerPicker": {
+      "builtIn": "Built-in",
+      "subscriptions": "Subscriptions",
+      "custom": "Custom",
+      "oauth": "OAuth",
+      "customEndpoint": "Custom endpoint format",
+      "modelCount": "{count} models"
+    },
+    "customProvider": {
+      "title": "Add custom provider",
+      "subtitle": "Detect an OpenAI-compatible or Anthropic relay, pick models, then save.",
+      "id": "Provider ID (optional)",
+      "idPlaceholder": "Leave blank to derive from the Base URL",
+      "baseUrl": "Base URL",
+      "apiKey": "API key",
+      "apiKeyPlaceholder": "Required for detect / test / save",
+      "protocol": "Protocol",
+      "protocolAuto": "Auto-detect",
+      "protocolOpenAi": "OpenAI compatible",
+      "protocolAnthropic": "Claude / Anthropic",
+      "models": "Upstream models",
+      "selectAll": "Select all",
+      "deselectAll": "Deselect all",
+      "detect": "Detect",
+      "test": "Test connectivity",
+      "save": "Save provider",
+      "baseUrlRequired": "Base URL is required.",
+      "keyRequired": "API key is required.",
+      "detectFirst": "Detect the protocol first, or choose it manually.",
+      "modelsRequired": "Select at least one model.",
+      "detecting": "Detecting protocol…",
+      "testing": "Testing connectivity…",
+      "saving": "Saving provider…",
+      "detected": "Detected {protocol} · {count} models",
+      "detectFailed": "Could not detect the protocol.",
+      "testOk": "Reachable · {ms}ms",
+      "testFailed": "Connectivity test failed.",
+      "saved": "Saved {id} with {count} models",
+      "saveFailed": "Failed to save provider.",
+      "keyStored": " · API key stored",
+      "keyNotStored": " · API key was not stored"
     },
     "apiKeys": {
       "noProviders": "No providers known.",
@@ -764,15 +861,6 @@
     "copyConfigPath": "Copy path",
     "configPathCopied": "Copied",
     "configPathCopyFailed": "Copy failed"
-  },
-  "lanQr": {
-    "modalAriaLabel": "Mobile QR code",
-    "title": "Open on Mobile",
-    "closeAriaLabel": "Close",
-    "generating": "Generating QR code…",
-    "qrAlt": "QR code for mobile access",
-    "hint": "Scan with your phone to open Picot on the same network",
-    "openLink": "Open Link"
   },
   "cost": {
     "documentTitle": "Picot - Usage",
@@ -900,6 +988,7 @@
         "thinkOff": "Think off",
         "extensions": "Extensions",
         "skills": "Skills",
+        "prompts": "Prompts",
         "faster": "Faster",
         "smarter": "Smarter",
         "betaUpdates": "Beta updates",
@@ -936,7 +1025,8 @@
       "composer": {
         "composerSlashMenu": {
           "textcontent": {
-            "noMatchingCommands": "No matching commands"
+            "noMatchingCommands": "No matching commands",
+            "terminalOnly": "Terminal-only"
           },
           "ariaLabel": {
             "slashCommands": "Slash commands"
@@ -1103,5 +1193,35 @@
     "chooseProjectBeforeApproval": "Choose a project before approval.",
     "loadingProjects": "Loading projects…",
     "projectRunning": "{name} · running"
+  },
+  "remoteApproval": {
+    "title": "Remote access request",
+    "unknownDevice": "Unknown browser",
+    "warning": "Approving grants this device access to projects, prompts, tools, and files available through Picot.",
+    "deny": "Deny",
+    "approve": "Approve",
+    "error": "That request could not be handled. It may already have been decided."
+  },
+  "infoPanel": {
+    "title": "Info",
+    "workspace": "Workspace",
+    "copyPath": "Copy path",
+    "copied": "Copied",
+    "sessionHistory": "Session history",
+    "activePath": "Active path",
+    "branch": "Branch",
+    "turns": "{count} turns",
+    "resumeBranch": "Resume branch",
+    "resumeStreamingBlocked": "Resume unavailable while streaming",
+    "actionWhileStreaming": "Wait for the current response to finish",
+    "refresh": "Refresh session history",
+    "empty": "No messages yet",
+    "statusError": "Error",
+    "statusAborted": "Aborted",
+    "imageMessage": "Image",
+    "roleUser": "You",
+    "roleAssistant": "Assistant",
+    "toggleAria": "Toggle session info panel",
+    "closeAria": "Close session info panel"
   }
 }

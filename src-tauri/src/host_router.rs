@@ -29,11 +29,6 @@ pub enum RoutedAction {
         request_id: String,
         frame: Value,
     },
-    Auth {
-        client_id: String,
-        request_id: String,
-        frame: Value,
-    },
     Subscribe {
         client_id: String,
         request_id: String,
@@ -78,6 +73,25 @@ impl HostRouter {
     }
 
     pub fn connect(&mut self, client_id: &str, hello: &Value) -> Result<(), RouterError> {
+        let kind = match hello.get("clientType").and_then(Value::as_str) {
+            Some("desktop") => ClientKind::Desktop,
+            Some("remote") => ClientKind::Remote,
+            _ => {
+                return Err(RouterError::new(
+                    "invalid_client_type",
+                    "Unsupported client type",
+                ))
+            }
+        };
+        self.connect_as(client_id, hello, kind)
+    }
+
+    pub fn connect_as(
+        &mut self,
+        client_id: &str,
+        hello: &Value,
+        kind: ClientKind,
+    ) -> Result<(), RouterError> {
         if hello.get("type").and_then(Value::as_str) != Some("hello") {
             return Err(RouterError::new(
                 "handshake_required",
@@ -92,16 +106,6 @@ impl HostRouter {
                 ),
             ));
         }
-        let kind = match hello.get("clientType").and_then(Value::as_str) {
-            Some("desktop") => ClientKind::Desktop,
-            Some("remote") => ClientKind::Remote,
-            _ => {
-                return Err(RouterError::new(
-                    "invalid_client_type",
-                    "Unsupported client type",
-                ))
-            }
-        };
         if client_id.is_empty() {
             return Err(RouterError::new(
                 "invalid_client_id",
@@ -117,7 +121,7 @@ impl HostRouter {
     }
 
     pub fn route(&self, client_id: &str, frame: &Value) -> Result<RoutedAction, RouterError> {
-        self.client_kind(client_id).ok_or_else(|| {
+        let _kind = self.client_kind(client_id).ok_or_else(|| {
             RouterError::new("unauthorized_client", "Client has not completed handshake")
         })?;
         let frame_type = frame
@@ -197,11 +201,6 @@ impl HostRouter {
                 })
             }
             "data_request" => Ok(RoutedAction::Data {
-                client_id: client_id.to_owned(),
-                request_id,
-                frame: frame.clone(),
-            }),
-            "auth_request" => Ok(RoutedAction::Auth {
                 client_id: client_id.to_owned(),
                 request_id,
                 frame: frame.clone(),
@@ -299,6 +298,27 @@ mod tests {
             )
             .is_ok());
         assert_eq!(router.client_kind("client-a"), Some(ClientKind::Desktop));
+    }
+
+    #[test]
+    fn legacy_auth_frames_are_not_routable() {
+        let mut router = HostRouter::new();
+        router
+            .connect(
+                "desktop",
+                &json!({ "type": "hello", "protocolVersion": 2, "clientType": "desktop" }),
+            )
+            .unwrap();
+        let error = router
+            .route(
+                "desktop",
+                &json!({
+                    "type": "auth_request",
+                    "requestId": "auth-1",
+                }),
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "unknown_frame_type");
     }
 
     #[test]

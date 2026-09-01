@@ -16,19 +16,23 @@
   }
 }
 
-/* ── Rail — no background, just floating ticks on the right edge ── */
+/* ── Rail — no background, just floating ticks on the left edge ── */
 .conv-nav {
   position: absolute;
-  right: 4px;
   top: 50%;
   transform: translateY(-50%);
   z-index: 30;
   display: flex;
   flex-direction: column;
-  align-items: flex-end; /* ticks grow leftward */
+  align-items: flex-start; /* ticks grow rightward from the left edge */
   gap: var(--space-1);
-  padding: var(--space-2) 0;
-  /* No pill, no border, no backdrop — transparent rail */
+  padding: var(--space-2) var(--space-1-5);
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  /* Whole-rail hover surface (Info panel design): one rounded highlight for
+     the entire hit area — never a per-tick background. Border and padding
+     are constant so the surface's appearance never shifts tick layout. */
+  background: transparent;
   max-height: min(
     560px,
     calc(100% - var(--messages-top-inset) - var(--messages-bottom-inset) - 24px)
@@ -37,7 +41,17 @@
   animation: convNavIn 0.3s var(--spring);
   transition:
     opacity 0.2s var(--ease),
-    transform 0.2s var(--ease);
+    transform 0.2s var(--ease),
+    background 0.2s var(--ease),
+    border-color 0.2s var(--ease);
+}
+
+.conv-nav:hover {
+  background: var(--sidebar-bg-mobile);
+  border-color: var(--border);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 /* Hide conv-nav when window is too narrow — needs room to the right of messages */
@@ -51,13 +65,13 @@
   display: flex !important;
   opacity: 0;
   pointer-events: none;
-  transform: translateY(-50%) translateX(8px);
+  transform: translateY(-50%) translateX(-8px);
 }
 
 @keyframes convNavIn {
   from {
     opacity: 0;
-    transform: translateY(-50%) translateX(10px);
+    transform: translateY(-50%) translateX(-10px);
   }
   to {
     opacity: 1;
@@ -70,22 +84,21 @@
 .conv-nav-track {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: flex-start;
   gap: var(--space-1);
   overflow: visible;
-  margin-right: 2px;
+  margin-left: 2px;
   /* The track is the hover target: gaps between ticks must still show a tooltip. */
   pointer-events: auto;
 }
 
 /* Individual tick — button is the (large) hit target; ::after is the visual line */
 .conv-nav-dot {
-  width: 28px; /* wide hit target */
   height: 2px; /* visual bar height; gap provides spacing */
   padding: var(--space-0-5) 0;
   display: flex;
   align-items: center;
-  justify-content: flex-end; /* bar hugs the right/rail edge */
+  justify-content: flex-start; /* bar hugs the left/rail edge */
   background: transparent;
   border: none;
   cursor: pointer;
@@ -100,7 +113,7 @@
   border-radius: var(--radius-pill);
   background: var(--border-hover);
   opacity: 0.6;
-  transform-origin: right center;
+  transform-origin: left center;
   transition:
     width 0.22s var(--ease),
     background 0.2s var(--ease),
@@ -120,13 +133,12 @@
     var(--accent)
   );
   opacity: 1;
-  box-shadow: 2px 0 6px var(--accent-glow);
+  box-shadow: -2px 0 6px var(--accent-glow);
 }
 
-/* Tooltip — floated to the left of the rail */
+/* Tooltip — anchored by JS to the right of the (left-side) rail */
 .conv-nav-tooltip {
   position: fixed;
-  right: 44px; /* close to the compact ticks */
   width: 260px;
   background: var(--bg-frosted);
   border: 1px solid var(--border-hover);
@@ -140,7 +152,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1-5);
-  transform-origin: right center;
+  transform-origin: left center;
   /* animated via JS class swap */
 }
 
@@ -156,7 +168,7 @@
 @keyframes convTooltipIn {
   from {
     opacity: 0;
-    transform: translateX(8px) scale(0.96);
+    transform: translateX(-8px) scale(0.96);
   }
   to {
     opacity: 1;
@@ -194,7 +206,7 @@
 .conv-nav-new-badge {
   position: fixed;
   bottom: calc(var(--messages-bottom-inset, 128px) + 12px);
-  right: 48px;
+  left: 48px;
   font-size: var(--font-size-sm);
   color: white;
   background: var(--accent);

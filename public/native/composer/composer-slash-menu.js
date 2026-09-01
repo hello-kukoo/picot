@@ -46,8 +46,14 @@ export function originLabel(command) {
   return scopeLabel(command?.sourceInfo?.scope ?? command?.scope);
 }
 
-/** Command groups rendered in the menu, in display order. */
-const MENU_GROUPS = ["skill", "extension"];
+/**
+ * Command groups rendered in the menu, in display order. Extension and prompt
+ * commands come from pi's `get_commands` catalog the same way skills do, so
+ * the menu lists everything a user can actually invoke over RPC — built-in TUI
+ * commands are never reported by pi and internal data planes are filtered out
+ * of the catalog (see slash-commands.js).
+ */
+const MENU_GROUPS = ["skill", "extension", "prompt"];
 
 function commandGroup(command) {
   if (command.type === "skill" || command.source === "skill") return "skill";
@@ -68,6 +74,7 @@ function typeLabel(command) {
 
 function groupLabel(group) {
   if (group === "extension") return t("migrated.index.text.extensions");
+  if (group === "prompt") return t("migrated.index.text.prompts");
   return t("migrated.index.text.skills");
 }
 
@@ -86,12 +93,59 @@ function puzzleIcon() {
     </svg>`;
 }
 
+function pageIcon() {
+  return `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M14 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7l-4-4Z" />
+      <path d="M14 3v4h4M9 12h6M9 16h6" />
+    </svg>`;
+}
+
 function commandIcon(command) {
-  return commandGroup(command) === "extension" ? puzzleIcon() : cubeIcon();
+  const group = commandGroup(command);
+  if (group === "extension") return puzzleIcon();
+  if (group === "prompt") return pageIcon();
+  return cubeIcon();
+}
+
+/**
+ * True when the command is known to need the real terminal — pi-gui calls this
+ * "terminal-only". Picot learns it the first time a command's TUI surface fails
+ * to render in the WebView (see extensions/extension-command-compatibility.js).
+ */
+export function isTerminalOnly(command) {
+  return command?.compatibility?.status === "terminal-only";
 }
 
 function isMenuCommand(command) {
   return MENU_GROUPS.includes(commandGroup(command));
+}
+
+/**
+ * Order matches so a command whose name literally starts with the query wins
+ * over one that only matched fuzzily (on its description, package, or scope),
+ * and so the group holding such a match is listed first. Without this an
+ * installed skill steals `/tod` from the `todos` extension command purely
+ * because skills are rendered before extensions.
+ */
+export function orderSlashMatches(matches, query) {
+  const isPrefix = (command) =>
+    query && command.command.slice(1).toLowerCase().startsWith(query) ? 0 : 1;
+  const groupsWithPrefix = new Set(
+    matches.filter((command) => isPrefix(command) === 0).map((command) => command.group),
+  );
+  const groupRank = (command) =>
+    MENU_GROUPS.indexOf(command.group) +
+    (groupsWithPrefix.size > 0 && !groupsWithPrefix.has(command.group) ? MENU_GROUPS.length : 0);
+  return matches
+    .map((command, index) => ({ command, index }))
+    .sort(
+      (a, b) =>
+        groupRank(a.command) - groupRank(b.command) ||
+        isPrefix(a.command) - isPrefix(b.command) ||
+        a.index - b.index,
+    )
+    .map((entry) => entry.command);
 }
 
 function normalizeCommands(commands) {
@@ -193,8 +247,9 @@ export function setupComposerSlashMenu({ input, container, commandButton = null,
       return;
     }
 
-    matches = normalizeCommands(getCommands()).filter((command) =>
-      commandMatches(command, slash.query),
+    matches = orderSlashMatches(
+      normalizeCommands(getCommands()).filter((command) => commandMatches(command, slash.query)),
+      slash.query,
     );
     selectedIndex = Math.min(selectedIndex, Math.max(matches.length - 1, 0));
 
@@ -233,10 +288,18 @@ export function setupComposerSlashMenu({ input, container, commandButton = null,
           <span class="skill-slash-icon">${commandIcon(command)}</span>
           <span class="skill-slash-name"></span>
           <span class="skill-slash-description"></span>
+          <span class="skill-slash-badge"></span>
           <span class="skill-slash-scope"></span>`;
         option.querySelector(".skill-slash-name").textContent = titleCaseCommandName(command.name);
         option.querySelector(".skill-slash-description").textContent =
           command.description || typeLabel(command);
+        const badge = option.querySelector(".skill-slash-badge");
+        if (isTerminalOnly(command)) {
+          badge.textContent = t(
+            "migrated.native.composer.composerSlashMenu.textcontent.terminalOnly",
+          );
+          badge.title = command.compatibility?.message || badge.textContent;
+        }
         const origin = option.querySelector(".skill-slash-scope");
         origin.textContent = originLabel(command);
         origin.title = command.sourceInfo?.path || command.path || origin.textContent;

@@ -89,6 +89,49 @@ describe("picot config default settings operations", () => {
     expect(SessionManager.open).not.toHaveBeenCalled();
   });
 
+  it("writes large pasted text into the active workspace scratch directory", async () => {
+    const { home, handlePicotConfig } = await loadConfigWithTempHome();
+    const workspace = join(home, "workspace");
+    mkdirSync(workspace, { recursive: true });
+
+    const result = await handlePicotConfig(
+      "write_paste_offload",
+      { content: "large pasted text" },
+      { cwd: workspace },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("Paste offload failed");
+    const relativePath = (result.data as { path: string }).path;
+    expect(relativePath.startsWith(".pi/tmp/paste-")).toBe(true);
+    expect(relativePath.endsWith(".txt")).toBe(true);
+    expect(readFileSync(join(workspace, relativePath), "utf8")).toBe("large pasted text");
+  });
+
+  it("navigates the active session tree through Pi context", async () => {
+    const { handlePicotConfig } = await loadConfigWithTempHome();
+    const navigateTree = vi.fn().mockResolvedValue({ cancelled: false });
+
+    await expect(
+      handlePicotConfig(
+        "navigate_tree",
+        { targetId: "entry-2", summarize: false, label: "Resume branch" },
+        { navigateTree } as never,
+      ),
+    ).resolves.toEqual({ ok: true, data: { cancelled: false } });
+    expect(navigateTree).toHaveBeenCalledWith("entry-2", {
+      summarize: false,
+      label: "Resume branch",
+    });
+  });
+
+  it("rejects navigation without a target entry", async () => {
+    const { handlePicotConfig } = await loadConfigWithTempHome();
+    await expect(
+      handlePicotConfig("navigate_tree", {}, { navigateTree: vi.fn() } as never),
+    ).resolves.toEqual({ ok: false, error: "targetId is required" });
+  });
+
   it("generates a title from the active persisted session", async () => {
     const { handlePicotConfig } = await loadConfigWithTempHome();
     await expect(
@@ -166,6 +209,7 @@ describe("picot config skills operations", () => {
     const listed = await handlePicotConfig("list_skill_inventory", { scope: "global" }, {});
 
     expect(listed.ok).toBe(true);
+    if (!listed.ok) throw new Error("Skill inventory lookup failed");
     const skill = (
       listed.data as { roots: Array<{ children: Array<{ id: string; name: string }> }> }
     ).roots[0].children[0];
@@ -199,7 +243,7 @@ describe("picot config models operations", () => {
       const result = handlePicotConfig(
         "write_models_config",
         { content },
-        { modelRegistry: registry },
+        { modelRegistry: registry as never },
       );
       await vi.advanceTimersByTimeAsync(2_000);
       await expect(result).resolves.toEqual({
@@ -362,5 +406,146 @@ describe("picot config auth operations", () => {
 
     expect(credentials.delete).toHaveBeenCalledWith("anthropic");
     expect(registry.refresh).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("picot config custom provider operations", () => {
+  it("saves a relay provider into models.json and stores the API key", async () => {
+    const { home, handlePicotConfig } = await loadConfigWithTempHome();
+    const credentials = {
+      modify: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const registry = {
+      runtime: { credentials },
+      refresh: vi.fn(async () => undefined),
+    };
+
+    const result = await handlePicotConfig(
+      "save_custom_provider",
+      {
+        providerId: "My Relay",
+        baseUrl: "https://relay.example.com/v1",
+        apiKey: "sk-test",
+        protocol: "openai-completions",
+        models: [{ id: "gpt-4o-mini", contextWindow: 32768, maxTokens: 4096 }],
+      },
+      { modelRegistry: registry },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        providerId: "my-relay",
+        protocol: "openai-completions",
+        modelCount: 1,
+        keyStored: true,
+      },
+    });
+    const saved = JSON.parse(readFileSync(join(home, ".pi", "agent", "models.json"), "utf8"));
+    expect(saved.providers["my-relay"]).toMatchObject({
+      baseUrl: "https://relay.example.com/v1",
+      api: "openai-completions",
+      models: [
+        expect.objectContaining({ id: "gpt-4o-mini", contextWindow: 32768, maxTokens: 4096 }),
+      ],
+    });
+    expect(saved.providers["my-relay"].apiKey).toBeUndefined();
+    expect(credentials.modify).toHaveBeenCalledWith("my-relay", expect.any(Function));
+  });
+
+  it("detects an OpenAI-compatible relay", async () => {
+    const { handlePicotConfig } = await loadConfigWithTempHome();
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (String(url).includes("/v1/models")) {
+        return new Response(
+          JSON.stringify({
+            object: "list",
+            data: [{ id: "gpt-4o-mini", context_window: 32768 }],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response("{}", { status: 404 });
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchImpl as unknown as typeof fetch;
+    try {
+      const result = await handlePicotConfig(
+        "detect_custom_provider",
+        { baseUrl: "https://relay.example.com/v1", apiKey: "sk-test" },
+        {},
+      );
+      expect(result.ok).toBe(true);
+      expect(result).toMatchObject({
+        data: {
+          protocol: "openai-completions",
+          models: [expect.objectContaining({ id: "gpt-4o-mini" })],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("health-checks custom providers over HTTP instead of creating an agent session", async () => {
+    const { handlePicotConfig } = await loadConfigWithTempHome();
+    const { createAgentSession } = await import("@earendil-works/pi-coding-agent");
+    const fetchImpl = vi.fn(async () => {
+      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchImpl as unknown as typeof fetch;
+    const registry = {
+      getAll: () => [
+        {
+          provider: "my-relay",
+          id: "gpt-4o-mini",
+          api: "openai-completions",
+          baseUrl: "https://relay.example.com/v1",
+        },
+      ],
+      getAvailable: async () => [{ provider: "my-relay", id: "gpt-4o-mini" }],
+      getProviderAuthStatus: () => ({ configured: true }),
+      getProviderDisplayName: () => "my-relay",
+      refresh: vi.fn(),
+      getApiKeyForProvider: async () => "sk-test",
+    };
+    try {
+      const result = await handlePicotConfig(
+        "check_model_health",
+        { provider: "my-relay", modelId: "gpt-4o-mini" },
+        { modelRegistry: registry },
+      );
+      expect(result.ok).toBe(true);
+      expect(result).toMatchObject({
+        data: { results: [expect.objectContaining({ provider: "my-relay", status: "healthy" })] },
+      });
+      expect(createAgentSession).not.toHaveBeenCalled();
+      expect(fetchImpl).toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("picot config oauth operations", () => {
+  it("rejects oauth_logout for providers outside the codex whitelist (design §3)", async () => {
+    const { handlePicotConfig } = await loadConfigWithTempHome();
+    const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+
+    await expect(handlePicotConfig("oauth_logout", { provider: "anthropic" }, {})).resolves.toEqual(
+      { ok: false, error: "Unsupported OAuth provider" },
+    );
+    await expect(handlePicotConfig("oauth_logout", {}, {})).resolves.toEqual({
+      ok: false,
+      error: "Unsupported OAuth provider",
+    });
+    // Rejected before any runtime is constructed — the op surface never
+    // forwards a non-codex provider to runtime.logout().
+    expect(ModelRuntime.create).not.toHaveBeenCalled();
   });
 });

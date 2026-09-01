@@ -29,6 +29,9 @@ impl BridgeError {
     }
 }
 
+/// Cap on stderr lines folded into an error message.
+const DIAGNOSTIC_TAIL_LINES: usize = 20;
+
 type PendingSender = oneshot::Sender<Result<Value, BridgeError>>;
 
 struct BridgeInner {
@@ -228,8 +231,17 @@ impl PiRpcProcess {
             .map_err(|error| format!("Cannot stop Pi RPC process: {error}"))
     }
 
-    pub fn take_diagnostic(&self) -> Option<String> {
-        self.diagnostics.try_recv().ok()
+    /// Everything `pi` has written to stderr and we have not reported yet.
+    /// When the process dies at startup its reason lands here — without this
+    /// the caller can only say `ProcessClosed`, which explains nothing.
+    pub fn drain_diagnostics(&self) -> Option<String> {
+        let lines: Vec<String> = self.diagnostics.try_iter().collect();
+        if lines.is_empty() {
+            return None;
+        }
+        // Keep the tail: a crashing runtime's last words beat its banner.
+        let start = lines.len().saturating_sub(DIAGNOSTIC_TAIL_LINES);
+        Some(lines[start..].join("\n"))
     }
 }
 

@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod appimage_env;
 mod git_pi_runner;
 mod git_service;
 mod host_data;
@@ -13,6 +14,7 @@ mod native_pi_manager;
 mod package_updates;
 mod pi_launch;
 mod pi_rpc_bridge;
+mod pi_tls;
 mod remote_auth;
 mod runtime_coordinator;
 mod session_ui_profile_store;

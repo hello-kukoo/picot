@@ -379,3 +379,50 @@
     gap: var(--space-0-5);
   }
 }
+
+/* ─── Large-paste offload prompt (composer-paste-offload.js) ─── */
+
+.paste-offload-prompt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  border-bottom: 1px solid var(--border);
+}
+
+.paste-offload-prompt.hidden {
+  display: none;
+}
+
+.paste-offload-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.paste-offload-prompt button {
+  flex: 0 0 auto;
+  padding: var(--space-0-5) var(--space-1-5);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-sm);
+}
+
+.paste-offload-prompt button:hover,
+.paste-offload-prompt button:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.paste-offload-prompt button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}

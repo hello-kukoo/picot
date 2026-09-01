@@ -15,7 +15,8 @@
   max-width: min(760px, 92vw);
   max-height: min(760px, 88vh);
   width: 90%;
-  animation: sheetIn 0.3s var(--ease);
+  /* Flex-centred, so it needs the no-static-transform keyframe. */
+  animation: sheetInCentered 0.2s var(--ease);
   overflow: auto;
 }
 

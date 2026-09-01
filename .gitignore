@@ -31,3 +31,7 @@ public/vendor/
 
 # Zed editor
 .zed/
+
+# Local read-only checkout of the upstream pi-gui app, kept for reference
+# while porting its extension/TUI mapping. Not part of this repo.
+pi-gui/

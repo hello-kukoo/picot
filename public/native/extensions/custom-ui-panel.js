@@ -43,14 +43,14 @@ export class CustomUiPanel {
   #onError;
   #enabled;
 
-  constructor({ runtime, getTarget, container = null, onError = () => {}, enabled = false }) {
+  constructor({ runtime, getTarget, container = null, onError = () => {}, enabled = true }) {
     this.#runtime = runtime;
     this.#getTarget = getTarget;
     this.#container = container;
     this.#onError = onError;
-    // Off by default: `ctx.ui.custom()` overlays are unstable in the GUI
-    // (they flash on session start). Pass `{ enabled: true }` to exercise
-    // the renderer; production app.js leaves this unset.
+    // The extension side decides whether overlays are bridged at all
+    // (CUSTOM_UI_OVERLAY_ENABLED); this flag only exists so a test can prove
+    // frames are swallowed rather than rendered when the renderer is off.
     this.#enabled = enabled === true;
   }
 

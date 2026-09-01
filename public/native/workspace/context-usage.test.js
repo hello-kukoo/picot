@@ -67,7 +67,7 @@ describe("context usage header", () => {
 
     const pill = document.getElementById("token-usage");
     expect(pill.classList.contains("visible")).toBe(true);
-    expect(pill.textContent).toBe("In 1.6M · Out 6.0k · 7%");
+    expect(pill.textContent).toBe("↓ 1.6M · ↑ 6.0k · 7%");
 
     pill.click();
     const legendLabels = [...document.querySelectorAll(".context-legend-item")].map(
@@ -83,7 +83,7 @@ describe("context usage header", () => {
 
     const pill = document.getElementById("token-usage");
     expect(pill.classList.contains("visible")).toBe(true);
-    expect(pill.textContent).toBe("In 100 · Out 50");
+    expect(pill.textContent).toBe("↓ 100 · ↑ 50");
   });
 
   it("only shows the compact control when Pi has enough context to compact", () => {

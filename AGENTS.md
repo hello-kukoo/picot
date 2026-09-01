@@ -179,8 +179,8 @@ Picot is a Tauri v2 app. The three main layers:
 | `composer/` | Message input controls: `composer-images`, `composer-slash-menu`, `composer-submit`, `slash-commands`, `queued-messages` |
 | `settings/` | Settings panel and all sub-panels: `settings-panel`, `settings-config`, `settings-toggles`, `settings-save-status`, `package-browse`, `cost-dashboard`, `thinking-effort-control` |
 | `workspace/` | Header, project info, file browser: `project-header`, `header-open-app`, `workspace-actions`, `context-usage`, `file-browser` |
-| `extensions/` | Extension UI, dialogs, command palette: `dialog`, `extension-ui-host`, `inline-extension-prompt`, `command-palette` |
-| `features/` | Independent self-contained features: `app-updater`, `lan-qr`, `remote-auth`, `rpiv-todo-mirror` |
+| `extensions/` | Extension UI, dialogs, command palette: `dialog`, `extension-ui-host`, `inline-extension-prompt`, `command-palette`, `custom-ui-panel`, `extension-command-compatibility` |
+| `features/` | Independent self-contained features: `app-updater`, `remote-auth`, `rpiv-todo-mirror` |
 | `utils/` | Pure utilities (no DOM, no side-effects): `random-id`, `router`, `keyboard-shortcuts` |
 
 CSS-only files without a JS pair (`sidebar.css`, `header.css`, `messages.css`, `composer.css`, `instance-swap.css`) stay at the `native/` root and are imported from `public/style.css`.
@@ -199,12 +199,24 @@ Cross-subdir import conventions:
 **3. Pi bridge extensions (`extensions/`)** — TypeScript compiled into `extensions/dist/`.
 
 - `picot-bridge.ts` runs inside Pi and exposes Picot-specific commands.
+- `custom-ui-bridge.ts` replaces pi's RPC stub for `ctx.ui.custom()`, drives the
+  pi-tui component headlessly, and ships its rendered lines to the WebView. It
+  honours `OverlayHandle` visibility, so a panel an extension parks at session
+  start is not painted until the extension reveals it.
+- `host-ui-capabilities.ts` reports the `ctx.ui` surfaces that stay terminal-only
+  (`setFooter`, `setHeader`, `setEditorComponent`, `onTerminalInput`) so the
+  composer can badge the commands that use them.
 - `pi-chat` remains an optional bundled extension for chat integrations.
 
 ## Key data flows
 
 - User action → `native/transport/runtime-gateway.js` → `/v2/ws` → `HostServer` → `NativePiManager` → Pi stdio RPC.
 - Extension UI requests → Pi stdio RPC event → `HostServer` → `native/extensions/extension-ui-host.js` dialog host → response over `/v2/ws`.
+- Extension slash commands: `get_commands` → `composer/slash-commands.js` catalog →
+  `composer/composer-slash-menu.js` (skills, extensions, prompt templates) →
+  `prompt` RPC. Terminal-only reports ride `notify` into
+  `native/extensions/extension-command-compatibility.js`, which persists what it
+  learns per workspace and badges the command in the menu.
 
 ## Bumping the embedded pi version
 

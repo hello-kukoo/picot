@@ -18,13 +18,14 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 // panel id, mirroring the `picot-config` data plane (see
 // public/native/extensions/custom-ui-panel.js).
 //
-// The overlay is currently off: session_start panels (MCP, etc.) flash a TUI
-// dialog in the GUI because Picot has no hidden-overlay equivalent. Leave
-// `custom()` as Pi's RPC stub until that mapping is stable. Tests pass
-// `{ enabled: true }` to exercise the implementation.
+// Overlays carry a real hidden state (`OverlayHandle.setHidden`), which is how
+// extensions park a panel at session start and reveal it later from a command.
+// The bridge honours it: a panel is shipped to the WebView only while it is the
+// topmost non-hidden entry in the stack, and the first paint is deferred by a
+// microtask so a panel hidden inside `onHandle` never flashes on screen.
 
 /** When false, `registerCustomUiBridge` is a no-op and `custom()` stays stubbed. */
-export const CUSTOM_UI_OVERLAY_ENABLED = false;
+export const CUSTOM_UI_OVERLAY_ENABLED = true;
 
 const DEFAULT_WIDTH = 82;
 const MIN_WIDTH = 20;
@@ -49,6 +50,8 @@ type Panel = {
   id: string;
   component: OverlayComponent;
   width: number;
+  /** Temporarily hidden via the overlay handle; still stacked, just not painted. */
+  hidden: boolean;
   settle: (result: unknown) => void;
 };
 
@@ -62,31 +65,23 @@ function resolveWidth(options: CustomUiOptions | undefined): number {
   return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, Math.round(width)));
 }
 
-/**
- * A no-op overlay handle for extensions that pass `onHandle`. Picot renders the
- * panel as a modal that is always visible and always focused while it is open,
- * so the visibility controls have nothing to toggle.
- */
-function createOverlayHandle(close: () => void) {
-  return {
-    hide: close,
-    setHidden: () => {},
-    isHidden: () => false,
-    focus: () => {},
-    unfocus: () => {},
-    isFocused: () => true,
-  };
-}
-
 export function registerCustomUiBridge(pi: ExtensionAPI, options?: { enabled?: boolean }): void {
   if (!(options?.enabled ?? CUSTOM_UI_OVERLAY_ENABLED)) return;
 
   // Panels form a stack so a component that opens a nested overlay behaves the
-  // way it would in the TUI: input goes to the topmost panel.
+  // way it would in the TUI: input goes to the topmost visible panel.
   const stack: Panel[] = [];
   let nextPanelId = 0;
+  /** Id of the panel the WebView is currently showing, or null when none is. */
+  let shownId: string | null = null;
 
-  const top = (): Panel | undefined => stack[stack.length - 1];
+  const top = (): Panel | undefined => {
+    for (let index = stack.length - 1; index >= 0; index -= 1) {
+      const panel = stack[index];
+      if (!panel.hidden) return panel;
+    }
+    return undefined;
+  };
 
   const emit = (ui: ExtensionContext["ui"], payload: Record<string, unknown>): void => {
     ui.notify(JSON.stringify({ __picotCustomUi: payload }), "info");
@@ -99,6 +94,61 @@ export function registerCustomUiBridge(pi: ExtensionAPI, options?: { enabled?: b
       return [`Failed to render panel: ${error instanceof Error ? error.message : String(error)}`];
     }
   };
+
+  /** Repaint a panel, but only while it is the one on screen. */
+  const repaint = (ui: ExtensionContext["ui"], panel: Panel): void => {
+    if (panel.id !== shownId) return;
+    emit(ui, { op: "update", id: panel.id, lines: renderPanel(panel) });
+  };
+
+  /**
+   * Bring the WebView in line with the stack. The frontend shows one panel at a
+   * time, so a change of topmost-visible panel is a close of the old followed
+   * by an open of the new — an `update` would be dropped, because the WebView
+   * has already torn down the terminal for the panel that just went away.
+   */
+  const syncVisible = (ui: ExtensionContext["ui"]): void => {
+    const next = top();
+    if ((next?.id ?? null) === shownId) return;
+    if (shownId) emit(ui, { op: "close", id: shownId });
+    shownId = next?.id ?? null;
+    if (next) emit(ui, { op: "open", id: next.id, width: next.width, lines: renderPanel(next) });
+  };
+
+  /**
+   * The `OverlayHandle` pi-tui hands back from `showOverlay`. Visibility and
+   * focus are the same thing here: the WebView paints exactly one panel, the
+   * topmost visible one, and it always owns the keyboard.
+   */
+  const createOverlayHandle = (panel: Panel, ui: ExtensionContext["ui"]) => ({
+    hide: () => panel.settle(undefined),
+    setHidden: (hidden: boolean) => {
+      if (panel.hidden === hidden) return;
+      panel.hidden = hidden;
+      syncVisible(ui);
+    },
+    isHidden: () => panel.hidden,
+    focus: () => {
+      panel.hidden = false;
+      const index = stack.indexOf(panel);
+      if (index >= 0 && index !== stack.length - 1) {
+        stack.splice(index, 1);
+        stack.push(panel);
+      }
+      syncVisible(ui);
+    },
+    unfocus: () => {
+      // Drop below the rest of the stack so the next visible overlay takes
+      // over, mirroring pi-tui's "release focus to the next capturing overlay".
+      const index = stack.indexOf(panel);
+      if (index >= 0) {
+        stack.splice(index, 1);
+        stack.unshift(panel);
+      }
+      syncVisible(ui);
+    },
+    isFocused: () => top() === panel,
+  });
 
   // Tracked by identity rather than a marker property: the RPC host rebuilds
   // the UI context on every session rebind, and a copied marker would make a
@@ -136,15 +186,13 @@ export function registerCustomUiBridge(pi: ExtensionAPI, options?: { enabled?: b
           } catch {
             // A failing dispose must not strand the awaiting extension.
           }
-          emit(ui, { op: "close", id });
-          const next = top();
-          if (next) emit(ui, { op: "update", id: next.id, lines: renderPanel(next) });
+          syncVisible(ui);
           resolve(result as T);
         };
 
         const push = (): void => {
           if (settled || !panel) return;
-          emit(ui, { op: "update", id, lines: renderPanel(panel) });
+          repaint(ui, panel);
         };
 
         // Components only ever ask the host to re-render; everything else they
@@ -174,10 +222,17 @@ export function registerCustomUiBridge(pi: ExtensionAPI, options?: { enabled?: b
               component.dispose?.();
               return;
             }
-            panel = { id, component, width, settle };
+            panel = { id, component, width, hidden: false, settle };
             stack.push(panel);
-            options?.onHandle?.(createOverlayHandle(() => settle(undefined)));
-            emit(ui, { op: "open", id, width, lines: renderPanel(panel) });
+            options?.onHandle?.(createOverlayHandle(panel, ui));
+            // Paint on the next microtask, not on the call. An extension that
+            // parks a panel at session start opens it and hides it again from
+            // inside `onHandle`; showing it synchronously would flash a modal
+            // across the GUI. The TUI has the same grace period — it repaints
+            // on the next frame.
+            queueMicrotask(() => {
+              if (!settled) syncVisible(ui);
+            });
           })
           .catch((error) => {
             emit(ui, {
@@ -246,7 +301,7 @@ export function registerCustomUiBridge(pi: ExtensionAPI, options?: { enabled?: b
       // Components normally repaint through `tui.requestRender()`, but repaint
       // unconditionally so a component that mutates state without asking for a
       // render still shows the result of the keystroke.
-      emit(ctx.ui, { op: "update", id: panel.id, lines: renderPanel(panel) });
+      repaint(ctx.ui, panel);
     },
   });
 }

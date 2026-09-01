@@ -1,6 +1,32 @@
 import { t } from "../../i18n.js";
+import { basenameLocalPath } from "../../workspace/path-utils.js";
 
-function activeSession(getTarget, getSessions) {
+/** Compact label for a session file path; copy/hover still use the full path. */
+export function describeSessionFile(filePath, inMemoryLabel) {
+  if (!filePath) {
+    return { text: inMemoryLabel, title: "", copyValue: inMemoryLabel };
+  }
+  return {
+    text: basenameLocalPath(filePath) || filePath,
+    title: filePath,
+    copyValue: filePath,
+  };
+}
+
+export function describeSessionId(sessionId, unavailableLabel) {
+  if (!sessionId) {
+    return { text: unavailableLabel, title: "", copyValue: unavailableLabel };
+  }
+  return { text: sessionId, title: sessionId, copyValue: sessionId };
+}
+
+function paintSessionInfoValue(el, { text, title }) {
+  el.textContent = text;
+  if (title) el.setAttribute("title", title);
+  else el.removeAttribute("title");
+}
+
+export function activeSession(getTarget, getSessions) {
   const sessionId = getTarget()?.sessionId ?? "";
   return {
     id: sessionId,
@@ -25,8 +51,14 @@ export function setupSessionInfo({
 
   const refresh = () => {
     const { id, session } = activeSession(getTarget, getSessions);
-    fileValue.textContent = session?.filePath || t("sessionInfo.inMemory");
-    idValue.textContent = id || t("sessionInfo.unavailable");
+    const filePath = session?.filePath || "";
+    const file = describeSessionFile(filePath, t("sessionInfo.inMemory"));
+    const idDesc = describeSessionId(id, t("sessionInfo.unavailable"));
+    paintSessionInfoValue(fileValue, file);
+    paintSessionInfoValue(idValue, idDesc);
+    fileValue.dataset.copyValue = file.copyValue;
+    idValue.dataset.copyValue = idDesc.copyValue;
+    return { id, filePath };
   };
 
   const close = () => {
@@ -60,7 +92,9 @@ export function setupSessionInfo({
   for (const button of panel.querySelectorAll("[data-copy-session-field]")) {
     button.addEventListener("click", async () => {
       const value =
-        button.dataset.copySessionField === "file" ? fileValue.textContent : idValue.textContent;
+        button.dataset.copySessionField === "file"
+          ? fileValue.dataset.copyValue || fileValue.textContent
+          : idValue.dataset.copyValue || idValue.textContent;
       const defaultLabel = t(
         button.dataset.copySessionField === "file" ? "sessionInfo.copyFile" : "sessionInfo.copyId",
       );

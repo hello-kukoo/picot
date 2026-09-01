@@ -2,14 +2,15 @@
 // ABOUTME: Safe to call repeatedly — each call re-probes and stale probes lose.
 
 import { onLocaleChange, t } from "../../i18n.js";
+import { compactWorkspaceLabel } from "../../workspace/path-utils.js";
 
 /**
  * project-header — populates the chat header with workspace path and git
  * branch info fetched from the host data plane.
  *
  * Responsibilities:
- *  - Show the full workspace path in the #workspace-indicator label inside
- *    #file-sidebar-toggle.
+ *  - Show the workspace folder name in the #workspace-indicator label inside
+ *    #file-sidebar-toggle. Title and aria-label keep the full path.
  *  - Show the current git branch in the #git-branch-indicator label inside
  *    #diff-sidebar-toggle.
  *  - Both labels are hidden when data is unavailable.
@@ -73,7 +74,7 @@ export async function setupProjectHeader({ data, workspaceId } = {}) {
 
   if (workspaceEl) {
     if (info.path) {
-      workspaceEl.textContent = info.path;
+      workspaceEl.textContent = compactWorkspaceLabel(info.path);
       workspaceEl.classList.remove("hidden");
       if (filesToggleEl) {
         applyFilesToggleLabels(filesToggleEl, info);

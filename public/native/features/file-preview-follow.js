@@ -57,7 +57,7 @@ export function shouldFollowWrite(event, pendingPath = "") {
   return true;
 }
 
-export function createFilePreviewFollow({ panel, getWorkspacePath } = {}) {
+export function createFilePreviewFollow({ panel, getWorkspacePath, onWriteApplied } = {}) {
   const pending = new Map();
 
   async function resolveRelative(rawPath) {
@@ -78,11 +78,15 @@ export function createFilePreviewFollow({ panel, getWorkspacePath } = {}) {
     async onToolEnd(event) {
       const remembered = event?.toolCallId ? pending.get(event.toolCallId) : "";
       if (event?.toolCallId) pending.delete(event.toolCallId);
-      if (!shouldFollowWrite(event, remembered) || !panel) return null;
+      if (!shouldFollowWrite(event, remembered)) return null;
       const raw = pathFromToolArgs(event.args) || remembered;
-      const relative = await resolveRelative(raw);
-      if (!relative) return null;
-      return panel.revealWrite(relative);
+      const previewPath = await resolveRelative(raw);
+      if (!previewPath) return null;
+      const tab = panel ? await panel.revealWrite(previewPath) : null;
+      // Notify after the write is known to be inside the workspace, whether
+      // or not a preview panel is attached (turn chips collect from this).
+      if (typeof onWriteApplied === "function") onWriteApplied(raw, previewPath);
+      return tab;
     },
 
     async openPath(rawPath) {

@@ -42,18 +42,31 @@ export function buildCommandCatalog({ builtIns = [], nativeCommands = [] } = {})
   return catalog;
 }
 
+/**
+ * Resolve the catalog entry a composer line invokes, or null when the line is
+ * not a slash command Picot knows about. Exported so callers that need the
+ * command itself (not just the intent) parse it the same way.
+ */
+export function matchCatalogCommand(input, catalog) {
+  const message = String(input ?? "");
+  if (message.startsWith("//") || !message.startsWith("/")) return null;
+  const match = /^\/([^\s]+)(?:\s+(.*))?$/s.exec(message);
+  const name = match?.[1] ?? "";
+  const args = match?.[2] ?? "";
+  const resolvedName = name === "todo" && catalog.has("todos") ? "todos" : name;
+  const command = catalog.get(resolvedName);
+  return command ? { command, name, resolvedName, args } : null;
+}
+
 export function resolveComposerInput(input, catalog, options = {}) {
   const message = String(input ?? "");
   if (message.startsWith("//")) {
     return runtimeIntent("prompt", message.slice(1), options.images);
   }
   if (message.startsWith("/")) {
-    const match = /^\/([^\s]+)(?:\s+(.*))?$/s.exec(message);
-    const name = match?.[1] ?? "";
-    const args = match?.[2] ?? "";
-    const resolvedName = name === "todo" && catalog.has("todos") ? "todos" : name;
-    const command = catalog.get(resolvedName);
-    if (!command) return defaultRuntimeIntent(message, options);
+    const matched = matchCatalogCommand(message, catalog);
+    if (!matched) return defaultRuntimeIntent(message, options);
+    const { command, name, resolvedName, args } = matched;
     if (command.capabilityState !== "enabled") {
       return { kind: "rejected", reason: `Command unavailable: /${name}` };
     }

@@ -2,10 +2,12 @@ const READ_OPERATIONS = new Set([
   "list_files",
   "list_sessions",
   "list_all_sessions",
+  "list_launcher_sessions",
   "search_sessions",
   "cost_dashboard",
   "workspace_info",
   "read_session_messages",
+  "read_session_tree",
 ]);
 
 const DEFAULT_SESSION_LIST_HTTP_TIMEOUT_MS = 1500;
@@ -22,6 +24,7 @@ export class HostDataGateway {
   #nextRequestId = 1;
   #pending = new Map();
   #sessionListHttpTimeoutMs;
+  #deviceToken;
 
   constructor(
     adapter,
@@ -31,6 +34,7 @@ export class HostDataGateway {
       sessionListHttpTimeoutMs = DEFAULT_SESSION_LIST_HTTP_TIMEOUT_MS,
       hostReadyTimeoutMs = DEFAULT_HOST_READY_TIMEOUT_MS,
       dataRequestTimeoutMs = DEFAULT_DATA_REQUEST_TIMEOUT_MS,
+      deviceToken = "",
     } = {},
   ) {
     this.#adapter = adapter;
@@ -39,6 +43,7 @@ export class HostDataGateway {
     this.#location = location;
     this.#dataRequestTimeoutMs = dataRequestTimeoutMs;
     this.#sessionListHttpTimeoutMs = sessionListHttpTimeoutMs;
+    this.#deviceToken = deviceToken;
     adapter.setReceiver((frame) => this.#receive(frame));
     adapter.setConnectionListener?.((connected) => {
       if (!connected) this.#disconnect();
@@ -122,6 +127,10 @@ export class HostDataGateway {
     return this.request("list_all_sessions", { workspaceId });
   }
 
+  listLauncherSessions() {
+    return this.request("list_launcher_sessions");
+  }
+
   searchSessions(workspaceId, query) {
     return this.request("search_sessions", { workspaceId, query });
   }
@@ -144,6 +153,15 @@ export class HostDataGateway {
     return this.request("read_session_messages", { workspaceId, sessionId });
   }
 
+  /**
+   * Full session JSONL tree snapshot for the Info panel: every id-carrying
+   * entry verbatim (hidden entries keep the parent/child chain connected)
+   * plus the derived active leaf. Resolves to `{ tree: { entries, leafId } }`.
+   */
+  readSessionTree(workspaceId, sessionId) {
+    return this.request("read_session_tree", { workspaceId, sessionId });
+  }
+
   async #listAllSessionsHttp(workspaceId) {
     const url = new URL("/v2/sessions", this.#location?.origin ?? globalThis.location?.origin);
     url.searchParams.set("workspaceId", workspaceId);
@@ -162,9 +180,11 @@ export class HostDataGateway {
         reject(new Error("Session list HTTP request timed out"));
       }, timeoutMs);
     });
-    const fetchPromise = controller
-      ? this.#fetch(url, { signal: controller.signal })
-      : this.#fetch(url);
+    const init = {
+      ...(controller ? { signal: controller.signal } : {}),
+      ...(this.#deviceToken ? { headers: { authorization: `Bearer ${this.#deviceToken}` } } : {}),
+    };
+    const fetchPromise = this.#fetch(url, init);
     return Promise.race([fetchPromise, timeoutPromise]).finally(() => {
       if (timeout) clearTimeout(timeout);
     });

@@ -3,6 +3,15 @@ import { CUSTOM_UI_OVERLAY_ENABLED, registerCustomUiBridge } from "./custom-ui-b
 
 const ESCAPE = String.fromCharCode(27);
 
+/**
+ * Let a panel finish opening: one tick resolves the component factory, the
+ * next runs the deferred first paint.
+ */
+async function flush() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 type Frame = { op: string; id: string; lines?: string[]; width?: number; message?: string };
 
 /**
@@ -33,7 +42,7 @@ function setup({ enabled = true }: { enabled?: boolean } = {}) {
     },
   };
 
-  registerCustomUiBridge(pi as never, enabled ? { enabled: true } : undefined);
+  registerCustomUiBridge(pi as never, { enabled });
   handlers.get("session_start")?.({}, ctx);
 
   const frames = (): Frame[] =>
@@ -93,12 +102,12 @@ function open(
 
 describe("registerCustomUiBridge", () => {
   it("stays a no-op while the GUI overlay is disabled", async () => {
-    expect(CUSTOM_UI_OVERLAY_ENABLED).toBe(false);
+    expect(CUSTOM_UI_OVERLAY_ENABLED).toBe(true);
     const { ctx, frames } = setup({ enabled: false });
     const component = createComponent();
 
     void open(ctx, component, { overlay: true, overlayOptions: { width: 60 } });
-    await Promise.resolve();
+    await flush();
 
     expect(frames()).toEqual([]);
     expect(await ctx.ui.custom()).toBeUndefined();
@@ -109,7 +118,7 @@ describe("registerCustomUiBridge", () => {
     const component = createComponent();
 
     void open(ctx, component, { overlay: true, overlayOptions: { width: 60 } });
-    await Promise.resolve();
+    await flush();
 
     expect(frames()).toEqual([{ op: "open", id: "panel-1", width: 60, lines: ["line one"] }]);
   });
@@ -118,7 +127,7 @@ describe("registerCustomUiBridge", () => {
     const { ctx, frames } = setup();
 
     void open(ctx, createComponent());
-    await Promise.resolve();
+    await flush();
 
     expect(frames()[0].width).toBe(82);
   });
@@ -126,7 +135,7 @@ describe("registerCustomUiBridge", () => {
   it("resolves the awaiting caller when the component calls done", async () => {
     const { ctx, input } = setup();
     const pending = open(ctx, createComponent());
-    await Promise.resolve();
+    await flush();
 
     input({ id: "panel-1", data: ESCAPE });
     await expect(pending).resolves.toBe("closed");
@@ -136,7 +145,7 @@ describe("registerCustomUiBridge", () => {
     const { ctx, frames, input } = setup();
     const component = createComponent();
     void open(ctx, component);
-    await Promise.resolve();
+    await flush();
 
     component.lines = ["line two"];
     input({ id: "panel-1", data: `${ESCAPE}[B` });
@@ -149,7 +158,7 @@ describe("registerCustomUiBridge", () => {
     const { ctx, frames } = setup();
     const component = createComponent();
     void open(ctx, component);
-    await Promise.resolve();
+    await flush();
 
     component.lines = ["repainted"];
     component.requestRender();
@@ -161,7 +170,7 @@ describe("registerCustomUiBridge", () => {
     const { ctx, frames, input } = setup();
     const component = createComponent();
     const pending = open(ctx, component);
-    await Promise.resolve();
+    await flush();
 
     input({ id: "panel-1", cancel: true });
 
@@ -179,7 +188,7 @@ describe("registerCustomUiBridge", () => {
       (() => ({ render: () => ["stubborn"], handleInput: () => {} })) as never,
       undefined,
     );
-    await Promise.resolve();
+    await flush();
 
     input({ id: "panel-1", cancel: true });
     await expect(pending).resolves.toBeUndefined();
@@ -188,13 +197,18 @@ describe("registerCustomUiBridge", () => {
   it("re-reveals the panel underneath when a nested overlay closes", async () => {
     const { ctx, frames, input } = setup();
     void open(ctx, createComponent(["outer"]));
-    await Promise.resolve();
+    await flush();
     void open(ctx, createComponent(["inner"]));
-    await Promise.resolve();
+    await flush();
 
     input({ id: "panel-2", cancel: true });
 
-    expect(frames().at(-1)).toEqual({ op: "update", id: "panel-1", lines: ["outer"] });
+    // The WebView tore its terminal down when panel-2 opened, so the panel
+    // underneath has to be re-opened rather than repainted.
+    expect(frames().slice(-2)).toEqual([
+      { op: "close", id: "panel-2" },
+      { op: "open", id: "panel-1", width: 82, lines: ["outer"] },
+    ]);
   });
 
   it("reports a factory that throws instead of hanging the caller", async () => {
@@ -207,14 +221,15 @@ describe("registerCustomUiBridge", () => {
     );
 
     await expect(pending).resolves.toBeUndefined();
-    expect(frames().map((frame) => frame.op)).toEqual(["error", "close"]);
+    // The panel never reached the WebView, so there is nothing to close.
+    expect(frames().map((frame) => frame.op)).toEqual(["error"]);
     expect(frames()[0].message).toBe("boom");
   });
 
   it("releases panels still open at session shutdown", async () => {
     const { ctx, shutdown } = setup();
     const pending = open(ctx, createComponent());
-    await Promise.resolve();
+    await flush();
 
     shutdown();
     await expect(pending).resolves.toBeUndefined();
@@ -229,9 +244,77 @@ describe("registerCustomUiBridge", () => {
     sessionStart();
 
     void open(ctx, createComponent());
-    await Promise.resolve();
+    await flush();
 
     expect(custom).not.toHaveBeenCalled();
+  });
+
+  it("never paints an overlay the extension hides from inside onHandle", async () => {
+    const { ctx, frames } = setup();
+    let handle: { setHidden: (hidden: boolean) => void } | undefined;
+
+    // How an extension parks a panel at session start: open it, hide it, and
+    // reveal it later from its own slash command.
+    void open(ctx, createComponent(["mcp servers"]), {
+      overlay: true,
+      onHandle: (received: { setHidden: (hidden: boolean) => void }) => {
+        handle = received;
+        received.setHidden(true);
+      },
+    });
+    await flush();
+
+    expect(frames()).toEqual([]);
+
+    handle?.setHidden(false);
+    expect(frames()).toEqual([{ op: "open", id: "panel-1", width: 82, lines: ["mcp servers"] }]);
+  });
+
+  it("hides and re-reveals a parked overlay without disturbing the caller", async () => {
+    const { ctx, frames } = setup();
+    let handle: { setHidden: (hidden: boolean) => void; isHidden: () => boolean } | undefined;
+    void open(ctx, createComponent(), {
+      overlay: true,
+      onHandle: (received: never) => {
+        handle = received;
+      },
+    });
+    await flush();
+
+    handle?.setHidden(true);
+    expect(handle?.isHidden()).toBe(true);
+    expect(frames().at(-1)).toEqual({ op: "close", id: "panel-1" });
+
+    handle?.setHidden(false);
+    expect(frames().at(-1)).toEqual({
+      op: "open",
+      id: "panel-1",
+      width: 82,
+      lines: ["line one"],
+    });
+  });
+
+  it("routes keystrokes past a hidden panel to the visible one", async () => {
+    const { ctx, input } = setup();
+    const parked = createComponent(["parked"]);
+    let handle: { setHidden: (hidden: boolean) => void } | undefined;
+    void open(ctx, parked, {
+      overlay: true,
+      onHandle: (received: never) => {
+        handle = received;
+      },
+    });
+    await flush();
+    handle?.setHidden(true);
+
+    const visible = createComponent(["visible"]);
+    void open(ctx, visible);
+    await flush();
+
+    input({ data: "x" });
+
+    expect(visible.keys).toEqual(["x"]);
+    expect(parked.keys).toEqual([]);
   });
 
   it("ignores input for an unknown panel", () => {

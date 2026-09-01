@@ -75,9 +75,9 @@ describe("custom UI end to end", () => {
     expect(FakeTerminal.instances[0].writes.at(-1)).toContain("╭── MCP ──╮");
   });
 
-  it("does not open an overlay in the production default (disabled) path", async () => {
+  it("swallows the frame without opening an overlay when the renderer is off", async () => {
     const runtime = { request: vi.fn().mockResolvedValue({}) };
-    const panel = new CustomUiPanel({ runtime, getTarget: () => target });
+    const panel = new CustomUiPanel({ runtime, getTarget: () => target, enabled: false });
     const renderSystemMessage = vi.fn();
 
     const host = new ExtensionUiHost({

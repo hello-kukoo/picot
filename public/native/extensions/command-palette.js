@@ -1,3 +1,5 @@
+import { bindDialogEscape } from "../../ui/dialog-escape.js";
+
 export function setupCommandPalette({
   button,
   palette,
@@ -53,13 +55,14 @@ export function setupCommandPalette({
 
   button.addEventListener("click", open);
   overlay.addEventListener("click", close);
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !palette.classList.contains("hidden")) {
-      event.preventDefault();
+  bindDialogEscape(
+    () => {
+      if (palette.classList.contains("hidden")) return;
       close();
       button.focus();
-    }
-  });
+    },
+    { isActive: () => palette.isConnected && !palette.classList.contains("hidden") },
+  );
 
   return { open, close };
 }

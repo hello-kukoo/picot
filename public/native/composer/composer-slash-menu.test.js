@@ -74,7 +74,7 @@ describe("composer slash menu", () => {
     input.setSelectionRange(input.value.length, input.value.length);
     await controller.update();
 
-    // Ensure the menu groups both kinds (headings may be i18n‑translated).
+    // The menu groups both kinds (headings may be i18n-translated).
     const options = menu.querySelectorAll(".skill-slash-option");
     expect(options).toHaveLength(2);
     expect(options[0].textContent).toContain("Research");
@@ -108,6 +108,24 @@ describe("composer slash menu", () => {
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", cancelable: true }));
 
     expect(input.value).toBe("/picot-help ");
+  });
+
+  it("lists prompt-template commands alongside skills and extensions", async () => {
+    const controller = setupComposerSlashMenu({
+      input,
+      container: menu,
+      getCommands: () => [
+        { name: "fix-tests", description: "Fix failing tests", source: "prompt", scope: "project" },
+      ],
+    });
+
+    input.value = "/fix";
+    input.setSelectionRange(input.value.length, input.value.length);
+    await controller.update();
+
+    const options = menu.querySelectorAll(".skill-slash-option");
+    expect(options).toHaveLength(1);
+    expect(options[0].textContent).toContain("Fix Tests");
   });
 
   it("shows Personal vs Project from pi skill sourceInfo", async () => {
@@ -273,6 +291,74 @@ describe("composer slash menu", () => {
     expect(menu.querySelectorAll(".skill-slash-option")).toHaveLength(1);
     expect(menu.textContent).toContain("Research");
     expect(menu.textContent).toContain("Project");
+  });
+
+  it("ranks a prefix match above a fuzzy match from an earlier group", async () => {
+    const controller = setupComposerSlashMenu({
+      input,
+      container: menu,
+      getCommands: () => [
+        {
+          name: "skill:plan",
+          description: "Break a todo into steps",
+          type: "skill",
+          scope: "user",
+        },
+        { name: "todos", description: "Show all todos", source: "extension", scope: "user" },
+      ],
+    });
+
+    input.value = "/tod";
+    input.setSelectionRange(input.value.length, input.value.length);
+    await controller.update();
+
+    const options = menu.querySelectorAll(".skill-slash-option");
+    expect(options).toHaveLength(2);
+    expect(options[0].textContent).toContain("Todos");
+    expect(options[1].textContent).toContain("Plan");
+  });
+
+  it("badges a command Picot has learned is terminal-only", async () => {
+    const controller = setupComposerSlashMenu({
+      input,
+      container: menu,
+      getCommands: () => [
+        {
+          name: "mcp",
+          description: "Manage MCP servers",
+          source: "extension",
+          scope: "user",
+          compatibility: { status: "terminal-only", message: "/mcp needs the terminal." },
+        },
+      ],
+    });
+
+    input.value = "/mcp";
+    input.setSelectionRange(input.value.length, input.value.length);
+    await controller.update();
+
+    // i18n is not initialized under vitest, so `t()` echoes the key back.
+    const badge = menu.querySelector(".skill-slash-badge");
+    expect(badge.textContent).toBe(
+      "migrated.native.composer.composerSlashMenu.textcontent.terminalOnly",
+    );
+    expect(badge.title).toBe("/mcp needs the terminal.");
+  });
+
+  it("leaves the badge empty for a GUI-compatible command", async () => {
+    const controller = setupComposerSlashMenu({
+      input,
+      container: menu,
+      getCommands: () => [
+        { name: "websearch", description: "Search the web", source: "extension", scope: "user" },
+      ],
+    });
+
+    input.value = "/web";
+    input.setSelectionRange(input.value.length, input.value.length);
+    await controller.update();
+
+    expect(menu.querySelector(".skill-slash-badge").textContent).toBe("");
   });
 
   it("formats command names for display", () => {

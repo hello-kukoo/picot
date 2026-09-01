@@ -2,7 +2,7 @@
 
 use crate::host_data::{HostDataError, HostDataPlane, WriteFileResult};
 use crate::host_git;
-use crate::host_router::{HostRouter, RoutedAction, PROTOCOL_VERSION};
+use crate::host_router::{ClientKind, HostRouter, RoutedAction, PROTOCOL_VERSION};
 use crate::markitdown_preview::{
     ConversionOutcome, DependencyReason, MarkitdownPreviewService, INPUT_BYTE_CAP,
 };
@@ -20,24 +20,25 @@ use crate::window_owner::OwnerId;
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::Query;
-use axum::extract::{DefaultBodyLimit, Json, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Json, State};
 use axum::http::header::{
     CACHE_CONTROL, CONTENT_LENGTH, CONTENT_SECURITY_POLICY, CONTENT_TYPE, PRAGMA,
 };
-use axum::http::HeaderValue;
-use axum::http::StatusCode;
-use axum::response::Response;
+use axum::http::{HeaderMap, HeaderValue, Uri};
+use axum::http::{Method, StatusCode};
+use axum::middleware;
+use axum::response::{Redirect, Response};
 use axum::routing::{get, post};
 use axum::Router;
-use futures_util::StreamExt;
-use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
-use serde::{Deserialize, Serialize};
+use futures_util::{SinkExt, StreamExt};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fs;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri_plugin_dialog::DialogExt;
@@ -288,14 +289,30 @@ impl HostServer {
             ))
             .service(ServeDir::new(static_dir));
         let app = Router::new()
+            .route("/", get(app_launcher_redirect))
             .route("/health", get(health))
             .route("/health/runtime", get(health_runtime))
             .route("/health/models/test", post(health_model_test))
             .route("/v2/ws", get(websocket_upgrade))
             .route("/v2/bootstrap", get(bootstrap_target))
             .route("/v2/sessions", get(list_all_sessions_http))
-            .route("/v2/auth/exchange", post(exchange_pairing))
-            .route("/v2/lan-qr", get(lan_qr))
+            .route(
+                "/v2/auth/device-requests",
+                post(create_device_request).get(list_device_requests),
+            )
+            .route(
+                "/v2/auth/device-requests/{request_id}/claim",
+                post(claim_device_request),
+            )
+            .route(
+                "/v2/auth/device-requests/{request_id}/approve",
+                post(approve_device_request),
+            )
+            .route(
+                "/v2/auth/device-requests/{request_id}/deny",
+                post(deny_device_request),
+            )
+            .route("/v2/remote-access", get(remote_access))
             .route(
                 "/api/files/content",
                 get(read_file_content).put(write_file_content),
@@ -312,13 +329,53 @@ impl HostServer {
             .fallback_service(static_service)
             .layer(DefaultBodyLimit::max(MAX_HTTP_BODY_BYTES))
             .with_state(state.clone());
+        let auth_for_http = state.auth.clone();
+        let app = app.layer(middleware::from_fn(
+            move |request: axum::extract::Request, next: middleware::Next| {
+                let auth = auth_for_http.clone();
+                async move {
+                    let path = request.uri().path();
+                    if is_public_http_request(request.method(), path) {
+                        return next.run(request).await;
+                    }
+                    let loopback = request
+                        .extensions()
+                        .get::<ConnectInfo<std::net::SocketAddr>>()
+                        .copied()
+                        .map(|peer| {
+                            trusted_loopback_request(peer, request.headers(), request.uri())
+                        })
+                        .unwrap_or(false);
+                    let authorized = loopback
+                        || request
+                            .headers()
+                            .get(axum::http::header::AUTHORIZATION)
+                            .and_then(|value| value.to_str().ok())
+                            .and_then(|value| value.strip_prefix("Bearer "))
+                            .and_then(|token| auth.lock().ok()?.authorize(token).ok())
+                            .unwrap_or(false);
+                    if authorized {
+                        next.run(request).await
+                    } else {
+                        Response::builder()
+                            .status(StatusCode::UNAUTHORIZED)
+                            .header(CONTENT_TYPE, "application/json")
+                            .body(Body::from(r#"{"error":{"code":"unauthorized_device"}}"#))
+                            .expect("authorization response is valid")
+                    }
+                }
+            },
+        ));
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         tokio::spawn(async move {
-            if let Err(error) = axum::serve(listener, app)
-                .with_graceful_shutdown(async {
-                    let _ = shutdown_rx.await;
-                })
-                .await
+            if let Err(error) = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await
             {
                 log::error!("[picot-host] server stopped unexpectedly: {error}");
             }
@@ -366,6 +423,10 @@ impl Drop for HostServer {
             let _ = shutdown.send(());
         }
     }
+}
+
+async fn app_launcher_redirect() -> Redirect {
+    Redirect::temporary("/app")
 }
 
 async fn health(State(state): State<Arc<HostState>>) -> Json<Value> {
@@ -478,22 +539,15 @@ fn local_lan_url_with_port(port: u16) -> Option<String> {
     local_lan_ip().map(|ip| format!("http://{}:{}", ip, port))
 }
 
-fn append_pairing_token(url: &mut String, token: &str) {
-    let separator = if url.contains('?') { '&' } else { '?' };
-    url.push(separator);
-    url.push_str("pairingToken=");
-    url.push_str(&utf8_percent_encode(token, NON_ALPHANUMERIC).to_string());
-}
-
-#[derive(Deserialize)]
-struct LanQrQuery {
-    path: Option<String>,
-}
-
-async fn lan_qr(
+async fn remote_access(
     State(state): State<Arc<HostState>>,
-    Query(query): Query<LanQrQuery>,
+    peer: ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    uri: Uri,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if !trusted_loopback_request(peer, &headers, &uri) {
+        return Err(api_error(StatusCode::FORBIDDEN, "loopback_required"));
+    }
     let port = state.port;
     let base_url = local_lan_url_with_port(port).unwrap_or_default();
     if base_url.is_empty() {
@@ -502,25 +556,9 @@ async fn lan_qr(
             Json(json!({ "error": "No LAN interface found" })),
         ));
     }
-    // Append the session path (e.g. /app/workspaces/{id}/sessions/{id}) if provided.
-    let mut url = if let Some(path) = query.path.as_deref() {
-        let path = path.trim_start_matches('/');
-        format!("{}/{}", base_url.trim_end_matches('/'), path)
-    } else {
-        base_url.clone()
-    };
-    let pairing = state
-        .auth
-        .lock()
-        .map_err(|_| {
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({ "error": "Remote auth unavailable" })),
-            )
-        })?
-        .create_pairing(now_seconds());
-    append_pairing_token(&mut url, &pairing.token);
-    // Build QR code as SVG, then base64-encode it as a data URL.
+    // The QR is navigation only. It deliberately encodes the stable launcher
+    // URL and never contains a session path, pairing secret, or device token.
+    let url = format!("{}/app", base_url.trim_end_matches('/'));
     let code = qrcode::QrCode::new(url.as_bytes()).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -536,9 +574,7 @@ async fn lan_qr(
     use base64::Engine as _;
     let b64 = base64::engine::general_purpose::STANDARD.encode(svg_str.as_bytes());
     let data_url = format!("data:image/svg+xml;base64,{b64}");
-    Ok(Json(
-        json!({ "dataUrl": data_url, "url": url, "baseUrl": base_url }),
-    ))
+    Ok(Json(json!({ "dataUrl": data_url, "url": url })))
 }
 
 #[derive(Deserialize)]
@@ -884,6 +920,24 @@ struct ResolveWorkspaceRequest {
     project_path: String,
 }
 
+fn resolve_workspace_path(state: &HostState, project_path: &str) -> Result<String, &'static str> {
+    let path = PathBuf::from(project_path);
+    if !path.is_dir() {
+        return Err("project_not_found");
+    }
+    let workspace_id = state
+        .auth
+        .lock()
+        .map_err(|_| "auth_unavailable")?
+        .resolve_workspace(&path)
+        .map_err(|_| "workspace_resolve_failed")?;
+    state
+        .data
+        .register_workspace(&workspace_id, path)
+        .map_err(|_| "workspace_register_failed")?;
+    Ok(workspace_id)
+}
+
 /// POST /v2/resolve-workspace — map a project path to its stable workspace id
 /// and register the workspace root so subsequent `/v2/bootstrap` calls can
 /// lazily resume its sessions. Used by LAN/mobile clients switching to a
@@ -892,43 +946,31 @@ async fn resolve_workspace(
     State(state): State<Arc<HostState>>,
     Json(body): Json<ResolveWorkspaceRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let path = PathBuf::from(&body.project_path);
-    if !path.is_dir() {
-        return Err(api_error(StatusCode::NOT_FOUND, "project_not_found"));
-    }
-    let workspace_id = state
-        .auth
-        .lock()
-        .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "auth_unavailable"))?
-        .resolve_workspace(&path)
-        .map_err(|_| {
-            api_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "workspace_resolve_failed",
-            )
-        })?;
-    state
-        .data
-        .register_workspace(&workspace_id, path)
-        .map_err(|_| {
-            api_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "workspace_register_failed",
-            )
-        })?;
+    let workspace_id = resolve_workspace_path(&state, &body.project_path).map_err(|code| {
+        let status = if code == "project_not_found" {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        api_error(status, code)
+    })?;
     Ok(Json(json!({ "workspaceId": workspace_id })))
 }
 
 async fn websocket_upgrade(
     State(state): State<Arc<HostState>>,
+    peer: ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    uri: Uri,
     websocket: WebSocketUpgrade,
 ) -> Response {
+    let loopback = trusted_loopback_request(peer, &headers, &uri);
     websocket
         .max_message_size(MAX_WS_MESSAGE_BYTES)
-        .on_upgrade(move |socket| handle_websocket(socket, state))
+        .on_upgrade(move |socket| handle_websocket(socket, state, loopback))
 }
 
-async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
+async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>, loopback_peer: bool) {
     let Some(Ok(Message::Text(first))) = socket.next().await else {
         return;
     };
@@ -952,7 +994,7 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
             return;
         }
     };
-    if hello.get("clientType").and_then(Value::as_str) == Some("remote") {
+    if !loopback_peer {
         let authorized = hello
             .get("deviceToken")
             .and_then(Value::as_str)
@@ -975,7 +1017,15 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
         .map_err(|_| "Host router unavailable".to_string())
         .and_then(|mut router| {
             router
-                .connect(&client_id, &hello)
+                .connect_as(
+                    &client_id,
+                    &hello,
+                    if loopback_peer {
+                        ClientKind::Desktop
+                    } else {
+                        ClientKind::Remote
+                    },
+                )
                 .map_err(|error| error.message)
         });
     if let Err(message) = handshake {
@@ -999,9 +1049,28 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
     let mut terminal_events = state.terminal_events.subscribe();
     let mut git_events = state.git_events.subscribe();
     let mut subscriptions = HashSet::new();
-    loop {
+
+    // Writing goes through a channel so this loop never blocks on the socket,
+    // and — more importantly — so request dispatch can move off this task. A
+    // runtime request stays pending for as long as the Pi command it triggers
+    // runs, and a command that opens an extension dialog only finishes once
+    // the user answers it. Answering needs the `extension_ui_request` event
+    // that this very loop delivers, so awaiting dispatch inline deadlocked the
+    // dialog until the 30s RPC timeout fired.
+    let (mut socket_sink, mut socket_stream) = socket.split();
+    let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
+    let writer = tokio::spawn(async move {
+        while let Some(message) = outgoing_rx.recv().await {
+            if socket_sink.send(message).await.is_err() {
+                break;
+            }
+        }
+    });
+    let send_frame = |value: Value| outgoing_tx.send(Message::Text(value.to_string().into()));
+
+    'connection: loop {
         tokio::select! {
-            incoming = socket.next() => {
+            incoming = socket_stream.next() => {
                 let Some(Ok(message)) = incoming else { break };
                 let Message::Text(text) = message else {
                     if matches!(message, Message::Close(_)) { break; }
@@ -1010,7 +1079,7 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                 let frame = match serde_json::from_str::<Value>(&text) {
                     Ok(frame) => frame,
                     Err(_) => {
-                        let _ = send_error(&mut socket, None, "invalid_json", "Invalid JSON frame").await;
+                        let _ = send_frame(structured_error(None, "invalid_json", "Invalid JSON frame"));
                         continue;
                     }
                 };
@@ -1027,6 +1096,10 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                             .route(&client_id, &frame)
                             .map_err(|error| (error.code, error.message))
                     });
+                // Subscribe stays on this task: it mutates `subscriptions`,
+                // which the runtime-event branch below reads, and it never
+                // awaits. Every other action is dispatched on its own task so a
+                // long-running Pi command cannot stall event delivery.
                 let mut after_response = Vec::new();
                 let response = match routed {
                     Ok(RoutedAction::Subscribe { request_id, target, .. }) => {
@@ -1050,19 +1123,32 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                             Err(_) => Err(("invalid_target", "Runtime target is invalid".into())),
                         }
                     }
-                    Ok(action) => dispatch(action, &state).await,
+                    Ok(action) => {
+                        let state = Arc::clone(&state);
+                        let outgoing_tx = outgoing_tx.clone();
+                        tokio::spawn(async move {
+                            let outgoing = match dispatch(action, &state).await {
+                                Ok(value) => value,
+                                Err((code, message)) => {
+                                    structured_error(request_id.as_deref(), code, &message)
+                                }
+                            };
+                            let _ = outgoing_tx.send(Message::Text(outgoing.to_string().into()));
+                        });
+                        continue;
+                    }
                     Err((code, message)) => Err((code, message)),
                 };
                 let outgoing = match response {
                     Ok(value) => value,
                     Err((code, message)) => structured_error(request_id.as_deref(), code, &message),
                 };
-                if socket.send(Message::Text(outgoing.to_string().into())).await.is_err() {
+                if send_frame(outgoing).is_err() {
                     break;
                 }
                 for replay in after_response {
-                    if socket.send(Message::Text(replay.to_string().into())).await.is_err() {
-                        return;
+                    if send_frame(replay).is_err() {
+                        break 'connection;
                     }
                 }
             }
@@ -1079,8 +1165,7 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                                 == Some(client_id.as_str());
                             if !is_owner { continue; }
                         }
-                        let outgoing = runtime_event_frame(event);
-                        if socket.send(Message::Text(outgoing.to_string().into())).await.is_err() {
+                        if send_frame(runtime_event_frame(event)).is_err() {
                             break;
                         }
                     }
@@ -1091,7 +1176,7 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                             "event_sequence_gap",
                             "Runtime events were missed; request a snapshot",
                         );
-                        if socket.send(Message::Text(outgoing.to_string().into())).await.is_err() {
+                        if send_frame(outgoing).is_err() {
                             break;
                         }
                     }
@@ -1101,7 +1186,7 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
             event = terminal_events.recv() => {
                 match event {
                     Ok((owner, outgoing)) if owner == terminal_owner => {
-                        if socket.send(Message::Text(outgoing.to_string().into())).await.is_err() {
+                        if send_frame(outgoing).is_err() {
                             break;
                         }
                     }
@@ -1112,7 +1197,7 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
             event = git_events.recv() => {
                 match event {
                     Ok((owner, outgoing)) if owner == client_id => {
-                        if socket.send(Message::Text(outgoing.to_string().into())).await.is_err() {
+                        if send_frame(outgoing).is_err() {
                             break;
                         }
                     }
@@ -1122,8 +1207,27 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
             }
         }
     }
+    drop(outgoing_tx);
+    let _ = writer.await;
     if let Ok(mut owners) = state.session_owners.lock() {
         owners.retain(|_, owner| owner != &client_id);
+    }
+}
+
+/// Most runtime commands are answered as soon as Pi has accepted them, so a
+/// short deadline keeps a wedged runtime from leaking a pending request.
+const RUNTIME_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// `prompt` is the exception. An extension command runs inline and its response
+/// only arrives once the handler returns — and a handler that opens a dialog
+/// does not return until the user has answered it, possibly several screens
+/// later. Bound that generously instead of at human-reaction speed; a 30s
+/// deadline turned every extension menu into a spurious "request failed".
+const RUNTIME_INTERACTIVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+fn runtime_request_timeout(command: &Value) -> Duration {
+    match command.get("type").and_then(Value::as_str) {
+        Some("prompt") => RUNTIME_INTERACTIVE_REQUEST_TIMEOUT,
+        _ => RUNTIME_REQUEST_TIMEOUT,
     }
 }
 
@@ -1204,7 +1308,8 @@ fn messages_from_entries_response(response: &Value) -> Value {
 }
 
 fn message_with_entry_id(mut message: Value, entry_id: Option<&str>) -> Value {
-    if message.get("role").and_then(Value::as_str) != Some("user") {
+    let role = message.get("role").and_then(Value::as_str);
+    if role != Some("user") && role != Some("assistant") {
         return message;
     }
     let Some(entry_id) = entry_id else {
@@ -1350,7 +1455,12 @@ async fn dispatch(
             }
             let response = state
                 .runtimes
-                .request(&target, command, idempotency_key, Duration::from_secs(30))
+                .request(
+                    &target,
+                    command.clone(),
+                    idempotency_key,
+                    runtime_request_timeout(&command),
+                )
                 .await
                 .map_err(|message| ("runtime_request_failed", message))?;
             Ok(json!({
@@ -1402,27 +1512,6 @@ async fn dispatch(
             }
             Ok(response)
         }
-        RoutedAction::Auth {
-            request_id, frame, ..
-        } => match frame.get("operation").and_then(Value::as_str) {
-            Some("create_pairing") => {
-                let pairing = state
-                    .auth
-                    .lock()
-                    .map_err(|_| ("auth_unavailable", "Remote auth unavailable".into()))?
-                    .create_pairing(now_seconds());
-                Ok(json!({
-                    "type": "auth_response",
-                    "requestId": request_id,
-                    "pairingToken": pairing.token,
-                    "expiresAt": pairing.expires_at,
-                }))
-            }
-            _ => Err((
-                "unknown_auth_operation",
-                "Unsupported auth operation".into(),
-            )),
-        },
         RoutedAction::Host {
             client_id,
             request_id,
@@ -1494,6 +1583,23 @@ async fn dispatch(
                     "sessions": sessions,
                 }))
             }
+            Some("list_launcher_sessions") => {
+                let sessions = state
+                    .data
+                    .list_launcher_sessions()
+                    .map_err(host_data_error)?;
+                let mut sessions = serde_json::to_value(sessions)
+                    .map_err(|error| ("serialization_failed", error.to_string()))?;
+                if let Ok(statuses) = state.runtimes.statuses() {
+                    annotate_live_sessions(&mut sessions, statuses);
+                }
+                Ok(json!({
+                    "type": "data_response",
+                    "requestId": request_id,
+                    "operation": "list_launcher_sessions",
+                    "sessions": sessions,
+                }))
+            }
             Some("search_sessions") => {
                 let workspace_id = frame
                     .get("workspaceId")
@@ -1545,6 +1651,26 @@ async fn dispatch(
                     "requestId": request_id,
                     "operation": "read_session_messages",
                     "messages": messages,
+                }))
+            }
+            Some("read_session_tree") => {
+                let workspace_id = frame
+                    .get("workspaceId")
+                    .and_then(Value::as_str)
+                    .ok_or(("invalid_workspace", "workspaceId is required".into()))?;
+                let session_id = frame
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .ok_or(("invalid_session", "sessionId is required".into()))?;
+                let tree = state
+                    .data
+                    .read_session_tree(workspace_id, session_id)
+                    .map_err(host_data_error)?;
+                Ok(json!({
+                    "type": "data_response",
+                    "requestId": request_id,
+                    "operation": "read_session_tree",
+                    "tree": tree,
                 }))
             }
             Some("workspace_info") => {
@@ -1734,6 +1860,21 @@ async fn dispatch_host_operation(
                 "requestId": request_id,
                 "operation": "open_external",
                 "ok": true,
+            }))
+        }
+        "resolve_workspace" => {
+            let project_path = frame
+                .get("projectPath")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or(("invalid_project_path", "projectPath is required".into()))?;
+            let workspace_id = resolve_workspace_path(state, project_path)
+                .map_err(|code| (code, code.replace('_', " ")))?;
+            Ok(json!({
+                "type": "host_response",
+                "requestId": request_id,
+                "operation": "resolve_workspace",
+                "workspaceId": workspace_id,
             }))
         }
         "delete_sessions" => {
@@ -2178,30 +2319,243 @@ fn host_data_http_error(error: HostDataError) -> (StatusCode, Json<Value>) {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PairingExchangeRequest {
-    pairing_token: String,
+struct DeviceRequestBody {
     device_id: String,
+    device_name: String,
+    claim_secret: String,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PairingExchangeResponse {
-    device_token: String,
+struct DeviceClaimBody {
+    device_id: String,
+    claim_secret: String,
 }
 
-async fn exchange_pairing(
+fn is_public_http_request(method: &Method, path: &str) -> bool {
+    if !path.starts_with("/v2/") && !path.starts_with("/api/") && !path.starts_with("/health/") {
+        return true;
+    }
+    (method == Method::GET && matches!(path, "/health" | "/v2/ws"))
+        || (method == Method::POST
+            && (matches!(path, "/v2/auth/device-requests")
+                || (path.starts_with("/v2/auth/device-requests/") && path.ends_with("/claim"))))
+}
+
+fn loopback_peer(peer: ConnectInfo<std::net::SocketAddr>) -> bool {
+    peer.0.ip().is_loopback()
+}
+
+fn loopback_authority(headers: &HeaderMap, uri: &Uri) -> bool {
+    let authority = headers
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .or_else(|| uri.authority().map(|authority| authority.as_str()));
+    let Some(authority) = authority else {
+        return false;
+    };
+    let Ok(authority) = axum::http::uri::Authority::from_str(authority) else {
+        return false;
+    };
+    let host = authority.host().trim_matches(['[', ']']);
+    host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
+}
+
+fn trusted_loopback_request(
+    peer: ConnectInfo<std::net::SocketAddr>,
+    headers: &HeaderMap,
+    uri: &Uri,
+) -> bool {
+    loopback_peer(peer) && loopback_authority(headers, uri)
+}
+
+fn no_store_json(status: StatusCode, value: Value) -> Response {
+    Response::builder()
+        .status(status)
+        .header(CONTENT_TYPE, "application/json")
+        .header(CACHE_CONTROL, "no-store")
+        .body(Body::from(value.to_string()))
+        .expect("JSON response is valid")
+}
+
+async fn create_device_request(
     State(state): State<Arc<HostState>>,
-    Json(request): Json<PairingExchangeRequest>,
-) -> Result<Json<PairingExchangeResponse>, (StatusCode, Json<Value>)> {
-    let token = state
+    Json(body): Json<DeviceRequestBody>,
+) -> Response {
+    let result = state
         .auth
         .lock()
-        .map_err(|_| api_error(StatusCode::SERVICE_UNAVAILABLE, "auth_unavailable"))?
-        .exchange(&request.pairing_token, &request.device_id, now_seconds())
-        .map_err(|_| api_error(StatusCode::UNAUTHORIZED, "pairing_rejected"))?;
-    Ok(Json(PairingExchangeResponse {
-        device_token: token,
-    }))
+        .map_err(|_| "auth_unavailable")
+        .and_then(|mut auth| {
+            auth.create_device_request(
+                &body.device_id,
+                &body.device_name,
+                &body.claim_secret,
+                now_seconds(),
+            )
+            .map_err(|error| match error {
+                crate::remote_auth::DeviceRequestError::Capacity => "request_capacity",
+                crate::remote_auth::DeviceRequestError::RateLimited => "rate_limited",
+                crate::remote_auth::DeviceRequestError::Invalid => "invalid_request",
+                _ => "request_rejected",
+            })
+        });
+    match result {
+        Ok(created) => no_store_json(
+            StatusCode::CREATED,
+            json!({
+                "requestId": created.request_id,
+                "expiresAt": created.expires_at,
+                "pollAfterMs": 1500,
+            }),
+        ),
+        Err(code) => no_store_json(
+            if code == "invalid_request" {
+                StatusCode::BAD_REQUEST
+            } else if code == "rate_limited" {
+                StatusCode::TOO_MANY_REQUESTS
+            } else {
+                StatusCode::SERVICE_UNAVAILABLE
+            },
+            json!({ "error": { "code": code } }),
+        ),
+    }
+}
+
+async fn list_device_requests(
+    State(state): State<Arc<HostState>>,
+    peer: ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response {
+    if !trusted_loopback_request(peer, &headers, &uri) {
+        return no_store_json(
+            StatusCode::FORBIDDEN,
+            json!({ "error": { "code": "loopback_required" } }),
+        );
+    }
+    match state.auth.lock() {
+        Ok(mut auth) => no_store_json(
+            StatusCode::OK,
+            json!({ "requests": auth.list_device_requests(now_seconds()) }),
+        ),
+        Err(_) => no_store_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({ "error": { "code": "auth_unavailable" } }),
+        ),
+    }
+}
+
+async fn decide_device_request(
+    State(state): State<Arc<HostState>>,
+    peer: ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    uri: Uri,
+    request_id: axum::extract::Path<String>,
+    approve: bool,
+) -> Response {
+    if !trusted_loopback_request(peer, &headers, &uri) {
+        return no_store_json(
+            StatusCode::FORBIDDEN,
+            json!({ "error": { "code": "loopback_required" } }),
+        );
+    }
+    let result = state
+        .auth
+        .lock()
+        .map_err(|_| crate::remote_auth::DeviceRequestError::Storage("auth unavailable".into()))
+        .and_then(|mut auth| auth.decide_device_request(&request_id, approve, now_seconds()));
+    match result {
+        Ok(()) => no_store_json(
+            StatusCode::OK,
+            json!({ "status": if approve { "approved" } else { "denied" } }),
+        ),
+        Err(
+            crate::remote_auth::DeviceRequestError::NotFound
+            | crate::remote_auth::DeviceRequestError::Denied
+            | crate::remote_auth::DeviceRequestError::Expired,
+        ) => no_store_json(
+            StatusCode::GONE,
+            json!({ "error": { "code": "already_handled" } }),
+        ),
+        Err(_) => no_store_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({ "error": { "code": "auth_unavailable" } }),
+        ),
+    }
+}
+
+async fn approve_device_request(
+    state: State<Arc<HostState>>,
+    peer: ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    uri: Uri,
+    request_id: axum::extract::Path<String>,
+) -> Response {
+    decide_device_request(state, peer, headers, uri, request_id, true).await
+}
+
+async fn deny_device_request(
+    state: State<Arc<HostState>>,
+    peer: ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    uri: Uri,
+    request_id: axum::extract::Path<String>,
+) -> Response {
+    decide_device_request(state, peer, headers, uri, request_id, false).await
+}
+
+async fn claim_device_request(
+    State(state): State<Arc<HostState>>,
+    axum::extract::Path(request_id): axum::extract::Path<String>,
+    Json(body): Json<DeviceClaimBody>,
+) -> Response {
+    let result = state
+        .auth
+        .lock()
+        .map_err(|_| crate::remote_auth::DeviceRequestError::Storage("auth unavailable".into()))
+        .and_then(|mut auth| {
+            auth.claim_device_request(
+                &request_id,
+                &body.device_id,
+                &body.claim_secret,
+                now_seconds(),
+            )
+        });
+    match result {
+        Ok(crate::remote_auth::DeviceClaim::Pending) => {
+            no_store_json(StatusCode::ACCEPTED, json!({ "status": "pending" }))
+        }
+        Ok(crate::remote_auth::DeviceClaim::Approved(token)) => no_store_json(
+            StatusCode::OK,
+            json!({ "status": "approved", "deviceToken": token }),
+        ),
+        Err(crate::remote_auth::DeviceRequestError::Denied) => {
+            no_store_json(StatusCode::FORBIDDEN, json!({ "status": "denied" }))
+        }
+        Err(
+            crate::remote_auth::DeviceRequestError::Expired
+            | crate::remote_auth::DeviceRequestError::NotFound,
+        ) => no_store_json(
+            StatusCode::GONE,
+            json!({ "error": { "code": "request_expired" } }),
+        ),
+        Err(
+            crate::remote_auth::DeviceRequestError::WrongSecret
+            | crate::remote_auth::DeviceRequestError::WrongDevice,
+        ) => no_store_json(
+            StatusCode::UNAUTHORIZED,
+            json!({ "error": { "code": "claim_rejected" } }),
+        ),
+        Err(crate::remote_auth::DeviceRequestError::Invalid) => no_store_json(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": { "code": "invalid_request" } }),
+        ),
+        Err(_) => no_store_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({ "error": { "code": "auth_unavailable" } }),
+        ),
+    }
 }
 
 fn api_error(status: StatusCode, code: &'static str) -> (StatusCode, Json<Value>) {
@@ -2252,8 +2606,9 @@ fn now_seconds() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_pairing_token, extension_ui_requires_owner, messages_from_entries_response,
-        HostServer,
+        extension_ui_requires_owner, is_public_http_request, messages_from_entries_response,
+        runtime_request_timeout, trusted_loopback_request, HostServer,
+        RUNTIME_INTERACTIVE_REQUEST_TIMEOUT, RUNTIME_REQUEST_TIMEOUT,
     };
     use crate::metadata_store::MetadataStore;
     use crate::native_pi_manager::NativePiManager;
@@ -2266,21 +2621,80 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn appends_pairing_token_to_lan_deep_link() {
-        let mut plain = "http://192.168.1.10:9000/app/workspaces/a/sessions/b".to_string();
-        append_pairing_token(&mut plain, "picot_pair_a+b");
-        assert_eq!(
-            plain,
-            "http://192.168.1.10:9000/app/workspaces/a/sessions/b?pairingToken=picot%5Fpair%5Fa%2Bb"
-        );
+    fn exposes_static_assets_and_only_the_minimum_unauthenticated_protocol_routes() {
+        use axum::http::Method;
 
-        let mut with_query =
-            "http://192.168.1.10:9000/app/workspaces/a/sessions/b?tab=settings".to_string();
-        append_pairing_token(&mut with_query, "token");
-        assert_eq!(
-            with_query,
-            "http://192.168.1.10:9000/app/workspaces/a/sessions/b?tab=settings&pairingToken=token"
-        );
+        for path in [
+            "/",
+            "/app",
+            "/manifest.json",
+            "/locales/en.json",
+            "/icons/logo-dark.svg",
+            "/v/build/style.css",
+        ] {
+            assert!(is_public_http_request(&Method::GET, path), "{path}");
+        }
+        assert!(is_public_http_request(&Method::GET, "/v2/ws"));
+        assert!(is_public_http_request(
+            &Method::POST,
+            "/v2/auth/device-requests"
+        ));
+        assert!(is_public_http_request(
+            &Method::POST,
+            "/v2/auth/device-requests/request-1/claim"
+        ));
+
+        for (method, path) in [
+            (Method::POST, "/v2/auth/exchange"),
+            (Method::GET, "/v2/remote-access"),
+            (Method::GET, "/v2/auth/device-requests"),
+            (Method::POST, "/v2/auth/device-requests/request-1/approve"),
+            (Method::GET, "/v2/sessions"),
+            (Method::GET, "/api/files/content"),
+            (Method::GET, "/health/runtime"),
+        ] {
+            assert!(!is_public_http_request(&method, path), "{path}");
+        }
+    }
+
+    #[test]
+    fn loopback_authority_requires_actual_peer_and_accepts_supported_hosts() {
+        use axum::extract::connect_info::ConnectInfo;
+        use axum::http::{HeaderMap, HeaderValue, Uri};
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
+        let peer = ConnectInfo(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1));
+        let uri = Uri::from_static("/health");
+        for host in [
+            "localhost",
+            "localhost:57620",
+            "127.0.0.1:57620",
+            "[::1]:57620",
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert("host", HeaderValue::from_static(host));
+            assert!(trusted_loopback_request(peer, &headers, &uri), "{host}");
+        }
+        assert!(trusted_loopback_request(
+            peer,
+            &HeaderMap::new(),
+            &Uri::from_static("http://localhost:57620/health"),
+        ));
+        let mut external = HeaderMap::new();
+        external.insert("host", HeaderValue::from_static("remote.example"));
+        assert!(!trusted_loopback_request(peer, &external, &uri));
+        let non_loopback = ConnectInfo(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)),
+            1,
+        ));
+        let mut spoofed = HeaderMap::new();
+        spoofed.insert("host", HeaderValue::from_static("127.0.0.1:57620"));
+        assert!(!trusted_loopback_request(non_loopback, &spoofed, &uri));
+        let ipv6_peer = ConnectInfo(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 1));
+        assert!(!trusted_loopback_request(ipv6_peer, &external, &uri));
+        let mut ipv6_headers = HeaderMap::new();
+        ipv6_headers.insert("host", HeaderValue::from_static("[::1]:57620"));
+        assert!(trusted_loopback_request(ipv6_peer, &ipv6_headers, &uri));
     }
 
     #[test]
@@ -2300,7 +2714,7 @@ mod tests {
     }
 
     #[test]
-    fn derives_active_branch_messages_with_user_entry_ids_from_entries() {
+    fn derives_active_branch_messages_with_user_and_assistant_entry_ids_from_entries() {
         let response = json!({
             "type": "response",
             "command": "get_entries",
@@ -2348,9 +2762,9 @@ mod tests {
             messages,
             json!([
                 { "role": "user", "content": "first", "entryId": "user-1" },
-                { "role": "assistant", "content": [{ "type": "text", "text": "old" }] },
+                { "role": "assistant", "content": [{ "type": "text", "text": "old" }], "entryId": "assistant-1" },
                 { "role": "user", "content": "current", "entryId": "user-2" },
-                { "role": "assistant", "content": [{ "type": "text", "text": "new" }] }
+                { "role": "assistant", "content": [{ "type": "text", "text": "new" }], "entryId": "assistant-2" }
             ])
         );
     }
@@ -2371,6 +2785,17 @@ mod tests {
             .await
             .unwrap();
 
+        let root = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap()
+            .get(format!("{}/", host.origin()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(root.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(root.headers().get("location").unwrap(), "/app");
+
         let health: serde_json::Value = reqwest::get(format!("{}/health", host.origin()))
             .await
             .unwrap()
@@ -2386,6 +2811,100 @@ mod tests {
             .await
             .unwrap();
         assert!(index.contains("Picot native host"));
+
+        host.stop();
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[tokio::test]
+    async fn protects_http_data_and_remote_access_by_authority_and_bearer() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-auth-boundary-{nonce}"));
+        let public = temp.join("public");
+        fs::create_dir_all(&public).unwrap();
+        fs::write(public.join("index.html"), "Picot").unwrap();
+        let metadata = MetadataStore::open(&temp.join("picot.sqlite3")).unwrap();
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::new(Mutex::new(metadata)))));
+        let host = HostServer::start(public, NativePiManager::new(32), auth, None)
+            .await
+            .unwrap();
+        let client = reqwest::Client::new();
+        let runtime_url = format!("{}/health/runtime", host.origin());
+
+        let loopback = client.get(&runtime_url).send().await.unwrap();
+        assert!(loopback.status().is_success());
+
+        let external_authority = client
+            .get(&runtime_url)
+            .header("host", "remote.example")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            external_authority.status(),
+            reqwest::StatusCode::UNAUTHORIZED
+        );
+
+        let invalid_bearer = client
+            .get(&runtime_url)
+            .header("host", "remote.example")
+            .bearer_auth("invalid-token")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(invalid_bearer.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+        let remote_access = client
+            .get(format!("{}/v2/remote-access", host.origin()))
+            .send()
+            .await
+            .unwrap();
+        assert!(remote_access.status().is_success());
+        let body: serde_json::Value = remote_access.json().await.unwrap();
+        let launcher_url = reqwest::Url::parse(body["url"].as_str().unwrap()).unwrap();
+        assert_eq!(launcher_url.path(), "/app");
+        assert!(launcher_url.query().is_none());
+        assert!(launcher_url.fragment().is_none());
+        assert!(!body.to_string().contains("picot_pair_"));
+
+        let request = host
+            .state
+            .auth
+            .lock()
+            .unwrap()
+            .create_device_request("remote-test", "Remote browser", &"a".repeat(64), 1)
+            .unwrap();
+        host.state
+            .auth
+            .lock()
+            .unwrap()
+            .decide_device_request(&request.request_id, true, 2)
+            .unwrap();
+        let device_token = match host
+            .state
+            .auth
+            .lock()
+            .unwrap()
+            .claim_device_request(&request.request_id, "remote-test", &"a".repeat(64), 3)
+            .unwrap()
+        {
+            crate::remote_auth::DeviceClaim::Approved(token) => token,
+            _ => panic!("approved request did not issue a token"),
+        };
+        let remote_access_bearer = client
+            .get(format!("{}/v2/remote-access", host.origin()))
+            .header("host", "remote.example")
+            .bearer_auth(device_token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            remote_access_bearer.status(),
+            reqwest::StatusCode::FORBIDDEN
+        );
 
         host.stop();
         fs::remove_dir_all(temp).unwrap();
@@ -2546,6 +3065,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bearer_authenticated_external_authority_cannot_retrieve_remote_access() {
+        use axum::http::header::HOST;
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-ws-auth-boundary-{nonce}"));
+        let public = temp.join("public");
+        fs::create_dir_all(&public).unwrap();
+        fs::write(public.join("index.html"), "Picot").unwrap();
+        let metadata = MetadataStore::open(&temp.join("picot.sqlite3")).unwrap();
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::new(Mutex::new(metadata)))));
+        let host = HostServer::start(public, NativePiManager::new(32), auth, None)
+            .await
+            .unwrap();
+        let token = "picot_device_invalid";
+        let response = reqwest::Client::new()
+            .get(format!("{}/v2/remote-access", host.origin()))
+            .header(HOST, "remote.example")
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+        host.stop();
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[tokio::test]
     async fn sends_runtime_events_only_after_an_explicit_target_subscription() {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2603,6 +3152,119 @@ mod tests {
         assert_eq!(event["type"], "runtime_event");
         assert_eq!(event["target"]["sessionId"], "session-a");
         assert_eq!(event["sequence"], 1);
+
+        host.stop();
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn prompts_get_the_interactive_deadline_and_everything_else_the_short_one() {
+        assert_eq!(
+            runtime_request_timeout(&json!({ "type": "prompt", "message": "/plan" })),
+            RUNTIME_INTERACTIVE_REQUEST_TIMEOUT
+        );
+        assert_eq!(
+            runtime_request_timeout(&json!({ "type": "get_commands" })),
+            RUNTIME_REQUEST_TIMEOUT
+        );
+        assert_eq!(
+            runtime_request_timeout(&json!({ "type": "steer", "message": "stop" })),
+            RUNTIME_REQUEST_TIMEOUT
+        );
+        assert_eq!(runtime_request_timeout(&json!({})), RUNTIME_REQUEST_TIMEOUT);
+    }
+
+    #[tokio::test]
+    async fn delivers_extension_dialog_events_while_a_runtime_request_is_still_pending() {
+        // An extension command such as `/plan` blocks its `prompt` response
+        // until the dialog it opens is answered. Dispatching that request on
+        // the socket task starved the event branch, so the dialog only reached
+        // the client when the 30s RPC timeout finally released the loop.
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-ws-pending-{nonce}"));
+        let public = temp.join("public");
+        fs::create_dir_all(&public).unwrap();
+        fs::write(public.join("index.html"), "Picot").unwrap();
+        let metadata = MetadataStore::open(&temp.join("picot.sqlite3")).unwrap();
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::new(Mutex::new(metadata)))));
+        let runtimes = NativePiManager::new(32);
+        let target = RuntimeTarget::new("workspace-a", "session-a", "instance-a");
+        let mut fake = runtimes.register_in_memory(target.clone()).unwrap();
+        let host = HostServer::start(public, runtimes, auth, None)
+            .await
+            .unwrap();
+        let ws_url = host.origin().replace("http://", "ws://") + "/v2/ws";
+        let (mut socket, _) = tokio_tungstenite::connect_async(ws_url).await.unwrap();
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "type": "hello",
+                    "protocolVersion": 2,
+                    "clientType": "desktop",
+                    "clientId": "desktop-a"
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        socket.next().await.unwrap().unwrap();
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "type": "runtime_subscribe",
+                    "requestId": "subscribe-1",
+                    "target": target,
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        socket.next().await.unwrap().unwrap();
+
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "type": "runtime_request",
+                    "requestId": "prompt-1",
+                    "target": target,
+                    "idempotencyKey": "key-1",
+                    "command": { "type": "prompt", "message": "/plan" },
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        // Pi received the prompt; deliberately never answer it, the way an
+        // extension command blocked on `ctx.ui.select()` does not.
+        let forwarded =
+            tokio::time::timeout(std::time::Duration::from_secs(1), fake.read_request())
+                .await
+                .expect("prompt forwarded to pi")
+                .unwrap();
+        assert_eq!(forwarded["type"], "prompt");
+
+        fake.write_frame(json!({
+            "type": "extension_ui_request",
+            "id": "dialog-1",
+            "method": "select",
+            "title": "Plan mode",
+            "options": ["Start Plan mode"],
+        }))
+        .await
+        .unwrap();
+
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), socket.next())
+            .await
+            .expect("dialog event delivered without waiting for the prompt response")
+            .unwrap()
+            .unwrap();
+        let event: serde_json::Value = serde_json::from_str(event.to_text().unwrap()).unwrap();
+        assert_eq!(event["type"], "runtime_event");
+        assert_eq!(event["event"]["type"], "extension_ui_request");
+        assert_eq!(event["event"]["id"], "dialog-1");
 
         host.stop();
         fs::remove_dir_all(temp).unwrap();

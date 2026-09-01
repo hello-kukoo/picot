@@ -1,6 +1,9 @@
 const STORAGE_KEY = "picot-open-app";
 
-const MONOGRAMS = {
+// Shared brand-mark tables: the header split-button and the Info panel both
+// resolve app logos/monograms from these tables so the two surfaces can
+// never drift (v3 "same action source" invariant).
+export const OPEN_APP_MONOGRAMS = {
   vscode: "VS",
   cursor: "C",
   webstorm: "WS",
@@ -10,7 +13,7 @@ const MONOGRAMS = {
   finder: "F",
 };
 
-const ICONS = {
+export const OPEN_APP_ICONS = {
   vscode: "icons/app-vscode.png",
   cursor: "icons/app-cursor.svg",
   webstorm: "icons/app-webstorm.svg",
@@ -21,10 +24,18 @@ const ICONS = {
 };
 
 function renderLogo(app) {
-  const icon = ICONS[app?.id];
-  if (icon) return `<img src="${icon}" alt="" class="header-open-app-logo-img">`;
-  const label = MONOGRAMS[app?.id] || app?.label?.slice(0, 1).toUpperCase() || "•";
-  return `<span class="header-open-app-logo-text">${label}</span>`;
+  const icon = OPEN_APP_ICONS[app?.id];
+  if (icon) {
+    const image = document.createElement("img");
+    image.src = icon;
+    image.alt = "";
+    image.className = "header-open-app-logo-img";
+    return image;
+  }
+  const label = document.createElement("span");
+  label.className = "header-open-app-logo-text";
+  label.textContent = OPEN_APP_MONOGRAMS[app?.id] || app?.label?.slice(0, 1).toUpperCase() || "•";
+  return label;
 }
 
 function reportError(onError, error) {
@@ -66,7 +77,7 @@ export function setupHeaderOpenApp({ data, control, workspaceId, onError } = {})
       return;
     }
     root.classList.remove("hidden");
-    logo.innerHTML = renderLogo(app);
+    logo.replaceChildren(renderLogo(app));
     button.title = `Open ${state.path} in ${app.label}`;
     button.setAttribute("aria-label", `Open workspace in ${app.label}`);
   };
@@ -114,7 +125,13 @@ export function setupHeaderOpenApp({ data, control, workspaceId, onError } = {})
       if (app.id === state.selectedId) item.classList.add("active");
       item.title = `Open in ${app.label}`;
       item.setAttribute("aria-label", `Open in ${app.label}`);
-      item.innerHTML = `<span class="header-open-app-logo" aria-hidden="true">${renderLogo(app)}</span><span>${app.label}</span>`;
+      const glyph = document.createElement("span");
+      glyph.className = "header-open-app-logo";
+      glyph.setAttribute("aria-hidden", "true");
+      glyph.append(renderLogo(app));
+      const name = document.createElement("span");
+      name.textContent = app.label;
+      item.append(glyph, name);
       item.addEventListener("click", (event) => {
         event.stopPropagation();
         closeMenu();

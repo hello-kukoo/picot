@@ -3,6 +3,7 @@ import { createIcon } from "../../icons.js";
 import { buildSidebarSection, buildSidebarWorkspaceGroup } from "../../sidebar-workspace-group.js";
 import { isSuperAgentProjectPath } from "../../super-agent/session.js";
 import { isSuperAgentEnabled } from "../../super-agent/settings.js";
+import { bindDialogEscape } from "../../ui/dialog-escape.js";
 import { createLoadingPlaceholder } from "../../ui/loading-placeholder.js";
 import { basenameLocalPath } from "../../workspace/path-utils.js";
 import { randomId } from "../utils/random-id.js";
@@ -221,6 +222,8 @@ export class SessionSidebar {
       onCreateSession,
       onSessionsLoaded,
       onAgentInboxSessionChange,
+      loadSessions,
+      cacheScope,
     },
   ) {
     this.container = container;
@@ -233,6 +236,8 @@ export class SessionSidebar {
     this.onCreateSession = onCreateSession;
     this.onSessionsLoaded = onSessionsLoaded;
     this.onAgentInboxSessionChange = onAgentInboxSessionChange;
+    this.loadSessions = loadSessions;
+    this.cacheScope = cacheScope;
 
     this.sessions = [];
     this.activeSessionId = getTarget()?.sessionId ?? null;
@@ -445,20 +450,18 @@ export class SessionSidebar {
       actions.append(noBtn, yesBtn);
       dialog.appendChild(actions);
       overlay.appendChild(dialog);
-      function onKeyDown(event) {
-        if (event.key === "Escape") cleanup(false);
-      }
+      let unbindEscape = () => {};
       function cleanup(result) {
-        document.removeEventListener("keydown", onKeyDown);
+        unbindEscape();
         overlay.remove();
         resolve(result);
       }
+      unbindEscape = bindDialogEscape(() => cleanup(false));
       overlay.addEventListener("click", (event) => {
         if (event.target === overlay) cleanup(false);
       });
       overlay.querySelector(".sidebar-confirm-no").addEventListener("click", () => cleanup(false));
       overlay.querySelector(".sidebar-confirm-yes").addEventListener("click", () => cleanup(true));
-      document.addEventListener("keydown", onKeyDown);
       document.body.appendChild(overlay);
     });
   }
@@ -518,7 +521,7 @@ export class SessionSidebar {
   // ── loading ─────────────────────────────────────────────────────
   async load({ quiet = false, retryAttempt = 0 } = {}) {
     const seq = ++this._loadSeq;
-    const workspaceId = this.getTarget()?.workspaceId;
+    const workspaceId = this.getTarget()?.workspaceId ?? this.cacheScope;
     if (!workspaceId) return;
     let renderedFromCache = false;
     if (!quiet && this.sessions.length === 0) {
@@ -545,7 +548,9 @@ export class SessionSidebar {
     }
     const previousSignature = sessionListSignature(this.sessions);
     try {
-      const response = await this.data.listAllSessions(workspaceId);
+      const response = this.loadSessions
+        ? await this.loadSessions()
+        : await this.data.listAllSessions(workspaceId);
       if (seq < this._loadCommitted) return;
       this._loadCommitted = seq;
       const receivedSessions = response.sessions ?? [];

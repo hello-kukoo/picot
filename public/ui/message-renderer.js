@@ -5,6 +5,7 @@
  */
 
 import { onLocaleChange, t } from "../i18n.js";
+import { createIcon } from "../icons.js";
 import { initImageLightbox } from "./image-lightbox.js";
 import { renderMarkdown, renderStreamingMarkdown, renderUserMarkdown } from "./markdown.js";
 
@@ -37,13 +38,27 @@ function cleanChatTranscript(text) {
 
 const COPY_ICON =
   '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
-const FORK_ICON =
-  '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>';
 const CHEVRON_ICON =
   '<svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" aria-hidden="true"><path d="M2 1l4 3-4 3z"/></svg>';
 const BRAIN_ICON =
   '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px" aria-hidden="true"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M12 5v13"/><path d="M6.5 9h11"/><path d="M7 13h10"/></svg>';
 const AUTO_SCROLL_BOTTOM_TOLERANCE = 1;
+
+export const USER_MESSAGE_COLLAPSE_CHAR_THRESHOLD = 400;
+export const USER_MESSAGE_COLLAPSE_NEWLINE_THRESHOLD = 8;
+
+function resolveMessageEntryId(message, override = null) {
+  const id = override ?? message?.entryId ?? message?.entry_id ?? null;
+  return typeof id === "string" && id ? id : null;
+}
+
+export function shouldCollapseUserMessage(text) {
+  if (typeof text !== "string" || text.length === 0) return false;
+  return (
+    text.length >= USER_MESSAGE_COLLAPSE_CHAR_THRESHOLD ||
+    (text.match(/\n/g)?.length ?? 0) >= USER_MESSAGE_COLLAPSE_NEWLINE_THRESHOLD
+  );
+}
 
 /**
  * Format a message timestamp for a chat log.
@@ -88,8 +103,11 @@ function fullTimestampTitle(timestampMs) {
 }
 
 export class MessageRenderer {
-  constructor(container) {
+  constructor(container, { sessionTreeActions = false } = {}) {
     this.container = container;
+    // Session-tree actions (Fork/Edit) need a persisted session tree behind
+    // the message list; ephemeral or detached views render no inert controls.
+    this.sessionTreeActions = sessionTreeActions;
     this.isNearBottom = true;
     this.lastWelcomeOptions = null;
     this._destroyed = false;
@@ -108,6 +126,10 @@ export class MessageRenderer {
       this.container.querySelectorAll(".message-copy-btn").forEach((btn) => {
         btn.setAttribute("aria-label", t("messages.copyMessage"));
         btn.title = t("messages.copyMessage");
+      });
+      this.container.querySelectorAll(".message-user-collapse-toggle").forEach((btn) => {
+        const expanded = btn.getAttribute("aria-expanded") === "true";
+        btn.textContent = t(expanded ? "messages.collapse" : "messages.expand");
       });
       this.container.querySelectorAll(".thinking-label-text").forEach((el) => {
         el.textContent = t("messages.thinking");
@@ -242,23 +264,30 @@ export class MessageRenderer {
     this._appendMarkup(content, renderUserMarkdown(displayContent));
     div.appendChild(content);
 
+    const collapseToggle = this._createUserCollapseToggle(content, displayContent);
     const footer = document.createElement("div");
     footer.className = "message-footer";
+    // Fixed user order (v3 2026-08-21 design): Expand → Fork → Edit → Copy →
+    // Timestamp. Fork/Edit are session-tree actions gated to persisted trees;
+    // the toolbar is always visible (no hover reveal).
+    if (collapseToggle) footer.appendChild(collapseToggle);
+    if (this.sessionTreeActions) {
+      const actionText = typeof message.content === "string" ? message.content : "";
+      footer.appendChild(this._createUserActionButton("fork", actionText));
+      footer.appendChild(this._createUserActionButton("edit", actionText));
+    }
+    footer.appendChild(this._createCopyButton());
     const timeSpan = this._createTimeSpan(message.timestamp);
     if (timeSpan) footer.appendChild(timeSpan);
-    footer.appendChild(this._createCopyButton());
-    const forkEntryId = entryId ?? message.entryId ?? message.entry_id ?? null;
+    const forkEntryId = resolveMessageEntryId(message, entryId);
     if (forkEntryId) {
       div.dataset.entryId = forkEntryId;
-      footer.appendChild(this._createForkButton());
     }
     div.appendChild(footer);
-    this._setupFooterHover(content, footer);
 
     this.container.appendChild(div);
     this._setupCodeCopyButtons(div);
     this._setupCopyBtn(div);
-    if (forkEntryId) this._setupForkBtn(div);
     if (!isHistory) this.scrollToBottom();
     return div;
   }
@@ -270,6 +299,14 @@ export class MessageRenderer {
     const div = document.createElement("div");
     div.className = `message assistant${isHistory ? " history" : ""}`;
     div.dataset.messageId = message.id || "streaming";
+    // Jump targets for the Info panel. Process-group fragments share a
+    // parent assistant entry; only the visible answer (or unterminated
+    // leading text) should carry the session-tree id.
+    const isProcessMessage = targetContainer !== null;
+    const assistantEntryId = resolveMessageEntryId(message);
+    if (assistantEntryId && !isProcessMessage) {
+      div.dataset.entryId = assistantEntryId;
+    }
 
     let contentHtml = "";
     let usageHtml = "";
@@ -300,7 +337,6 @@ export class MessageRenderer {
     }
 
     const hasText = rawStreamingText.trim().length > 0;
-    const isProcessMessage = targetContainer !== null;
     if (!isProcessMessage && message.usage?.cost && !hasThinking) {
       const cost = message.usage.cost.total;
       if (cost > 0) {
@@ -503,19 +539,35 @@ export class MessageRenderer {
     this.scrollToBottom();
   }
 
-  _setupForkBtn(messageEl) {
-    const btn = messageEl.querySelector(".message-fork-btn");
-    if (!btn) return;
-    const entryId = messageEl.dataset.entryId;
-    if (!entryId) return;
-    btn.addEventListener("click", () => {
-      messageEl.dispatchEvent(
-        new CustomEvent("messagefork", {
+  /**
+   * Fork / Edit action for user messages (Pi-native /fork and /tree-select
+   * entry points). The buttons dispatch bubbling `messagefork` /
+   * `messageedit` CustomEvents carrying the Pi entry id (resolved from the
+   * nearest [data-entry-id] anchor at click time) and the original prompt
+   * text. App.js owns the transport calls; the renderer stays presentational.
+   */
+  _createUserActionButton(kind, actionText) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `message-action message-${kind}-btn`;
+    button.setAttribute(
+      "aria-label",
+      t(kind === "fork" ? "messages.forkSession" : "messages.editMessage"),
+    );
+    button.title = t(kind === "fork" ? "messages.forkSession" : "messages.editMessage");
+    const icon = createIcon(kind === "fork" ? "git-branch" : "pencil", { size: 12 });
+    if (icon) button.appendChild(icon);
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const entryId = button.closest("[data-entry-id]")?.dataset.entryId || null;
+      button.dispatchEvent(
+        new CustomEvent(kind === "fork" ? "messagefork" : "messageedit", {
           bubbles: true,
-          detail: { entryId },
+          detail: { entryId, text: actionText },
         }),
       );
     });
+    return button;
   }
 
   _setupCopyBtn(messageEl) {
@@ -573,37 +625,22 @@ export class MessageRenderer {
     return span;
   }
 
-  /**
-   * Show/hide the user message footer on hover. Footer visibility is
-   * JS-driven (not pure CSS :hover) because a long user message fills the
-   * row width, so `:hover` on the message block never actually ends when
-   * the pointer moves to the empty side — the footer would never hide. Here
-   * we scope the hover to the bubble (.message-content) and the footer
-   * itself, with a tiny grace timer so moving between the two does not
-   * flicker. `:focus-within` still reveals the footer via CSS for keyboard
-   * users.
-   */
-  _setupFooterHover(contentEl, footerEl) {
-    if (!contentEl || !footerEl) return;
-    let hideTimer = 0;
-    const show = () => {
-      if (hideTimer) {
-        clearTimeout(hideTimer);
-        hideTimer = 0;
-      }
-      footerEl.classList.add("visible");
-    };
-    const hideSoon = () => {
-      if (hideTimer) clearTimeout(hideTimer);
-      hideTimer = setTimeout(() => {
-        hideTimer = 0;
-        footerEl.classList.remove("visible");
-      }, 80);
-    };
-    for (const el of [contentEl, footerEl]) {
-      el.addEventListener("mouseenter", show);
-      el.addEventListener("mouseleave", hideSoon);
-    }
+  /** Create the expand/collapse control for long user prompts. */
+  _createUserCollapseToggle(contentEl, rawContent) {
+    if (!shouldCollapseUserMessage(rawContent)) return null;
+
+    contentEl.classList.add("user-message-collapsible");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "message-user-collapse-toggle";
+    button.textContent = t("messages.expand");
+    button.setAttribute("aria-expanded", "false");
+    button.addEventListener("click", () => {
+      const expanded = contentEl.classList.toggle("expanded");
+      button.setAttribute("aria-expanded", String(expanded));
+      button.textContent = t(expanded ? "messages.collapse" : "messages.expand");
+    });
+    return button;
   }
 
   _createCopyButton() {
@@ -613,15 +650,6 @@ export class MessageRenderer {
     button.setAttribute("aria-label", t("messages.copyMessage"));
     button.title = t("messages.copyMessage");
     this._appendMarkup(button, COPY_ICON);
-    return button;
-  }
-
-  _createForkButton() {
-    const button = document.createElement("button");
-    button.className = "message-fork-btn";
-    button.setAttribute("aria-label", t("migrated.ui.messageRenderer.title.forkSessionFromHere"));
-    button.title = t("migrated.ui.messageRenderer.title.forkSessionFromHere");
-    this._appendMarkup(button, FORK_ICON);
     return button;
   }
 

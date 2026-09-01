@@ -45,7 +45,7 @@ describe("project header", () => {
     vi.restoreAllMocks();
   });
 
-  it("shows the full workspace path in the files toggle", async () => {
+  it("shows the workspace folder name in the files toggle", async () => {
     mountBaseHeader();
     const fullPath = "/Users/ShixinGuo/code/pi/pi-web-ui";
     const data = {
@@ -57,7 +57,7 @@ describe("project header", () => {
     const indicator = document.getElementById("workspace-indicator");
     const toggle = document.getElementById("file-sidebar-toggle");
     expect(data.workspaceInfo).toHaveBeenCalledWith("workspace-a");
-    expect(indicator.textContent).toBe(fullPath);
+    expect(indicator.textContent).toBe("pi-web-ui");
     expect(indicator.classList.contains("hidden")).toBe(false);
     expect(toggle.title).toBe(fullPath);
     expect(toggle.getAttribute("aria-label")).toBe(`Open Files panel — ${fullPath}`);
@@ -152,12 +152,12 @@ describe("project header", () => {
 
     const oldProbe = setupProjectHeader({ data, workspaceId: "old-ws" });
     await setupProjectHeader({ data, workspaceId: "new-ws" });
-    expect(document.getElementById("workspace-indicator").textContent).toBe("/new/workspace");
+    expect(document.getElementById("workspace-indicator").textContent).toBe("workspace");
 
     resolveOldProbe({ info: { path: "/old/workspace", gitBranch: "old-branch" } });
     await oldProbe;
 
-    expect(document.getElementById("workspace-indicator").textContent).toBe("/new/workspace");
+    expect(document.getElementById("workspace-indicator").textContent).toBe("workspace");
     expect(document.getElementById("git-branch-indicator").textContent).toBe("main");
     expect(document.getElementById("diff-sidebar-toggle").classList.contains("hidden")).toBe(false);
   });

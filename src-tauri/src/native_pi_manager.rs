@@ -116,6 +116,9 @@ impl NativePiManager {
         let launch = spec.command_description();
         let mut command = Command::new(&launch.program);
         configure_child_process(&mut command);
+        // Before any of our own env: an AppImage's AppRun points the dynamic
+        // loader at the bundle, and `pi` is built against the host system.
+        crate::appimage_env::scrub(&mut command);
         command
             .args(&launch.args)
             .envs(&launch.environment)
@@ -123,6 +126,7 @@ impl NativePiManager {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        crate::pi_tls::apply_runtime_tls_env(&mut command);
         let child = command
             .spawn()
             .map_err(|error| format!("Cannot start embedded Pi native RPC process: {error}"))?;
@@ -315,10 +319,16 @@ impl NativePiManager {
             .get(&target.instance_id)
             .map(|runtime| runtime.bridge.clone())
             .ok_or_else(|| "Native runtime instance is not running".to_string())?;
-        let response = bridge
-            .request(command, timeout)
-            .await
-            .map_err(|error| format!("Pi RPC request failed: {error:?}"))?;
+        let response = match bridge.request(command, timeout).await {
+            Ok(response) => response,
+            Err(error) => {
+                let mut message = format!("Pi RPC request failed: {error:?}");
+                if let Some(stderr) = self.drain_diagnostics(&target.instance_id) {
+                    message.push_str(&format!("\nPi stderr:\n{stderr}"));
+                }
+                return Err(message);
+            }
+        };
         if let Some(key) = mutation_key {
             self.inner
                 .coordinator
@@ -328,6 +338,19 @@ impl NativePiManager {
                 .map_err(|error| format!("Cannot cache mutation result: {error:?}"))?;
         }
         Ok(response)
+    }
+
+    /// Pull whatever `pi` wrote to stderr, so a dead runtime reports why it
+    /// died instead of a bare transport error.
+    fn drain_diagnostics(&self, instance_id: &str) -> Option<String> {
+        self.inner
+            .runtimes
+            .lock()
+            .ok()?
+            .get(instance_id)?
+            .process
+            .as_ref()?
+            .drain_diagnostics()
     }
 
     pub fn stop(&self, target: &RuntimeTarget) -> Result<(), String> {

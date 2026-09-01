@@ -4,6 +4,20 @@
     "welcomeHint": "下にメッセージを入力してPiとチャットを始めるか、サイドバーからセッションを選択してください。",
     "currentWorkspace": "現在のワークスペース："
   },
+  "launcher": {
+    "title": "プロジェクト",
+    "hint": "サイドバーからプロジェクトまたは保存済みセッションを選択します。",
+    "invalidSession": "この保存済みセッションを開けません。",
+    "accessHint": "プロジェクトとセッションを読み込むには、デスクトップ Picot からアクセスをリクエストしてください。",
+    "requestAccess": "アクセスをリクエスト",
+    "requestingAccess": "アクセスをリクエスト中…",
+    "waitingApproval": "デスクトップ Picot の承認を待っています…",
+    "accessApproved": "アクセスが承認されました。Picot を開いています…",
+    "accessDenied": "アクセスが拒否されました。もう一度リクエストしてください。",
+    "accessExpired": "アクセスリクエストの期限が切れました。もう一度リクエストしてください。",
+    "accessNetworkError": "アクセスリクエストに接続できません。再試行します。",
+    "composerHint": "保存済みセッションを選択してチャットを開始"
+  },
   "shortcuts": {
     "focusInput": "入力欄にフォーカス",
     "abort": "中止"
@@ -11,7 +25,6 @@
   "nav": {
     "chat": "チャット",
     "toggleSidebar": "サイドバーを切り替え",
-    "showMobileQR": "モバイルQRコードを表示",
     "openWorkspace": "ワークスペースを開く",
     "openWorkspaceInApp": "アプリでワークスペースを開く",
     "chooseApp": "ワークスペースを開くアプリを選択",
@@ -75,9 +88,9 @@
     "output": "output",
     "cache": "cache",
     "costTitle": "costTitle",
-    "summary": "In {in} · Out {out} · Cache {cache}",
-    "inputSummary": "In {in}",
-    "outputSummary": "Out {out}",
+    "summary": "↓ {in} · ↑ {out} · Cache {cache}",
+    "inputSummary": "↓ {in}",
+    "outputSummary": "↑ {out}",
     "sessionUsageTitle": "Session tokens (input / output / cache)"
   },
   "sessionInfo": {
@@ -132,7 +145,11 @@
     "expandAllToolsDesc": "すべてのツールカードを展開する",
     "collapseAllTools": "すべてのツールを折りたたむ",
     "collapseAllToolsDesc": "すべてのツールカードを折りたたむ",
-    "compacting": "コンパクト中…"
+    "compacting": "コンパクト中…",
+    "pasteDetected": "大きな貼り付けを検出（{size}）— ファイルとして添付しますか？",
+    "pasteAsFile": "ファイルとして添付",
+    "keepInline": "インラインのまま",
+    "pasteOffloadFailed": "貼り付けたテキストを保存できませんでした"
   },
   "messages": {
     "attachedImage": "添付画像",
@@ -140,12 +157,18 @@
     "thinking": "考え中",
     "copy": "コピー",
     "copied": "コピーしました！",
+    "forkSession": "セッションをフォーク",
+    "editMessage": "メッセージを編集",
+    "expand": "展開",
+    "collapse": "折りたたむ",
     "scrollToBottom": "Scroll to latest message",
     "processDetails": "処理の詳細",
     "processStep": "{count} ステップ",
     "processSteps": "{count} ステップ",
     "processToolCall": "{count} 件のツール呼び出し",
-    "processToolCalls": "{count} 件のツール呼び出し"
+    "processToolCalls": "{count} 件のツール呼び出し",
+    "providerError": "モデルへのリクエストに失敗しました。",
+    "turnFiles": "このターンで変更されたファイル（{count}）:"
   },
   "tools": {
     "copyOutput": "出力をコピー",
@@ -321,7 +344,8 @@
     "insertExample": "例を挿入",
     "remove": "削除",
     "delete": "削除",
-    "openLink": "リンクを開く"
+    "openLink": "リンクを開く",
+    "close": "閉じる"
   },
   "status": {
     "saving": "保存中...",
@@ -358,6 +382,7 @@
     "compactedWithSummary": "✓ コンテキストをコンパクトにしました — {summary}"
   },
   "errors": {
+    "treeNavigateFailed": "分岐の切り替えに失敗しました:{error}",
     "newSessionOnlyNative": "新しいセッションはネイティブホストでのみサポートされています。",
     "newSessionPathUnavailable": "新しいセッションの開始に失敗しました：現在のワークスペースパスが利用できません",
     "newSessionNavUnavailable": "新しいセッションの開始に失敗しました：ナビゲーションが利用できません",
@@ -393,7 +418,6 @@
     "modelRequestFailed": "モデルリクエストが失敗しました",
     "modelRequestFailedDetail": "[{provider}/{model}] {message}",
     "newSessionCancelled": "新しいセッションがキャンセルされました",
-    "mobileBrokerRequired": "別のプロジェクトで新しいチャットを開始するにはデスクトップブローカーが必要です。モバイルQRコードを再度開いてください。",
     "abortedByUser": "ユーザーによって中止されました",
     "invalidJson": "無効なJSON：{detail}",
     "modelsMustBeObject": "models.jsonはJSONオブジェクトである必要があります。",
@@ -591,6 +615,17 @@
     "extensions": "拡張機能",
     "usage": "使用量",
     "configuration": "詳細設定",
+    "remoteAccess": "リモートアクセス",
+    "remoteAccessHelp": "同じネットワーク上の端末でこのランチャーURLを開くかスキャンしてください。アクセスをリクエストし、デスクトップPicotで承認します。",
+    "remoteAccessUrl": "LANランチャーURL",
+    "remoteAccessCopy": "URLをコピー",
+    "remoteAccessRefreshQr": "QRを更新",
+    "remoteAccessQrRefreshed": "QRコードを更新しました。",
+    "remoteAccessCopied": "URLをコピーしました",
+    "remoteAccessCopyFailed": "コピーに失敗しました",
+    "remoteAccessQrAlt": "PicotランチャーのQRコード",
+    "remoteAccessNote": "このQRは /app ランチャーURLのみを開き、端末を認証しません。ローカルアクセスは http://<LAN-IP>:57620/app を使います。通信は暗号化されないため、プロンプトやソースコードがネットワーク上で見られる可能性があります。",
+    "remoteAccessUnavailable": "ローカルネットワークのランチャーURLを利用できません。",
     "agentInbox": "エージェント受信箱",
     "backToChat": "チャットに戻る",
     "appearance": "外観",
@@ -615,9 +650,13 @@
     "requireLogin": "ログインを要求",
     "agentConfigFile": "エージェント設定ファイル",
     "agentsMd": "AGENTS.md",
-    "agentsContextFile": "エージェントコンテキストファイル（AGENTS.md）",
+    "agentsContextFile": "エージェントの文脈",
+    "agentsMdHelp": "エージェント向けの作業メモ（好み、慣習、よく使うコマンド）。任意。ここは全プロジェクト共通のグローバルファイルです。リポジトリ固有のルールはそのリポジトリの AGENTS.md に書いてください。",
+    "agentsMdPlaceholder": "例：日本語で答える。編集前に関連ファイルを読む。",
     "appendSystemMd": "APPEND_SYSTEM.md",
-    "appendSystemPromptFile": "システムプロンプト追記ファイル（APPEND_SYSTEM.md）",
+    "appendSystemPromptFile": "システムプロンプトへの追記",
+    "appendSystemMdHelp": "Pi のデフォルトを置き換えずに、システムプロンプト末尾へ追記します。常に守ってほしい行動ルール向け。任意。空ならデフォルトのままです。",
+    "appendSystemMdPlaceholder": "例：簡潔に答える。危険な操作の前に説明する。",
     "providersFile": "プロバイダーファイル",
     "llmProviders": "LLMプロバイダー",
     "browseCommunityPackages": "コミュニティパッケージを閲覧",
@@ -662,7 +701,65 @@
       "docsLink": "models.jsonドキュメント",
       "helpPost2": "を参照してください。変更はすぐに反映されます — 再起動不要。",
       "replaceConfirm": "現在の内容をOllamaの例で置き換えますか？",
-      "docsOpenFailed": "ドキュメントリンクを開けませんでした"
+      "docsOpenFailed": "ドキュメントリンクを開けませんでした",
+      "oauth": {
+        "signInWithChatGPT": "ChatGPT でサインイン",
+        "preparing": "ChatGPT サインインを準備しています…",
+        "completeInBrowser": "ブラウザで認証を完了して続行してください。",
+        "openBrowser": "ブラウザを開く",
+        "copyCode": "コードをコピー",
+        "cancel": "キャンセル",
+        "connected": "ChatGPT に接続しました。",
+        "logout": "ログアウト",
+        "logoutConfirm": "ChatGPT からログアウトしますか？保存されたサインイン資格情報が削除されます。",
+        "cancelled": "ChatGPT サインインをキャンセルしました。",
+        "expired": "このデバイスコードは期限切れです。もう一度開始してください。",
+        "failed": "ChatGPT サインインに失敗しました。",
+        "tlsUntrusted": "TLS 証明書の検証に失敗しました。ローカルの HTTPS プロキシ（Clash / Surge / VPN）が OpenAI を傍受している可能性があります。そのプロキシの CA を信頼するか、OpenAI の HTTPS 検査を無効にしてから再試行してください。",
+        "retry": "再試行"
+      }
+    },
+    "providerPicker": {
+      "builtIn": "組み込み",
+      "subscriptions": "サブスクリプション",
+      "custom": "カスタム",
+      "oauth": "OAuth",
+      "customEndpoint": "カスタムエンドポイント",
+      "modelCount": "{count}モデル"
+    },
+    "customProvider": {
+      "title": "カスタムプロバイダーを追加",
+      "subtitle": "OpenAI互換またはAnthropic中継を検出し、モデルを選んで保存します。",
+      "id": "プロバイダー ID（任意）",
+      "idPlaceholder": "空欄なら Base URL から自動生成",
+      "baseUrl": "Base URL",
+      "apiKey": "APIキー",
+      "apiKeyPlaceholder": "検出 / テスト / 保存に必要",
+      "protocol": "プロトコル",
+      "protocolAuto": "自動検出",
+      "protocolOpenAi": "OpenAI互換",
+      "protocolAnthropic": "Claude / Anthropic",
+      "models": "上流モデル",
+      "selectAll": "すべて選択",
+      "deselectAll": "すべて解除",
+      "detect": "検出",
+      "test": "接続テスト",
+      "save": "プロバイダーを保存",
+      "baseUrlRequired": "Base URL は必須です。",
+      "keyRequired": "APIキーは必須です。",
+      "detectFirst": "先にプロトコルを検出するか、手動で選択してください。",
+      "modelsRequired": "少なくとも1つのモデルを選択してください。",
+      "detecting": "プロトコルを検出しています…",
+      "testing": "接続をテストしています…",
+      "saving": "プロバイダーを保存しています…",
+      "detected": "{protocol} を検出 · {count} モデル",
+      "detectFailed": "プロトコルを検出できませんでした。",
+      "testOk": "到達可能 · {ms}ms",
+      "testFailed": "接続テストに失敗しました。",
+      "saved": "{id} を {count} モデルで保存しました",
+      "saveFailed": "プロバイダーの保存に失敗しました。",
+      "keyStored": " · APIキーを保存しました",
+      "keyNotStored": " · APIキーは保存されませんでした"
     },
     "apiKeys": {
       "noProviders": "既知のプロバイダーがありません。",
@@ -764,15 +861,6 @@
     "copyConfigPath": "パスをコピー",
     "configPathCopied": "コピーしました",
     "configPathCopyFailed": "コピーに失敗しました"
-  },
-  "lanQr": {
-    "modalAriaLabel": "モバイルQRコード",
-    "title": "モバイルで開く",
-    "closeAriaLabel": "閉じる",
-    "generating": "QRコードを生成中…",
-    "qrAlt": "モバイルアクセス用QRコード",
-    "hint": "スマートフォンでスキャンして同じネットワーク上でPicotを開く",
-    "openLink": "リンクを開く"
   },
   "cost": {
     "documentTitle": "Picot - 使用量",
@@ -900,6 +988,7 @@
         "thinkOff": "思考オフ",
         "extensions": "拡張機能",
         "skills": "スキル",
+        "prompts": "プロンプト",
         "faster": "速め",
         "smarter": "賢め",
         "betaUpdates": "ベータアップデート",
@@ -936,7 +1025,8 @@
       "composer": {
         "composerSlashMenu": {
           "textcontent": {
-            "noMatchingCommands": "一致するコマンドがありません"
+            "noMatchingCommands": "一致するコマンドがありません",
+            "terminalOnly": "ターミナル専用"
           },
           "ariaLabel": {
             "slashCommands": "スラッシュコマンド"
@@ -1103,5 +1193,35 @@
     "chooseProjectBeforeApproval": "承認する前にプロジェクトを選んでください。",
     "loadingProjects": "プロジェクトを読み込み中…",
     "projectRunning": "{name} · 実行中"
+  },
+  "remoteApproval": {
+    "title": "リモートアクセスのリクエスト",
+    "unknownDevice": "不明なブラウザー",
+    "warning": "承認すると、このデバイスは Picot で利用できるプロジェクト、プロンプト、ツール、ファイルにアクセスできます。",
+    "deny": "拒否",
+    "approve": "承認",
+    "error": "リクエストを処理できませんでした。すでに処理済みの可能性があります。"
+  },
+  "infoPanel": {
+    "title": "情報",
+    "workspace": "ワークスペース",
+    "copyPath": "パスをコピー",
+    "copied": "コピーしました",
+    "sessionHistory": "セッション履歴",
+    "activePath": "アクティブな分岐",
+    "branch": "分岐",
+    "turns": "{count} ターン",
+    "resumeBranch": "分岐を再開",
+    "resumeStreamingBlocked": "ストリーミング中は再開できません",
+    "actionWhileStreaming": "現在の応答が完了するまでお待ちください",
+    "refresh": "セッション履歴を更新",
+    "empty": "メッセージはまだありません",
+    "statusError": "エラー",
+    "statusAborted": "中止しました",
+    "imageMessage": "画像",
+    "roleUser": "あなた",
+    "roleAssistant": "アシスタント",
+    "toggleAria": "セッション情報パネルを切り替え",
+    "closeAria": "セッション情報パネルを閉じる"
   }
 }
