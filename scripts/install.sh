@@ -11,34 +11,53 @@ APP_NAME="Picot"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 if [ -t 1 ]; then
-  BOLD="\033[1m"; GREEN="\033[1;32m"; YELLOW="\033[1;33m"
-  RED="\033[1;31m"; CYAN="\033[1;36m"; RESET="\033[0m"
+  BOLD="\033[1m"
+  GREEN="\033[1;32m"
+  YELLOW="\033[1;33m"
+  RED="\033[1;31m"
+  CYAN="\033[1;36m"
+  RESET="\033[0m"
 else
-  BOLD=""; GREEN=""; YELLOW=""; RED=""; CYAN=""; RESET=""
+  BOLD=""
+  GREEN=""
+  YELLOW=""
+  RED=""
+  CYAN=""
+  RESET=""
 fi
 
-info()    { printf "  ${CYAN}•${RESET} %s\n" "$*"; }
+info() { printf "  ${CYAN}•${RESET} %s\n" "$*"; }
 success() { printf "  ${GREEN}✓${RESET} %s\n" "$*"; }
-warn()    { printf "  ${YELLOW}⚠${RESET} %s\n" "$*"; }
-error()   { printf "  ${RED}✗${RESET} %s\n" "$*" >&2; }
-header()  { printf "\n${BOLD}%s${RESET}\n" "$*"; }
+warn() { printf "  ${YELLOW}⚠${RESET} %s\n" "$*"; }
+error() { printf "  ${RED}✗${RESET} %s\n" "$*" >&2; }
+header() { printf "\n${BOLD}%s${RESET}\n" "$*"; }
 
-die() { error "$*"; exit 1; }
+die() {
+  error "$*"
+  exit 1
+}
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 PINNED_VERSION=""
 FORCE_APPIMAGE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --version|-v) PINNED_VERSION="$2"; shift 2 ;;
-    --appimage)   FORCE_APPIMAGE=1; shift ;;
-    --help|-h)
-      echo "Usage: install.sh [--version <tag>] [--appimage]"
-      echo "  --version   Install a specific release tag (e.g. v0.3.0). Defaults to latest."
-      echo "  --appimage  Linux only. Install the AppImage into ~/.local/bin instead of"
-      echo "              using the system package manager. No sudo required."
-      exit 0 ;;
-    *) die "Unknown option: $1" ;;
+  --version | -v)
+    PINNED_VERSION="$2"
+    shift 2
+    ;;
+  --appimage)
+    FORCE_APPIMAGE=1
+    shift
+    ;;
+  --help | -h)
+    echo "Usage: install.sh [--version <tag>] [--appimage]"
+    echo "  --version   Install a specific release tag (e.g. v0.3.0). Defaults to latest."
+    echo "  --appimage  Linux only. Install the AppImage into ~/.local/bin instead of"
+    echo "              using the system package manager. No sudo required."
+    exit 0
+    ;;
+  *) die "Unknown option: $1" ;;
   esac
 done
 
@@ -53,10 +72,10 @@ need_cmd uname
 # under a visible $HOME path.
 is_snap_path() {
   case "$1" in
-    /snap/*) return 0 ;;
+  /snap/*) return 0 ;;
   esac
   case "$(readlink -f "$1" 2>/dev/null || true)" in
-    /snap/*) return 0 ;;
+  /snap/*) return 0 ;;
   esac
   return 1
 }
@@ -73,15 +92,15 @@ OS="$(uname -s)"
 ARCH="$(uname -m)"
 
 case "$OS" in
-  Darwin) PLATFORM="macos" ;;
-  Linux)  PLATFORM="linux" ;;
-  *)      die "Unsupported operating system: $OS. Use install.ps1 for Windows." ;;
+Darwin) PLATFORM="macos" ;;
+Linux) PLATFORM="linux" ;;
+*) die "Unsupported operating system: $OS. Use install.ps1 for Windows." ;;
 esac
 
 case "$ARCH" in
-  x86_64|amd64)     ARCH_NORM="x86_64" ;;
-  arm64|aarch64)    ARCH_NORM="arm64"  ;;
-  *)                die "Unsupported architecture: $ARCH" ;;
+x86_64 | amd64) ARCH_NORM="x86_64" ;;
+arm64 | aarch64) ARCH_NORM="arm64" ;;
+*) die "Unsupported architecture: $ARCH" ;;
 esac
 
 if [ "$FORCE_APPIMAGE" = "1" ] && [ "$PLATFORM" != "linux" ]; then
@@ -132,8 +151,8 @@ else
   RELEASE_URL="${GITHUB_API}/latest"
 fi
 
-RELEASE_JSON="$(curl_get -fsSL "$RELEASE_URL")" \
-  || die "Failed to query the GitHub release API. Check your connection, or that ${PINNED_VERSION:-the latest release} exists."
+RELEASE_JSON="$(curl_get -fsSL "$RELEASE_URL")" ||
+  die "Failed to query the GitHub release API. Check your connection, or that ${PINNED_VERSION:-the latest release} exists."
 
 if [ -z "$PINNED_VERSION" ]; then
   # `|| true`: `set -o pipefail` turns a non-matching grep into a failed
@@ -148,9 +167,9 @@ fi
 # so tag `v0.4.3-beta.4` ships assets named `Picot_0.4.3-10004_*`. Matching the
 # asset list the API just handed us keeps this immune to that encoding — and to
 # any future bundler rename.
-ASSET_URLS="$(printf '%s' "$RELEASE_JSON" \
-  | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*"' \
-  | sed -E 's/.*"([^"]*)"$/\1/' || true)"
+ASSET_URLS="$(printf '%s' "$RELEASE_JSON" |
+  grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*"' |
+  sed -E 's/.*"([^"]*)"$/\1/' || true)"
 [ -n "$ASSET_URLS" ] || die "Release ${VERSION} has no downloadable assets."
 
 # `|| true` so a no-match returns empty rather than tripping `set -e` via
@@ -158,34 +177,34 @@ ASSET_URLS="$(printf '%s' "$RELEASE_JSON" \
 pick_asset() { printf '%s\n' "$ASSET_URLS" | grep -E "$1" | head -1 || true; }
 
 case "$ARCH_NORM" in
-  x86_64) APPIMAGE_PATTERN='_amd64\.AppImage$'    ;;
-  arm64)  APPIMAGE_PATTERN='_aarch64\.AppImage$'  ;;
+x86_64) APPIMAGE_PATTERN='_amd64\.AppImage$' ;;
+arm64) APPIMAGE_PATTERN='_aarch64\.AppImage$' ;;
 esac
 
 case "$PLATFORM" in
-  macos)
+macos)
+  case "$ARCH_NORM" in
+  arm64) PATTERN='_aarch64\.dmg$' ;;
+  x86_64) PATTERN='_x64\.dmg$' ;;
+  esac
+  ;;
+linux)
+  case "$INSTALL_METHOD" in
+  apt | dpkg)
     case "$ARCH_NORM" in
-      arm64)  PATTERN='_aarch64\.dmg$' ;;
-      x86_64) PATTERN='_x64\.dmg$'     ;;
+    x86_64) PATTERN='_amd64\.deb$' ;;
+    arm64) PATTERN='_arm64\.deb$' ;;
     esac
     ;;
-  linux)
-    case "$INSTALL_METHOD" in
-      apt|dpkg)
-        case "$ARCH_NORM" in
-          x86_64) PATTERN='_amd64\.deb$' ;;
-          arm64)  PATTERN='_arm64\.deb$' ;;
-        esac
-        ;;
-      dnf|yum|rpm)
-        case "$ARCH_NORM" in
-          x86_64) PATTERN='\.x86_64\.rpm$'  ;;
-          arm64)  PATTERN='\.aarch64\.rpm$' ;;
-        esac
-        ;;
-      appimage) PATTERN="$APPIMAGE_PATTERN" ;;
+  dnf | yum | rpm)
+    case "$ARCH_NORM" in
+    x86_64) PATTERN='\.x86_64\.rpm$' ;;
+    arm64) PATTERN='\.aarch64\.rpm$' ;;
     esac
     ;;
+  appimage) PATTERN="$APPIMAGE_PATTERN" ;;
+  esac
+  ;;
 esac
 
 DOWNLOAD_URL="$(pick_asset "$PATTERN")"
@@ -255,13 +274,13 @@ install_appimage() {
   mkdir -p "$desktop_dir" "$icon_dir"
 
   local extracted
-  extracted="$(cd "$TMPDIR" && "$BIN_PATH" --appimage-extract 'usr/share/icons/hicolor/256x256/apps/*.png' >/dev/null 2>&1 \
-    && find "${TMPDIR}/squashfs-root" -name '*.png' | head -1 || true)"
+  extracted="$(cd "$TMPDIR" && "$BIN_PATH" --appimage-extract 'usr/share/icons/hicolor/256x256/apps/*.png' >/dev/null 2>&1 &&
+    find "${TMPDIR}/squashfs-root" -name '*.png' | head -1 || true)"
   if [ -n "$extracted" ] && [ -f "$extracted" ]; then
     cp "$extracted" "${icon_dir}/picot.png"
   fi
 
-  cat > "${desktop_dir}/picot.desktop" <<DESKTOP
+  cat >"${desktop_dir}/picot.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
 Name=${APP_NAME}
@@ -274,8 +293,8 @@ DESKTOP
   info "Added launcher entry"
 
   case ":${PATH}:" in
-    *":${BIN_DIR}:"*) ;;
-    *) warn "${BIN_DIR} is not on your PATH. Add it to your shell profile to run \`picot\` directly." ;;
+  *":${BIN_DIR}:"*) ;;
+  *) warn "${BIN_DIR} is not on your PATH. Add it to your shell profile to run \`picot\` directly." ;;
   esac
   # FUSE 2 is what mounts an AppImage at launch. Ubuntu 24.04+ ships only
   # FUSE 3, so point at both the fix and the no-install escape hatch.
@@ -285,75 +304,75 @@ DESKTOP
 }
 
 case "$PLATFORM" in
-  macos)
-    MOUNTPOINT="$(mktemp -d)"
-    info "Mounting disk image..."
-    hdiutil attach -quiet -nobrowse -mountpoint "$MOUNTPOINT" "$DEST"
+macos)
+  MOUNTPOINT="$(mktemp -d)"
+  info "Mounting disk image..."
+  hdiutil attach -quiet -nobrowse -mountpoint "$MOUNTPOINT" "$DEST"
 
-    APP_SRC="$(find "$MOUNTPOINT" -maxdepth 1 -name "*.app" | head -1)"
-    [ -n "$APP_SRC" ] || die "No .app found in DMG."
+  APP_SRC="$(find "$MOUNTPOINT" -maxdepth 1 -name "*.app" | head -1)"
+  [ -n "$APP_SRC" ] || die "No .app found in DMG."
 
-    APP_DEST="/Applications/${APP_NAME}.app"
+  APP_DEST="/Applications/${APP_NAME}.app"
 
-    if [ -d "$APP_DEST" ]; then
-      warn "Removing existing installation at ${APP_DEST}..."
-      rm -rf "$APP_DEST"
-    fi
+  if [ -d "$APP_DEST" ]; then
+    warn "Removing existing installation at ${APP_DEST}..."
+    rm -rf "$APP_DEST"
+  fi
 
-    info "Copying ${APP_NAME}.app to /Applications..."
-    cp -R "$APP_SRC" "$APP_DEST"
+  info "Copying ${APP_NAME}.app to /Applications..."
+  cp -R "$APP_SRC" "$APP_DEST"
 
-    hdiutil detach -quiet "$MOUNTPOINT" || true
-    rm -rf "$MOUNTPOINT"
+  hdiutil detach -quiet "$MOUNTPOINT" || true
+  rm -rf "$MOUNTPOINT"
 
-    # Remove the quarantine bit so Gatekeeper does not block the first launch.
-    # Picot uses ad-hoc signing (not Apple-notarized). Files downloaded via
-    # curl still receive the com.apple.quarantine xattr from macOS, which
-    # causes the "app can't be opened" / Privacy & Security prompt on first
-    # launch. Stripping it here means the app opens directly without any
-    # manual "Open Anyway" step in System Settings.
-    info "Removing macOS quarantine attribute..."
-    xattr -dr com.apple.quarantine "$APP_DEST" 2>/dev/null || true
+  # Remove the quarantine bit so Gatekeeper does not block the first launch.
+  # Picot uses ad-hoc signing (not Apple-notarized). Files downloaded via
+  # curl still receive the com.apple.quarantine xattr from macOS, which
+  # causes the "app can't be opened" / Privacy & Security prompt on first
+  # launch. Stripping it here means the app opens directly without any
+  # manual "Open Anyway" step in System Settings.
+  info "Removing macOS quarantine attribute..."
+  xattr -dr com.apple.quarantine "$APP_DEST" 2>/dev/null || true
 
-    success "Installed ${APP_NAME}.app to /Applications"
+  success "Installed ${APP_NAME}.app to /Applications"
+  ;;
+
+linux)
+  case "$INSTALL_METHOD" in
+  apt)
+    info "Installing with apt..."
+    sudo apt-get install -y "$DEST"
     ;;
-
-  linux)
-    case "$INSTALL_METHOD" in
-      apt)
-        info "Installing with apt..."
-        sudo apt-get install -y "$DEST"
-        ;;
-      dpkg)
-        info "Installing with dpkg..."
-        sudo dpkg -i "$DEST"
-        ;;
-      dnf)
-        info "Installing with dnf..."
-        sudo dnf install -y "$DEST"
-        ;;
-      yum)
-        info "Installing with yum..."
-        sudo yum localinstall -y "$DEST"
-        ;;
-      rpm)
-        info "Installing with rpm..."
-        sudo rpm -U --force "$DEST"
-        ;;
-      appimage)
-        install_appimage
-        ;;
-    esac
-    success "Installed ${APP_NAME}"
+  dpkg)
+    info "Installing with dpkg..."
+    sudo dpkg -i "$DEST"
     ;;
+  dnf)
+    info "Installing with dnf..."
+    sudo dnf install -y "$DEST"
+    ;;
+  yum)
+    info "Installing with yum..."
+    sudo yum localinstall -y "$DEST"
+    ;;
+  rpm)
+    info "Installing with rpm..."
+    sudo rpm -U --force "$DEST"
+    ;;
+  appimage)
+    install_appimage
+    ;;
+  esac
+  success "Installed ${APP_NAME}"
+  ;;
 esac
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 printf "\n${GREEN}${BOLD}✓ ${APP_NAME} ${VERSION} installed successfully!${RESET}\n\n"
 
 case "$PLATFORM" in
-  macos) info "Launch it from /Applications/${APP_NAME}.app or Spotlight." ;;
-  linux) info "Launch it by running: picot  (or search in your app menu)" ;;
+macos) info "Launch it from /Applications/${APP_NAME}.app or Spotlight." ;;
+linux) info "Launch it by running: picot  (or search in your app menu)" ;;
 esac
 
 printf "\n"
