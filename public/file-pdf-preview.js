@@ -14,7 +14,7 @@ if (typeof window !== "undefined" && GlobalWorkerOptions) {
   GlobalWorkerOptions.workerSrc = "/vendor/pdf.worker.js";
 }
 
-export function createPdfRenderer({ filePath, onError, getDocumentImpl = getDocument }) {
+export function createPdfRenderer({ onError, rawUrl, getDocumentImpl = getDocument }) {
   let container = null;
   let pdfDoc = null;
   let loadingTask = null;
@@ -24,8 +24,8 @@ export function createPdfRenderer({ filePath, onError, getDocumentImpl = getDocu
   async function loadDocument() {
     if (!container || destroyed) return;
     try {
-      const url = `/api/files/raw?path=${encodeURIComponent(filePath)}`;
-      const task = getDocumentImpl({ url });
+      if (typeof rawUrl !== "string" || !rawUrl) throw new Error("Raw file URL unavailable");
+      const task = getDocumentImpl({ url: rawUrl });
       loadingTask = task;
       const loadedDocument = await task.promise;
       if (loadingTask === task) loadingTask = null;

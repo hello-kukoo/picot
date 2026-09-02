@@ -3,7 +3,7 @@
 // handling here makes the authorization gate and result shapes unit-testable
 // without an AppHandle or live WebSocket.
 
-use crate::broker_ws::{ClientClass, VerifiedClientContext};
+use crate::host_control::{ClientClass, VerifiedClientContext};
 use crate::metadata_store::SharedMetadataStore;
 use serde_json::{json, Value};
 
@@ -155,7 +155,7 @@ pub fn handle_control(
 #[cfg(test)]
 mod tests {
     use super::{handle_control, require_native_owner, RegistryChange, NATIVE_OWNER_REQUIRED};
-    use crate::broker_ws::{ClientClass, VerifiedClientContext};
+    use crate::host_control::{ClientClass, VerifiedClientContext};
     use crate::metadata_store::{MetadataStore, SharedMetadataStore};
     use crate::window_owner::OwnerId;
     use serde_json::{json, Value};

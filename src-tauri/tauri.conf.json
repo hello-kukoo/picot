@@ -35,7 +35,8 @@
     ],
     "resources": {
       "../public": "public",
-      "../extensions/dist": "extensions",
+      "../extensions/dist/picot-bridge.mjs": "extensions/picot-bridge.mjs",
+      "../extensions/dist/pi-chat.mjs": "extensions/pi-chat.mjs",
       "./resources/pi": "pi"
     }
   },

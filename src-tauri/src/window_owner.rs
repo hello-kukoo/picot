@@ -527,7 +527,7 @@ impl WindowOwnerRegistry {
 pub fn capability_initialization_script(capability: &str) -> String {
     let token = serde_json::to_string(capability).expect("capability JSON");
     format!(
-        "if (window === window.top && window.location.protocol === 'http:' && [\"127.0.0.1\",\"localhost\",\"::1\",\"[::1]\"].includes(window.location.hostname)) {{ Object.defineProperty(window, '__PICOT_NATIVE_CAPABILITY__', {{ value: {token}, configurable: true }}); }}"
+        "if (window.location.protocol === 'http:' && [\"127.0.0.1\",\"localhost\",\"::1\",\"[::1]\"].includes(window.location.hostname)) {{ Object.defineProperty(window, '__PICOT_NATIVE_CAPABILITY__', {{ value: {token}, configurable: true }}); }}"
     )
 }
 
@@ -866,9 +866,10 @@ mod tests {
         // is enforced by `authorize_navigation`, not by this init script.
         assert!(!script.contains("window.location.port"));
         assert!(script.contains("__PICOT_NATIVE_CAPABILITY__"));
-        // The capability is injected only into the top-level frame, so a child
-        // frame or popup (window !== window.top) cannot inherit it.
-        assert!(script.contains("window === window.top"));
+        // Same-origin host-served iframes (e.g. the /cost settings embed) also
+        // receive the capability: they speak the same v2 protocol to the same
+        // loopback host. The exact-origin boundary is authorize_navigation.
+        assert!(!script.contains("window === window.top"));
     }
 
     #[test]

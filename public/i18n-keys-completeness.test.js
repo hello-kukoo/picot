@@ -104,7 +104,7 @@ describe("locale key parity", () => {
 // ── HTML key references ───────────────────────────────────────────────
 
 describe("HTML data-i18n key references", () => {
-  const htmlFiles = ["index.html", "bootstrap.html", "cost.html"];
+  const htmlFiles = ["index.html", "cost.html"];
 
   for (const file of htmlFiles) {
     it(`${file} references only keys that exist in en.json`, () => {

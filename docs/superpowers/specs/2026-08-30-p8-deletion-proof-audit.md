@@ -43,7 +43,7 @@
 | --- | --- | --- |
 | `/api/files/content`、`/api/files/raw` | 410 Gone；`file_read`/`file_write`/`file_raw` 数据 op 已存在但预览面板未接 | Office 预览（MarkItDown）在 host 侧无 op；图像/PDF 需定 blob URL 还是 token 下载路由 |
 | `/api/git-branch` | 410 Gone；指示器降级为空 | 用 `git_status` 快照的 branch 字段驱动，还是补 `git_branch` op |
-| `/api/chat-config` + Super Agent/Telegram 组件 | 410 Gone；组件仍在 DOM | 移除死 UI，还是重议 scope |
+| `/api/chat-config` + Super Agent/Telegram 组件 | 410 Gone；**WebView 侧死 UI 已移除**（`public/super-agent/`、`components/{super-agent-*,sa-chat-header,chat-settings-panel}.js`、Agent Inbox 设置页、`.lan-qr-*`/`.super-agent-*`/`.sa-*`/`.telegram-*` 样式、`lanQr.*`/`settings.agentInbox`/`nav.showMobileQR`/`misc.qrUnavailable` 文案） | 无（剩余工作在 legacy 运行时：`pi-chat*` 扩展与 `pi_manager.rs` 的 super-agent 分支） |
 | `/api/rpc` 的 5 个 provider op（catalog / set_api_key / remove_api_key / check_model_health / set_model_visibility） | ConfigGateway 返回 `no native runtime implementation` | 需 host 侧凭证/目录 op（Pi credential store 投影） |
 | `list_skills`、`list_skill_inventory`、`set_skill_enabled`、`list_package_skill_inventory`、`set_default_thinking_level` | `rpcCommand` 返回显式失败 | 需 host 数据/控制 op（skills 清单、thinking 默认值） |
 
@@ -54,7 +54,6 @@
 | `/api/files/content` | `file-preview-panel.js` | v2 `file_read`/`file_write` 已有，缺 Office 转换 |
 | `/api/files/raw` | `file-preview-renderers.js` + `file-pdf-preview.js` | v2 `file_raw`（base64）已有，缺 URL 形态决策 |
 | `/api/git-branch` | `app.js` | 可用 `git_status` 快照替代 |
-| `/api/chat-config` | `chat-settings-panel.js` + `sa-chat-header.js` | scope 移除待决 |
 
 ## 结论
 
@@ -64,6 +63,6 @@
 
 > 本段以下数字为 P8-1 审计当时快照，已被上一段与「能力缺口」表取代。
 
-- 15 条属 P6 延迟行（Telegram、git-branch、super-agent、skills、lan-qr、open、agent/models-config）
+- 15 条属 P6 延迟行（git-branch、skills、open 的 URL 语义、files/content·raw）；**Telegram / Super Agent / Agent Inbox / lan-qr 已从 WebView 移除**，这些路由现在 zero production caller，只需等 D10 遥测周期即可物理删除
 
 **P8 物理删除前置**：deprecated usage telemetry（D10 Stage 2+）必须显示上述 21 条路由在两个稳定 release 周期内零命中。

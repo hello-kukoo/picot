@@ -71,8 +71,18 @@ afterEach(() => {
 });
 
 function makeSidebar({ notice } = {}) {
+  const transport = {
+    sessionDeleteBatch: vi.fn(async (filePaths) => {
+      const response = await global.fetch("/api/sessions/delete-batch", {
+        method: "POST",
+        body: JSON.stringify({ filePaths }),
+      });
+      return response.json();
+    }),
+  };
   const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
     onSessionNotice: notice,
+    transport,
   });
   sidebar.projects = [];
   return sidebar;

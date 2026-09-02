@@ -69,26 +69,20 @@ describe("settings page split", () => {
     expect(appJs).not.toContain('rpcCommand({ type: "get_auth" })');
   });
 
-  test("orders navigation and disables the Agent Inbox", () => {
+  test("orders navigation without the retired Agent Inbox entry", () => {
     const dom = new JSDOM(html, { url: "http://localhost" });
     const { document } = dom.window;
 
     const tabs = [...document.querySelectorAll(".settings-nav-item")].map(
       (item) => item.dataset.settingsTab,
     );
-    expect(tabs).toEqual([
-      "general",
-      "models",
-      "skills",
-      "extensions",
-      "configuration",
-      "usage",
-      "chat",
-    ]);
+    expect(tabs).toEqual(["general", "models", "skills", "extensions", "configuration", "usage"]);
 
-    const chatItem = document.querySelector('[data-settings-tab="chat"]');
-    expect(chatItem).not.toBeNull();
-    expect(chatItem.disabled).toBe(true);
+    // The Super Agent / Agent Inbox surface was removed with its runtime scope:
+    // a disabled placeholder tab is still a dead control, so it must be gone.
+    expect(document.querySelector('[data-settings-tab="chat"]')).toBeNull();
+    expect(document.querySelector("#super-agent-chat-header")).toBeNull();
+    expect(document.querySelector("super-agent-runtime")).toBeNull();
   });
 
   test("renames Configuration to Advanced Configuration in every locale", () => {

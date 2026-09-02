@@ -1397,6 +1397,7 @@ impl GitService {
     /// commits that completed while the client was disconnected are all
     /// recovered here, sorted by creation time so the UI sees them in the
     /// order they finished.
+    #[allow(dead_code)]
     pub fn take_pending_outcomes(
         &self,
         owner: &str,
@@ -1548,6 +1549,7 @@ impl GitService {
     /// Un-mark an owner as revoked (e.g. when a new window reopens the same
     /// workspace). Outcomes recorded before the reopen are already gone; new
     /// commits after this point may store outcomes normally.
+    #[allow(dead_code)]
     pub fn revive_owner(&self, owner: &str) {
         self.revoked_owners.lock().unwrap().remove(owner);
     }

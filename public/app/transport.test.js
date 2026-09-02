@@ -5,6 +5,7 @@ function fakeWsClient(capabilities = { native: true }) {
   return {
     capabilities,
     sendControl: vi.fn((command) => Promise.resolve(`ok:${command}`)),
+    sendRuntime: vi.fn((command) => Promise.resolve({ command })),
     sendData: vi.fn((operation) => Promise.resolve({ operation })),
   };
 }
@@ -41,61 +42,50 @@ describe("WsTransport", () => {
     expect(ws.sendData).toHaveBeenCalledWith("file_mentions", { query: "src/comp" });
   });
 
-  test("create new session sends a new_session control command", async () => {
+  test("mobile entry controls send host control commands", async () => {
     const ws = fakeWsClient();
     const transport = createTransport({ wsClient: ws, env: {} });
 
-    await transport.newSession(47999);
+    await transport.mobileAccessInfo();
+    await transport.mobilePairingCreate();
 
-    expect(ws.sendControl).toHaveBeenCalledWith("new_session", { port: 47999 }, {});
+    expect(ws.sendControl).toHaveBeenCalledWith("mobile_access_info", {}, {});
+    expect(ws.sendControl).toHaveBeenCalledWith("mobile_pairing_create", {}, {});
   });
 
-  test("switchSession sends a switch_session control command", async () => {
+  test("fork sends a canonical runtime request without a port", async () => {
     const ws = fakeWsClient();
     const transport = new WsTransport(ws, {});
 
-    await transport.switchSession("/tmp/session.jsonl", 47822);
+    await transport.fork("entry-123");
 
-    expect(ws.sendControl).toHaveBeenCalledWith(
-      "switch_session",
-      { sessionPath: "/tmp/session.jsonl", port: 47822 },
-      {},
-    );
+    expect(ws.sendRuntime).toHaveBeenCalledWith({ type: "fork", entryId: "entry-123" });
   });
 
-  test("fork sends a fork control command with the entry id", async () => {
+  test("navigateTree sends a canonical runtime request without a port", async () => {
     const ws = fakeWsClient();
     const transport = new WsTransport(ws, {});
 
-    await transport.fork("entry-123", 47822);
+    await transport.navigateTree("leaf-9", { summarize: false });
 
-    expect(ws.sendControl).toHaveBeenCalledWith("fork", { entryId: "entry-123", port: 47822 }, {});
+    expect(ws.sendRuntime).toHaveBeenCalledWith({
+      type: "navigate_tree",
+      entryId: "leaf-9",
+      summarize: false,
+    });
   });
 
-  test("navigateTree sends a navigate_tree control command with summarize flag", async () => {
-    const ws = fakeWsClient();
-    const transport = new WsTransport(ws, {});
-
-    await transport.navigateTree("leaf-9", { summarize: false, port: 47822 });
-
-    expect(ws.sendControl).toHaveBeenCalledWith(
-      "navigate_tree",
-      { entryId: "leaf-9", summarize: false, port: 47822 },
-      {},
-    );
-  });
-
-  test("navigateTree defaults summarize to false and port to null", async () => {
+  test("navigateTree defaults summarize to false", async () => {
     const ws = fakeWsClient();
     const transport = new WsTransport(ws, {});
 
     await transport.navigateTree("leaf-9");
 
-    expect(ws.sendControl).toHaveBeenCalledWith(
-      "navigate_tree",
-      { entryId: "leaf-9", summarize: false, port: null },
-      {},
-    );
+    expect(ws.sendRuntime).toHaveBeenCalledWith({
+      type: "navigate_tree",
+      entryId: "leaf-9",
+      summarize: false,
+    });
   });
 
   test("session UI profile methods use native host control commands", async () => {
@@ -214,17 +204,6 @@ describe("WsTransport", () => {
       {},
       { onProgress, timeoutMs: 0 },
     );
-  });
-
-  test("currentPort + brokerWsUrl derive from the environment", () => {
-    const env = {
-      location: { port: "48010", search: "?brokerWs=ws://x/ui-ws" },
-      sessionStorage: { getItem: () => null, setItem: () => {} },
-    };
-    const transport = new WsTransport(fakeWsClient(), env);
-
-    expect(transport.currentPort()).toBe(48010);
-    expect(transport.brokerWsUrl()).toBe("ws://x/ui-ws");
   });
 
   test("relaunchApp swallows the disconnect that follows a host restart", async () => {

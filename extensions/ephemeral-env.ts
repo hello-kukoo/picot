@@ -1,5 +1,5 @@
 // ABOUTME: Parses trusted host-injected ephemeral session markers from the process env.
-// ABOUTME: Kepts dependency-free so tests can import it without loading the full embedded server.
+// ABOUTME: Keeps ephemeral runtime environment parsing dependency-free for extension startup.
 
 export type EphemeralEnv = {
   kind: "side-chat" | "quick-chat";

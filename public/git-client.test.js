@@ -18,7 +18,13 @@ describe("GitClient", () => {
     const requestId = client.command({ type: "status" });
     const promise = client._await(requestId, (m) => m.type === "git_status", 100);
     expect(send).toHaveBeenCalledWith(
-      expect.objectContaining({ requestId, workspaceGeneration: 4 }),
+      expect.objectContaining({
+        type: "host_request",
+        protocolVersion: 2,
+        requestId,
+        operation: "git_status",
+        args: {},
+      }),
     );
     expect(client.resolveResponse({ requestId, type: "git_status" })).toBe(true);
     await expect(promise).resolves.toMatchObject({ type: "git_status" });
@@ -50,10 +56,10 @@ describe("GitClient", () => {
     const detailId = client.logDetail("aabb");
     const diffId = client.commitDiff("aabb", "YS50eHQ=");
     expect(new Set([logId, detailId, diffId]).size).toBe(3);
-    expect(send.mock.calls.map(([frame]) => frame.command)).toEqual([
-      { type: "log", limit: 50, before: null },
-      { type: "log_detail", oid: "aabb" },
-      { type: "commit_diff", commitOid: "aabb", pathBytesBase64: "YS50eHQ=" },
+    expect(send.mock.calls.map(([frame]) => [frame.operation, frame.args])).toEqual([
+      ["git_log", { limit: 50, before: null }],
+      ["git_log_detail", { oid: "aabb" }],
+      ["git_commit_diff", { commitOid: "aabb", pathBytesBase64: "YS50eHQ=" }],
     ]);
   });
   it("releases a pending write when the broker reports failure", () => {

@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf};
+use std::path::PathBuf;
 
 /// Hard guarantee: a Picot release build CANNOT be produced without the
 /// embedded pi binary inside `src-tauri/resources/pi/`.
@@ -20,27 +20,12 @@ use std::{fs, path::PathBuf};
 /// don't require a network round-trip.
 fn main() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let extension_dist_dir = manifest_dir.join("..").join("extensions").join("dist");
-
-    // Tauri validates every configured bundle resource while running the build
-    // script, even for debug `cargo check` / clippy flows. The extension bundle
-    // is generated, so a clean checkout may not have this directory yet.
-    fs::create_dir_all(&extension_dist_dir).unwrap_or_else(|err| {
-        panic!(
-            "failed to create generated extension resource directory at {}: {}",
-            extension_dist_dir.display(),
-            err
-        )
-    });
-
     tauri_build::build();
 
     // Re-run if the version pin or the binary itself changes, so cached
     // builds notice when fetch:pi has been run between invocations.
     println!("cargo:rerun-if-changed=resources/pi/.version");
     println!("cargo:rerun-if-changed=../scripts/pi-version.json");
-    println!("cargo:rerun-if-changed=../extensions/embedded-server.ts");
-    println!("cargo:rerun-if-changed=../extensions/dist/embedded-server.mjs");
     println!("cargo:rerun-if-env-changed=PI_STUDIO_SKIP_BIN_CHECK");
 
     let profile = std::env::var("PROFILE").unwrap_or_default();
@@ -59,7 +44,6 @@ fn main() {
     };
 
     let bin_path = manifest_dir.join("resources").join("pi").join(bin_name);
-    let extension_bundle_path = extension_dist_dir.join("embedded-server.mjs");
 
     if !bin_path.is_file() {
         panic!(
@@ -74,21 +58,6 @@ fn main() {
              To bypass this check (NOT for shipping builds), set\n\
              PI_STUDIO_SKIP_BIN_CHECK=1.\n\n",
             bin_path.display()
-        );
-    }
-
-    if !extension_bundle_path.is_file() {
-        panic!(
-            "\n\n\
-             Picot release build aborted: embedded-server extension bundle is missing.\n\
-             Expected: {}\n\n\
-             Release builds ship the bundled extension instead of relying on\n\
-             repo-local TypeScript sources or node_modules.\n\n\
-             Fix: run `bun run build:extensions` from the repo root before building.\n\
-             (Or `bun run build`, which already does this for you.)\n\n\
-             To bypass this check (NOT for shipping builds), set\n\
-             PI_STUDIO_SKIP_BIN_CHECK=1.\n\n",
-            extension_bundle_path.display()
         );
     }
 }

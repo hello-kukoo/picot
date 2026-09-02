@@ -1,6 +1,11 @@
 import { onLocaleChange, t } from "../i18n.js";
 import { renderCostInfobar } from "./infobar.js";
 
+let dataTransport = null;
+export function setCostDashboardTransport(transport) {
+  dataTransport = transport || null;
+}
+
 const FILTER_STORAGE_KEY = "pi-studio-cost-filters";
 const DEFAULT_RANGE = "30d";
 
@@ -122,20 +127,14 @@ function saveFilters(range) {
   } catch {}
 }
 
-function buildQuery(range) {
-  const params = new URLSearchParams({
-    range,
-    granularity: "day",
-    scope: "all",
-  });
-  return params.toString();
-}
-
 function renderLoadError(section, error) {
   const message = String(error?.message || error || "Failed to load usage data");
   const overviewEl = section.querySelector("#infobar-overview-grid");
   if (overviewEl) {
-    overviewEl.innerHTML = `<div class="empty">${escapeHtml(message)}</div>`;
+    const errorEl = document.createElement("div");
+    errorEl.className = "empty";
+    errorEl.textContent = message;
+    overviewEl.replaceChildren(errorEl);
   }
 }
 
@@ -201,12 +200,11 @@ export class CostDashboard extends HTMLElement {
 
     saveFilters(this.currentRange);
     const loadVersion = ++this._loadVersion;
-    const query = buildQuery(this.currentRange);
-    const request = fetch(`/api/cost-dashboard?${query}`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
+    const request = (
+      dataTransport?.costDashboard
+        ? dataTransport.costDashboard({ range: this.currentRange })
+        : Promise.reject(new Error("Host cost data unavailable"))
+    )
       .then((payload) => {
         if (loadVersion !== this._loadVersion) return;
         this._lastPayload = payload;

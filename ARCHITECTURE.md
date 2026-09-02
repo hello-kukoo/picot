@@ -60,6 +60,9 @@ fn native_runtime_enabled(app) -> bool {
 | `/health` | HTTP GET | 无 | 宿主存活探针 |
 | `/v2/session-export/:token` | HTTP GET | 一次性令牌（owner + generation 绑定） | 会话导出流 |
 | `/v2/paste-offload` | HTTP POST | desktop capability | ≥4 MiB paste 卸载 |
+| `/v2/auth/exchange` | HTTP POST | 配对令牌（5 分钟 TTL，一次性） | pairing token → device token |
+| `/v2/mobile/status` | HTTP GET | device token（Bearer） | 配对设备只读状态（v1 仅 liveness） |
+| `/pair.html` | HTTP GET | 无（pairing 前唯一 surface） | 手机配对页 |
 
 ### 兼容路由的唯一实现规则
 
@@ -78,7 +81,7 @@ fn native_runtime_enabled(app) -> bool {
 
 删除前置条件不变：D10 Stage 2+ 遥测需显示这些条目在两个稳定 release 周期内零命中。
 
-**LAN 边界**：HostServer 仅绑定 `127.0.0.1`（loopback-only）。D4 未显式启用前不暴露 LAN。
+**LAN 边界**：HostServer 默认仅绑定 `127.0.0.1`（loopback-only）。用户在 设置 → Mobile Access 显式开启后（`mobile.lanAccessEnabled`，重启生效），host 绑定 `0.0.0.0`，移动端经 `/pair.html` 用桌面铸造的配对令牌换 device token；配对后 v1 仅开放只读状态，读写面仍为 desktop capability 专属（Gate B 远程矩阵未实现前不开放）。
 
 ## 授权模型
 
@@ -138,21 +141,20 @@ spawn → Starting → Ready → Working ↔ Idle → Stopped
 | `oauth_manager.rs` | OAuth 操作生命周期（generation 绑定） |
 | `paste_offload.rs` | paste 临时文件（TTL/quota/symlink/.gitignore） |
 | `transport_limits.rs` | 帧/响应/事件/快照/进度大小限制 |
-| `cost_compat.rs` | legacy cost-dashboard payload parity |
-| `v1_control_adapter.rs` | v1→v2 控制映射（退役中） |
-| `metadata_store.rs` | SQLite 工作区注册 + preferences |
+| `cost_compat.rs` | cost-dashboard payload parity |
+| `metadata_store.rs` | SQLite 工作区注册 + preferences；schema 兼容契约：接受 user_version ≤ 6（Corp v4–v6 表归 Corp 构建，public 只读不建），public 迁移只完成 v1–v3 并只盖 v3 戳 |
 | `window_owner.rs` | 窗口 owner 注册与 capability |
 | `remote_auth.rs` | 远程设备配对与 device token |
 | `ephemeral_registry.rs` | Side/Quick chat 生命周期 |
-| `broker_ws.rs` | legacy broker WebSocket（compat handler） |
-| `pi_manager.rs` | legacy 进程管理（**P8 删除候选**） |
+| `git_service.rs` | owner-scoped Git status, diff, history, and commit operations |
+
 | `pi_launch.rs` | 启动契约共享基底（binary/args/env/extensions） |
 | `telemetry.rs` | D10 匿名遥测 schema（Stage 0 接线） |
 | `process_tree.rs` | 进程树管理（Unix pgid / Windows Job Object） |
 
 ## 兼容路由（P8 删除候选）
 
-`/api/*` 兼容路由维持 existing shell 前端在 host origin 上的可用性。每条路由经 owner capability 鉴权。**P8 物理删除前置**：deprecated usage telemetry = 0（D10 Stage 2+，两个稳定 release 周期）。
+`/api/*` compatibility routes maintain existing shell behavior on host origin. Each route uses owner capability authorization. Runtime traffic must use `/v2/*` and `/v2/ws`; retained HTTP routes are explicit compatibility or retirement responses, never Pi-origin forwarding.
 
 ## 静态资源
 

@@ -1,63 +1,28 @@
 import { describe, expect, test } from "vitest";
 import { resolveWebSocketUrl, WebSocketClient } from "./websocket-client.js";
 
-function fakeSessionStorage() {
-  const store = {};
-  return {
-    getItem: (k) => (k in store ? store[k] : null),
-    setItem: (k, v) => {
-      store[k] = String(v);
-    },
-  };
-}
-
 describe("resolveWebSocketUrl", () => {
-  test("uses the broker URL from the ?brokerWs= query param", () => {
-    const brokerUrl = "ws://127.0.0.1:49000/ui-ws";
-
+  test("uses the current HostServer origin and canonical v2 path", () => {
     expect(
       resolveWebSocketUrl({
-        location: {
-          protocol: "http:",
-          host: "127.0.0.1:47821",
-          search: `?brokerWs=${encodeURIComponent(brokerUrl)}`,
-        },
-        sessionStorage: fakeSessionStorage(),
+        location: { protocol: "https:", host: "studio.local", search: "?brokerWs=ws://evil/ws" },
       }),
-    ).toBe(brokerUrl);
+    ).toBe("wss://studio.local/v2/ws");
   });
 
-  test("recovers the broker URL from sessionStorage on a param-less reload", () => {
-    const brokerUrl = "ws://127.0.0.1:49000/ui-ws";
-    const sessionStorage = fakeSessionStorage();
-    // First load carries the param and persists it.
-    resolveWebSocketUrl({
-      location: { protocol: "http:", host: "127.0.0.1:47821", search: `?brokerWs=${brokerUrl}` },
-      sessionStorage,
-    });
-    // Reload without the param still resolves to the broker.
+  test("uses HTTP WebSocket protocol for local HostServer", () => {
     expect(
       resolveWebSocketUrl({
         location: { protocol: "http:", host: "127.0.0.1:47821", search: "" },
-        sessionStorage,
       }),
-    ).toBe(brokerUrl);
-  });
-
-  test("falls back to the page-local pi websocket when no broker URL is present", () => {
-    expect(
-      resolveWebSocketUrl({
-        location: { protocol: "https:", host: "studio.local", search: "" },
-        sessionStorage: fakeSessionStorage(),
-      }),
-    ).toBe("wss://studio.local/ws");
+    ).toBe("ws://127.0.0.1:47821/v2/ws");
   });
 });
 
 describe("WebSocketClient control commands", () => {
   function openClient() {
     const sent = [];
-    const client = new WebSocketClient("ws://broker/ui-ws");
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
     client.ws = {
       readyState: WebSocket.OPEN,
       send: (message) => sent.push(JSON.parse(message)),
@@ -65,18 +30,19 @@ describe("WebSocketClient control commands", () => {
     return { client, sent };
   }
 
-  test("sendControl emits a broker_control envelope and resolves on control_response", async () => {
+  test("sendControl emits a host_request envelope and resolves on host_response", async () => {
     const { client, sent } = openClient();
     const result = client.sendControl("get_pi_version", {});
 
     expect(sent[0]).toMatchObject({
-      type: "broker_control",
-      command: "get_pi_version",
+      type: "host_request",
+      operation: "get_pi_version",
       requestId: "ctl-1",
+      protocolVersion: 2,
     });
 
     client.handleMessage({
-      type: "control_response",
+      type: "host_response",
       requestId: "ctl-1",
       ok: true,
       result: "1.2.3",
@@ -106,7 +72,7 @@ describe("WebSocketClient control commands", () => {
     const { client } = openClient();
     const result = client.sendControl("new_session", {});
     client.handleMessage({
-      type: "control_response",
+      type: "host_response",
       requestId: "ctl-1",
       ok: false,
       error: "boom",
@@ -134,7 +100,7 @@ describe("WebSocketClient control commands", () => {
       data: { phase: "progress", downloaded: 50, contentLength: 100 },
     });
     client.handleMessage({
-      type: "control_response",
+      type: "host_response",
       requestId: "ctl-1",
       ok: true,
       result: { installed: true },
@@ -147,54 +113,73 @@ describe("WebSocketClient control commands", () => {
     ]);
   });
 
-  test("the capabilities handshake authenticates and derives native from class", () => {
-    const client = new WebSocketClient("ws://broker/ui-ws");
+  test("the hello_ack handshake authenticates the HostServer connection", () => {
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
     const seen = [];
-    client.addEventListener("capabilities", (event) => seen.push(event.detail));
+    client.addEventListener("hostCapabilities", (event) => seen.push(event.detail));
 
-    client.handleMessage({ type: "capabilities", class: "native" });
+    client.handleMessage({ type: "hello_ack", protocolVersion: 2 });
 
     expect(client.authenticated).toBe(true);
     expect(client.capabilities).toEqual({ native: true, class: "native" });
     expect(seen).toEqual([{ native: true, class: "native" }]);
   });
 
-  test("a remote capabilities frame reports native=false", () => {
-    const client = new WebSocketClient("ws://broker/ui-ws");
-    client.handleMessage({ type: "capabilities", class: "remote" });
-    expect(client.capabilities).toEqual({ native: false, class: "remote" });
-  });
-
-  test("client_hello presents the injected capability once, then connected fires only after capabilities", () => {
+  test("hello presents injected desktop capability, then connected fires after hello_ack", () => {
     const sent = [];
     globalThis.__PICOT_NATIVE_CAPABILITY__ = "secret-cap";
-    const client = new WebSocketClient("ws://broker/ui-ws");
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
     const connected = [];
     client.addEventListener("connected", () => connected.push(true));
     client.ws = { readyState: WebSocket.OPEN, send: (m) => sent.push(JSON.parse(m)) };
     client._pendingConnect = true;
     client._sendClientHello();
-    expect(sent[0]).toMatchObject({ type: "client_hello", capability: "secret-cap" });
+    expect(sent[0]).toMatchObject({
+      type: "hello",
+      protocolVersion: 2,
+      clientType: "desktop",
+      desktopCapability: "secret-cap",
+    });
     expect(globalThis.__PICOT_NATIVE_CAPABILITY__).toBeUndefined();
     expect(connected).toEqual([]);
-    client.handleMessage({ type: "capabilities", class: "native" });
+    client.handleMessage({ type: "hello_ack", protocolVersion: 2 });
     expect(client.authenticated).toBe(true);
     expect(connected).toEqual([true]);
     delete globalThis.__PICOT_NATIVE_CAPABILITY__;
   });
 
-  test("a remote client_hello omits the capability", () => {
+  test("hello reuses cached desktop capability after reconnect", () => {
     const sent = [];
-    const client = new WebSocketClient("ws://broker/ui-ws");
+    globalThis.__PICOT_NATIVE_CAPABILITY__ = "secret-cap";
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
+    client.ws = { readyState: WebSocket.OPEN, send: (m) => sent.push(JSON.parse(m)) };
+
+    client._sendClientHello();
     client.ws = { readyState: WebSocket.OPEN, send: (m) => sent.push(JSON.parse(m)) };
     client._sendClientHello();
-    expect(sent[0]).toEqual({ type: "client_hello", protocolVersion: 1 });
-    expect(sent[0].capability).toBeUndefined();
+
+    expect(sent).toHaveLength(2);
+    expect(sent[0].desktopCapability).toBe("secret-cap");
+    expect(sent[1].desktopCapability).toBe("secret-cap");
+    delete globalThis.__PICOT_NATIVE_CAPABILITY__;
+  });
+
+  test("hello omits desktop capability when host injection is absent", () => {
+    const sent = [];
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
+    client.ws = { readyState: WebSocket.OPEN, send: (m) => sent.push(JSON.parse(m)) };
+    client._sendClientHello();
+    expect(sent[0]).toMatchObject({
+      type: "hello",
+      protocolVersion: 2,
+      clientType: "desktop",
+      desktopCapability: null,
+    });
   });
 
   test("sendEphemeral wraps an ephemeral_command envelope and returns its requestId", () => {
     const sent = [];
-    const client = new WebSocketClient("ws://broker/ui-ws");
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
     client.ws = { readyState: WebSocket.OPEN, send: (m) => sent.push(JSON.parse(m)) };
     const id = client.sendEphemeral("inst-1", 3, { type: "prompt", message: "hi" });
     expect(id).toBe("ep-1");
@@ -210,7 +195,7 @@ describe("WebSocketClient control commands", () => {
   });
 
   test("ephemeral_event and ephemeral_command_failed dispatch distinct events", () => {
-    const client = new WebSocketClient("ws://broker/ui-ws");
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
     const events = [];
     const fails = [];
     client.addEventListener("ephemeralEvent", (e) => events.push(e.detail));
@@ -229,7 +214,7 @@ describe("WebSocketClient control commands", () => {
   });
 
   test("git_command_ack dispatches a correlated Git acknowledgement", () => {
-    const client = new WebSocketClient("ws://broker/ui-ws");
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
     const acknowledgements = [];
     client.addEventListener("gitCommandAck", (event) => acknowledgements.push(event.detail));
 
@@ -248,7 +233,7 @@ describe("WebSocketClient control commands", () => {
 describe("WebSocketClient broker routing", () => {
   test("wraps commands with the current session route", () => {
     const sent = [];
-    const client = new WebSocketClient("ws://127.0.0.1:49000/ui-ws");
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
     client.ws = {
       readyState: WebSocket.OPEN,
       send: (message) => sent.push(JSON.parse(message)),
@@ -262,47 +247,53 @@ describe("WebSocketClient broker routing", () => {
 
     expect(sent).toEqual([
       {
-        type: "broker_command",
-        protocolVersion: 1,
+        type: "runtime_request",
+        protocolVersion: 2,
         requestId: "req-1",
-        workspaceId: "workspace:/tmp/project",
-        sessionId: "/tmp/project/session-a.jsonl",
-        payload: { type: "mirror_sync_request" },
+        target: {
+          workspaceId: "workspace:/tmp/project",
+          sessionId: "/tmp/project/session-a.jsonl",
+          instanceId: "primary",
+        },
+        command: { type: "mirror_sync_request" },
+        idempotencyKey: "ui-req-1",
       },
     ]);
   });
 
-  test("attaches broker route metadata to unwrapped rpc events", () => {
-    const client = new WebSocketClient("ws://127.0.0.1:49000/ui-ws");
+  test("forwards sequenced runtime events to v2 listeners", () => {
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
     const events = [];
-    client.addEventListener("rpcEvent", (event) => events.push(event.detail));
+    client.addEventListener("runtimeEvent", (event) => events.push(event.detail));
 
     client.handleMessage({
-      type: "broker_event",
-      workspaceId: "workspace:/tmp/project",
-      sessionId: "/tmp/project/session-b.jsonl",
-      sourcePort: 47822,
-      payload: {
-        type: "event",
-        event: { type: "agent_start" },
+      type: "runtime_event",
+      target: {
+        workspaceId: "workspace:/tmp/project",
+        sessionId: "/tmp/project/session-b.jsonl",
+        instanceId: "47822",
       },
+      sequence: 1,
+      event: { type: "agent_start" },
     });
 
     expect(events).toEqual([
       {
-        type: "agent_start",
-        __broker: {
+        type: "runtime_event",
+        target: {
           workspaceId: "workspace:/tmp/project",
           sessionId: "/tmp/project/session-b.jsonl",
-          sourcePort: 47822,
+          instanceId: "47822",
         },
+        sequence: 1,
+        event: { type: "agent_start" },
       },
     ]);
   });
 
   test("can clear the current session route for a new active process", () => {
     const sent = [];
-    const client = new WebSocketClient("ws://127.0.0.1:49000/ui-ws");
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
     client.ws = {
       readyState: WebSocket.OPEN,
       send: (message) => sent.push(JSON.parse(message)),
@@ -315,13 +306,13 @@ describe("WebSocketClient broker routing", () => {
 
     client.send({ type: "prompt", message: "hello" });
 
-    expect(sent[0].sessionId).toBeUndefined();
-    expect(sent[0].workspaceId).toBe("workspace:/tmp/project");
+    expect(sent[0].target.sessionId).toBeNull();
+    expect(sent[0].target.workspaceId).toBe("workspace:/tmp/project");
   });
 
-  test("mirror_sync does not hijack the routing context", () => {
+  test("runtime snapshots do not hijack the routing context", () => {
     const sent = [];
-    const client = new WebSocketClient("ws://127.0.0.1:49000/ui-ws");
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
     client.ws = {
       readyState: WebSocket.OPEN,
       send: (message) => sent.push(JSON.parse(message)),
@@ -330,87 +321,81 @@ describe("WebSocketClient broker routing", () => {
     client.setRoutingContext({
       workspaceId: "workspace:/tmp/project",
       sessionId: "/tmp/project/session-a.jsonl",
-      sourcePort: 47821,
+      instanceId: "47821",
     });
 
-    // A background process (session B on port 47822) broadcasts a mirror_sync.
+    // A background snapshot cannot alter client routing context.
     client.handleMessage({
-      type: "broker_event",
-      workspaceId: "workspace:/tmp/project",
-      sessionId: "/tmp/project/session-b.jsonl",
-      sourcePort: 47822,
-      payload: { type: "mirror_sync", sessionFile: "/tmp/project/session-b.jsonl" },
+      type: "runtime_snapshot",
+      target: {
+        workspaceId: "workspace:/tmp/project",
+        sessionId: "/tmp/project/session-b.jsonl",
+        instanceId: "secondary",
+      },
+      state: { messages: [], stats: {}, pi: {} },
     });
 
     // The next command must still target session A, not the background B.
     client.send({ type: "prompt", message: "hello" });
-    expect(sent[0].sessionId).toBe("/tmp/project/session-a.jsonl");
-    expect(sent[0].sourcePort).toBe(47821);
+    expect(sent[0].target.sessionId).toBe("/tmp/project/session-a.jsonl");
+    expect(sent[0].target.instanceId).toBe("47821");
   });
 
-  test("mirror_sync surfaces the broker source port to listeners", () => {
-    const client = new WebSocketClient("ws://127.0.0.1:49000/ui-ws");
+  test("runtime snapshots surface target instance to v2 listeners", () => {
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
     const syncs = [];
-    client.addEventListener("mirrorSync", (event) => syncs.push(event.detail));
+    client.addEventListener("runtimeSnapshot", (event) => syncs.push(event.detail));
 
     client.handleMessage({
-      type: "broker_event",
-      sessionId: "/tmp/project/session-b.jsonl",
-      sourcePort: 47822,
-      payload: { type: "mirror_sync", sessionFile: "/tmp/project/session-b.jsonl" },
+      type: "runtime_snapshot",
+      target: {
+        sessionId: "/tmp/project/session-b.jsonl",
+        instanceId: "secondary",
+      },
+      state: { messages: [], stats: {}, pi: {} },
     });
 
     expect(syncs).toHaveLength(1);
-    expect(syncs[0].port).toBe(47822);
+    expect(syncs[0].target.instanceId).toBe("secondary");
   });
 
-  test("send returns the requestId so callers can correlate delivery failures", () => {
-    const client = new WebSocketClient("ws://127.0.0.1:49000/ui-ws");
+  test("send returns the requestId for runtime requests", () => {
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
     client.ws = { readyState: WebSocket.OPEN, send: () => {} };
 
     expect(client.send({ type: "prompt", message: "hello" })).toBe("req-1");
-    // Pre-wrapped broker_command envelopes keep their own requestId.
-    expect(client.send({ type: "broker_command", requestId: "req-custom" })).toBe("req-custom");
+    // Caller payload cannot override transport correlation IDs.
+    expect(client.send({ type: "runtime_request", requestId: "req-custom" })).toBe("req-2");
     // Not connected: nothing is sent and there is no requestId to track.
     client.ws = { readyState: WebSocket.CLOSED, send: () => {} };
     expect(client.send({ type: "prompt", message: "later" })).toBeNull();
   });
 
-  test("command_undeliverable dispatches a commandUndeliverable event", () => {
-    const client = new WebSocketClient("ws://127.0.0.1:49000/ui-ws");
-    const seen = [];
-    client.addEventListener("commandUndeliverable", (event) => seen.push(event.detail));
+  test("structured runtime errors reject pending requests", async () => {
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
+    client.ws = { readyState: WebSocket.OPEN, send: () => {} };
+    const pending = client.sendRuntime({ type: "prompt", message: "hello" });
 
     client.handleMessage({
-      type: "command_undeliverable",
-      requestId: "req-7",
-      command: "prompt",
-      reason: "upstream_unavailable",
-      sessionId: "/tmp/project/session-a.jsonl",
+      type: "error",
+      requestId: "req-1",
+      error: { code: "upstream_unavailable", message: "Runtime unavailable" },
     });
 
-    expect(seen).toEqual([
-      {
-        type: "command_undeliverable",
-        requestId: "req-7",
-        command: "prompt",
-        reason: "upstream_unavailable",
-        sessionId: "/tmp/project/session-a.jsonl",
-      },
-    ]);
+    await expect(pending).rejects.toThrow("Runtime unavailable");
   });
 
-  test("normalizes v2 responses and forwards sequenced runtime events to legacy listeners", async () => {
+  test("normalizes v2 responses and forwards sequenced runtime events", async () => {
     const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
     client.setRoutingContext({
       workspaceId: "workspace-a",
       sessionId: "session-a",
-      sourcePort: 47821,
+      instanceId: "47821",
     });
     const events = [];
     const syncs = [];
-    client.addEventListener("rpcEvent", (event) => events.push(event.detail));
-    client.addEventListener("mirrorSync", (event) => syncs.push(event.detail));
+    client.addEventListener("runtimeEvent", (event) => events.push(event.detail));
+    client.addEventListener("runtimeSnapshot", (event) => syncs.push(event.detail));
     client.handleMessage({
       type: "runtime_event",
       sequence: 4,
@@ -423,11 +408,20 @@ describe("WebSocketClient broker routing", () => {
       target: { workspaceId: "workspace-a", sessionId: "session-a", instanceId: "47821" },
       state: { pi: { isStreaming: false }, messages: [{ role: "user" }], stats: { total: 1 } },
     });
-    expect(events[0]).toMatchObject({ type: "message_update", text_delta: "hi", __sequence: 4 });
+    expect(events[0]).toMatchObject({
+      type: "runtime_event",
+      target: { workspaceId: "workspace-a", sessionId: "session-a", instanceId: "47821" },
+      sequence: 4,
+      event: { type: "message_update", text_delta: "hi" },
+    });
     expect(syncs[0]).toMatchObject({
+      type: "runtime_snapshot",
       sequence: 5,
-      messages: [{ role: "user" }],
-      stats: { total: 1 },
+      target: { workspaceId: "workspace-a", sessionId: "session-a", instanceId: "47821" },
+      state: {
+        messages: [{ role: "user" }],
+        stats: { total: 1 },
+      },
     });
 
     client.ws = { readyState: WebSocket.OPEN, send: () => {} };
@@ -451,7 +445,7 @@ describe("WebSocketClient broker routing", () => {
     client.setRoutingContext({
       workspaceId: "workspace-a",
       sessionId: "session-a",
-      sourcePort: 47821,
+      instanceId: "47821",
     });
     client.handleMessage({
       type: "error",
@@ -468,9 +462,9 @@ describe("WebSocketClient broker routing", () => {
     });
   });
 
-  test("wraps commands with the active source port", () => {
+  test("wraps commands with the active runtime instance", () => {
     const sent = [];
-    const client = new WebSocketClient("ws://127.0.0.1:49000/ui-ws");
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
     client.ws = {
       readyState: WebSocket.OPEN,
       send: (message) => sent.push(JSON.parse(message)),
@@ -478,12 +472,12 @@ describe("WebSocketClient broker routing", () => {
     client.setRoutingContext({
       workspaceId: "workspace:/tmp/project",
       sessionId: "/tmp/project/session-a.jsonl",
-      sourcePort: 47822,
+      instanceId: "47822",
     });
 
     client.send({ type: "mirror_sync_request" });
 
-    expect(sent[0].sourcePort).toBe(47822);
+    expect(sent[0].target.instanceId).toBe("47822");
   });
 
   test("sendRuntime correlates the v2 runtime reply and yields its data", async () => {
@@ -496,7 +490,7 @@ describe("WebSocketClient broker routing", () => {
     client.setRoutingContext({
       workspaceId: "workspace-a",
       sessionId: "session-a",
-      sourcePort: 47821,
+      instanceId: "47821",
     });
 
     const pending = client.sendRuntime({ type: "set_model", provider: "p", modelId: "m" });
@@ -593,15 +587,33 @@ describe("WebSocketClient broker routing", () => {
     expect(error.code).toBe("file_conflict");
   });
 
-  test("v1 clients refuse data and runtime request helpers", async () => {
-    const client = new WebSocketClient("ws://127.0.0.1:49000/ui-ws");
-    client.ws = { readyState: WebSocket.OPEN, send: () => {} };
+  test("non-v2 WebSocket endpoints are rejected", () => {
+    expect(() => new WebSocketClient("ws://127.0.0.1:49000/ws")).toThrow(
+      "HostServer v2 WebSocket URL required",
+    );
+  });
 
-    await expect(client.sendData("file_read", {})).rejects.toThrow(
-      'Data operation "file_read" requires protocol v2',
-    );
-    await expect(client.sendRuntime({ type: "get_state" })).rejects.toThrow(
-      "Runtime requests require protocol v2",
-    );
+  test("v2 clients provide data and runtime request helpers", async () => {
+    const sent = [];
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
+    client.ws = { readyState: WebSocket.OPEN, send: (message) => sent.push(JSON.parse(message)) };
+
+    const dataPending = client.sendData("file_read", {});
+    expect(sent[0]).toMatchObject({ type: "data_request", protocolVersion: 2 });
+    client.handleMessage({
+      type: "data_response",
+      requestId: sent[0].requestId,
+      path: "a.ts",
+    });
+    await expect(dataPending).resolves.toMatchObject({ path: "a.ts" });
+
+    const runtimePending = client.sendRuntime({ type: "get_state" });
+    expect(sent[1]).toMatchObject({ type: "runtime_request", protocolVersion: 2 });
+    client.handleMessage({
+      type: "runtime_response",
+      requestId: sent[1].requestId,
+      response: { success: true, data: { isStreaming: false } },
+    });
+    await expect(runtimePending).resolves.toEqual({ isStreaming: false });
   });
 });

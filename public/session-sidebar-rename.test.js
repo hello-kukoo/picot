@@ -36,20 +36,23 @@ describe("session sidebar rename metadata", () => {
 
   test("keeps a server-error retry actionable through pointerdown and click", async () => {
     let renameCalls = 0;
-    globalThis.fetch = vi.fn(async (url) => {
-      if (String(url) === "/api/sessions/rename") {
+    const transport = {
+      available: true,
+      capabilities: { native: true },
+      sessionRename: vi.fn(async () => {
         renameCalls += 1;
-        if (renameCalls === 1) return { ok: false, status: 500 };
-        return { ok: true, status: 200 };
-      }
-      if (String(url) === "/api/sessions")
-        return { ok: true, json: async () => ({ projects: [] }) };
-      if (String(url) === "/api/instances")
-        return { ok: true, json: async () => ({ instances: [] }) };
-      return { ok: false, status: 404 };
-    });
+        if (renameCalls === 1) {
+          const error = new Error("session rename failed");
+          error.code = "session_rename_failed";
+          throw error;
+        }
+        return { ok: true };
+      }),
+      runtimeInstances: vi.fn(async () => ({ instances: [] })),
+      listWorkspaces: vi.fn(async () => ({ workspaces: [], removed: [] })),
+    };
     const root = document.getElementById("root");
-    const sidebar = new SessionSidebar(root, vi.fn(), vi.fn());
+    const sidebar = new SessionSidebar(root, vi.fn(), vi.fn(), { transport });
     const item = document.createElement("div");
     item.className = "session-item";
     item.dataset.filePath = "/sessions/a.jsonl";

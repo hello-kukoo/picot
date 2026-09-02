@@ -29,15 +29,21 @@ const TEXT_WRITE_OPS = new Map([
   ["write_append_system_md", "APPEND_SYSTEM.md"],
 ]);
 
-// Retiring `/api/rpc` removed the in-Pi handlers for these. There is no host
-// equivalent yet, so the gateway reports the gap instead of issuing a request
-// that can only come back as a failure the user cannot act on.
-const UNSUPPORTED_OPS = new Set([
-  "list_model_catalog",
-  "set_api_key",
-  "remove_api_key",
-  "check_model_health",
-  "set_model_visibility",
+// These were retired with /api/rpc and are now native host controls: the
+// gateway routes them over the same v2 transport as every other surface.
+const HOST_CONTROL_OPS = new Map([
+  ["list_model_catalog", (transport) => transport.listModelCatalog()],
+  ["set_api_key", (transport, params) => transport.setApiKey(params.provider, params.apiKey)],
+  ["remove_api_key", (transport, params) => transport.removeApiKey(params.provider)],
+  [
+    "check_model_health",
+    (transport, params) => transport.checkModelHealth(params.provider, params.modelId || ""),
+  ],
+  [
+    "set_model_visibility",
+    (transport, params) =>
+      transport.setModelVisibility(params.provider, params.modelId, params.visible !== false),
+  ],
 ]);
 
 function withTimeout(promise, ms, label) {
@@ -56,7 +62,7 @@ function unavailable(operation) {
   };
 }
 
-export class LegacyConfigGateway {
+export class ConfigGateway {
   constructor({ transport = null } = {}) {
     // Injected rather than imported: the gateway must stay usable (and testable)
     // without owning transport construction order.
@@ -101,7 +107,12 @@ export class LegacyConfigGateway {
         await withTimeout(this.transport.logoutOauthLogin(params), timeoutMs, operation);
         return { ok: true };
       }
-      if (UNSUPPORTED_OPS.has(operation)) return unavailable(operation);
+      const hostControl = HOST_CONTROL_OPS.get(operation);
+      if (hostControl) {
+        if (!this.transport) return unavailable(operation);
+        const data = await withTimeout(hostControl(this.transport, params), timeoutMs, operation);
+        return { ok: true, data: data ?? {} };
+      }
       throw new Error(`Unknown operation: ${operation}`);
     } catch (error) {
       return { ok: false, error: error?.message || String(error) };

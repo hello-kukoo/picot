@@ -73,11 +73,12 @@ describe("createFileRenderer — renderer selection", () => {
     const renderer = createFileRenderer({
       filePath: "photo.png",
       fileName: "photo.png",
+      rawUrl: "/v2/files/raw?workspaceId=workspace-1&path=photo.png",
     });
     renderer.mount(container);
     const img = container.querySelector("img");
     expect(img).not.toBeNull();
-    expect(img.src).toContain("/api/files/raw?path=");
+    expect(img.src).toContain("/v2/files/raw?workspaceId=workspace-1&path=photo.png");
     renderer.destroy();
   });
 

@@ -1,4 +1,4 @@
-// ABOUTME: Sends owner-scoped Git broker commands with workspace-generation binding.
+// ABOUTME: Sends owner-scoped Git host requests with workspace-generation binding.
 // ABOUTME: Correlates replies and clears pending requests when the workspace changes.
 
 export class GitClient {
@@ -17,14 +17,21 @@ export class GitClient {
     this.generation = generation;
     return true;
   }
-  command(payload = {}, frameType = "git_command") {
+  command(payload = {}, operation = null) {
     if (this.generation === null) return null;
     const requestId = `git-${++this.counter}`;
+    const type = operation || payload.type;
+    if (typeof type !== "string" || !type) return null;
+    const args = { ...payload };
+    delete args.type;
+    const operationName = type.startsWith("git_") ? type : `git_${type}`;
     this.send?.({
-      type: frameType,
+      type: "host_request",
+      protocolVersion: 2,
       requestId,
+      operation: operationName,
       workspaceGeneration: this.generation,
-      command: payload,
+      args,
     });
     return requestId;
   }
@@ -64,17 +71,25 @@ export class GitClient {
   }
   sendAndAwait(payload, matcher = null, timeoutMs = this.timeoutMs) {
     if (this.generation === null) return Promise.resolve(null);
+    const type = payload?.type;
+    if (typeof type !== "string" || !type) return Promise.resolve(null);
     const requestId = `git-${++this.counter}`;
     const promise = this._await(
       requestId,
       matcher || ((message) => message?.requestId === requestId),
       timeoutMs,
     );
+    const args = { ...payload };
+    delete args.type;
+    const operationName =
+      typeof type === "string" && type.startsWith("git_") ? type : `git_${type}`;
     this.send?.({
-      type: "git_command",
+      type: "host_request",
+      protocolVersion: 2,
       requestId,
+      operation: operationName,
       workspaceGeneration: this.generation,
-      command: payload,
+      args,
     });
     return promise;
   }

@@ -136,6 +136,39 @@ afterEach(() => {
 
 function createPanel(options = {}) {
   const storedValues = new Map();
+  const transport = {
+    fileRead: vi.fn(async (path, { signal } = {}) => {
+      const response = await globalThis.fetch(
+        `/test/host-file-read?path=${encodeURIComponent(path)}`,
+        { signal },
+      );
+      if (!response.ok) {
+        const error = new Error(`Host file read failed (${response.status})`);
+        error.code = response.status === 403 ? "unauthorized_target" : undefined;
+        throw error;
+      }
+      return response.json();
+    }),
+    fileWrite: vi.fn(async (path, content, options = {}) => {
+      const response = await globalThis.fetch("/test/host-file-write", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: `/test/workspace/${path}`,
+          content,
+          expectedMtimeMs: options.expectedModifiedAtMs,
+          force: options.force,
+        }),
+      });
+      if (!response.ok) {
+        const error = new Error((await response.json()).error || `HTTP ${response.status}`);
+        error.code = response.status === 409 ? "file_conflict" : undefined;
+        throw error;
+      }
+      return response.json();
+    }),
+    fileRawUrl: vi.fn((path) => `/v2/files/raw?path=${encodeURIComponent(path)}`),
+  };
   return new FilePreviewPanel({
     panel,
     resizer,
@@ -149,6 +182,7 @@ function createPanel(options = {}) {
       removeItem: (key) => storedValues.delete(key),
     },
     ...options,
+    transport: options.transport || transport,
   });
 }
 
@@ -281,7 +315,7 @@ describe("FilePreviewPanel", () => {
     await p.openFile("/test/workspace/README.md");
 
     const contentCalls = global.fetch.mock.calls.filter(([url]) =>
-      String(url).startsWith("/api/files/content"),
+      String(url).startsWith("/test/host-file-read"),
     );
     expect(contentCalls).toHaveLength(1);
     expect(p.state.getActiveTab()?.content).toBe("# Unsaved\n");
@@ -315,7 +349,7 @@ describe("FilePreviewPanel", () => {
     expect(tabBar.children).toHaveLength(1);
     // A live preview reload should have issued a second content fetch.
     const contentCalls = global.fetch.mock.calls.filter(([url]) =>
-      String(url).startsWith("/api/files/content"),
+      String(url).startsWith("/test/host-file-read"),
     );
     expect(contentCalls.length).toBeGreaterThan(1);
     p.destroy();
@@ -328,7 +362,7 @@ describe("FilePreviewPanel", () => {
     await p.openFile("/test/workspace/other.md");
     const activeId = p.state.getActiveTab().id;
     const contentCallsBefore = global.fetch.mock.calls.filter(([url]) =>
-      String(url).startsWith("/api/files/content"),
+      String(url).startsWith("/test/host-file-read"),
     ).length;
 
     await p.revealWrite("/test/workspace/README.md");
@@ -338,7 +372,7 @@ describe("FilePreviewPanel", () => {
     expect(p.state.getActiveTab().id).toBe(activeId);
     // The silent reload re-fetched the file content from disk.
     const contentCallsAfter = global.fetch.mock.calls.filter(([url]) =>
-      String(url).startsWith("/api/files/content"),
+      String(url).startsWith("/test/host-file-read"),
     ).length;
     expect(contentCallsAfter).toBeGreaterThan(contentCallsBefore);
     p.destroy();
@@ -383,11 +417,11 @@ describe("FilePreviewPanel", () => {
     });
     const p = createPanel();
     const first = p.openFile("/test/workspace/a.docx");
-    const firstRequest = pending.get("/api/files/content?path=%2Ftest%2Fworkspace%2Fa.docx");
+    const firstRequest = pending.get("/test/host-file-read?path=a.docx");
     const second = p.openFile("/test/workspace/b.docx");
     expect(firstRequest.options.signal.aborted).toBe(true);
     firstRequest.resolve({ ok: true, json: async () => ({ content: "stale" }) });
-    pending.get("/api/files/content?path=%2Ftest%2Fworkspace%2Fb.docx").resolve({
+    pending.get("/test/host-file-read?path=b.docx").resolve({
       ok: true,
       json: async () => ({ content: "b" }),
     });
@@ -414,12 +448,12 @@ describe("FilePreviewPanel", () => {
 
     const firstLoad = p.openFile("/test/workspace/a.js");
     const secondLoad = p.openFile("/test/workspace/b.js");
-    pending.get("/api/files/content?path=%2Ftest%2Fworkspace%2Fb.js")({
+    pending.get("/test/host-file-read?path=b.js")({
       ok: true,
       json: async () => ({ content: "const b = 1;\n", mtimeMs: 2 }),
     });
     await secondLoad;
-    pending.get("/api/files/content?path=%2Ftest%2Fworkspace%2Fa.js")({
+    pending.get("/test/host-file-read?path=a.js")({
       ok: true,
       json: async () => ({ content: "const a = 1;\n", mtimeMs: 1 }),
     });

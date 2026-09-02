@@ -5836,11 +5836,6 @@ body.hide-thinking .thinking-block {
   cursor: wait;
 }
 
-/* Hide fork button in Agent Inbox (super-agent) sessions */
-.super-agent-active .message-fork-btn {
-  display: none;
-}
-
 /* Edit button — same quiet affordance family as fork (user messages). */
 .message-edit-btn {
   opacity: 0.45;
@@ -5867,10 +5862,6 @@ body.hide-thinking .thinking-block {
 
 .message-edit-btn:disabled {
   cursor: wait;
-}
-
-.super-agent-active .message-edit-btn {
-  display: none;
 }
 
 /* Error / system messages */
@@ -7124,204 +7115,10 @@ html.macos-overlay .settings-content {
 }
 
 /* ── LAN QR Code Modal ──────────────────────────────────────────────────── */
-.lan-qr-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 2000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-4);
-}
-
-.lan-qr-modal.hidden {
-  display: none;
-}
-
-.lan-qr-modal-backdrop {
-  position: absolute;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-}
-
-.lan-qr-modal-content {
-  position: relative;
-  background: var(--bg-frosted);
-  backdrop-filter: blur(40px) saturate(1.5);
-  -webkit-backdrop-filter: blur(40px) saturate(1.5);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-4);
-  width: 300px;
-  max-width: 100%;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.lan-qr-modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.lan-qr-modal-title {
-  font-weight: 600;
-  font-size: var(--font-size-md);
-  color: var(--text-primary);
-}
-
-.lan-qr-modal-body {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.lan-qr-loading {
-  font-size: var(--font-size-md);
-  color: var(--text-dim);
-  padding: var(--space-8) 0;
-}
-
-.lan-qr-image {
-  width: 220px;
-  height: 220px;
-  border-radius: var(--radius-md);
-  background: #ffffff;
-  padding: var(--space-1-5);
-  display: block;
-}
-
-.lan-qr-image.hidden {
-  display: none;
-}
-
-.lan-qr-hint {
-  font-size: var(--font-size-sm);
-  color: var(--text-dim);
-  text-align: center;
-  line-height: 1.5;
-}
-
-.lan-qr-open-link {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  margin-top: 2px;
-  padding: var(--space-0-5) var(--space-1);
-  font-size: var(--font-size-md);
-  color: var(--accent-text);
-  background: none;
-  border: none;
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.lan-qr-open-link:hover {
-  opacity: 0.8;
-}
-
-.lan-qr-open-link.hidden {
-  display: none;
-}
-
-.lan-qr-btn {
-  color: var(--accent-text);
-}
 
 /* ══════════════════════════════════════════════════════
    Super Agent — sidebar entry
    ══════════════════════════════════════════════════════ */
-
-.super-agent-sidebar-entry {
-  margin: 4px 8px 2px;
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, #a855f7 12%, transparent);
-  border: 1px solid color-mix(in srgb, #a855f7 30%, transparent);
-  cursor: pointer;
-  transition: background 0.15s;
-  user-select: none;
-}
-
-.super-agent-sidebar-entry:hover {
-  background: color-mix(in srgb, #a855f7 20%, transparent);
-}
-
-.super-agent-sidebar-entry:active {
-  transform: scale(0.99);
-}
-
-.super-agent-sidebar-entry.active {
-  background: color-mix(in srgb, #a855f7 25%, transparent);
-  border-color: color-mix(in srgb, #a855f7 50%, transparent);
-}
-
-.super-agent-entry-inner {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-2);
-}
-
-.super-agent-entry-icon {
-  font-size: var(--font-size-lg);
-  flex-shrink: 0;
-  line-height: 1;
-}
-
-.super-agent-entry-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.super-agent-entry-name {
-  font-size: var(--font-size-sm);
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  color: #a855f7;
-}
-
-.super-agent-entry-status {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  margin-top: 2px;
-}
-
-.super-agent-status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #34d399;
-  flex-shrink: 0;
-  animation: sa-pulse 2s ease-in-out infinite;
-}
-
-.super-agent-status-text {
-  font-size: var(--font-size-sm);
-  color: var(--text-dim);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.super-agent-entry-badge {
-  min-width: 18px;
-  height: 18px;
-  padding: 0 var(--space-1);
-  border-radius: var(--radius-md);
-  background: #a855f7;
-  color: #fff;
-  font-size: var(--font-size-sm);
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
 
 /* ══════════════════════════════════════════════════════
    Super Agent — chat header (replaces normal header content)
@@ -7330,112 +7127,13 @@ html.macos-overlay .settings-content {
    ══════════════════════════════════════════════════════ */
 
 /* Service channel pills — extend the base .pill style */
-.sa-service-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  cursor: pointer;
-  border: 1px solid var(--border);
-  background: var(--bg-glass);
-  color: var(--text-secondary);
-  font-size: var(--font-size-sm); /* override .pill's 10px monospace */
-  transition:
-    background 0.15s,
-    color 0.15s;
-  -webkit-app-region: no-drag;
-}
-
-.sa-service-pill:hover {
-  background: var(--bg-glass-hover);
-  color: var(--text-primary);
-}
-
-.sa-service-pill:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-  color: var(--text-dim);
-}
-
-.sa-service-pill:disabled:hover {
-  background: var(--bg-glass);
-  color: var(--text-dim);
-}
-
-.sa-service-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.sa-service-pill:not(.connected) .sa-service-dot {
-  background: var(--text-dim);
-  opacity: 0.55;
-}
-
-.sa-dot-telegram {
-  background: #26a8ea;
-}
-
-.sa-runtime-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: none;
-  background: none;
-  color: var(--text-dim);
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  padding: 0;
-  flex-shrink: 0;
-  transition:
-    color 0.15s,
-    background 0.15s;
-  -webkit-app-region: no-drag;
-}
-.sa-runtime-toggle:hover {
-  color: var(--text-primary);
-  background: var(--btn-hover-bg, rgba(0, 0, 0, 0.06));
-}
-.sa-runtime-toggle.active {
-  color: var(--accent, #a855f7);
-}
 
 /* ══════════════════════════════════════════════════════
    Super Agent — Runtime panel (right column)
    ══════════════════════════════════════════════════════ */
 
-.super-agent-runtime {
-  display: none;
-  flex-direction: column;
-}
-
-body.super-agent-active .super-agent-runtime {
-  display: flex;
-}
-
-body.super-agent-active .super-agent-runtime.collapsed {
-  margin-right: calc(var(--panel-width) * -1);
-  opacity: 0;
-  pointer-events: none;
-}
-
 /* When SA is active, keep the regular session header measurable for live insets,
    but let the Super Agent header provide the visible controls. */
-body.super-agent-active .session-header {
-  visibility: hidden;
-  pointer-events: none;
-}
-
-body.super-agent-active .file-sidebar {
-  display: none;
-}
-
-.super-agent-chat-header {
-  z-index: 11;
-}
 
 .runtime-header {
   gap: var(--space-2);
@@ -7530,20 +7228,7 @@ body.super-agent-active .file-sidebar {
   position: relative;
 }
 
-.runtime-quick-actions {
-  display: none;
-  align-items: center;
-  gap: var(--space-1);
-  position: absolute;
-  right: 18px;
-  background: var(--bg-solid);
-}
-
 .runtime-task-card:hover .runtime-quick-actions,
-.runtime-task-card:focus-within .runtime-quick-actions {
-  display: inline-flex;
-}
-
 .runtime-status-dot {
   width: 7px;
   height: 7px;
@@ -7688,37 +7373,6 @@ body.super-agent-active .file-sidebar {
   word-break: break-word;
 }
 
-.runtime-task-history {
-  display: grid;
-  gap: var(--space-1-5);
-}
-
-.runtime-task-history-list {
-  display: grid;
-  gap: var(--space-1-5);
-  border-left: 1px solid var(--border);
-  padding-left: var(--space-2);
-}
-
-.runtime-task-history-item {
-  display: grid;
-  gap: var(--space-0-5);
-  font-size: var(--font-size-sm);
-  color: var(--text-dim);
-}
-
-.runtime-task-history-item strong {
-  color: var(--text-secondary);
-  font-size: var(--font-size-sm);
-  text-transform: uppercase;
-}
-
-.runtime-task-history-item p {
-  margin: 0;
-  color: var(--text-secondary);
-  word-break: break-word;
-}
-
 .runtime-approve-row {
   display: flex;
   align-items: center;
@@ -7736,57 +7390,6 @@ body.super-agent-active .file-sidebar {
   }
 }
 
-.sa-btn {
-  font-size: var(--font-size-sm);
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-xs);
-  border: 1px solid transparent;
-  cursor: pointer;
-  transition: opacity var(--duration) var(--ease);
-  white-space: nowrap;
-}
-
-.sa-btn:hover {
-  opacity: 0.8;
-}
-
-.runtime-quick-actions .sa-btn {
-  padding: var(--space-0-5) var(--space-1-5);
-  font-size: var(--font-size-sm);
-}
-
-.runtime-task-history > .sa-btn {
-  justify-self: flex-start;
-}
-
-.runtime-bulk-actions {
-  display: flex;
-  gap: var(--space-1-5);
-  padding: 0 var(--space-3) var(--space-2);
-  flex-shrink: 0;
-}
-
-.runtime-bulk-actions .sa-btn {
-  flex: 1;
-}
-
-.runtime-bulk-actions .sa-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.sa-btn-approve {
-  background: var(--accent);
-  color: var(--bg-solid, #212121);
-  border-color: var(--accent);
-}
-
-.sa-btn-dismiss {
-  background: var(--bg-glass-active);
-  color: var(--text-secondary);
-  border-color: var(--border, rgba(128, 128, 128, 0.25));
-}
-
 /* ── Chat Settings ──────────────────────────────────── */
 
 .chat-accounts-list {
@@ -7794,102 +7397,6 @@ body.super-agent-active .file-sidebar {
   flex-direction: column;
   gap: var(--space-2);
   margin-top: 12px;
-}
-
-.telegram-setup-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.telegram-safety-note {
-  border-left: 2px solid var(--accent);
-  padding-left: var(--space-2);
-}
-
-.telegram-token-label {
-  font-size: var(--font-size-sm);
-  color: var(--text-secondary);
-}
-
-.telegram-token-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.telegram-token-input.ui-input {
-  width: min(360px, 100%);
-  flex: 1 1 240px;
-}
-
-.telegram-token-row .ui-button {
-  flex: none;
-}
-
-.telegram-bind-instructions {
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-glass);
-  color: var(--text-secondary);
-  font-size: var(--font-size-sm);
-}
-
-.telegram-bind-steps {
-  margin: 6px 0 10px 18px;
-  padding: 0;
-}
-
-.telegram-bind-title {
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.telegram-open-link {
-  display: inline-flex;
-  width: fit-content;
-}
-
-.telegram-doctor-card {
-  margin-top: 12px;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border, rgba(128, 128, 128, 0.2));
-  border-radius: var(--radius-sm);
-  background: var(--bg-glass);
-}
-
-.telegram-doctor-checks {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1-5);
-  margin-top: 8px;
-}
-
-.telegram-doctor-check {
-  display: grid;
-  grid-template-columns: minmax(72px, 96px) 1fr;
-  gap: var(--space-2);
-  align-items: start;
-  font-size: var(--font-size-sm);
-  color: var(--text-dim);
-}
-
-.telegram-doctor-label {
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
-.telegram-doctor-check.ok .telegram-doctor-label {
-  color: var(--color-success, #4ade80);
-}
-
-.telegram-doctor-check.warning .telegram-doctor-label {
-  color: #fbbf24;
-}
-
-.telegram-doctor-check.error .telegram-doctor-label {
-  color: #f87171;
 }
 
 .chat-account-card {

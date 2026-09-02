@@ -44,6 +44,8 @@ export class FilePreviewPanel {
     confirmDirty,
     resolveConflict,
     storage,
+    transport,
+    workspaceRoot,
   } = {}) {
     this.panel = panel;
     this.resizer = resizer;
@@ -59,6 +61,7 @@ export class FilePreviewPanel {
       this.content.setAttribute("aria-label", t("files.preview.tabpanelLabel"));
     }
     this.onOpenDesktop = onOpenDesktop || (() => {});
+    this.transport = transport || null;
     this.onCopyText = onCopyText || ((text) => navigator.clipboard?.writeText(text));
     this.onStateChange = onStateChange || (() => {});
     this.confirmDirty = confirmDirty || ((tabs, reason) => this._showDirtyDialog(tabs, reason));
@@ -75,7 +78,7 @@ export class FilePreviewPanel {
     }
     this.state = new FileTabState({ storage: this.storage });
     this.currentRenderer = null;
-    this.workspaceRoot = "";
+    this.workspaceRoot = normalizeLocalPath(workspaceRoot) || "";
     this.loadTokens = new Map();
     this.loadAbortControllers = new Map();
     this.savePromises = new Map();
@@ -883,22 +886,10 @@ export class FilePreviewPanel {
     this.loadAbortControllers.set(tab.id, controller);
 
     try {
-      const res = await fetch(`/api/files/content?path=${encodeURIComponent(tab.filePath)}`, {
-        signal: controller.signal,
-      });
-      if (this.loadTokens.get(tab.id) !== token || !this.state.getTab(tab.id)) return false;
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        this.state.updateTab(tab.id, {
-          loading: false,
-          error: t("files.preview.loadError"),
-          errorDetail: errorData.error || `HTTP ${res.status}`,
-        });
-        await this._mountIfActive(tab.id);
-        return false;
-      }
-
-      const data = await res.json();
+      const relativePath = relativeLocalPath(tab.filePath, this.workspaceRoot);
+      if (relativePath === null) throw new Error("File is outside workspace");
+      if (!this.transport?.fileRead) throw new Error("Host file preview unavailable");
+      const data = await this.transport.fileRead(relativePath, { signal: controller.signal });
       if (this.loadTokens.get(tab.id) !== token || !this.state.getTab(tab.id)) return false;
       const classification = classifyFilePath(tab.filePath);
       if (data.previewStatus === "dependencyUnavailable") {
@@ -968,7 +959,7 @@ export class FilePreviewPanel {
         content: data.content ?? "",
         originalContent: data.content ?? "",
         renderAs: data.renderAs,
-        mtimeMs: data.mtimeMs,
+        mtimeMs: data.modifiedAtMs ?? data.mtimeMs,
         mimeType: data.mimeType,
         size: data.size,
         truncated: Boolean(data.truncated),
@@ -1081,6 +1072,7 @@ export class FilePreviewPanel {
         this.state.updateTab(tab.id, { mode });
         this.state.persist();
       },
+      rawUrl: this.transport?.fileRawUrl?.(relativeLocalPath(tab.filePath, this.workspaceRoot)),
       onError: (error) => {
         this.state.updateTab(tab.id, {
           error: t("files.preview.loadError"),
@@ -1156,40 +1148,44 @@ export class FilePreviewPanel {
     this.state.updateTab(tabId, { saving: true, saveError: null });
 
     try {
-      const res = await fetch("/api/files/content", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          path: tab.filePath,
-          content: savedContent,
-          expectedMtimeMs,
+      const relativePath = relativeLocalPath(tab.filePath, this.workspaceRoot);
+      if (relativePath === null) throw new Error("File is outside workspace");
+      let data;
+      try {
+        if (!this.transport?.fileWrite) throw new Error("Host file save unavailable");
+        data = await this.transport.fileWrite(relativePath, savedContent, {
+          expectedModifiedAtMs: expectedMtimeMs,
           force,
-        }),
-      });
+        });
+      } catch (error) {
+        if (error?.code === "file_conflict" || /conflict/i.test(error?.message || "")) {
+          this.state.updateTab(tabId, { saving: false, conflict: true });
+          if (autoSave) return false;
+          return this._resolveSaveConflict(tabId);
+        }
+        throw error;
+      }
 
-      if (res.status === 409) {
+      if (data?.errorCode === "file_conflict") {
         this.state.updateTab(tabId, { saving: false, conflict: true });
         if (autoSave) return false;
         return this._resolveSaveConflict(tabId);
       }
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
+      if (!data) {
         this.state.updateTab(tabId, {
           saving: false,
           saveError: t("files.preview.saveError"),
-          errorDetail: errorData.error || `HTTP ${res.status}`,
+          errorDetail: "File save returned no result",
         });
         return false;
       }
-
-      const data = await res.json();
       const current = this.state.getTab(tabId);
       if (!current) return false;
       this.state.updateTab(tabId, {
         saving: false,
         dirty: current.content !== savedContent,
         conflict: false,
-        mtimeMs: data.mtimeMs,
+        mtimeMs: data.modifiedAtMs ?? data.mtimeMs,
         originalContent: savedContent,
         saveError: null,
         errorDetail: null,

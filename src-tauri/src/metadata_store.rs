@@ -12,9 +12,18 @@ use uuid::Uuid;
 
 // HISTORY: v1 introduced workspaces/paired_devices/preferences. Other
 // branches may carry a v2 with extra tables; v3 adds sidebar-registry
-// columns to workspaces. Migrations must stay strictly additive so any
-// branch's DB survives opening here (see ARCHITECTURE.md persistence).
-const SCHEMA_VERSION: i64 = 3;
+// columns to workspaces. v4–v6 add Picot Corp tables (company account
+// profile, GitLab bindings, company install ledger) owned by Corp builds:
+// this build accepts those databases read-compatibly and never creates or
+// alters Corp tables. Migrations stay strictly additive (see
+// ARCHITECTURE.md persistence).
+/// Highest metadata schema this build can open. Databases stamped above this
+/// reject startup (fail-closed N-1 rule); v4–v6 Corp databases open normally.
+const SCHEMA_VERSION: i64 = 6;
+/// Schema level this build's own migration completes and stamps. Never above
+/// the shape it actually creates, so a Corp binary never mistakes a
+/// public-created database for a completed Corp schema.
+const WRITTEN_SCHEMA_VERSION: i64 = 3;
 
 /// A registered workspace row as exposed to the frontend (camelCase).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -212,7 +221,10 @@ impl MetadataStore {
                 "Picot metadata schema {current} is newer than supported schema {SCHEMA_VERSION}"
             ));
         }
-        if current == SCHEMA_VERSION {
+        // v3+ needs no public migration. Corp v4–v6 databases keep their
+        // version: Corp tables are owned by Corp builds, which finish their
+        // own staircase; this build reads only the v1–v3 tables it uses.
+        if current >= WRITTEN_SCHEMA_VERSION {
             return Ok(());
         }
 
@@ -287,7 +299,7 @@ impl MetadataStore {
         }
 
         transaction
-            .execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
+            .execute_batch(&format!("PRAGMA user_version = {WRITTEN_SCHEMA_VERSION};"))
             .map_err(|error| format!("Cannot finalize Picot metadata schema version: {error}"))?;
 
         transaction
@@ -760,6 +772,7 @@ fn token_hash(token: &str) -> Vec<u8> {
 mod tests {
     use super::{
         AddWorkspaceError, MetadataStore, RemovedWorkspace, WorkspaceLookupError, SCHEMA_VERSION,
+        WRITTEN_SCHEMA_VERSION,
     };
     use rusqlite::Connection;
     use std::fs;
@@ -804,18 +817,35 @@ mod tests {
 
     #[allow(clippy::too_many_lines)]
     fn workspace_columns(store: &MetadataStore) -> Vec<String> {
+        table_columns(store, "workspaces")
+    }
+
+    fn table_columns(store: &MetadataStore, table: &str) -> Vec<String> {
         let connection: &Connection = &store.connection;
-        let mut statement = connection.prepare("PRAGMA table_info(workspaces)").unwrap();
+        let mut statement = connection
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .unwrap();
         let mapped = statement
             .query_map([], |row| row.get::<_, String>(1))
             .unwrap();
         mapped.map(|entry| entry.unwrap()).collect()
     }
 
+    fn table_exists(store: &MetadataStore, table: &str) -> bool {
+        let connection: &Connection = &store.connection;
+        connection
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [table],
+                |_| Ok(()),
+            )
+            .is_ok()
+    }
+
     #[test]
-    fn fresh_empty_database_reaches_schema_v3_with_registry_columns() {
+    fn fresh_empty_database_reaches_public_schema_v3_without_corp_tables() {
         let (_guard, mut store) = fresh_store("picot.sqlite3");
-        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+        assert_eq!(store.schema_version().unwrap(), WRITTEN_SCHEMA_VERSION);
         let columns = workspace_columns(&store);
         for expected in [
             "workspace_id",
@@ -831,10 +861,22 @@ mod tests {
             );
         }
         assert!(store.list_workspaces_and_prune().unwrap().0.is_empty());
+        // Corp tables belong to Corp builds; a public-created database must
+        // never fabricate them or claim a Corp-complete schema version.
+        for corp_table in [
+            "company_account_profiles",
+            "gitlab_bindings",
+            "company_install_ledger",
+        ] {
+            assert!(
+                !table_exists(&store, corp_table),
+                "public migration must not create {corp_table}"
+            );
+        }
     }
 
     #[test]
-    fn v2_style_database_keeps_unknown_tables_and_migrates_to_v3() {
+    fn v2_style_database_keeps_unknown_tables_and_migrates_current() {
         let temp = temp_dir();
         let _guard = tempdir_guard::TempDirGuard(temp.clone());
         let database = temp.join("picot.sqlite3");
@@ -857,18 +899,18 @@ mod tests {
                         key TEXT PRIMARY KEY,
                         value_json TEXT NOT NULL
                     );
-                    CREATE TABLE company_account_profiles (
+                    CREATE TABLE legacy_experiments (
                         profile_key TEXT PRIMARY KEY,
                         payload TEXT NOT NULL
                     );
-                    INSERT INTO company_account_profiles (profile_key, payload) VALUES ('a', '{}');
+                    INSERT INTO legacy_experiments (profile_key, payload) VALUES ('a', '{}');
                     INSERT INTO workspaces (workspace_id, canonical_path) VALUES ('legacy', '/tmp/legacy');
                     PRAGMA user_version = 2;",
                 )
                 .unwrap();
         }
         let store = MetadataStore::open(&database).unwrap();
-        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+        assert_eq!(store.schema_version().unwrap(), WRITTEN_SCHEMA_VERSION);
 
         // Verify the v2-era registry row survived migration through a direct
         // count: the placeholder path is not a real directory, so the pruning
@@ -891,13 +933,163 @@ mod tests {
         let profiles: i64 = {
             let connection: &Connection = &reopened.connection;
             connection
-                .query_row("SELECT count(*) FROM company_account_profiles", [], |row| {
+                .query_row("SELECT count(*) FROM legacy_experiments", [], |row| {
                     row.get(0)
                 })
                 .unwrap()
         };
         assert_eq!(profiles, 1, "unknown v2 table survived");
         assert_eq!(workspace_columns(&reopened).len(), 6);
+    }
+
+    #[test]
+    fn corp_v6_database_opens_unchanged_with_workspace_rows() {
+        let temp = temp_dir();
+        let _guard = tempdir_guard::TempDirGuard(temp.clone());
+        let database = temp.join("picot.sqlite3");
+        let project = temp.join("corp-project");
+        fs::create_dir_all(&project).unwrap();
+        let project_path = project.to_string_lossy().into_owned();
+        {
+            let connection = Connection::open(&database).unwrap();
+            connection
+                .execute_batch(&format!(
+                    "CREATE TABLE workspaces (
+                    workspace_id TEXT PRIMARY KEY,
+                    canonical_path TEXT NOT NULL UNIQUE,
+                    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+                , display_name TEXT, pinned INTEGER NOT NULL DEFAULT 0, last_opened_at INTEGER);
+                CREATE TABLE paired_devices (
+                    device_id TEXT PRIMARY KEY,
+                    token_hash BLOB NOT NULL UNIQUE,
+                    paired_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                    revoked_at INTEGER
+                );
+                CREATE TABLE preferences (
+                    key TEXT PRIMARY KEY,
+                    value_json TEXT NOT NULL
+                );
+                CREATE TABLE company_account_profiles (
+                    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                    sub TEXT NOT NULL,
+                    preferred_username TEXT,
+                    name TEXT,
+                    email TEXT,
+                    picture TEXT,
+                    last_validated_at INTEGER
+                );
+                CREATE TABLE gitlab_bindings (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    gitlab_user_id INTEGER NOT NULL,
+                    gitlab_username TEXT NOT NULL,
+                    company_account_sub TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+                , gitlab_name TEXT, gitlab_avatar_url TEXT);
+                CREATE TABLE company_install_ledger (
+                    id INTEGER PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    scope TEXT NOT NULL CHECK (scope IN ('global', 'project')),
+                    workspace_id TEXT,
+                    catalog TEXT CHECK (catalog = 'datarx-enterprise'),
+                    source_kind TEXT NOT NULL CHECK (source_kind IN ('catalog', 'company-git')),
+                    installed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                    last_seen_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                    last_attempt_at INTEGER,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    last_error_code TEXT,
+                    UNIQUE(source, scope, workspace_id),
+                    CHECK (
+                        (scope = 'global' AND workspace_id IS NULL)
+                        OR
+                        (scope = 'project' AND workspace_id IS NOT NULL)
+                    ),
+                    CHECK (
+                        (source_kind = 'catalog' AND catalog IS NOT NULL)
+                        OR
+                        (source_kind = 'company-git' AND catalog IS NULL)
+                    )
+                );
+                INSERT INTO company_account_profiles
+                    (singleton, sub, preferred_username) VALUES (1, 'corp-sub', 'lin');
+                INSERT INTO workspaces (workspace_id, canonical_path, display_name)
+                    VALUES ('corp-ws', '{project_path}', 'Corp');
+                PRAGMA user_version = 6;",
+                ))
+                .unwrap();
+        }
+        let mut store = MetadataStore::open(&database).unwrap();
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+        let rows = store.list_workspaces_and_prune().unwrap().0;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].workspace_id, "corp-ws");
+        let corp_profile: i64 = {
+            let connection: &Connection = &store.connection;
+            connection
+                .query_row("SELECT count(*) FROM company_account_profiles", [], |row| {
+                    row.get(0)
+                })
+                .unwrap()
+        };
+        assert_eq!(corp_profile, 1, "corp data untouched");
+    }
+
+    #[test]
+    fn corp_v4_partial_database_opens_without_creating_corp_tables() {
+        let temp = temp_dir();
+        let _guard = tempdir_guard::TempDirGuard(temp.clone());
+        let database = temp.join("picot.sqlite3");
+        let project = temp.join("corp-partial");
+        fs::create_dir_all(&project).unwrap();
+        {
+            let connection = Connection::open(&database).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE workspaces (
+                        workspace_id TEXT PRIMARY KEY,
+                        canonical_path TEXT NOT NULL UNIQUE,
+                        created_at INTEGER NOT NULL DEFAULT (unixepoch())
+                    , display_name TEXT, pinned INTEGER NOT NULL DEFAULT 0, last_opened_at INTEGER);
+                    CREATE TABLE paired_devices (
+                        device_id TEXT PRIMARY KEY,
+                        token_hash BLOB NOT NULL UNIQUE,
+                        paired_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                        revoked_at INTEGER
+                    );
+                    CREATE TABLE preferences (
+                        key TEXT PRIMARY KEY,
+                        value_json TEXT NOT NULL
+                    );
+                    CREATE TABLE company_account_profiles (
+                        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                        sub TEXT NOT NULL,
+                        preferred_username TEXT,
+                        name TEXT,
+                        email TEXT,
+                        picture TEXT,
+                        last_validated_at INTEGER
+                    );
+                    PRAGMA user_version = 4;",
+                )
+                .unwrap();
+        }
+        let store = MetadataStore::open(&database).unwrap();
+        // A Corp-partial database keeps its version untouched: the Corp
+        // staircase owns v4–v6 completion, and this build must neither stamp
+        // a Corp-complete version nor fabricate Corp tables it does not use.
+        assert_eq!(store.schema_version().unwrap(), 4);
+        assert!(table_exists(&store, "company_account_profiles"));
+        assert!(
+            !table_exists(&store, "gitlab_bindings"),
+            "public open must not create Corp tables"
+        );
+        assert!(!table_exists(&store, "company_install_ledger"));
+        // The v1–v3 surface stays fully usable.
+        let (_row, added) = store.add_workspace(&project).unwrap();
+        assert!(added);
+        assert_eq!(store.schema_version().unwrap(), 4);
+        drop(store);
+        let reopened = MetadataStore::open(&database).unwrap();
+        assert_eq!(reopened.schema_version().unwrap(), 4);
     }
 
     #[test]
@@ -908,13 +1100,13 @@ mod tests {
 
         {
             let store = MetadataStore::open(&database).unwrap();
-            assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+            assert_eq!(store.schema_version().unwrap(), WRITTEN_SCHEMA_VERSION);
         }
         assert!(database.exists());
 
         // Reopen the exact same database; migration must be a no-op.
         let mut reopened = MetadataStore::open(&database).unwrap();
-        assert_eq!(reopened.schema_version().unwrap(), SCHEMA_VERSION);
+        assert_eq!(reopened.schema_version().unwrap(), WRITTEN_SCHEMA_VERSION);
         assert!(reopened.list_workspaces_and_prune().unwrap().0.is_empty());
     }
 
@@ -947,7 +1139,7 @@ mod tests {
         // (renamed, bytes retained) and a fresh store is created, so the app
         // keeps starting without user intervention.
         let store = MetadataStore::open(&database).unwrap();
-        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+        assert_eq!(store.schema_version().unwrap(), WRITTEN_SCHEMA_VERSION);
 
         let quarantined = quarantine_files(&temp);
         assert_eq!(quarantined.len(), 1, "exactly one quarantine file");
@@ -972,7 +1164,7 @@ mod tests {
         let database = temp.join("picot.sqlite3");
         {
             let store = MetadataStore::open(&database).unwrap();
-            assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+            assert_eq!(store.schema_version().unwrap(), WRITTEN_SCHEMA_VERSION);
         }
 
         // Reopen a healthy database with data; no quarantine may appear.
@@ -1346,7 +1538,7 @@ mod tests {
         let first = store.workspace_id_for_path(&workspace).unwrap();
         let second = store.workspace_id_for_path(&workspace).unwrap();
         assert_eq!(first, second);
-        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+        assert_eq!(store.schema_version().unwrap(), WRITTEN_SCHEMA_VERSION);
 
         store
             .store_device_token("phone", "plain-device-token")

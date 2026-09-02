@@ -1,51 +1,25 @@
 // ABOUTME: Maintains the broker WebSocket, authentication handshake, and reconnect state.
 // ABOUTME: Dispatches correlated control, session, and owner-scoped ephemeral frames.
 
-import { consumeInjectedCapability } from "./host-origin.js";
+import { consumeInjectedCapability, readInjectedCapability } from "./host-origin.js";
 
 /**
  * WebSocket Client - Handles connection to backend WebSocket server
  */
 
-const BROKER_WS_STORAGE_KEY = "pi-studio:broker-ws-url";
-
-// The shared broker URL is delivered to each page via the `?brokerWs=` query
-// param (the Rust host appends it when opening a window, and in-app navigations
-// carry it forward — see workspace-actions.withBrokerWs). We persist it to
-// sessionStorage so a reload without the param still finds it. Keeping this in
-// the transport-agnostic WS layer means the frontend does not depend on any
-// desktop-specific bridge to discover the broker.
-export function resolveBrokerWsUrl(env = globalThis.window || globalThis) {
-  try {
-    const loc = env?.location || globalThis.location;
-    const search = loc?.search || "";
-    const fromUrl = new URLSearchParams(search).get("brokerWs");
-    if (fromUrl) {
-      env?.sessionStorage?.setItem?.(BROKER_WS_STORAGE_KEY, fromUrl);
-      return fromUrl;
-    }
-    return env?.sessionStorage?.getItem?.(BROKER_WS_STORAGE_KEY) || "";
-  } catch {
-    return "";
-  }
-}
-
+/**
+ * Resolve sole WebSocket endpoint from current HostServer origin.
+ *
+ * Native Pi runtimes speak stdin/stdout RPC; browser never connects to a Pi
+ * port. Keeping URL construction origin-local also prevents an untrusted
+ * query parameter from redirecting control traffic to an arbitrary socket.
+ */
 export function resolveWebSocketUrl(env = globalThis.window || globalThis) {
   const loc = env?.location || globalThis.location;
-  const hostOrigin = typeof loc?.pathname === "string" && loc.pathname.startsWith("/workspaces/");
-  // Existing-shell pages served by HostServer have one canonical transport. Do
-  // not consult brokerWs (or fall back to Pi's /ws) on this origin.
-  if (hostOrigin) {
-    const protocol = loc?.protocol === "https:" ? "wss:" : "ws:";
-    return `${protocol}//${loc?.host || "127.0.0.1:47821"}/v2/ws`;
-  }
-  const brokerUrl = resolveBrokerWsUrl(env);
-  if (brokerUrl.trim()) {
-    return brokerUrl.trim();
-  }
-
+  const host = loc?.host;
+  if (!host) throw new Error("HostServer origin is unavailable");
   const protocol = loc?.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${loc?.host || "127.0.0.1:47821"}/ws`;
+  return `${protocol}//${host}/v2/ws`;
 }
 
 export class WebSocketClient extends EventTarget {
@@ -60,23 +34,28 @@ export class WebSocketClient extends EventTarget {
     this.isIntentionallyClosed = false;
     this.reconnectTimer = null;
     this.connectionState = "idle";
-    this.protocolVersion = url.endsWith("/v2/ws") ? 2 : 1;
+    if (!url.endsWith("/v2/ws")) {
+      throw new Error("HostServer v2 WebSocket URL required");
+    }
+    this.protocolVersion = 2;
     this.clientId = null;
+    // Cache capability privately for the lifetime of this page. The injected
+    // global is one-shot, but every reconnect must repeat the authenticated
+    // hello; never rediscover capability from URL or browser storage.
+    this.desktopCapability = readInjectedCapability(globalThis);
+    consumeInjectedCapability(globalThis);
     this.workspaceId = null;
     this.sessionId = null;
     this.canonicalRoute = this._readCanonicalRoute();
-    this.sourcePort = null;
     this.requestCounter = 0;
-    // Whether the broker advertised native (OS/window) capabilities. Updated by
-    // the authenticated `capabilities` handshake frame; consumers gate native-only
-    // UI on it.
+    // Host capability state from authenticated hello_ack; consumers gate
+    // native-only UI on it.
     this.capabilities = { native: false };
-    // True once the broker has authenticated our `client_hello`. `connected` only
-    // fires after this, so no command is sent before the owner/class is verified.
+    // True after HostServer accepts hello. `connected` fires only after this.
     this.authenticated = false;
     this._pendingConnect = false;
-    // Pending control requests keyed by requestId. Each entry resolves/rejects
-    // the promise returned by sendControl() when a matching control_response
+    // Pending host requests keyed by requestId. Each entry resolves/rejects
+    // the promise returned by sendControl() when a matching host_response
     // arrives (or on timeout / disconnect). `onProgress` receives streamed
     // control_progress frames (e.g. updater download chunks).
     this.pendingControls = new Map();
@@ -85,7 +64,6 @@ export class WebSocketClient extends EventTarget {
   }
 
   _readCanonicalRoute() {
-    if (this.protocolVersion !== 2) return false;
     const match = (globalThis.location?.pathname || "").match(
       /^\/workspaces\/([^/]+)\/sessions\/([^/]+)/,
     );
@@ -95,23 +73,32 @@ export class WebSocketClient extends EventTarget {
     return true;
   }
 
-  setRoutingContext({ workspaceId, sessionId, sourcePort }) {
-    // Host-origin route IDs are authoritative. Legacy app.js updates must not
-    // replace them with path-derived IDs after a native navigation.
+  getRuntimeTarget() {
+    if (!this.workspaceId || !this.sessionId) return null;
+    return {
+      workspaceId: this.workspaceId,
+      sessionId: this.sessionId,
+      instanceId: this._instanceId(),
+    };
+  }
+
+  setRoutingContext({ workspaceId, sessionId, instanceId }) {
+    // Host-origin route IDs are authoritative after navigation.
     if (!this.canonicalRoute) {
-      if (typeof workspaceId === "string" && workspaceId.trim())
+      if (typeof workspaceId === "string" && workspaceId.trim()) {
         this.workspaceId = workspaceId.trim();
+      }
       if (sessionId === null) this.sessionId = null;
-      if (typeof sessionId === "string" && sessionId.trim()) this.sessionId = sessionId.trim();
+      if (typeof sessionId === "string" && sessionId.trim()) {
+        this.sessionId = sessionId.trim();
+      }
     }
-    if (sourcePort === null) this.sourcePort = null;
-    if (typeof sourcePort === "number" && Number.isFinite(sourcePort)) {
-      this.sourcePort = sourcePort;
+    if (typeof instanceId === "string" && instanceId.trim()) {
+      this._instanceIdValue = instanceId.trim();
     }
     console.debug("[WS route] setRoutingContext", {
       workspaceId: this.workspaceId,
       sessionId: this.sessionId,
-      sourcePort: this.sourcePort,
     });
   }
 
@@ -137,7 +124,7 @@ export class WebSocketClient extends EventTarget {
     this.ws = new WebSocket(this.url);
 
     this.ws.onopen = () => {
-      console.log("[WS] Open; sending client_hello");
+      console.log("[WS] Open; sending hello");
       this.reconnectAttempts = 0;
       this.connectionState = "open";
       this.authenticated = false;
@@ -227,40 +214,24 @@ export class WebSocketClient extends EventTarget {
 
   send(data) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      // Prefer broker envelope, while remaining backward-compatible with
-      // servers that still expect raw command payloads.
       const requestId = `req-${++this.requestCounter}`;
-      const payload =
-        this.protocolVersion === 2
-          ? {
-              type: "runtime_request",
-              protocolVersion: 2,
-              requestId,
-              target: {
-                workspaceId: this.workspaceId,
-                sessionId: this.sessionId,
-                instanceId: String(this.sourcePort || "primary"),
-              },
-              command: data,
-              idempotencyKey: `ui-${requestId}`,
-            }
-          : data && data.type === "broker_command"
-            ? data
-            : {
-                type: "broker_command",
-                protocolVersion: this.protocolVersion,
-                requestId,
-                workspaceId: this.workspaceId || undefined,
-                sessionId: this.sessionId || undefined,
-                sourcePort: this.sourcePort || undefined,
-                payload: data,
-              };
+      const payload = {
+        type: "runtime_request",
+        protocolVersion: 2,
+        requestId,
+        target: {
+          workspaceId: this.workspaceId,
+          sessionId: this.sessionId,
+          instanceId: this._instanceId(),
+        },
+        command: data,
+        idempotencyKey: `ui-${requestId}`,
+      };
       console.debug("[WS route] send", {
-        command: payload.payload?.type || payload.type,
+        command: payload.command?.type || payload.type,
         requestId: payload.requestId,
-        workspaceId: payload.workspaceId,
-        sessionId: payload.sessionId,
-        sourcePort: payload.sourcePort,
+        workspaceId: payload.target?.workspaceId,
+        sessionId: payload.target?.sessionId,
       });
       this.ws.send(JSON.stringify(payload));
       // Return the requestId so callers can correlate a later
@@ -272,31 +243,47 @@ export class WebSocketClient extends EventTarget {
     }
   }
 
-  _readNativeCapability() {
-    return consumeInjectedCapability(globalThis);
+  _instanceId() {
+    return this._instanceIdValue || "primary";
   }
 
-  // Send the first-frame `client_hello`. Native clients present the injected
-  // capability; remote (LAN/mobile) clients send a bare hello with no secret.
+  _readNativeCapability() {
+    return this.desktopCapability;
+  }
+
+  async loadCanonicalTarget(fetchImpl = globalThis.fetch?.bind(globalThis)) {
+    if (!this.canonicalRoute || typeof fetchImpl !== "function") return null;
+    const query = new URLSearchParams({
+      workspaceId: this.workspaceId,
+      sessionId: this.sessionId,
+    });
+    const response = await fetchImpl(`/v2/bootstrap?${query}`);
+    if (!response.ok) throw new Error(`Host bootstrap failed (${response.status})`);
+    const target = await response.json();
+    this.setRoutingContext(target);
+    return target;
+  }
+
+  requestSnapshot() {
+    this._requestCanonicalSnapshot();
+  }
+
+  // Send canonical v2 hello. Desktop windows present injected capability.
   _sendClientHello() {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     const capability = this._readNativeCapability();
     this._readCanonicalRoute();
-    const hello =
-      this.protocolVersion === 2
-        ? {
-            type: "hello",
-            protocolVersion: 2,
-            clientType: "desktop",
-            clientId: this.clientId || `desktop-${globalThis.crypto?.randomUUID?.() || Date.now()}`,
-            desktopCapability: capability,
-          }
-        : { type: "client_hello", protocolVersion: this.protocolVersion };
-    if (capability && this.protocolVersion !== 2) hello.capability = capability;
+    const hello = {
+      type: "hello",
+      protocolVersion: 2,
+      clientType: "desktop",
+      clientId: this.clientId || `desktop-${globalThis.crypto?.randomUUID?.() || Date.now()}`,
+      desktopCapability: capability,
+    };
     try {
       this.ws.send(JSON.stringify(hello));
     } catch (err) {
-      console.error("[WS] Failed to send client_hello:", err);
+      console.error("[WS] Failed to send hello:", err);
     }
   }
 
@@ -307,7 +294,7 @@ export class WebSocketClient extends EventTarget {
       const requestId = `ep-${++this.requestCounter}`;
       const envelope = {
         type: "ephemeral_command",
-        protocolVersion: this.protocolVersion,
+        protocolVersion: 2,
         requestId,
         ephemeralInstanceId: instanceId,
         generation,
@@ -380,16 +367,7 @@ export class WebSocketClient extends EventTarget {
       }
       this.pendingControls.set(requestId, entry);
 
-      const envelope =
-        this.protocolVersion === 2
-          ? this._canonicalControlEnvelope(command, requestId, args)
-          : {
-              type: "broker_control",
-              protocolVersion: this.protocolVersion,
-              requestId,
-              command,
-              args: args || {},
-            };
+      const envelope = this._canonicalControlEnvelope(command, requestId, args);
       try {
         this.ws.send(JSON.stringify(envelope));
       } catch (err) {
@@ -400,14 +378,8 @@ export class WebSocketClient extends EventTarget {
     });
   }
 
-  // Host data-plane request (`data_request` → `data_response`). Shares the
-  // requestId correlation pool with control commands; the reply payload is
-  // delivered at the top level of `data_response`, so `unwrap` strips the
-  // envelope keys instead of reading `result`.
+  // Host data-plane request (`data_request` → `data_response`).
   sendData(operation, args = {}, options = {}) {
-    if (this.protocolVersion !== 2) {
-      return Promise.reject(new Error(`Data operation "${operation}" requires protocol v2`));
-    }
     return this._sendRequest(
       (requestId) => ({
         type: "data_request",
@@ -421,16 +393,8 @@ export class WebSocketClient extends EventTarget {
     );
   }
 
-  // Runtime command that needs a correlated reply (`runtime_request` →
-  // `runtime_response`). `send()` stays fire-and-forget for prompt-style calls
-  // whose result arrives as events; this path registers the requestId so the
-  // Pi reply's `{success, data}` envelope resolves it. Resolves with the inner
-  // `data` (legacy `wsRequest` contract) and rejects on `success: false` so
-  // callers keep seeing the runtime's own error text.
+  // Runtime command with a correlated `runtime_response`.
   sendRuntime(command, { timeoutMs } = {}) {
-    if (this.protocolVersion !== 2) {
-      return Promise.reject(new Error("Runtime requests require protocol v2"));
-    }
     return this._sendRequest(
       (requestId) => ({
         type: "runtime_request",
@@ -439,7 +403,7 @@ export class WebSocketClient extends EventTarget {
         target: {
           workspaceId: this.workspaceId,
           sessionId: this.sessionId,
-          instanceId: String(this.sourcePort || "primary"),
+          instanceId: this._instanceId(),
         },
         command,
         idempotencyKey: `ui-${requestId}`,
@@ -498,7 +462,7 @@ export class WebSocketClient extends EventTarget {
   }
 
   _subscribeCanonicalTarget() {
-    if (this.protocolVersion !== 2 || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     if (!this.workspaceId || !this.sessionId) return;
     this.ws.send(
       JSON.stringify({
@@ -508,14 +472,14 @@ export class WebSocketClient extends EventTarget {
         target: {
           workspaceId: this.workspaceId,
           sessionId: this.sessionId,
-          instanceId: String(this.sourcePort || "primary"),
+          instanceId: this._instanceId(),
         },
       }),
     );
   }
 
   _requestCanonicalSnapshot() {
-    if (this.protocolVersion !== 2 || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     if (!this.workspaceId || !this.sessionId) return;
     this.ws.send(
       JSON.stringify({
@@ -525,17 +489,14 @@ export class WebSocketClient extends EventTarget {
         target: {
           workspaceId: this.workspaceId,
           sessionId: this.sessionId,
-          instanceId: String(this.sourcePort || "primary"),
+          instanceId: this._instanceId(),
         },
       }),
     );
   }
 
   _canonicalControlEnvelope(command, requestId, args) {
-    // Host owns process/workspace lifecycle. Keep this classification aligned
-    // with `scripts/prototype/control-map.js` and Rust `v1_control_adapter`;
-    // routing these controls as runtime requests sends them to Pi instead of
-    // the host lifecycle handler.
+    // Host owns process and workspace lifecycle.
     return {
       type: "host_request",
       protocolVersion: 2,
@@ -547,7 +508,7 @@ export class WebSocketClient extends EventTarget {
   }
 
   _recoverFromSequenceGap() {
-    if (this.sequenceGapRecoveryPending || this.protocolVersion !== 2) return;
+    if (this.sequenceGapRecoveryPending) return;
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     if (!this.workspaceId || !this.sessionId) return;
     this.sequenceGapRecoveryPending = true;
@@ -559,7 +520,7 @@ export class WebSocketClient extends EventTarget {
         target: {
           workspaceId: this.workspaceId,
           sessionId: this.sessionId,
-          instanceId: String(this.sourcePort || "primary"),
+          instanceId: this._instanceId(),
         },
       }),
     );
@@ -600,42 +561,14 @@ export class WebSocketClient extends EventTarget {
     this.pendingControls.clear();
   }
 
-  handleMessage(message, route = null) {
-    if (message.type === "broker_event") {
-      const payload = message.payload || {};
-      // Extract routing metadata from the broker envelope but do NOT call
-      // setRoutingContext here — incoming events must not silently hijack the
-      // routing context that the user (or an explicit session-select action)
-      // set. If session B streams an event while the user is viewing session A,
-      // the next command must still go to A.
-      const eventRoute = {
-        workspaceId: message.workspaceId || payload.workspaceId || undefined,
-        sessionId: message.sessionId || payload.sessionId || undefined,
-        sourcePort: message.sourcePort || payload.port || undefined,
-      };
-      console.debug("[WS route] broker_event", {
-        payloadType: payload.type,
-        eventType: payload.event?.type,
-        workspaceId: eventRoute.workspaceId,
-        sessionId: eventRoute.sessionId,
-        sourcePort: eventRoute.sourcePort,
-      });
-      this.dispatchEvent(new CustomEvent("brokerEvent", { detail: message }));
-      this.handleMessage(payload, eventRoute);
-      return;
-    }
-
-    // Broker reply for a broker_control we sent (requestId-keyed).
+  handleMessage(message) {
     if (
-      message.type === "control_response" ||
       message.type === "runtime_response" ||
       message.type === "host_response" ||
       message.type === "data_response"
     ) {
-      // Canonical v2 uses `response` for runtime/host results; legacy callers
-      // consume `result`. Data replies carry their payload at the top level, so
-      // the envelope (minus type/requestId/ok) is the result. Normalize only at
-      // this compatibility boundary.
+      // Runtime/host replies use `response`; data replies carry payload fields
+      // at top level. Normalize both to resolveControl's result shape.
       let normalized = message;
       if (message.result === undefined && message.response !== undefined) {
         normalized = { ...message, result: message.response };
@@ -652,78 +585,47 @@ export class WebSocketClient extends EventTarget {
       if (message.error?.code === "event_sequence_gap") {
         this._recoverFromSequenceGap();
       }
-      this.resolveControl({
+      const error = {
         requestId: message.requestId,
+        code: message.error?.code,
+        message: message.error?.message || message.error?.code || "Request failed",
+      };
+      this.resolveControl({
+        requestId: error.requestId,
         ok: false,
         // Keep the machine code alongside the human message: callers such as the
         // file preview panel must distinguish a conflict from any other failure.
-        errorCode: message.error?.code,
-        error: message.error?.message || message.error?.code || "Request failed",
+        errorCode: error.code,
+        error: error.message,
       });
+      if (error.requestId) {
+        this.dispatchEvent(new CustomEvent("runtimeError", { detail: error }));
+      }
       return;
     }
 
     if (message.type === "runtime_event") {
-      const route = {
-        workspaceId: message.target?.workspaceId,
-        sessionId: message.target?.sessionId,
-        sourcePort: message.target?.instanceId,
-      };
       this.dispatchEvent(new CustomEvent("runtimeEvent", { detail: message }));
-      this.dispatchEvent(new CustomEvent("brokerEvent", { detail: message }));
-      // Existing shell owns event rendering through rpcEvent. Translate v2's
-      // sequenced envelope without dropping sequence/target metadata.
-      this.dispatchEvent(
-        new CustomEvent("rpcEvent", {
-          detail: message.event
-            ? { ...message.event, __broker: route, __sequence: message.sequence }
-            : {},
-        }),
-      );
       return;
     }
 
     if (message.type === "runtime_snapshot") {
       this.sequenceGapRecoveryPending = false;
-      const state = message.state || {};
-      const piState = state.pi && typeof state.pi === "object" ? state.pi : {};
-      const target = message.target || {};
-      this.dispatchEvent(
-        new CustomEvent("mirrorSync", {
-          detail: {
-            ...piState,
-            workspaceId: target.workspaceId,
-            sessionId: target.sessionId,
-            port: target.instanceId,
-            sequence: message.sequence,
-            messages: state.messages || [],
-            stats: state.stats || {},
-          },
-        }),
-      );
+      this.dispatchEvent(new CustomEvent("runtimeSnapshot", { detail: message }));
       return;
     }
 
-    // The broker could not route/deliver a broker_command we sent (the target
-    // pi process is gone or no session is reachable). Surface it so a dropped
-    // prompt does not vanish silently — callers correlate via requestId.
-    if (message.type === "command_undeliverable") {
-      this.dispatchEvent(new CustomEvent("commandUndeliverable", { detail: message }));
-      return;
-    }
-
-    // Streamed progress for an in-flight broker_control (e.g. updater download).
+    // Streamed progress for an in-flight host request (e.g. updater download).
     if (message.type === "control_progress") {
       this.handleControlProgress(message);
       return;
     }
 
-    // Host v2 acknowledges its authenticated hello directly. Legacy broker
-    // connections advertise capabilities in a second frame.
-    if (message.type === "hello_ack" && this.protocolVersion === 2) {
+    // HostServer v2 acknowledges authenticated hello directly.
+    if (message.type === "hello_ack") {
       this.capabilities = { native: true, class: "native" };
       this.authenticated = true;
-      this.dispatchEvent(new CustomEvent("capabilities", { detail: this.capabilities }));
+      this.dispatchEvent(new CustomEvent("hostCapabilities", { detail: this.capabilities }));
       this._subscribeCanonicalTarget();
       this._requestCanonicalSnapshot();
       if (this._pendingConnect) {
@@ -733,26 +635,7 @@ export class WebSocketClient extends EventTarget {
       return;
     }
 
-    // Broker capability handshake — authenticates the client and tells the UI
-    // whether native (OS/window) operations are available (class "native"
-    // inside the desktop host, "remote" for LAN/mobile).
-    if (message.type === "capabilities") {
-      const cls = message.class === "native" ? "native" : "remote";
-      this.capabilities = {
-        native: cls === "native" || Boolean(message.native),
-        class: cls,
-      };
-      this.authenticated = true;
-      this.dispatchEvent(new CustomEvent("capabilities", { detail: this.capabilities }));
-      if (this._pendingConnect) {
-        this._pendingConnect = false;
-        console.log("[WS] Authenticated; connected");
-        this.dispatchEvent(new CustomEvent("connected"));
-      }
-      return;
-    }
-
-    // Owner-scoped bootstrap (live ephemeral descriptors) for a native client.
+    // Owner-scoped bootstrap (live ephemeral descriptors) for a desktop client.
     if (message.type === "owner_bootstrap") {
       this.dispatchEvent(new CustomEvent("ownerBootstrap", { detail: message }));
       return;
@@ -850,50 +733,6 @@ export class WebSocketClient extends EventTarget {
       return;
     }
 
-    // Emit events based on message type
-    switch (message.type) {
-      case "event":
-        this.dispatchEvent(
-          new CustomEvent("rpcEvent", {
-            detail: message.event
-              ? {
-                  ...message.event,
-                  __broker: route,
-                }
-              : message.event,
-          }),
-        );
-        break;
-      case "state":
-        this.dispatchEvent(new CustomEvent("stateUpdate", { detail: message }));
-        break;
-      case "error":
-        this.dispatchEvent(new CustomEvent("serverError", { detail: message }));
-        break;
-      case "response":
-        // Broker acknowledgment for a broker_command we sent (requestId-keyed).
-        // No frontend handler needed currently; dispatch for future use.
-        this.dispatchEvent(new CustomEvent("commandResponse", { detail: message }));
-        break;
-      case "session_switch":
-        this.dispatchEvent(new CustomEvent("sessionSwitch"));
-        break;
-      case "mirror_sync":
-        // Do NOT call setRoutingContext here. The broker broadcasts every
-        // upstream's `mirror_sync` to all UI clients, so a snapshot emitted by
-        // a *background* pi process (e.g. the previously-running session that
-        // keeps streaming after the user switched away) must not silently
-        // hijack the routing context — otherwise the user's next command would
-        // be routed to that background session. Routing context is owned by the
-        // app layer (`handleMirrorSync`), which guards against background
-        // snapshots by source port. Surface the source port so it can decide.
-        if (message.port == null && route?.sourcePort != null) {
-          message = { ...message, port: route.sourcePort };
-        }
-        this.dispatchEvent(new CustomEvent("mirrorSync", { detail: message }));
-        break;
-      default:
-        console.warn("[WS] Unknown message type:", message.type);
-    }
+    console.warn("[WS] Unknown HostServer v2 message type:", message.type);
   }
 }

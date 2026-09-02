@@ -15,10 +15,10 @@ import { t } from "../i18n.js";
 // "Start a new session" entry points (header "+ New Session" and sidebar
 // project tile "start new chat") both use the same pattern: spawn a fresh
 // HEADLESS pi for the target cwd and navigate THIS window's WebView to
-// the new port. The previously-attached pi process keeps running in the
-// background (PiManager retains it) and is reachable via the
-// running-instances list / launcher / sidebar. Net effect: no new OS
-// window, no interruption of any previously-running session.
+// the new host runtime. The previously-attached Pi process keeps running in
+// the background and is reachable via the running-instances list / launcher /
+// sidebar. Net effect: no new OS window, no interruption of any previously-
+// running session.
 //
 // "Open project" / "Open folder" entry points still attach to an existing
 // pi instance for the same cwd when one exists — those actions are about
@@ -33,42 +33,6 @@ import { t } from "../i18n.js";
 // white flash (while the WebView reloads). The overlay is persisted
 // across the navigation boundary via sessionStorage; the new page boots
 // straight into it (see index.html bootstrap script).
-
-// Append the broker WS URL to a navigation target so the freshly-loaded
-// page (on a *different* origin/port) can reach the shared broker. Without
-// this the new page can't recover the broker URL: it isn't in the URL, and
-// sessionStorage is per-origin so it isn't shared across the port change.
-// The new page then silently falls back to its own per-instance /ws,
-// bypassing the broker multiplexer. Mirrors the Rust windowed path
-// (open_workspace_window) which already appends ?brokerWs=.
-export function withBrokerWs(url, transport) {
-  let brokerUrl = "";
-  try {
-    brokerUrl = transport?.brokerWsUrl?.() || "";
-  } catch {
-    brokerUrl = "";
-  }
-  if (!brokerUrl) return url;
-  const sep = url.includes("?") ? "&" : "?";
-  return `${url}${sep}brokerWs=${encodeURIComponent(brokerUrl)}`;
-}
-
-export function buildWorkspaceUrl(port, env = globalThis.window || globalThis) {
-  const loc = env?.location || globalThis.location;
-  const host = loc?.hostname || "localhost";
-  return `http://${host}:${port}/`;
-}
-
-// True when an in-place `new_session(port)` / `switch_session(port)` RPC
-// failed because the target port is no longer backed by a pi process the
-// Rust PiManager owns. This happens when `foregroundPort` drifts to a stale
-// port — e.g. a dedicated/background session process that has since exited,
-// or a leftover port from a previous run. The caller should recover by
-// spawning a fresh process rather than surfacing the raw error.
-export function isDeadPortError(error) {
-  const message = typeof error === "string" ? error : error?.message || String(error || "");
-  return /No pi instance on port/i.test(message);
-}
 
 function runOnBeforeSwap(onBeforeSwap, label) {
   if (typeof onBeforeSwap !== "function") return () => {};
@@ -85,34 +49,19 @@ function runOnBeforeSwap(onBeforeSwap, label) {
 async function attachToWorkspace({
   targetCwd,
   transport,
-  fetchInstances,
-  getCurrentPort,
   navigate,
   onBeforeSwap,
   beforeWorkspaceTransition,
   onWorkspaceTransitionCancelled,
   renderError,
 }) {
-  const instances = await fetchInstances();
-  const currentPort = getCurrentPort();
-  const current = instances.find((i) => i.port === currentPort);
-
-  if (current && current.cwd === targetCwd) {
-    return { samePort: true, port: currentPort };
-  }
-
-  const existing = instances.find((i) => i.cwd === targetCwd);
-  let targetPort = existing?.port;
   let prepared = null;
   let dismissOverlay = () => {};
   try {
     if (typeof transport.prepareWorkspaceTarget === "function") {
-      targetPort = await transport.openWorkspace(targetCwd, {
-        forceNewSession: false,
-        openWindow: false,
-        waitForSessions: false,
+      prepared = await transport.prepareWorkspaceTarget(targetCwd, {
+        reuseExisting: true,
       });
-      prepared = await transport.prepareWorkspaceTarget(targetCwd, { targetPort });
       const crossWorkspace = prepared?.classification === "cross";
       if (crossWorkspace && typeof beforeWorkspaceTransition === "function") {
         const settled = await beforeWorkspaceTransition(prepared);
@@ -127,21 +76,11 @@ async function attachToWorkspace({
       }
       dismissOverlay = runOnBeforeSwap(onBeforeSwap, "Opening workspace…");
       await transport.commitWorkspaceTransition(prepared.transitionGeneration);
-      targetPort = Number(new URL(prepared.targetOrigin).port);
-      navigate(withBrokerWs(buildWorkspaceUrl(targetPort), transport), { targetCwd });
-      return { samePort: false, port: targetPort };
+      navigate(prepared.targetOrigin, { targetCwd });
+      return { samePort: false, targetOrigin: prepared.targetOrigin };
     }
 
-    dismissOverlay = runOnBeforeSwap(onBeforeSwap, "Opening workspace…");
-    if (!targetPort) {
-      targetPort = await transport.openWorkspace(targetCwd, {
-        forceNewSession: false,
-        openWindow: false,
-        waitForSessions: false,
-      });
-    }
-    navigate(withBrokerWs(buildWorkspaceUrl(targetPort), transport), { targetCwd });
-    return { samePort: false, port: targetPort };
+    throw new Error("Native workspace transition is unavailable");
   } catch (e) {
     dismissOverlay();
     if (prepared?.transitionGeneration != null) {
@@ -161,13 +100,8 @@ async function attachToWorkspace({
 export async function startInWindowNewSession({
   transport,
   getCurrentCwd,
-  getCurrentPort,
-  fetchInstances,
   navigate,
   onBeforeSwap,
-  shouldSpawnParallel,
-  onInPlaceSessionCreated,
-  onParallelSessionCreated,
   beforeWorkspaceTransition,
   onWorkspaceTransitionCancelled,
   renderError,
@@ -186,16 +120,6 @@ export async function startInWindowNewSession({
     }
   }
 
-  if (!targetCwd && fetchInstances && getCurrentPort) {
-    try {
-      const instances = await fetchInstances();
-      const port = getCurrentPort();
-      targetCwd = instances.find((i) => i.port === port)?.cwd || null;
-    } catch {
-      targetCwd = null;
-    }
-  }
-
   if (!targetCwd) {
     renderError(t("errors.newSessionPathUnavailable"));
     return false;
@@ -206,45 +130,17 @@ export async function startInWindowNewSession({
     return false;
   }
 
-  const currentPort = typeof getCurrentPort === "function" ? getCurrentPort() : null;
-  const wantsParallel =
-    typeof shouldSpawnParallel === "function" ? Boolean(shouldSpawnParallel()) : false;
   console.debug("[Session route] newSession:decision", {
     targetCwd,
-    currentPort,
-    wantsParallel,
-    mode: wantsParallel ? "parallel-spawn" : "in-place",
+    mode: "host-runtime-spawn",
   });
-  if (!wantsParallel && typeof currentPort === "number" && Number.isFinite(currentPort)) {
-    try {
-      await transport.newSession(currentPort);
-      if (typeof onInPlaceSessionCreated === "function") {
-        onInPlaceSessionCreated();
-      }
-      return true;
-    } catch (e) {
-      // If the in-place target port has drifted to a dead/unmanaged process,
-      // don't fail — recover by spawning a fresh process for this workspace.
-      if (!isDeadPortError(e)) {
-        renderError(`${t("errors.newSessionFailed")}: ${String(e)}`);
-        return false;
-      }
-      console.warn("[Session route] newSession:in-place-dead-port, spawning fresh process", {
-        currentPort,
-        error: String(e),
-      });
-    }
-  }
-
   return spawnFreshSession({
     targetCwd,
     transport,
     navigate,
     onBeforeSwap,
-    getCurrentCwd,
     beforeWorkspaceTransition,
     onWorkspaceTransitionCancelled,
-    onParallelSessionCreated,
     renderError,
     label: t("sidebar.startingSession"),
     debugTag: "newSession",
@@ -253,72 +149,45 @@ export async function startInWindowNewSession({
 
 // Spawn a brand-new headless pi for `targetCwd` and either activate it
 // in-place (when `onParallelSessionCreated` is provided) or navigate the
-// current window to it. Shared by "+ New Session" (parallel + dead-port
-// fallback) and the project-tile "start new chat" flow.
+// current window to it. Shared by "+ New Session" and the project-tile
+// "start new chat" flow.
 async function spawnFreshSession({
   targetCwd,
   transport,
   navigate,
   onBeforeSwap,
-  getCurrentCwd,
   beforeWorkspaceTransition,
   onWorkspaceTransitionCancelled,
-  onParallelSessionCreated,
   renderError,
   label,
   debugTag,
   errorLabel = t("errors.newSessionFailed"),
 }) {
-  const currentCwd = typeof getCurrentCwd === "function" ? getCurrentCwd() : null;
-  const canActivateInPlace =
-    typeof onParallelSessionCreated === "function" && (!currentCwd || currentCwd === targetCwd);
   let dismissOverlay = () => {};
   let prepared = null;
   try {
-    // Wait before both in-place activation and full-page navigation. Otherwise
-    // remote/mobile clients can land on a not-yet-listening embedded port and
-    // get stuck behind the swap overlay.
-    const waitForHealth = true;
-    const newPort = await transport.openWorkspace(targetCwd, {
-      forceNewSession: false,
-      openWindow: false,
-      waitForHealth,
-      waitForSessions: false,
-    });
-    if (!canActivateInPlace && typeof transport.prepareWorkspaceTarget === "function") {
-      prepared = await transport.prepareWorkspaceTarget(targetCwd, { targetPort: newPort });
-      if (prepared?.classification === "cross" && typeof beforeWorkspaceTransition === "function") {
-        const settled = await beforeWorkspaceTransition(prepared);
-        if (!settled) {
-          onWorkspaceTransitionCancelled?.();
-          await transport.cancelWorkspaceTransition(prepared.transitionGeneration).catch(() => {});
-          return false;
-        }
-      }
-      dismissOverlay = runOnBeforeSwap(onBeforeSwap, label);
-      await transport.commitWorkspaceTransition(prepared.transitionGeneration);
-    } else if (!canActivateInPlace) {
-      dismissOverlay = runOnBeforeSwap(onBeforeSwap, label);
+    if (typeof transport.prepareWorkspaceTarget !== "function") {
+      throw new Error("Native workspace transition is unavailable");
     }
-    console.debug(`[Session route] ${debugTag}:parallel-created`, {
-      targetCwd,
-      newPort,
+    prepared = await transport.prepareWorkspaceTarget(targetCwd, {
+      forceNewSession: true,
+      reuseExisting: false,
     });
-    if (canActivateInPlace) {
-      // In-place activation: no full-page navigation happens, so the swap
-      // overlay would otherwise stay up forever. Dismiss it ourselves once
-      // the new parallel session is wired up.
-      try {
-        await onParallelSessionCreated(newPort, targetCwd);
-      } finally {
-        dismissOverlay();
+    if (prepared?.classification === "cross" && typeof beforeWorkspaceTransition === "function") {
+      const settled = await beforeWorkspaceTransition(prepared);
+      if (!settled) {
+        onWorkspaceTransitionCancelled?.();
+        await transport.cancelWorkspaceTransition(prepared.transitionGeneration).catch(() => {});
+        return false;
       }
-      return true;
     }
-    const targetPort = prepared?.targetOrigin
-      ? Number(new URL(prepared.targetOrigin).port)
-      : newPort;
-    navigate(withBrokerWs(buildWorkspaceUrl(targetPort), transport), { targetCwd });
+    if (typeof prepared?.transitionGeneration !== "number") {
+      throw new Error("Native workspace transition was not prepared");
+    }
+    dismissOverlay = runOnBeforeSwap(onBeforeSwap, label);
+    await transport.commitWorkspaceTransition(prepared.transitionGeneration);
+    console.debug(`[Session route] ${debugTag}:created`, { targetCwd });
+    navigate(prepared.targetOrigin, { targetCwd });
     return true;
   } catch (e) {
     dismissOverlay();
@@ -337,20 +206,16 @@ function resolveProjectCwd(project) {
 
 // Sidebar "start new chat" entry point (project tile in the open
 // workspace window). Spawns a fresh headless pi for the project's cwd
-// and navigates THIS window to it. The previously-attached pi process
-// stays alive in the background (PiManager retains it; reachable via
-// the running-instances list). No new OS window is opened, and no
-// running session is interrupted — same model as in-window "+ New
-// Session", just sourced from a project tile instead of the header.
+// and navigates THIS window to it. The previously-attached Pi process stays
+// alive in the background and remains reachable via the running-instances list.
+// No new OS window is opened, and no running session is interrupted — same model
+// as in-window "+ New Session", just sourced from a project tile instead of the
+// header.
 export async function startNewProjectChat({
   project,
   transport,
-  getCurrentPort,
   getCurrentCwd,
   shouldSpawnParallel,
-  onInPlaceSessionCreated,
-  onParallelSessionCreated,
-  fetchInstances,
   navigate,
   onBeforeSwap,
   beforeWorkspaceTransition,
@@ -374,64 +239,35 @@ export async function startNewProjectChat({
   }
 
   const currentCwd = typeof getCurrentCwd === "function" ? getCurrentCwd() : null;
-  const currentPort = typeof getCurrentPort === "function" ? getCurrentPort() : null;
   const sameWorkspace = Boolean(currentCwd && targetCwd && currentCwd === targetCwd);
   const wantsParallel =
     typeof shouldSpawnParallel === "function" ? Boolean(shouldSpawnParallel()) : false;
   console.debug("[Session route] projectNewChat:decision", {
     targetCwd,
     currentCwd,
-    currentPort,
     sameWorkspace,
     wantsParallel,
   });
 
-  if (
-    sameWorkspace &&
-    !wantsParallel &&
-    typeof currentPort === "number" &&
-    Number.isFinite(currentPort)
-  ) {
-    try {
-      await transport.newSession(currentPort);
-      if (typeof onInPlaceSessionCreated === "function") {
-        onInPlaceSessionCreated();
-      }
-      return true;
-    } catch (e) {
-      // Drifted/dead foreground port: fall through to spawning a fresh
-      // process for this workspace instead of surfacing the raw RPC error.
-      if (!isDeadPortError(e)) {
-        renderError(`${t("errors.newChatFailed")}: ${String(e)}`);
-        return false;
-      }
-      console.warn("[Session route] projectNewChat:in-place-dead-port, spawning fresh process", {
-        currentPort,
-        error: String(e),
-      });
-      return spawnFreshSession({
-        targetCwd,
-        transport,
-        navigate,
-        onBeforeSwap,
-        getCurrentCwd,
-        beforeWorkspaceTransition,
-        onWorkspaceTransitionCancelled,
-        onParallelSessionCreated,
-        renderError,
-        label: t("sidebar.startingSession"),
-        debugTag: "projectNewChat",
-        errorLabel: t("errors.newChatFailed"),
-      });
-    }
+  if (!wantsParallel && sameWorkspace) {
+    return spawnFreshSession({
+      targetCwd,
+      transport,
+      navigate,
+      onBeforeSwap,
+      beforeWorkspaceTransition,
+      onWorkspaceTransitionCancelled,
+      renderError,
+      label: t("sidebar.startingSession"),
+      debugTag: "projectNewChat",
+      errorLabel: t("errors.newChatFailed"),
+    });
   }
 
   if (!wantsParallel) {
     const result = await attachToWorkspace({
       targetCwd,
       transport,
-      fetchInstances,
-      getCurrentPort,
       navigate,
       onBeforeSwap,
       beforeWorkspaceTransition,
@@ -446,10 +282,8 @@ export async function startNewProjectChat({
     transport,
     navigate,
     onBeforeSwap,
-    getCurrentCwd,
     beforeWorkspaceTransition,
     onWorkspaceTransitionCancelled,
-    onParallelSessionCreated,
     renderError,
     label: t("sidebar.startingSession"),
     debugTag: "projectNewChat",
@@ -464,8 +298,6 @@ export async function startNewProjectChat({
 export async function openProjectWorkspace({
   project,
   transport,
-  fetchInstances,
-  getCurrentPort,
   navigate,
   onBeforeSwap,
   beforeWorkspaceTransition,
@@ -487,10 +319,8 @@ export async function openProjectWorkspace({
     const result = await attachToWorkspace({
       targetCwd,
       transport,
-      fetchInstances,
-      getCurrentPort,
-      navigate,
       onBeforeSwap,
+      navigate,
       beforeWorkspaceTransition,
       onWorkspaceTransitionCancelled,
       renderError,
@@ -504,8 +334,6 @@ export async function openProjectWorkspace({
 
 export async function openFolderAsWorkspace({
   transport,
-  fetchInstances,
-  getCurrentPort,
   navigate,
   onBeforeSwap,
   beforeWorkspaceTransition,
@@ -533,8 +361,6 @@ export async function openFolderAsWorkspace({
     const result = await attachToWorkspace({
       targetCwd: selectedPath,
       transport,
-      fetchInstances,
-      getCurrentPort,
       navigate,
       onBeforeSwap,
       beforeWorkspaceTransition,

@@ -11,7 +11,6 @@
   "nav": {
     "chat": "Chat",
     "toggleSidebar": "Toggle sidebar",
-    "showMobileQR": "Show mobile QR code",
     "openWorkspace": "Open workspace",
     "openWorkspaceInApp": "Open workspace in app",
     "chooseApp": "Choose app to open workspace",
@@ -608,7 +607,6 @@
     "extensions": "Extensions",
     "usage": "Usage",
     "configuration": "Advanced Configuration",
-    "agentInbox": "Agent Inbox",
     "backToChat": "Back to chat",
     "appearance": "Appearance",
     "agent": "Agent",
@@ -820,16 +818,15 @@
       "duplicateProvider": "Provider “{provider}” already exists.",
       "connect": "Connect",
       "model": "Model"
+    },
+    "mobile": {
+      "title": "Mobile Access",
+      "enable": "Allow phones on this network to pair",
+      "pair": "Pair device",
+      "pairAction": "Generate token",
+      "pairHint": "Open the address on the phone, then enter the token within 5 minutes.",
+      "restartHint": "Restart Picot to apply."
     }
-  },
-  "lanQr": {
-    "modalAriaLabel": "Mobile QR code",
-    "title": "Open on Mobile",
-    "closeAriaLabel": "Close",
-    "generating": "Generating QR code…",
-    "qrAlt": "QR code for mobile access",
-    "hint": "Scan with your phone to open Picot on the same network",
-    "openLink": "Open Link"
   },
   "cost": {
     "documentTitle": "Picot - Usage",
@@ -898,7 +895,6 @@
     "model": "model",
     "compact": "Compact",
     "compactTitle": "Context is over 80% — compact to save tokens",
-    "qrUnavailable": "QR code unavailable",
     "toggleContextControls": "Toggle context controls"
   },
   "browse": {

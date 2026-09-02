@@ -196,7 +196,10 @@ describe("WorkspaceFocusSidebar", () => {
       return { ok: false, status: 404, json: async () => ({}) };
     });
 
-    const normalSidebar = new SessionSidebar(document.getElementById("root"), vi.fn(), vi.fn());
+    const sessionRename = vi.fn(async () => ({}));
+    const normalSidebar = new SessionSidebar(document.getElementById("root"), vi.fn(), vi.fn(), {
+      transport: { sessionRename },
+    });
     normalSidebar.projects = [project];
     normalSidebar.loadSessions = vi.fn(async () => normalSidebar.projects);
     const focusSidebar = new WorkspaceFocusSidebar(document.getElementById("root"), {
@@ -218,12 +221,8 @@ describe("WorkspaceFocusSidebar", () => {
     input.value = "Focus renamed";
     input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
 
-    await vi.waitFor(() => expect(requests).toHaveLength(1));
-    expect(requests[0].url).toBe("/api/sessions/rename");
-    expect(JSON.parse(requests[0].options.body)).toEqual({
-      filePath: "/sessions/0.jsonl",
-      name: "Focus renamed",
-    });
+    await vi.waitFor(() => expect(sessionRename).toHaveBeenCalledTimes(1));
+    expect(sessionRename).toHaveBeenCalledWith("/sessions/0.jsonl", "Focus renamed");
     expect(normalSidebar.projects[0].sessions[0].name).toBe("Focus renamed");
     expect(item.dataset.name).toBe("focus renamed");
     expect(item.querySelector(".session-title").textContent).toBe("Focus renamed");

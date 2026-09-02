@@ -6,11 +6,10 @@ import { t } from "../i18n.js";
 const DIALOG_CLASS = "oauth-login-dialog";
 
 /**
- * Owner-scoped device-code login dialog. `command` sends RPC commands over the
- * dedicated /ws connection; `subscribe` receives only `{ type: "oauth_event",
- * event }` frames for this instance's operation. `onTerminal` is invoked on
- * every terminal state (succeeded/failed/cancelled/expired) so the caller can
- * release the dedicated connection. No token data or OAuth protocol logic
+ * Owner-scoped device-code login dialog. `command` uses authenticated HostServer
+ * transport; `subscribe` receives only `{ type: "oauth_event", event }` frames
+ * for this instance's operation. `onTerminal` runs on every terminal state
+ * (succeeded/failed/cancelled/expired). No token data or OAuth protocol logic
  * lives here.
  */
 export function createModelsOAuthLoginDialog({
@@ -236,8 +235,8 @@ export function createModelsOAuthLoginDialog({
         method: "device_code",
       });
     } catch (error) {
-      // The dedicated /ws connection failed to open or the command was not
-      // delivered. Surface a failure instead of leaving the dialog silent.
+      // HostServer transport failed or command was not delivered. Surface a
+      // failure instead of leaving dialog silent.
       renderFailure(error?.message || t("settings.models.oauth.failed"));
       return;
     }

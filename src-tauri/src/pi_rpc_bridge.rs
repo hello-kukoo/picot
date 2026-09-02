@@ -95,7 +95,10 @@ impl PiRpcBridge {
             pending: Mutex::new(HashMap::new()),
         });
         let parser_frame_tx = frame_tx.clone();
-        tokio::spawn(read_frames(
+        // attach runs on the Tauri setup thread, outside any ambient tokio
+        // runtime; tauri::async_runtime owns the process-wide global runtime
+        // the rest of the app (host server, terminal manager) already uses.
+        tauri::async_runtime::spawn(read_frames(
             incoming_rx,
             parser_frame_tx,
             Arc::clone(&inner),

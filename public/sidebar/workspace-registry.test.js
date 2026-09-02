@@ -25,7 +25,35 @@ function makeRegistryTransport(rows, responses = {}) {
     pickFolder: vi.fn(async () => responses.pickedFolder ?? ""),
     addWorkspace: vi.fn(async () => responses.addResult ?? { added: true }),
     removeWorkspace: vi.fn(async () => ({ removed: true })),
+    runtimeInstances: vi.fn(async () => ({ instances: responses.instances ?? [] })),
     setWorkspacePinned: vi.fn(async () => ({})),
+    workspaceSessions: vi.fn(async (workspaceId, options = {}) => {
+      const row = rows.find((item) => `ws:${item.workspaceId}` === workspaceId);
+      const query = new URLSearchParams({ path: row?.canonicalPath || workspaceId });
+      if (options.countOnly) query.set("countOnly", "1");
+      const response = await globalThis.fetch(`/api/workspace-sessions?${query}`);
+      return response.json();
+    }),
+    searchSessions: vi.fn(async (queryText) => {
+      const response = await globalThis.fetch(
+        `/api/search?q=${encodeURIComponent(queryText)}&paths=${encodeURIComponent(JSON.stringify(rows.map((row) => row.canonicalPath)))}`,
+      );
+      return response.json();
+    }),
+    sessionDeleteBatch: vi.fn(async (filePaths) => {
+      const response = await globalThis.fetch("/api/sessions/delete-batch", {
+        method: "POST",
+        body: JSON.stringify({ filePaths }),
+      });
+      return response.json();
+    }),
+    sessionRename: vi.fn(async (filePath, name) => {
+      const response = await globalThis.fetch("/api/sessions/rename", {
+        method: "POST",
+        body: JSON.stringify({ filePath, name }),
+      });
+      return response.json();
+    }),
   };
 }
 
@@ -35,7 +63,10 @@ async function makeSidebar({
   fetchRoutes = {},
   isCurrentWorkspace,
 } = {}) {
-  const transport = makeRegistryTransport(rows, transportResponses);
+  const transport = makeRegistryTransport(rows, {
+    ...transportResponses,
+    instances: fetchRoutes.instances ?? transportResponses.instances ?? [],
+  });
   const notices = [];
   const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
     pinStore: {

@@ -215,6 +215,12 @@ impl HostRouter {
         self.clients.get(client_id)
     }
 
+    pub fn has_desktop_owner(&self, owner: &OwnerId) -> bool {
+        self.clients.values().any(|context| {
+            context.kind == ClientKind::Desktop && context.owner_id.as_ref() == Some(owner)
+        })
+    }
+
     pub fn route(&self, client_id: &str, frame: &Value) -> Result<RoutedAction, RouterError> {
         self.client_kind(client_id).ok_or_else(|| {
             RouterError::new("unauthorized_client", "Client has not completed handshake")

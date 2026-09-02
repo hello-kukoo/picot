@@ -191,12 +191,10 @@ export class SessionSidebar {
 
     let deleted = false;
     try {
-      const res = await fetch("/api/sessions/delete-batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filePaths: [filePath] }),
-      });
-      const data = await res.json();
+      if (typeof this.transport?.sessionDeleteBatch !== "function") {
+        throw new Error("Host session delete unavailable");
+      }
+      const data = await this.transport.sessionDeleteBatch([filePath]);
       const running = new Set(data.running || []);
       const errors = new Set(data.errors || []);
       if (running.has(filePath)) {
@@ -460,11 +458,12 @@ export class SessionSidebar {
       if (this._registryBusyRows.has(project.workspaceId)) return;
       this._registryBusyRows.add(project.workspaceId);
       try {
-        const res = await fetch(
-          `/api/workspace-sessions?mode=count&path=${encodeURIComponent(project.path)}`,
-        );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
+        if (typeof this.transport?.workspaceSessions !== "function") {
+          throw new Error("Host workspace sessions unavailable");
+        }
+        const data = await this.transport.workspaceSessions(project.workspaceId, {
+          countOnly: true,
+        });
         project.sessionCount = Number(data?.sessionCount) || 0;
         this.render();
       } catch (error) {
@@ -482,9 +481,10 @@ export class SessionSidebar {
     }
     this._registryBusyRows.add(project.workspaceId);
     try {
-      const res = await fetch(`/api/workspace-sessions?path=${encodeURIComponent(project.path)}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      if (typeof this.transport?.workspaceSessions !== "function") {
+        throw new Error("Host workspace sessions unavailable");
+      }
+      const data = await this.transport.workspaceSessions(project.workspaceId);
       const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
       this.workspaceSessionsCache.set(cacheKey, sessions);
       project.dirName = data?.dirName ?? null;
@@ -545,10 +545,8 @@ export class SessionSidebar {
 
   async fetchLiveInstances() {
     try {
-      const res = await fetch("/api/instances");
-      if (!res.ok) return [];
-      const data = await res.json();
-      return Array.isArray(data.instances) ? data.instances : [];
+      const data = await this.transport?.runtimeInstances?.();
+      return Array.isArray(data?.instances) ? data.instances : [];
     } catch {
       return [];
     }
@@ -638,14 +636,10 @@ export class SessionSidebar {
     try {
       // Scope full-text search to the currently listed project paths so the
       // result surface matches what the sidebar shows.
-      const scopePaths = this.projects
-        .filter((project) => project.path)
-        .map((project) => project.path)
-        .slice(0, 100);
-      const suffix =
-        scopePaths.length > 0 ? `&paths=${encodeURIComponent(JSON.stringify(scopePaths))}` : "";
-      const res = await fetch(`/api/search?q=${encodeURIComponent(query)}${suffix}`);
-      const data = await res.json();
+      if (typeof this.transport?.searchSessions !== "function") {
+        throw new Error("Host session search unavailable");
+      }
+      const data = await this.transport.searchSessions(query);
       if (query !== this.searchQuery) return; // stale
 
       this._searchResults = data.results || [];
@@ -1036,12 +1030,10 @@ export class SessionSidebar {
     if (!ok) return;
 
     try {
-      const res = await fetch("/api/sessions/delete-batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filePaths }),
-      });
-      const data = await res.json();
+      if (typeof this.transport?.sessionDeleteBatch !== "function") {
+        throw new Error("Host session delete unavailable");
+      }
+      const data = await this.transport.sessionDeleteBatch(filePaths);
       if ((data.running || []).length > 0) {
         this.onSessionNotice?.(t("sidebar.deleteSessionRunning"));
       }
@@ -1159,22 +1151,14 @@ export class SessionSidebar {
       input.disabled = true;
       input.classList.add("busy");
       try {
-        const response = await fetch("/api/sessions/rename", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ filePath: target.filePath, name: newName }),
-        });
-        if (!response.ok) {
-          canRetry = response.status === 500;
-          const key =
-            response.status === 400
-              ? "sidebar.renameErrorInvalid"
-              : response.status === 404
-                ? "sidebar.renameErrorNotFound"
-                : response.status === 413
-                  ? "sidebar.renameErrorTooLarge"
-                  : "sidebar.renameErrorServer";
-          throw new Error(t(key));
+        try {
+          if (typeof this.transport?.sessionRename !== "function") {
+            throw new Error("Host session rename unavailable");
+          }
+          await this.transport.sessionRename(target.filePath, newName);
+        } catch (error) {
+          canRetry = error?.code === "session_rename_failed";
+          throw error;
         }
         this.invalidateSessionLoads();
         target.name = newName;
@@ -1284,8 +1268,7 @@ export class SessionSidebar {
   }
 
   /**
-   * Unified pinned-workspace render state: cookie pins (legacy browser
-   * surface) plus DB registry pins on native desktops.
+   * Pinned-workspace render state on native desktops: DB registry rows.
    */
   getRenderablePinState() {
     // Pinned-workspace render state now comes solely from DB registry rows.

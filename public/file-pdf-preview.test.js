@@ -19,6 +19,7 @@ describe("createPdfRenderer", () => {
     const onError = vi.fn();
     const renderer = createPdfRenderer({
       filePath: "/workspace/report.pdf",
+      rawUrl: "/v2/files/raw?workspaceId=workspace-1&path=report.pdf",
       onError,
       getDocumentImpl: () => loadingTask,
     });
@@ -44,6 +45,7 @@ describe("createPdfRenderer", () => {
     };
     const renderer = createPdfRenderer({
       filePath: "/workspace/report.pdf",
+      rawUrl: "/v2/files/raw?workspaceId=workspace-1&path=report.pdf",
       getDocumentImpl: () => loadingTask,
     });
     const parent = document.createElement("div");

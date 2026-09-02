@@ -1401,75 +1401,48 @@ export function setupModelsPage({
    * authentication panel. Never infers OAuth from the API-key catalog.
    */
   /**
-   * Dedicated same-origin /ws channel for the OAuth session (spec: Owner-scoped
-   * events 与传输). The desktop WebView origin is the instance server's loopback
-   * origin, so `new WebSocket("/ws")` passes the loopback gate; bare commands on
-   * this connection are not broker_command envelopes and pass the desktopOwnerOnly
-   * broker rejection. The connection object is the server-side ownerConnection;
-   * no token or owner id is ever sent.
+   * OAuth commands share authenticated HostServer v2 transport. No feature page
+   * opens a second socket or sends an unscoped command frame.
    */
   function createOAuthWsChannel() {
-    let ws = null;
-    let seq = 0;
-    const pending = new Map();
-    const listeners = new Set();
-
-    function open() {
-      return new Promise((resolve, reject) => {
-        ws = new WebSocket("/ws");
-        ws.onopen = () => resolve();
-        ws.onerror = () => reject(new Error("OAuth connection failed"));
-        ws.onmessage = (event) => {
-          let message;
-          try {
-            message = JSON.parse(event.data);
-          } catch {
-            return;
-          }
-          if (message.type === "response") {
-            const waiter = pending.get(message.id);
-            if (waiter) {
-              pending.delete(message.id);
-              waiter(message);
-            }
-          } else if (message.type === "oauth_event") {
-            for (const listener of listeners) listener(message);
-          }
-        };
-        ws.onclose = () => {
-          for (const waiter of pending.values())
-            waiter({ success: false, error: "OAuth connection closed" });
-          pending.clear();
-        };
-      });
+    const transport = configGateway?.transport;
+    if (!transport) {
+      return {
+        command: async () => ({ success: false, error: "OAuth transport unavailable" }),
+        subscribe: () => () => {},
+        close: () => {},
+      };
     }
 
     async function command(cmd) {
-      if (ws?.readyState !== 1) await open();
-      const id = `oauth-${++seq}`;
-      return new Promise((resolve) => {
-        pending.set(id, resolve);
-        ws.send(JSON.stringify({ ...cmd, id }));
-      });
+      try {
+        let data;
+        if (cmd?.type === "start_oauth_login") {
+          data = await transport.startOauthLogin({
+            provider: cmd.provider,
+            method: cmd.method,
+          });
+        } else if (cmd?.type === "cancel_oauth_login") {
+          data = await transport.cancelOauthLogin({ operationId: cmd.operationId });
+        } else {
+          return { success: false, error: "Unsupported OAuth command" };
+        }
+        return { success: true, data: data ?? {} };
+      } catch (error) {
+        return { success: false, error: error?.message || String(error) };
+      }
     }
 
-    function subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    }
-
-    function close() {
-      ws?.close();
-      ws = null;
-    }
-
-    return { command, subscribe, close };
+    return {
+      command,
+      subscribe: (listener) => transport.subscribeOauthEvents(listener),
+      close: () => {},
+    };
   }
 
   /**
-   * Start the Codex device-code login. Uses a dedicated /ws channel and the
-   * owner-scoped dialog; on success refreshes the global model data and the
-   * Models page local state exactly once.
+   * Start the Codex device-code login through the owner-scoped dialog; on
+   * success refreshes global model data and Models page local state once.
    */
   function startOAuthLogin() {
     oauthDialog?.destroy();
@@ -1489,8 +1462,8 @@ export function setupModelsPage({
       copyText: (text) => {
         void navigator.clipboard?.writeText(text);
       },
-      // Release the dedicated /ws connection on every terminal state, not
-      // just success, so the socket is not left open after failure/cancel.
+      // Release the dialog subscription on every terminal state, not just
+      // success, so listeners are not left active after failure/cancel.
       onTerminal: () => channel.close(),
       onSuccess: async () => {
         await onModelConfigurationChanged?.();
@@ -1501,8 +1474,7 @@ export function setupModelsPage({
         await loadInlineModelsEditor();
       },
     });
-    // Never leave an unhandled rejection in the WebView if the dedicated /ws
-    // fails to open or the start command is rejected.
+    // Never leave an unhandled rejection in WebView if start command fails.
     void oauthDialog.start().catch(() => {});
   }
 

@@ -1,6 +1,5 @@
 // ABOUTME: Runs an isolated one-shot Pi process for staged commit-message suggestions.
 // ABOUTME: Uses private request files, bounded output, and deterministic cleanup.
-#![allow(dead_code)] // DEPRECATED: legacy embedded-server stack, physical deletion at D10 Stage 2 (all live call sites removed)
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};

@@ -1,7 +1,8 @@
 #![cfg_attr(not(test), allow(dead_code))]
 
-use crate::broker_ws::{ControlHandler, ProgressSink, VerifiedClientContext};
+use crate::git_service::GitService;
 use crate::host_capability::HostCapabilityStore;
+use crate::host_control::{ControlHandler, HostEventSink, ProgressSink, VerifiedClientContext};
 use crate::host_data::{HostDataError, HostDataPlane};
 use crate::host_router::{HostClientContext, HostRouter, RoutedAction, PROTOCOL_VERSION};
 use crate::metadata_store::SharedMetadataStore;
@@ -11,7 +12,6 @@ use crate::runtime_coordinator::RuntimeTarget;
 use crate::transport_limits::{
     validate, PayloadKind, HTTP_DEFAULT_BODY_BYTES, WS_PHYSICAL_FRAME_BYTES,
 };
-use crate::v1_control_adapter;
 use crate::window_owner::WindowOwnerRegistry;
 use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -46,6 +46,32 @@ const MAX_HTTP_BODY_BYTES: usize = HTTP_DEFAULT_BODY_BYTES;
 // so the transport limit only needs headroom for the encoded form.
 const MAX_PASTE_BODY_BYTES: usize = crate::paste_offload::MAX_PASTE_BYTES * 6 + 64 * 1024;
 const MAX_WS_MESSAGE_BYTES: usize = WS_PHYSICAL_FRAME_BYTES;
+
+/// D4/LAN preference gate for the mobile entry. Stored in the shared
+/// metadata store so the Settings toggle, the bind decision, and the pairing
+/// controls all observe one value.
+fn mobile_lan_access_enabled(metadata: &crate::metadata_store::SharedMetadataStore) -> bool {
+    metadata
+        .lock()
+        .ok()
+        .and_then(|store| store.pref_get("mobile.lanAccessEnabled").ok())
+        .flatten()
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
+/// Best-effort primary LAN URL for the running host, discovered with a
+/// routing-table probe (a UDP `connect` sends no packets). Returns `None` on
+/// machines without a default route so the UI falls back to manual entry.
+fn primary_lan_url(port: u16) -> Option<String> {
+    let socket = std::net::UdpSocket::bind(("0.0.0.0", 0)).ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    let local = socket.local_addr().ok()?;
+    if local.ip().is_loopback() {
+        return None;
+    }
+    Some(format!("http://{}:{port}", local.ip()))
+}
 
 fn bind_is_loopback(address: std::net::IpAddr) -> bool {
     address.is_loopback()
@@ -106,12 +132,22 @@ struct HostState {
     data: HostDataPlane,
     index_html: Mutex<String>,
     control_handler: Mutex<Option<ControlHandler>>,
+    git_service: Mutex<Option<Arc<GitService>>>,
+    host_events: HostEventSink,
+    ephemeral_hub: Mutex<Option<crate::host_ephemeral::SharedEphemeralHub>>,
     oauth: Mutex<crate::oauth_manager::OAuthManager>,
     /// P4-d: one-shot TTL'd export tokens backing `session_export`.
     session_exports: crate::host_data::SessionExportRegistry,
     /// D8: anonymous client-class hit counts for the retired `/api/rpc`
     /// surface (no per-user/per-token dimensions).
     legacy_rpc_gone_hits: Mutex<HashMap<String, u64>>,
+    /// D4/LAN bind decision for this process, read once at start from the
+    /// `mobile.lanAccessEnabled` preference. Pairing controls re-check it so a
+    /// runtime-disabled host never mints tokens even if the pref flips later.
+    lan_access: bool,
+    /// Port the host listener bound; stored after `start` binds because the
+    /// OS assigns it. Mobile entry URLs are built from this.
+    host_port: std::sync::atomic::AtomicU16,
 }
 
 pub struct HostServer {
@@ -145,10 +181,17 @@ impl HostServer {
         auth: Arc<Mutex<RemoteAuth>>,
         metadata: SharedMetadataStore,
     ) -> Result<Self, String> {
+        // D4/LAN policy: loopback by default; LAN interfaces only when the user
+        // explicitly enabled mobile access. Reading the preference here means
+        // the Settings toggle and the bind decision observe one value, and a
+        // flip takes effect on the next host start.
+        let lan_access = mobile_lan_access_enabled(&metadata);
         let mut data = HostDataPlane::new(metadata);
         if let Some(home) = dirs::home_dir() {
             data = data.with_session_root(home.join(".pi/agent/sessions"));
         }
+        let (host_event_tx, _) = tokio::sync::broadcast::channel(256);
+        let host_events = HostEventSink::new(host_event_tx);
         let state = Arc::new(HostState {
             router: Mutex::new(HostRouter::new()),
             static_dir: static_dir.clone(),
@@ -159,12 +202,17 @@ impl HostServer {
             data,
             index_html: Mutex::new(String::new()),
             control_handler: Mutex::new(None),
+            git_service: Mutex::new(None),
+            host_events: host_events.clone(),
+            ephemeral_hub: Mutex::new(None),
             oauth: Mutex::new(crate::oauth_manager::OAuthManager::default()),
             session_exports: crate::host_data::SessionExportRegistry::new(
                 8,
                 std::time::Duration::from_secs(300),
             ),
             legacy_rpc_gone_hits: Mutex::new(HashMap::new()),
+            lan_access,
+            host_port: std::sync::atomic::AtomicU16::new(0),
         });
         let index = static_dir.join("index.html");
         // Serve this build's JS/CSS/HTML under a version-stamped path
@@ -231,6 +279,8 @@ impl HostServer {
             .route("/health", get(health))
             .route("/api/health", get(health))
             .route("/api/pi-version", get(pi_version))
+            // Retain only as authenticated compatibility facades for external
+            // clients during migration; frontend production callers use v2.
             .route("/api/files", get(compat_files))
             .route("/api/sessions", get(compat_sessions))
             .route("/api/search", get(compat_search))
@@ -268,6 +318,11 @@ impl HostServer {
             .route("/api/super-agent/projects", get(api_gone))
             .route("/api/super-agent/tasks", get(api_gone).put(api_gone))
             .route("/v2/session-export/{token}", get(session_export_stream))
+            .route(
+                "/v2/session-history/{session_id}",
+                get(session_history_stream),
+            )
+            .route("/v2/files/raw", get(raw_file_stream))
             .route("/api/rpc", any(rpc_retired))
             .route("/v2/ws", get(websocket_upgrade))
             // Bare Pi-origin WebSocket paths are never valid on host origin.
@@ -275,6 +330,7 @@ impl HostServer {
             .route("/ws", any(reject_legacy_ws))
             .route("/v2/bootstrap", get(bootstrap_target))
             .route("/v2/auth/exchange", post(exchange_pairing))
+            .route("/v2/mobile/status", get(mobile_status))
             .route(
                 "/v2/paste-offload",
                 post(paste_offload).layer(DefaultBodyLimit::max(MAX_PASTE_BODY_BYTES)),
@@ -294,16 +350,26 @@ impl HostServer {
             .fallback_service(static_service)
             .layer(DefaultBodyLimit::max(MAX_HTTP_BODY_BYTES))
             .with_state(Arc::clone(&state));
-        let bind_address = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
-        if !bind_is_loopback(bind_address) {
-            return Err("Host bind rejected: non-loopback address".into());
-        }
-        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        // D4/LAN policy: see the `lan_access` field. Loopback unless the user
+        // explicitly turned mobile access on; `0.0.0.0` covers every interface
+        // including loopback, so the desktop window keeps working unchanged.
+        let bind_host = if state.lan_access {
+            log::warn!(
+                "[picot-host] mobile/LAN access enabled: the host is reachable from LAN devices"
+            );
+            std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
+        } else {
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+        };
+        let listener = tokio::net::TcpListener::bind((bind_host, 0))
             .await
             .map_err(|error| format!("Cannot bind Picot Host: {error}"))?;
         let address = listener
             .local_addr()
             .map_err(|error| format!("Cannot read Picot Host address: {error}"))?;
+        state
+            .host_port
+            .store(address.port(), std::sync::atomic::Ordering::Relaxed);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         tokio::spawn(async move {
             if let Err(error) = axum::serve(listener, app)
@@ -315,8 +381,19 @@ impl HostServer {
                 log::error!("[picot-host] server stopped unexpectedly: {error}");
             }
         });
+        // Desktop windows keep talking to 127.0.0.1 even when the host is also
+        // reachable on LAN: an UNSPECIFIED bind would otherwise put `0.0.0.0`
+        // into the window URL and the capability origin.
+        let display_address = if address.ip().is_unspecified() {
+            std::net::SocketAddr::new(
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                address.port(),
+            )
+        } else {
+            address
+        };
         Ok(Self {
-            origin: format!("http://{address}"),
+            origin: format!("http://{display_address}"),
             shutdown: Some(shutdown_tx),
             state,
         })
@@ -333,18 +410,51 @@ impl HostServer {
         }
     }
 
+    /// Install the native ephemeral hub so the WebSocket loop can route
+    /// `ephemeral_command` frames and greet desktop clients with bootstrap.
+    pub fn set_ephemeral_hub(&self, hub: crate::host_ephemeral::SharedEphemeralHub) {
+        if let Ok(mut slot) = self.state.ephemeral_hub.lock() {
+            *slot = Some(hub);
+        }
+    }
+
     /// Drop every outstanding session-export grant for an owner (workspace
     /// transition / owner teardown hygiene; M4).
     pub fn revoke_session_exports(&self, owner: &str) {
         self.state.session_exports.revoke_owner(owner);
     }
 
-    /// Install same owner-checked control handler used by legacy broker.
-    /// Host-origin v2 dispatch must not grow a second control implementation.
+    /// Install owner-checked control handler shared by host-origin v2 dispatch.
+    /// The host must not grow a second control implementation.
     pub fn set_control_handler(&self, handler: ControlHandler) {
         if let Ok(mut slot) = self.state.control_handler.lock() {
             *slot = Some(handler);
         }
+    }
+
+    pub fn set_git_service(&self, service: Arc<GitService>) {
+        if let Ok(mut slot) = self.state.git_service.lock() {
+            *slot = Some(service);
+        }
+    }
+
+    pub fn event_sink(&self) -> HostEventSink {
+        self.state.host_events.clone()
+    }
+
+    pub fn send_owner_event(&self, owner: &crate::window_owner::OwnerId, value: Value) -> bool {
+        let has_owner = self
+            .state
+            .router
+            .lock()
+            .ok()
+            .is_some_and(|router| router.has_desktop_owner(owner));
+        has_owner && self.state.host_events.send_owner_event(owner, value)
+    }
+
+    #[allow(dead_code)]
+    pub fn broadcast_native_event(&self, value: Value) -> usize {
+        self.state.host_events.broadcast_native_event(value)
     }
 
     pub fn stop(mut self) {
@@ -368,10 +478,8 @@ impl Drop for HostServer {
     }
 }
 
-/// Host liveness only. Runtime readiness is a separate concern (spec §5.1:
-/// `GET /api/health` → `GET /health`， host health 与 runtime readiness 分离)
-/// and must not depend on the legacy `PiManager`; the version constant comes
-/// from the shared `pi_launch` substrate.
+/// Host liveness only. Runtime readiness is a separate concern; the version
+/// constant comes from the shared `pi_launch` substrate.
 async fn health() -> Json<Value> {
     Json(json!({
         "status": "ok",
@@ -623,6 +731,67 @@ async fn compat_workspace_info(
 struct WorkspaceSessionsQuery {
     path: String,
     mode: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RawFileQuery {
+    workspace_id: String,
+    path: String,
+}
+
+async fn raw_file_stream(
+    State(state): State<Arc<HostState>>,
+    headers: HeaderMap,
+    Query(query): Query<RawFileQuery>,
+) -> Result<Response, (StatusCode, Json<Value>)> {
+    let workspace_id = compat_owner_workspace(&state, &headers, Some(&query.workspace_id))?;
+    let root = state
+        .data
+        .workspace_root(&workspace_id)
+        .map_err(host_data_error_response)?;
+    let content = crate::host_files::read(&root, &query.path)
+        .map_err(|error| api_error(StatusCode::NOT_FOUND, error.code()))?;
+    let mime = match Path::new(&query.path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("pdf") => "application/pdf",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("svg") => "image/svg+xml",
+        Some("ico") => "image/x-icon",
+        Some("bmp") => "image/bmp",
+        _ => "application/octet-stream",
+    };
+    Ok(Response::builder()
+        .header(CONTENT_TYPE, mime)
+        .header(CACHE_CONTROL, "no-store")
+        .body(Body::from(content.bytes))
+        .expect("raw file response is well-formed"))
+}
+
+async fn session_history_stream(
+    State(state): State<Arc<HostState>>,
+    headers: HeaderMap,
+    axum::extract::Path(session_id): axum::extract::Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let workspace_id = compat_owner_workspace(&state, &headers, None)?;
+    let path = state
+        .data
+        .session_file_path(&workspace_id, &session_id)
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "session_not_found"))?;
+    let content = fs::read_to_string(path)
+        .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "session_io_failed"))?;
+    let entries = content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect::<Vec<_>>();
+    Ok(Json(json!({ "entries": entries })))
 }
 
 async fn compat_workspace_sessions(
@@ -1208,12 +1377,87 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
     }
 
     let mut runtime_events = state.runtimes.subscribe();
+    let mut host_events = state.host_events.subscribe();
     let mut subscriptions = HashSet::new();
     let client_context = state
         .router
         .lock()
         .ok()
         .and_then(|router| router.client_context(&client_id).cloned());
+
+    // Greet desktop clients with the owner-scoped bootstrap frame (workspace
+    // generation + live ephemeral instances) before the request loop starts.
+    // Terminal/Git/UI surfaces gate on this frame's workspaceGeneration.
+    if let Some(context) = client_context
+        .as_ref()
+        .filter(|context| context.kind == crate::host_router::ClientKind::Desktop)
+    {
+        if let Some(owner) = context.owner_id.as_ref() {
+            let hub = state
+                .ephemeral_hub
+                .lock()
+                .ok()
+                .and_then(|slot| slot.clone());
+            if let Some(hub) = hub {
+                let generation = state
+                    .owner_registry
+                    .lock()
+                    .ok()
+                    .and_then(|registry| registry.clone())
+                    .and_then(|registry| registry.current_workspace_generation(owner))
+                    .unwrap_or(0);
+                let _ = send_checked(
+                    &mut socket,
+                    hub.bootstrap_value(owner, generation),
+                    PayloadKind::Event,
+                )
+                .await;
+            }
+        }
+    }
+
+    // Detached Git commits can finish while browser socket is disconnected.
+    // Replay outcomes only to same desktop owner and current workspace generation;
+    // this preserves owner isolation without restoring broker-side routing.
+    if let Some(context) = client_context
+        .as_ref()
+        .filter(|context| context.kind == crate::host_router::ClientKind::Desktop)
+    {
+        if let (Some(owner), Some(service), Some(registry)) = (
+            context.owner_id.as_ref(),
+            state.git_service.lock().ok().and_then(|slot| slot.clone()),
+            state
+                .owner_registry
+                .lock()
+                .ok()
+                .and_then(|slot| slot.clone()),
+        ) {
+            if let Some((root, _)) = registry.current_workspace(owner) {
+                if let Some(generation) = registry.current_workspace_generation(owner) {
+                    for outcome in service.take_pending_outcomes(owner.as_str(), &root, generation)
+                    {
+                        if !send_checked(
+                            &mut socket,
+                            json!({
+                                "type": "git_commit_result",
+                                "requestId": outcome.request_id,
+                                "workspaceGeneration": outcome.generation,
+                                "status": outcome.status,
+                                "commitOid": outcome.commit_oid,
+                                "hookChangedTree": outcome.hook_changed_tree,
+                                "error": outcome.error,
+                            }),
+                            PayloadKind::Event,
+                        )
+                        .await
+                        {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
     loop {
         tokio::select! {
             incoming = socket.next() => {
@@ -1222,30 +1466,71 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                     if matches!(message, Message::Close(_)) { break; }
                     continue;
                 };
-                let mut frame = match serde_json::from_str::<Value>(&text) {
+                let frame = match serde_json::from_str::<Value>(&text) {
                     Ok(frame) => frame,
                     Err(_) => {
                         let _ = send_error(&mut socket, None, "invalid_json", "Invalid JSON frame").await;
                         continue;
                     }
                 };
-                let legacy_control = frame.get("type").and_then(Value::as_str) == Some("broker_control");
-                if legacy_control {
-                    let command = frame.get("command").and_then(Value::as_str).unwrap_or("");
-                    let request_id = frame.get("requestId").and_then(Value::as_str).unwrap_or("");
-                    let args = frame.get("args").cloned().unwrap_or_else(|| json!({}));
-                    frame = match v1_control_adapter::to_v2(command, request_id, args) {
-                        Ok(frame) => frame,
-                        Err(error) => {
-                            if !send_checked(&mut socket, structured_error(Some(request_id), "unimplemented_route", &error), PayloadKind::Response).await { break; }
-                            continue;
-                        }
-                    };
-                }
                 let request_id = frame
                     .get("requestId")
                     .and_then(Value::as_str)
                     .map(str::to_owned);
+                // Owner-scoped ephemeral RPC frames bypass the router: the hub
+                // derives the owner from the authenticated context and routes
+                // to the instance runtime. Responses flow back as
+                // `ephemeral_event` frames on the owner's event stream.
+                if frame.get("type").and_then(Value::as_str) == Some("ephemeral_command") {
+                    let hub = state
+                        .ephemeral_hub
+                        .lock()
+                        .ok()
+                        .and_then(|slot| slot.clone());
+                    let outcome = match (hub, client_context.as_ref()) {
+                        (Some(hub), Some(context))
+                            if context.kind == crate::host_router::ClientKind::Desktop =>
+                        {
+                            let Some(owner) = context.owner_id.as_ref() else {
+                                break;
+                            };
+                            let instance_id = frame
+                                .get("ephemeralInstanceId")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string();
+                            let generation =
+                                frame.get("generation").and_then(Value::as_u64).unwrap_or(0);
+                            let command_request_id =
+                                frame.get("requestId").and_then(Value::as_str).unwrap_or("");
+                            let payload =
+                                frame.get("payload").cloned().unwrap_or(Value::Null);
+                            hub.forward_command(
+                                &state.runtimes,
+                                owner,
+                                &instance_id,
+                                generation,
+                                payload,
+                                command_request_id,
+                            )
+                            .await
+                        }
+                        _ => Err("ephemeral transport requires a desktop owner".to_string()),
+                    };
+                    if let Err(error) = outcome {
+                        let _ = send_checked(
+                            &mut socket,
+                            json!({
+                                "type": "ephemeral_command_failed",
+                                "requestId": request_id,
+                                "error": error,
+                            }),
+                            PayloadKind::Response,
+                        )
+                        .await;
+                    }
+                    continue;
+                }
                 let routed = state
                     .router
                     .lock()
@@ -1292,14 +1577,7 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                     Err((code, message)) => Err((code, message)),
                 };
                 let outgoing = match response {
-                    Ok(mut value) => {
-                        if legacy_control && value.get("type").and_then(Value::as_str) == Some("runtime_response") {
-                            value["type"] = json!("control_response");
-                            value["ok"] = json!(true);
-                            value["result"] = value.get("response").cloned().unwrap_or(Value::Null);
-                        }
-                        value
-                    }
+                    Ok(value) => value,
                     Err((code, message)) => structured_error(request_id.as_deref(), code, &message),
                 };
                 let outbound_kind = match outgoing.get("type").and_then(Value::as_str) {
@@ -1320,6 +1598,24 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                     if !send_checked(&mut socket, replay, PayloadKind::Event).await {
                         return;
                     }
+                }
+            }
+            host_event = host_events.recv() => {
+                match host_event {
+                    Ok(event)
+                        if client_context.as_ref().is_some_and(|context| {
+                            context.kind == crate::host_router::ClientKind::Desktop
+                                && event.owner.as_ref().is_none_or(|owner| {
+                                    context.owner_id.as_ref() == Some(owner)
+                                })
+                        }) => {
+                            if !send_checked(&mut socket, event.value, PayloadKind::Event).await {
+                                break;
+                            }
+                        }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
             event = runtime_events.recv() => {
@@ -1705,35 +2001,13 @@ async fn dispatch(
                 "response": response,
             }))
         }
-        RoutedAction::Auth {
-            request_id, frame, ..
-        } => match frame.get("operation").and_then(Value::as_str) {
-            Some("create_pairing") => {
-                if context
-                    .is_none_or(|context| context.kind != crate::host_router::ClientKind::Unpaired)
-                {
-                    return Err((
-                        "forbidden_class",
-                        "Pairing can only be created by an unpaired browser".into(),
-                    ));
-                }
-                let pairing = state
-                    .auth
-                    .lock()
-                    .map_err(|_| ("auth_unavailable", "Remote auth unavailable".into()))?
-                    .create_pairing(now_seconds());
-                Ok(json!({
-                    "type": "auth_response",
-                    "requestId": request_id,
-                    "pairingToken": pairing.token,
-                    "expiresAt": pairing.expires_at,
-                }))
-            }
-            _ => Err((
-                "unknown_auth_operation",
-                "Unsupported auth operation".into(),
-            )),
-        },
+        // Pairing tokens are minted by the desktop only (`mobile_pairing_create`
+        // control): an unpaired-browser mint would let any LAN device self-pair
+        // the moment LAN bind is enabled, so no auth_request operation remains.
+        RoutedAction::Auth { .. } => Err((
+            "unknown_auth_operation",
+            "Unsupported auth operation".into(),
+        )),
         RoutedAction::Host {
             client_id,
             request_id,
@@ -1753,6 +2027,49 @@ async fn dispatch(
                 "unauthorized_target",
                 "Registered desktop owner required".into(),
             ))?;
+            // D4 mobile entry: the desktop mints pairing tokens for phones on
+            // the same LAN. Gated on the same preference that drove the bind
+            // decision, so a loopback-only host never mints tokens.
+            if operation == "mobile_access_info" {
+                let port = state.host_port.load(std::sync::atomic::Ordering::Relaxed);
+                let lan_urls = if state.lan_access {
+                    primary_lan_url(port).into_iter().collect()
+                } else {
+                    Vec::new()
+                };
+                return Ok(json!({
+                    "type": "host_response",
+                    "requestId": request_id,
+                    "operation": operation,
+                    "response": {
+                        "enabled": state.lan_access,
+                        "port": port,
+                        "lanUrls": lan_urls,
+                    },
+                }));
+            }
+            if operation == "mobile_pairing_create" {
+                if !state.lan_access {
+                    return Err((
+                        "mobile_access_disabled",
+                        "Enable mobile/LAN access before pairing a device".into(),
+                    ));
+                }
+                let pairing = state
+                    .auth
+                    .lock()
+                    .map_err(|_| ("auth_unavailable", "Remote auth unavailable".into()))?
+                    .create_pairing(now_seconds());
+                return Ok(json!({
+                    "type": "host_response",
+                    "requestId": request_id,
+                    "operation": operation,
+                    "response": {
+                        "pairingToken": pairing.token,
+                        "expiresAt": pairing.expires_at,
+                    },
+                }));
+            }
             // P4-d: session export — one-shot TTL'd token bound to the owner
             // and the resolved session file.
             if operation == "session_export" {
@@ -2007,7 +2324,7 @@ async fn dispatch(
             let client_id = client_id.parse::<u64>().unwrap_or(0);
             let verified = VerifiedClientContext {
                 client_id,
-                class: crate::broker_ws::ClientClass::Native,
+                class: crate::host_control::ClientClass::Native,
                 owner_id: Some(owner),
             };
             let args = frame.get("args").cloned().unwrap_or(Value::Null);
@@ -2034,17 +2351,21 @@ async fn dispatch(
                 .get("workspaceId")
                 .and_then(Value::as_str)
                 .ok_or(("invalid_workspace", "workspaceId is required".into()))?;
+            let operation = frame.get("operation").and_then(Value::as_str).unwrap_or("");
             let authorized = context.is_some_and(|ctx| {
                 ctx.kind == crate::host_router::ClientKind::Desktop
-                    && ctx.workspace_id.as_deref() == Some(workspace_id)
-                    // Re-read registry authority: handshake context must not
-                    // keep write access across a workspace transition.
                     && current_registered_context(state, ctx)
+                    && (ctx.workspace_id.as_deref() == Some(workspace_id)
+                        // Sidebar registry rows are owner-scoped and may load
+                        // history for another registered workspace. Data reads
+                        // still resolve roots through MetadataStore; only the
+                        // current desktop owner may request this operation.
+                        || operation == "workspace_sessions")
             });
             if !authorized {
                 return Err(("unauthorized_target", "Workspace is not authorized".into()));
             }
-            match frame.get("operation").and_then(Value::as_str) {
+            match Some(operation) {
                 Some("file_mentions") => {
                     let query = frame.get("query").and_then(Value::as_str).unwrap_or("");
                     let entries = state
@@ -2054,6 +2375,41 @@ async fn dispatch(
                     Ok(
                         json!({ "type": "data_response", "requestId": request_id, "operation": "file_mentions", "entries": entries }),
                     )
+                }
+                Some("workspace_info") => {
+                    let root = state
+                        .data
+                        .workspace_root(workspace_id)
+                        .map_err(host_data_error)?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "workspace_info",
+                        "workspaceId": workspace_id,
+                        "path": root.to_string_lossy(),
+                        "isGit": root.join(".git").exists(),
+                    }))
+                }
+                Some("workspace_sessions") => {
+                    let root = state
+                        .data
+                        .workspace_root(workspace_id)
+                        .map_err(host_data_error)?;
+                    let buckets = state.data.session_dirs_for_workspace(&root);
+                    let dir_name = buckets
+                        .first()
+                        .and_then(|dir| dir.file_name())
+                        .map(|name| name.to_string_lossy().into_owned());
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "workspace_sessions",
+                        "workspaceId": workspace_id,
+                        "path": root.to_string_lossy(),
+                        "dirName": dir_name,
+                        "sessions": state.data.list_workspace_session_entries(&buckets),
+                        "sessionCount": state.data.count_bucket_sessions(&buckets),
+                    }))
                 }
                 Some("list_files") => {
                     let workspace_id = frame
@@ -2143,7 +2499,10 @@ async fn dispatch(
                         "operation": "file_read",
                         "path": content.relative_path,
                         "content": text,
-                        "modifiedAtMs": content.modified_at_ms,
+                        "mtimeMs": content.modified_at_ms,
+                        "isBinary": false,
+                        "truncated": false,
+                        "editable": true,
                     }))
                 }
                 Some("file_write") => {
@@ -2236,6 +2595,29 @@ async fn dispatch(
                         "modifiedAtMs": content.modified_at_ms,
                     }))
                 }
+                Some("session_history") => {
+                    let session_id = frame
+                        .get("sessionId")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_session", "sessionId is required".into()))?;
+                    let path = state
+                        .data
+                        .session_file_path(workspace_id, session_id)
+                        .ok_or(("session_not_found", "Session is not available".into()))?;
+                    let content = fs::read_to_string(path)
+                        .map_err(|_| ("session_io_failed", "Session read failed".into()))?;
+                    let entries = content
+                        .lines()
+                        .filter(|line| !line.trim().is_empty())
+                        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                        .collect::<Vec<_>>();
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "session_history",
+                        "entries": entries,
+                    }))
+                }
                 _ => Err((
                     "unknown_data_operation",
                     "Unsupported data operation".into(),
@@ -2292,6 +2674,36 @@ async fn exchange_pairing(
     Ok(Json(PairingExchangeResponse {
         device_token: token,
     }))
+}
+
+/// D4 pairing matrix v1: a paired device gets a minimal, read-only liveness
+/// payload identified by its device token. Anything beyond this (runtime
+/// reads, workspace visibility, commands) is the Gate B remote-surface work
+/// and stays unauthorized.
+async fn mobile_status(
+    State(state): State<Arc<HostState>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "unauthenticated"))?;
+    let authorized = state
+        .auth
+        .lock()
+        .map_err(|_| api_error(StatusCode::SERVICE_UNAVAILABLE, "auth_unavailable"))?
+        .authorize(token)
+        .map_err(|_| api_error(StatusCode::SERVICE_UNAVAILABLE, "auth_unavailable"))?;
+    if !authorized {
+        return Err(api_error(StatusCode::UNAUTHORIZED, "pairing_rejected"));
+    }
+    Ok(Json(json!({
+        "protocolVersion": 2,
+        "appVersion": env!("CARGO_PKG_VERSION"),
+        "piVersion": crate::pi_launch::locked_pi_version(),
+    })))
 }
 
 async fn unimplemented_api_route() -> (StatusCode, Json<Value>) {
@@ -3692,6 +4104,216 @@ mod tests {
 
         host.stop();
         fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[tokio::test]
+    async fn mobile_pairing_create_refuses_while_lan_access_is_disabled() {
+        use tokio_tungstenite::tungstenite::Message;
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-mobile-disabled-{nonce}"));
+        let public = temp.join("public");
+        fs::create_dir_all(&public).unwrap();
+        fs::write(public.join("index.html"), "Picot").unwrap();
+        let metadata = Arc::new(Mutex::new(
+            MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
+        ));
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
+        let registry = Arc::new(crate::window_owner::WindowOwnerRegistry::default());
+        let host = HostServer::start(public, NativePiManager::new(8), auth, Arc::clone(&metadata))
+            .await
+            .unwrap();
+        let (_owner, capability) = registry
+            .create_owner_with_workspace(
+                "mobile-disabled-window".into(),
+                temp.clone(),
+                0,
+                host.origin().into(),
+                Some("mobile-workspace".into()),
+                crate::window_owner::TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        host.set_owner_registry(registry);
+        host.runtime_started().expect("generation advances");
+        let (mut socket, _) = tokio_tungstenite::connect_async(
+            host.origin().replacen("http://", "ws://", 1) + "/v2/ws",
+        )
+        .await
+        .unwrap();
+        socket
+            .send(Message::Text(
+                json!({
+                    "type": "hello", "protocolVersion": 2, "clientType": "desktop",
+                    "clientId": "mobile-disabled", "desktopCapability": capability
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let ack: Value =
+            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(ack["type"], "hello_ack");
+        socket
+            .send(Message::Text(
+                json!({
+                    "type": "host_request", "requestId": "mobile-info",
+                    "operation": "mobile_access_info", "args": {}
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let info: Value =
+            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(info["response"]["enabled"], false);
+        assert_eq!(info["response"]["lanUrls"], json!([]));
+        socket
+            .send(Message::Text(
+                json!({
+                    "type": "host_request", "requestId": "mobile-pair",
+                    "operation": "mobile_pairing_create", "args": {}
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let error: Value =
+            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(error["type"], "error");
+        assert_eq!(error["error"]["code"], "mobile_access_disabled");
+        let _ = socket.close(None).await;
+        host.stop();
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[tokio::test]
+    async fn mobile_pairing_flow_exchanges_token_and_authorizes_status() {
+        use tokio_tungstenite::tungstenite::Message;
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-mobile-pair-{nonce}"));
+        let public = temp.join("public");
+        fs::create_dir_all(&public).unwrap();
+        fs::write(public.join("index.html"), "Picot").unwrap();
+        let metadata = Arc::new(Mutex::new(
+            MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
+        ));
+        metadata
+            .lock()
+            .unwrap()
+            .pref_set("mobile.lanAccessEnabled", &json!(true))
+            .unwrap();
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
+        let registry = Arc::new(crate::window_owner::WindowOwnerRegistry::default());
+        let host = HostServer::start(public, NativePiManager::new(8), auth, Arc::clone(&metadata))
+            .await
+            .unwrap();
+        // Desktop windows keep using the loopback alias even on a LAN bind.
+        assert!(host.origin().starts_with("http://127.0.0.1"));
+        let (_owner, capability) = registry
+            .create_owner_with_workspace(
+                "mobile-pair-window".into(),
+                temp.clone(),
+                0,
+                host.origin().into(),
+                Some("mobile-workspace".into()),
+                crate::window_owner::TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        host.set_owner_registry(registry);
+        host.runtime_started().expect("generation advances");
+        let (mut socket, _) = tokio_tungstenite::connect_async(
+            host.origin().replacen("http://", "ws://", 1) + "/v2/ws",
+        )
+        .await
+        .unwrap();
+        socket
+            .send(Message::Text(
+                json!({
+                    "type": "hello", "protocolVersion": 2, "clientType": "desktop",
+                    "clientId": "mobile-pair", "desktopCapability": capability
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let ack: Value =
+            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(ack["type"], "hello_ack");
+        socket
+            .send(Message::Text(
+                json!({
+                    "type": "host_request", "requestId": "mobile-info",
+                    "operation": "mobile_access_info", "args": {}
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let info: Value =
+            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(info["response"]["enabled"], true);
+        socket
+            .send(Message::Text(
+                json!({
+                    "type": "host_request", "requestId": "mobile-pair",
+                    "operation": "mobile_pairing_create", "args": {}
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let response: Value =
+            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        let pairing_token = response["response"]["pairingToken"]
+            .as_str()
+            .expect("pairing token")
+            .to_owned();
+
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let exchange = client
+            .post(format!("{}/v2/auth/exchange", host.origin()))
+            .json(&json!({ "pairingToken": pairing_token, "deviceId": "phone-1" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(exchange.status(), 200);
+        let device_token = exchange.json::<Value>().await.unwrap()["deviceToken"]
+            .as_str()
+            .expect("device token")
+            .to_owned();
+
+        let status_url = format!("{}/v2/mobile/status", host.origin());
+        let paired = client
+            .get(&status_url)
+            .header("authorization", format!("Bearer {device_token}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(paired.status(), 200);
+        let status = paired.json::<Value>().await.unwrap();
+        assert_eq!(status["protocolVersion"], 2);
+        assert!(status["appVersion"].is_string());
+
+        for unauthorized in [
+            Vec::new(),
+            vec![("authorization", "Bearer picot_device_not_a_token")],
+        ] {
+            let mut request = client.get(&status_url);
+            for (key, value) in unauthorized {
+                request = request.header(key, value);
+            }
+            let rejected = request.send().await.unwrap();
+            assert_eq!(rejected.status(), 401);
+        }
+
+        let _ = socket.close(None).await;
+        host.stop();
+        let _ = fs::remove_dir_all(temp);
     }
 
     #[test]

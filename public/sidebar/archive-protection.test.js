@@ -79,6 +79,15 @@ describe("SessionSidebar deletion protection", () => {
   test("deleteWorkspaceSessions skips active, streaming, and live sessions", async () => {
     const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn(), {
       getLiveInstances: () => [{ sessionFile: "/s/live.jsonl" }],
+      transport: {
+        sessionDeleteBatch: vi.fn(async (filePaths) => {
+          const response = await global.fetch("/api/sessions/delete-batch", {
+            method: "POST",
+            body: JSON.stringify({ filePaths }),
+          });
+          return response.json();
+        }),
+      },
     });
     sidebar.projects = [];
     sidebar.activeSessionFile = "/s/active.jsonl";

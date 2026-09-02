@@ -52,7 +52,13 @@ if (result.status !== 0) {
   process.exit(result.status ?? 1);
 }
 
-const native = JSON.parse(readFileSync(rawPath, "utf8"));
+let native;
+try {
+  native = JSON.parse(readFileSync(rawPath, "utf8"));
+} catch (error) {
+  rmSync(temp, { recursive: true, force: true });
+  throw new Error(`Native performance output is invalid: ${error.message}`, { cause: error });
+}
 const summary = {
   generatedAt: new Date().toISOString(),
   command: `cargo test native_smoke_host_origin_p3 --manifest-path src-tauri/Cargo.toml -- --ignored --nocapture`,
@@ -82,10 +88,9 @@ const summary = {
     shellMs: native.shellMs,
     bootstrapMs: native.bootstrapMs,
   },
-  legacy: {
+  comparison: {
     status: "not-run",
-    blocker:
-      "No equivalent legacy fixture runner is available in repository. scripts/perf-baseline.mjs only measures an already-running Pi-origin server, while this harness creates and owns temporary workspace, session, model interaction, and cleanup; comparing it would violate same-fixture/equivalence requirement.",
+    note: "This harness records native host-origin timings only; no legacy transport comparison is generated.",
   },
 };
 const evidencePath = resolve(root, "docs/superpowers/specs/2026-08-30-p3-perf-evidence.md");

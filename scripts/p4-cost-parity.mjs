@@ -27,7 +27,7 @@ params.to = new Date(params.to);
 params.models = new Set(Array.isArray(params.models) ? params.models : []);
 
 async function parseSessionMetrics(filePath) {
-  // Mirrors embedded-server parseSessionMetrics (cost-relevant fields only).
+  // Reads cost-relevant session fields using same JSONL contract as host data plane.
   const stream = createReadStream(filePath, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   const data = {

@@ -11,7 +11,6 @@
   "nav": {
     "chat": "聊天",
     "toggleSidebar": "切换侧边栏",
-    "showMobileQR": "显示移动端二维码",
     "openWorkspace": "打开工作区",
     "openWorkspaceInApp": "在应用中打开工作区",
     "chooseApp": "选择打开工作区的应用",
@@ -608,7 +607,6 @@
     "extensions": "扩展",
     "usage": "使用量",
     "configuration": "高级配置",
-    "agentInbox": "智能体收件箱",
     "backToChat": "返回聊天",
     "appearance": "外观",
     "agent": "智能体",
@@ -820,16 +818,15 @@
       "duplicateProvider": "提供商“{provider}”已存在。",
       "connect": "连接",
       "model": "模型"
+    },
+    "mobile": {
+      "title": "移动端访问",
+      "enable": "允许同一网络内的手机配对",
+      "pair": "配对设备",
+      "pairAction": "生成令牌",
+      "pairHint": "在手机上打开该地址，并在 5 分钟内输入令牌。",
+      "restartHint": "重启 Picot 后生效。"
     }
-  },
-  "lanQr": {
-    "modalAriaLabel": "移动端二维码",
-    "title": "在手机上打开",
-    "closeAriaLabel": "关闭",
-    "generating": "正在生成二维码…",
-    "qrAlt": "用于手机访问的二维码",
-    "hint": "用手机扫描以在同一网络中打开 Picot",
-    "openLink": "打开链接"
   },
   "cost": {
     "documentTitle": "Picot - 使用量",
@@ -898,7 +895,6 @@
     "model": "模型",
     "compact": "压缩",
     "compactTitle": "上下文已超过 80% — 压缩以节省令牌",
-    "qrUnavailable": "二维码不可用",
     "toggleContextControls": "切换上下文控制"
   },
   "browse": {

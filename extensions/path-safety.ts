@@ -1,4 +1,4 @@
-// ABOUTME: Provides normalized filesystem containment checks for embedded-server paths.
+// ABOUTME: Provides normalized filesystem containment checks for host-managed paths.
 // ABOUTME: Uses native path semantics and a separator boundary to prevent sibling-prefix escapes.
 
 import * as path from "node:path";

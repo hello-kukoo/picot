@@ -30,12 +30,15 @@ describe("settings page split", () => {
     expect(appJs).not.toContain('selectSettingsTab("auth")');
   });
 
-  test("keeps LAN access behind the QR code instead of showing the raw URL", () => {
+  test("keeps LAN access out of the Settings surface after the QR removal", () => {
     const dom = new JSDOM(html);
     const { document } = dom.window;
 
+    // Original contract: never print a raw LAN URL in Settings. The QR modal was
+    // a dead control (its host route answers 410), so both are now absent.
     expect(Boolean(document.querySelector("#setting-lan-url-value"))).toBe(false);
-    expect(document.querySelector("#lan-qr-btn")).not.toBeNull();
-    expect(document.querySelector("#lan-qr-modal")).not.toBeNull();
+    expect(document.querySelector("#lan-qr-btn")).toBeNull();
+    expect(document.querySelector("#lan-qr-modal")).toBeNull();
+    expect(appJs).not.toContain("/api/lan-qr");
   });
 });

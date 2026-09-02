@@ -20,7 +20,10 @@ const root = resolve(__dirname, "..");
 const mainRs = readFileSync(resolve(root, "src-tauri/src/main.rs"), "utf8");
 
 // Match: tauri::generate_handler![cmd_a, cmd_b, ...]
-const handlerBlock = mainRs.match(/tauri::generate_handler!\[([^\]]+)\]/);
+// P8 removed every Tauri IPC command (the UI talks to HostServer over its v2
+// WebSocket only), so an absent or empty block is the expected native-only
+// state: no custom commands means nothing to cross-check against the toml.
+const handlerBlock = mainRs.match(/tauri::generate_handler!\[([^\]]*)\]/);
 if (!handlerBlock) {
   console.error("ERROR: Could not find tauri::generate_handler! block in main.rs");
   process.exit(1);
@@ -54,9 +57,15 @@ const defaultPermissions = defaultBlock
 
 // ── 3. Parse capability JSON ─────────────────────────────────────────────────
 
-const capability = JSON.parse(
-  readFileSync(resolve(root, "src-tauri/capabilities/default.json"), "utf8"),
-);
+let capability;
+try {
+  capability = JSON.parse(
+    readFileSync(resolve(root, "src-tauri/capabilities/default.json"), "utf8"),
+  );
+} catch (error) {
+  console.error(`ERROR: Could not parse capabilities/default.json: ${error.message}`);
+  process.exit(1);
+}
 const capabilityPermissions = capability.permissions ?? [];
 
 // ── 4. Validate ──────────────────────────────────────────────────────────────

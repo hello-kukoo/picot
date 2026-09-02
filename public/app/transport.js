@@ -9,26 +9,16 @@
  * That hard-wired the UI to the desktop app: a mobile / remote client could
  * not drive those commands.
  *
- * Now there is ONE transport: every op is a `broker_control` request sent over
- * the shared broker WebSocket and awaited via a correlated `control_response`.
- * Inside the desktop app the Rust broker installs a native control handler
- * (capabilities.native = true) and executes these ops; a bare broker / remote
- * client without a handler reports capabilities.native = false and native-only
- * ops reject server-side. The UI is identical across environments.
+ * Now there is ONE transport: every host op is a `host_request` sent over
+ * HostServer v2 WebSocket and awaited via a correlated response. Runtime ops
+ * use `runtime_request`; data ops use `data_request`.
  */
-
-import { resolveBrokerWsUrl } from "./websocket-client.js";
 
 // Long/interactive ops must not be killed by the default 30s control timeout:
 // the folder picker waits for the user, the updater download streams for a while.
 const NO_TIMEOUT = 0;
 const SPAWN_TIMEOUT_MS = 60000;
 const PACKAGE_TIMEOUT_MS = 120000;
-
-function currentPort(env = globalThis.window || globalThis) {
-  const port = Number.parseInt(env?.location?.port, 10);
-  return Number.isFinite(port) && port > 0 ? port : 47821;
-}
 
 export class WsTransport {
   constructor(wsClient, env = globalThis.window || globalThis) {
@@ -40,8 +30,7 @@ export class WsTransport {
     return Boolean(this.wsClient);
   }
 
-  // Live native-capability flag from the broker handshake. Native-only UI is
-  // gated on this; it flips true once the `capabilities` frame arrives.
+  // Host capability state from authenticated v2 hello_ack.
   get capabilities() {
     return this.wsClient?.capabilities || { native: false };
   }
@@ -74,40 +63,18 @@ export class WsTransport {
     );
   }
 
-  newSession(port) {
-    return this._control("new_session", { port: port ?? null });
+  // Runtime mutations use canonical v2 `runtime_request`; they never target a
+  // Pi HTTP/WS endpoint and never carry a legacy port hint.
+  fork(entryId) {
+    return this.wsClient.sendRuntime({ type: "fork", entryId });
   }
 
-  switchSession(sessionPath, port) {
-    return this._control("switch_session", { sessionPath, port: port ?? null });
-  }
-
-  // Fork the active session from a specific user entry. pi forks in-place (same
-  // process/port) and emits `session_start { reason: "fork" }`, which flows back
-  // to the UI as a mirror_sync snapshot.
-  fork(entryId, port) {
-    return this._control("fork", { entryId, port: port ?? null });
-  }
-
-  // Navigate the active session's tree in place (Info panel "Resume branch" /
-  // user-message "Edit"). No new session file: pi moves the active leaf via its
-  // own navigateTree primitive (dispatched through the picot-bridge extension
-  // command) and emits `session_tree`, which embedded-server forwards as a WS
-  // event; the UI then re-syncs from the authoritative snapshot.
-  navigateTree(entryId, { summarize = false, port = null } = {}) {
-    return this._control("navigate_tree", { entryId, summarize, port });
-  }
-
-  stopInstance(port) {
-    return this._control("stop_instance", { port: port ?? null });
-  }
-
-  spawnSessionProcess(sessionFile, cwd) {
-    return this._control(
-      "spawn_session_process",
-      { sessionFile, cwd, workspacePort: currentPort(this.env) },
-      { timeoutMs: SPAWN_TIMEOUT_MS },
-    );
+  navigateTree(entryId, { summarize = false } = {}) {
+    return this.wsClient.sendRuntime({
+      type: "navigate_tree",
+      entryId,
+      summarize,
+    });
   }
 
   // ── Versions / packages ────────────────────────────────────────────────────
@@ -241,6 +208,80 @@ export class WsTransport {
     return this.wsClient.sendData("file_mentions", { query });
   }
 
+  listFiles(path = "") {
+    return this.wsClient.sendData("list_files", { path });
+  }
+
+  listSessions() {
+    return this.wsClient.sendData("list_sessions", {});
+  }
+
+  searchSessions(query) {
+    return this.wsClient.sendData("search_sessions", { query });
+  }
+
+  costDashboard({ range = "30d", granularity = "day", scope = "all", models = "" } = {}) {
+    return this.wsClient.sendData("cost_dashboard", {
+      range,
+      granularity,
+      scope,
+      models,
+    });
+  }
+
+  fileRead(path, { signal } = {}) {
+    return this.wsClient.sendData("file_read", { path }, { signal });
+  }
+
+  fileWrite(path, content, { expectedModifiedAtMs = null, force = false } = {}) {
+    return this.wsClient.sendData("file_write", {
+      path,
+      content,
+      expectedModifiedAtMs,
+      force,
+      idempotencyKey: `ui-file-write-${crypto.randomUUID?.() || Date.now()}`,
+    });
+  }
+
+  fileRawUrl(path) {
+    const query = new URLSearchParams({
+      workspaceId: this.wsClient.workspaceId || "",
+      path,
+    });
+    return `/v2/files/raw?${query}`;
+  }
+
+  sessionHistory(sessionId) {
+    return this.wsClient.sendData("session_history", { sessionId });
+  }
+
+  sessionRename(filePath, name) {
+    return this._control("session_rename", { filePath, name });
+  }
+
+  sessionDeleteBatch(filePaths) {
+    return this._control("session_delete_batch", { filePaths });
+  }
+
+  workspaceInfo() {
+    return this.wsClient.sendData("workspace_info", {});
+  }
+
+  workspaceSessions(workspaceId = null, { countOnly = false } = {}) {
+    return this.wsClient.sendData("workspace_sessions", {
+      ...(workspaceId ? { workspaceId } : {}),
+      ...(countOnly ? { countOnly: true } : {}),
+    });
+  }
+
+  hostHealth() {
+    return this._control("host_health", {});
+  }
+
+  runtimeInstances() {
+    return this._control("runtime_instances", {});
+  }
+
   // Agent/config text files are host-owned: the read/write keeps the exact bytes
   // the editor showed, and the lock + atomic replace stay in `host_config`.
   agentTextFileGet(name, scope = "global") {
@@ -261,13 +302,78 @@ export class WsTransport {
     return this._control("settings_put", { name, value, scope });
   }
 
-  // Pi owns the credential store; the host only projects its native login flow.
+  // ── Model configuration (Settings → Models; host-owned files) ──
+
+  listModelCatalog() {
+    return this._control("list_model_catalog", {});
+  }
+
+  setApiKey(provider, apiKey) {
+    return this._control("set_api_key", { provider, apiKey });
+  }
+
+  removeApiKey(provider) {
+    return this._control("remove_api_key", { provider });
+  }
+
+  setModelVisibility(provider, modelId, visible) {
+    return this._control("set_model_visibility", { provider, modelId, visible });
+  }
+
+  checkModelHealth(provider, modelId = "") {
+    return this._control("check_model_health", { provider, modelId });
+  }
+
+  // ── Skills inventory (Settings → Skills; host-owned discovery) ──
+
+  listSkillInventory(scope) {
+    return this._control("list_skill_inventory", { scope });
+  }
+
+  listPackageSkillInventory(scope) {
+    return this._control("list_package_skill_inventory", { scope });
+  }
+
+  setSkillEnabled(scope, target, enabled) {
+    return this._control("set_skill_enabled", { scope, target, enabled });
+  }
+
+  setDefaultThinkingLevel(level) {
+    return this._control("set_default_thinking_level", { level });
+  }
+
+  // D4 mobile entry: LAN reachability + pairing-token minting. The mint is
+  // desktop-only on the host side and refuses while the host is loopback-only.
+  mobileAccessInfo() {
+    return this._control("mobile_access_info", {});
+  }
+
+  mobilePairingCreate() {
+    return this._control("mobile_pairing_create", {});
+  }
+
+  // Pi owns credential storage; OAuth control frames share canonical host WS.
   getOauthLoginCapabilities() {
     return this._control("get_oauth_login_capabilities", {});
   }
 
+  startOauthLogin(params = {}) {
+    return this._control("start_oauth_login", params);
+  }
+
+  cancelOauthLogin(params = {}) {
+    return this._control("cancel_oauth_login", params);
+  }
+
   logoutOauthLogin(params = {}) {
     return this._control("logout_oauth_login", params);
+  }
+
+  subscribeOauthEvents(listener) {
+    if (!this.wsClient || typeof listener !== "function") return () => {};
+    const handler = (event) => listener(event.detail);
+    this.wsClient.addEventListener("oauthEvent", handler);
+    return () => this.wsClient.removeEventListener("oauthEvent", handler);
   }
 
   loadSessionUiProfile(expectedSessionId) {
@@ -286,8 +392,8 @@ export class WsTransport {
     return this._control("open_external", { url });
   }
 
-  openDevtools(port) {
-    return this._control("open_devtools", { port: port ?? currentPort(this.env) });
+  openDevtools() {
+    return this._control("open_devtools", {});
   }
 
   // ── Auto-updater ────────────────────────────────────────────────────────────
@@ -347,7 +453,6 @@ export class WsTransport {
         sessionPath: options.sessionPath ?? null,
         forceNewSession: options.forceNewSession ?? false,
         reuseExisting: options.reuseExisting ?? false,
-        targetPort: options.targetPort ?? null,
       },
       { timeoutMs: SPAWN_TIMEOUT_MS },
     );
@@ -363,16 +468,6 @@ export class WsTransport {
   }
   cancelWindowClose(requestId) {
     return this._control("window_close_cancel", { requestId });
-  }
-
-  // ── Helpers ────────────────────────────────────────────────────────────────────
-
-  currentPort() {
-    return currentPort(this.env);
-  }
-
-  brokerWsUrl() {
-    return resolveBrokerWsUrl(this.env);
   }
 }
 

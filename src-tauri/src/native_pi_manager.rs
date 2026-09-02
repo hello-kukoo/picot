@@ -12,6 +12,7 @@ use crate::pi_rpc_bridge::{BridgeFrame, PiRpcBridge, PiRpcProcess, PiRpcProcessO
 use crate::runtime_coordinator::{
     MutationAcceptance, RuntimeCoordinator, RuntimeSnapshot, RuntimeState, RuntimeTarget,
 };
+use crate::temp_resources::{canonical_temp_root, cleanup_quick_chat_dir};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -395,7 +396,10 @@ impl NativePiManager {
         mut observer: Option<PiRpcProcessObserver>,
     ) {
         let inner = Arc::clone(&self.inner);
-        tokio::spawn(async move {
+        // Called synchronously from the Tauri setup thread during native
+        // startup; use the process-wide global runtime instead of the
+        // ambient tokio context (which does not exist on that thread).
+        tauri::async_runtime::spawn(async move {
             let mut poll = tokio::time::interval(Duration::from_millis(50));
             loop {
                 let frame = if observer.is_some() {
@@ -993,8 +997,8 @@ impl NativePiManager {
         self.record_cleanup(target, NativeCleanupStage::ProcessTreeTerminated);
         self.record_cleanup(target, NativeCleanupStage::ProcessReaped);
         if let Some((path, token)) = runtime.cleanup.temporary_directory.take() {
-            let root = crate::pi_manager::canonical_temp_root();
-            if let Err(error) = crate::pi_manager::cleanup_quick_chat_dir(&root, &path, &token) {
+            let root = canonical_temp_root();
+            if let Err(error) = cleanup_quick_chat_dir(&root, &path, &token) {
                 cleanup_error.get_or_insert(error);
             }
         }
@@ -1087,8 +1091,6 @@ impl NativePiManager {
         if !kind_matches {
             return Err("Ephemeral kind must match the launch spec runtime type".into());
         }
-        let canonical_cwd = spec.cwd.clone();
-        let cleanup_resources = spec.cleanup.clone();
         let registry = self
             .inner
             .ephemeral_registry
@@ -1101,17 +1103,51 @@ impl NativePiManager {
         let reservation = registry
             .reserve_create(owner, kind)
             .map_err(|error| format!("Ephemeral reservation rejected: {error}"))?;
+        self.spawn_ephemeral_committed(
+            reservation,
+            workspace_id,
+            session_id,
+            spec,
+            transition_generation,
+        )
+    }
+
+    /// Spawn + commit an existing reservation. Split from [`Self::spawn_ephemeral`]
+    /// so replacement flows can reserve a candidate while the old instance stays
+    /// live (transactional Quick Chat replacement): the registry's candidate-cancel
+    /// path restores the old record when spawn/commit fails here.
+    pub fn spawn_ephemeral_committed(
+        &self,
+        reservation: crate::ephemeral_registry::CreateReservation,
+        workspace_id: &str,
+        session_id: &str,
+        spec: NativeLaunchSpec,
+        transition_generation: u64,
+    ) -> Result<RuntimeTarget, String> {
+        let registry = self
+            .inner
+            .ephemeral_registry
+            .lock()
+            .map_err(|_| "Native ephemeral registry lock poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| {
+                "Native ephemeral creation requires the shared ephemeral registry".to_string()
+            })?;
+        let canonical_cwd = spec.cwd.clone();
+        let cleanup_resources = spec.cleanup.clone();
         let target = RuntimeTarget::with_owner(
             workspace_id,
             session_id,
             reservation.instance_id.clone(),
-            owner.as_str(),
+            reservation.owner_id.as_str(),
             transition_generation,
         );
         if let Err(error) = self.spawn(target.clone(), spec) {
-            if let Ok(Some(lease)) =
-                registry.begin_close(owner, &reservation.instance_id, reservation.generation)
-            {
+            if let Ok(Some(lease)) = registry.begin_close(
+                &reservation.owner_id,
+                &reservation.instance_id,
+                reservation.generation,
+            ) {
                 registry.finish_cleanup(&lease);
             }
             return Err(error);
@@ -1200,11 +1236,7 @@ impl NativePiManager {
         let owner = crate::window_owner::OwnerId::from_string(owner_id.to_string());
         for lease in registry.owner_cleanup(&owner) {
             if let Some((path, token)) = lease.temporary_directory.as_ref() {
-                let _ = crate::pi_manager::cleanup_quick_chat_dir(
-                    &crate::pi_manager::canonical_temp_root(),
-                    path,
-                    token,
-                );
+                let _ = cleanup_quick_chat_dir(&canonical_temp_root(), path, token);
             }
             registry.finish_cleanup(&lease);
         }
@@ -1251,11 +1283,7 @@ impl NativePiManager {
             let owner = crate::window_owner::OwnerId::from_string(owner_id.to_string());
             for lease in registry.cleanup_for_transition(&owner, transition_generation) {
                 if let Some((path, token)) = lease.temporary_directory.as_ref() {
-                    let _ = crate::pi_manager::cleanup_quick_chat_dir(
-                        &crate::pi_manager::canonical_temp_root(),
-                        path,
-                        token,
-                    );
+                    let _ = cleanup_quick_chat_dir(&canonical_temp_root(), path, token);
                 }
                 registry.finish_cleanup(&lease);
             }
@@ -1499,6 +1527,7 @@ mod tests {
     use super::{NativeLaunchSpec, NativePiManager, NativeRuntimeType};
     use crate::operation_registry::{OperationScope, OperationState};
     use crate::runtime_coordinator::RuntimeTarget;
+    use crate::temp_resources::{canonical_temp_root, cleanup_quick_chat_dir};
     use serde_json::json;
     use std::path::PathBuf;
     use std::time::Duration;
@@ -1738,8 +1767,8 @@ mod tests {
         let manager = NativePiManager::in_memory(8);
         let target = RuntimeTarget::new("workspace-temp", "session-temp", "instance-temp");
         let fake = manager.register_in_memory(target.clone()).unwrap();
-        let root = crate::pi_manager::canonical_temp_root();
-        let (path, token) = crate::pi_manager::create_quick_chat_temp_dir().unwrap();
+        let root = canonical_temp_root();
+        let (path, token) = crate::temp_resources::create_quick_chat_temp_dir().unwrap();
         manager
             .inner
             .runtimes
@@ -1753,7 +1782,7 @@ mod tests {
         assert!(!path.exists());
         // The ownership guard makes a second cleanup attempt a harmless no-op;
         // stop itself is idempotent for the exact target.
-        assert!(crate::pi_manager::cleanup_quick_chat_dir(&root, &path, "unused").is_err());
+        assert!(cleanup_quick_chat_dir(&root, &path, "unused").is_err());
         assert!(manager.stop(&target).is_ok());
         drop(fake);
     }
@@ -2188,6 +2217,81 @@ mod tests {
         manager.stop_for_owner_transition("owner-a", 3);
         assert!(registry.descriptors(&owner).is_empty());
         assert!(manager.snapshot(&target).is_err());
+    }
+
+    #[tokio::test]
+    async fn quick_chat_replacement_restores_old_when_candidate_spawn_fails() {
+        let manager = NativePiManager::in_memory(8);
+        let registry = std::sync::Arc::new(crate::ephemeral_registry::EphemeralRegistry::default());
+        manager.set_ephemeral_registry(std::sync::Arc::clone(&registry));
+        let owner = crate::window_owner::OwnerId::from_string("owner-a".into());
+        let original = manager
+            .spawn_ephemeral(
+                "workspace-a",
+                "session-1",
+                cat_ephemeral_spec(NativeRuntimeType::QuickChat, Some("secret")),
+                &owner,
+                crate::ephemeral_registry::EphemeralKind::QuickChat,
+                1,
+            )
+            .unwrap();
+
+        // Reserve the replacement: old goes Replacing, candidate goes Creating.
+        let replacement = registry.reserve_quick_replacement(&owner).unwrap();
+        assert!(replacement.old_instance.is_some());
+
+        // Candidate spawn fails (nonexistent binary); the committed path must
+        // cancel the candidate reservation, restoring the old record so the
+        // user's conversation survives the failure.
+        let mut bad_spec = cat_ephemeral_spec(NativeRuntimeType::QuickChat, Some("secret"));
+        bad_spec.binary = PathBuf::from("/nonexistent/picot-test-binary");
+        let error = manager
+            .spawn_ephemeral_committed(
+                replacement.candidate.clone(),
+                "workspace-a",
+                "session-2",
+                bad_spec,
+                1,
+            )
+            .unwrap_err();
+        assert!(!error.is_empty());
+
+        let descriptors = registry.descriptors(&owner);
+        assert_eq!(descriptors.len(), 1, "candidate must not linger");
+        assert_eq!(descriptors[0].instance_id, original.instance_id);
+        assert_eq!(
+            descriptors[0].state,
+            crate::ephemeral_registry::EphemeralState::Ready
+        );
+
+        // Happy path: a fresh replacement reservation joins as the second
+        // record; closing the old identity then leaves exactly the
+        // replacement. (The cancelled candidate reservation above stays
+        // permanently stale — by design, a retry must re-reserve.)
+        let retry = registry.reserve_quick_replacement(&owner).unwrap();
+        assert_ne!(
+            retry.candidate.instance_id,
+            replacement.candidate.instance_id
+        );
+        let candidate = manager
+            .spawn_ephemeral_committed(
+                retry.candidate.clone(),
+                "workspace-a",
+                "session-3",
+                cat_ephemeral_spec(NativeRuntimeType::QuickChat, Some("secret")),
+                1,
+            )
+            .unwrap();
+        assert_ne!(candidate.instance_id, original.instance_id);
+        if let Some((old_id, old_generation)) = retry.old_instance.clone() {
+            if let Ok(Some(lease)) = registry.begin_close(&owner, &old_id, old_generation) {
+                let _ = manager.stop(&original);
+                registry.finish_cleanup(&lease);
+            }
+        }
+        let descriptors = registry.descriptors(&owner);
+        assert_eq!(descriptors.len(), 1);
+        assert_eq!(descriptors[0].instance_id, candidate.instance_id);
     }
 
     #[tokio::test]

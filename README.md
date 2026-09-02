@@ -82,7 +82,7 @@ Provide credentials with `pi /login` inside any workspace, shell-exported provid
 - **Message queuing** — type while the agent is working; messages queue as pills and auto-send when ready
 - **`@` file mentions** — type `@` in any composer to search and insert a file-path reference (workspace, `../`, `~/`, or absolute); shared across Main, Side, and Quick Chat
 - **Conversation turn navigator** — Codex-style dot rail beside the chat; hover a dot for a preview, click to jump to that turn
-- **Command palette** — quick access to Compact, Expand/Collapse All Tools, Settings, and Help
+- **Command palette** — quick access to Compact, Expand/Collapse All Tools, Settings, and Help <!-- gitleaks:allow -->
 - **Fork from any message** — branch a new session off any point in the conversation
 
 </details>
@@ -111,16 +111,6 @@ Provide credentials with `pi /login` inside any workspace, shell-exported provid
 </details>
 
 <details>
-<summary><strong>📥 Agent Inbox</strong> <sub>(Beta)</sub></summary>
-
-- Connect a Telegram bot — incoming DMs land in a pinned **Agent Inbox** session, kept separate from your normal project chats
-- Dispatch tasks from the inbox to any open project's agent; track pending / running / done in a resizable task panel
-- Task lifecycle events (dispatched, needs input, done, failed) round-trip back to the inbox, including a reply to the original Telegram sender
-- Built-in Telegram Doctor check to diagnose bot/token/connectivity issues from Settings
-
-</details>
-
-<details>
 <summary><strong>🗃️ Projects & Workspace</strong></summary>
 
 - **Multi-project** — each project gets its own window, working directory, session history, and agent
@@ -134,13 +124,10 @@ Provide credentials with `pi /login` inside any workspace, shell-exported provid
 <summary><strong>📱 Mobile & LAN Access</strong></summary>
 
 <p align="center">
-  <img width="900" alt="LAN and mobile access panel" src="docs/images/lan-mobile-panel.webp" />
-</p>
-<p align="center">
   <img width="360" alt="Picot on mobile" src="docs/images/mobile.webp" />
 </p>
 
-- **LAN QR code** — scan to open Picot on any device on the same network
+- **Mobile access (beta)** — pair a phone over LAN from Settings → Mobile Access; the phone sees Picot's live status (full remote surface is gated behind the D4 security matrix)
 - Mobile-optimised URL handling and App Launcher support (installable as PWA on iOS/Android)
 
 </details>
@@ -226,20 +213,20 @@ Provide credentials with `pi /login` inside any workspace, shell-exported provid
 
 ### Architecture
 
-Picot starts a Rust `HostServer` and a managed native `pi --mode rpc` process. The WebView talks to `/v2/ws` on the host, and the host bridges those frames to Pi over stdio RPC. The bundled `embedded-server.mjs` extension owns the HTTP/WebSocket surface the Tauri WebView talks to (static assets, `/api/*`, `/ws`); `picot-bridge.mjs` provides Picot-specific Pi commands.
+Picot starts a Rust `HostServer` and a managed native `pi --mode rpc` process. The WebView talks only to `/v2/ws` on the host, and the host bridges those frames to Pi over stdio. `picot-bridge.mjs` provides Picot-specific Pi commands; Pi does not expose an HTTP or WebSocket server.
 
 ```
 ┌──────────────────────────────────────────────────────┐
 │ Picot .app                                       │
 │                                                      │
 │   Tauri + native HostServer (Rust)                   │
-│      ├─► spawn  pi --mode rpc --extension embedded-server.mjs --extension picot-bridge.mjs │
-│      ├─► bridge stdio RPC frames over /v2/ws         │
+│      ├─► spawn  pi --mode rpc --extension picot-bridge.mjs                         │
+│      ├─► bridge stdio RPC frames over /v2/ws                                       │
 │      └─► OS Window ──► WebView ──► native host HTTP  │
 │                                                      │
 │   resources/                                         │
 │      ├─ public/             (frontend)               │
-│      ├─ extensions/         (embedded-server + picot-bridge) │
+│      ├─ extensions/         (picot-bridge + optional Pi extensions) │
 │      └─ pi/                 (bun-compiled pi binary) │
 └──────────────────────────────────────────────────────┘
                        │
@@ -259,7 +246,7 @@ Picot does not re-implement agent logic — it embeds Pi and exposes its runtime
 - **Embedded `pi --mode rpc` runtime** — one managed process per workspace, isolated by project
 - **Streaming RPC bridge** — token-by-token output, tool-call events, and thinking blocks rendered live
 - **Session lifecycle APIs** — create, switch, and resume sessions; full per-project history
-- **Native host server** — Rust owns per-workspace `pi` lifecycle, port allocation, the broker WebSocket, and window management; bridges browser frames to Pi RPC
+- **Native host server** — Rust owns per-workspace `pi` lifecycle, host WebSocket, and window management; bridges browser frames to Pi RPC
 - **WebSocket broker** — multiple UI clients can connect to the same pi process simultaneously
 - **Extension compatibility** — user extensions from `~/.pi/agent/extensions/` and `.pi/extensions/` are auto-loaded
 - **Credential reuse and setup** — reuses Pi's existing `~/.pi/agent/auth.json`, imports shell-exported provider variables for GUI launches, and can persist API keys from Settings

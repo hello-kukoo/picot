@@ -33,7 +33,7 @@ const CHECKPOINT_MAX_BYTES: usize = 2 * 1024 * 1024;
 const INPUT_MAX_BYTES: usize = 64 * 1024;
 
 /// Delivers a `terminal_event` frame to the current authenticated owner client.
-/// In production this wraps `BrokerWs::send_owner_event`.
+/// HostServer installs this sink and applies owner filtering before delivery.
 pub type EventSink = Arc<dyn Fn(&OwnerId, Value) + Send + Sync>;
 
 #[derive(Clone)]

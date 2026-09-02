@@ -1,6 +1,5 @@
 // ABOUTME: Owns in-memory ephemeral chat records per window owner: quotas, state
 // ABOUTME: transitions, generation-checked create/replace/close, and redacted descriptors.
-#![allow(dead_code)] // DEPRECATED: legacy embedded-server stack, physical deletion at D10 Stage 2 (all live call sites removed)
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -786,7 +785,21 @@ mod tests {
         assert_eq!(descriptors[0].instance_id, a.instance_id);
         assert_eq!(descriptors[1].instance_id, b.instance_id);
         // Descriptors expose no port, pid, cwd, or temporary paths.
-        let serialized = serde_json::to_string(&descriptors).unwrap();
+        // instance_id is random hex and can contain any digit substring
+        // (e.g. "5300"), so it is normalized away before the substring
+        // assertions — otherwise the port check flakes on hex collisions.
+        let normalized: Vec<serde_json::Value> = descriptors
+            .iter()
+            .map(|descriptor| {
+                let mut value = serde_json::to_value(descriptor).unwrap();
+                value
+                    .as_object_mut()
+                    .expect("descriptor serializes to an object")
+                    .remove("instanceId");
+                value
+            })
+            .collect();
+        let serialized = serde_json::to_string(&normalized).unwrap();
         assert!(!serialized.contains("5300"));
         assert!(!serialized.contains("5301"));
         assert!(!serialized.contains("/ws"));

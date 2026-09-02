@@ -3,25 +3,9 @@
 // ABOUTME: Verifies the shared core-command manifest and its TS enforcement.
 // ABOUTME: Asserts schema, exhaustive source parity, and fail-closed authorization.
 
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import manifest from "../protocol/picot-core-commands.json";
 import { assertEphemeralCommandAllowed, classifyCoreCommand } from "./command-policy.ts";
-
-// Commands that Task 6/11 add as embedded-server case labels but are predeclared
-// in the manifest so the parity check stays green across that change.
-const PREDECLARED_EPHEMERAL_COMMANDS = ["ephemeral_snapshot_request", "extension_ui_response"];
-
-function readHandleCommandCases(): Set<string> {
-  const sourcePath = fileURLToPath(new URL("./embedded-server.ts", import.meta.url));
-  const source = readFileSync(sourcePath, "utf8");
-  const labels = new Set<string>();
-  for (const match of source.matchAll(/case\s+"([A-Za-z0-9_]+)"\s*:/g)) {
-    labels.add(match[1]);
-  }
-  return labels;
-}
 
 describe("picot-core-commands manifest", () => {
   it("declares schema version 1", () => {
@@ -35,22 +19,11 @@ describe("picot-core-commands manifest", () => {
     }
   });
 
-  it("classifies every handleCommand case plus the two predeclared ephemeral commands", () => {
-    const manifestNames = new Set(Object.keys(manifest.commands));
-    const sourceCases = readHandleCommandCases();
-    for (const label of sourceCases) {
-      expect(manifestNames.has(label)).toBe(true);
-    }
-    for (const label of PREDECLARED_EPHEMERAL_COMMANDS) {
-      expect(manifestNames.has(label)).toBe(true);
-    }
-    // Exact parity via set union: every handled case plus the predeclared
-    // commands, with no stale/unhandled entry lingering in the manifest.
-    const expectedCommands = new Set([...sourceCases, ...PREDECLARED_EPHEMERAL_COMMANDS]);
-    expect(Object.keys(manifest.commands).length).toBe(expectedCommands.size);
-    for (const name of Object.keys(manifest.commands)) {
-      expect(expectedCommands.has(name)).toBe(true);
-    }
+  it("declares every canonical native command exactly once", () => {
+    const commandNames = Object.keys(manifest.commands);
+    expect(new Set(commandNames).size).toBe(commandNames.length);
+    expect(commandNames).toContain("prompt");
+    expect(commandNames).toContain("extension_ui_response");
   });
 });
 
@@ -114,10 +87,9 @@ describe("assertEphemeralCommandAllowed", () => {
       expect(() => assertEphemeralCommandAllowed(command, false)).toThrow();
     });
     it(`${command} passes the generic gate for a desktop owner (absolute ephemeral gate rejects)`, () => {
-      // The embedded server calls assertEphemeralCommandAllowed(type, true);
-      // desktopOwnerOnly is only refused when the flag is false. Ephemeral
-      // runtimes are instead denied by the absolute assertNonEphemeralOAuthCommand
-      // gate (see embedded-server.ts), never by this flag.
+      // Native ephemeral dispatch applies this generic permission gate first;
+      // the runtime-specific policy rejects commands that temporary sessions
+      // cannot execute.
       expect(() => assertEphemeralCommandAllowed(command, true)).not.toThrow();
     });
   }

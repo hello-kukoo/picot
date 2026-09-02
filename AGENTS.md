@@ -68,7 +68,7 @@ bun run format:fix
 ```
 
 After editing `.js` or `.ts` under `public/` or `extensions/`, run `bun run check`.
-After editing `extensions/embedded-server.ts`, also run `bun run build:extensions`.
+After editing extension sources under `extensions/`, run `bun run build:extensions`.
 
 ## Module discipline
 

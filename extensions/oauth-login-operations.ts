@@ -6,8 +6,7 @@ import type { OAuthDeviceCode } from "./pi-oauth-login-adapter.ts";
 
 /**
  * Structural owner-connection identity: the initiating WebSocket object.
- * Mirrors embedded-server's `OAuthOwnerConnection` shape without importing it, so this
- * module stays free of the embedded-server dependency cycle.
+ * Kept local so extension OAuth state does not depend on host transport internals.
  */
 export type OAuthOwnerConnection = {
   readyState: number;

@@ -23,6 +23,7 @@ export function createFileRenderer({
   onModeChange,
   onError,
   renderAs,
+  rawUrl,
 } = {}) {
   const classification = classifyFilePath(filePath || "");
   if (renderAs === "markdown" && classification.contentType === "convertible") {
@@ -72,10 +73,10 @@ export function createFileRenderer({
       });
 
     case "image":
-      return createImageRenderer({ filePath, fileName });
+      return createImageRenderer({ filePath, fileName, rawUrl });
 
     case "pdf":
-      return createPdfRenderer({ filePath, onError });
+      return createPdfRenderer({ filePath, onError, rawUrl });
 
     case "text":
       return createTextRenderer({
@@ -319,7 +320,7 @@ function createTextRenderer({
 
 // ─── Image renderer ─────────────────────────────────────────────────────
 
-function createImageRenderer({ filePath, fileName }) {
+function createImageRenderer({ filePath, fileName, rawUrl }) {
   let imgEl = null;
   let containerEl = null;
 
@@ -332,7 +333,8 @@ function createImageRenderer({ filePath, fileName }) {
       imgEl = document.createElement("img");
       imgEl.className = "file-image-img";
       imgEl.alt = fileName || filePath || "";
-      imgEl.src = `/api/files/raw?path=${encodeURIComponent(filePath)}`;
+      if (typeof rawUrl !== "string" || !rawUrl) throw new Error("Raw file URL unavailable");
+      imgEl.src = rawUrl;
       imgEl.onerror = () => {
         if (containerEl) {
           containerEl.classList.add("file-image-error");

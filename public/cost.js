@@ -1,6 +1,13 @@
+import { createCostTransport } from "./cost/cost-transport.js";
+import { setCostDashboardTransport } from "./cost/dashboard.js";
 import { initI18n } from "./i18n.js";
 
 await initI18n();
+
+// The settings usage embed loads in a same-origin iframe, so it owns its own
+// authenticated v2 WebSocket; without this the dashboard has no data path.
+setCostDashboardTransport(createCostTransport());
+
 await import("./cost/dashboard.js");
 
 syncThemeFromCookie();

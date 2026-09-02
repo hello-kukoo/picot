@@ -42,8 +42,6 @@ test("sidebar action buttons share the main panel toggle visual contract", () =>
   expect(appJs).toContain(
     'setButtonIcon(document.getElementById("quick-chat-btn"), "message-circle", { size: 16 });',
   );
-  expect(appJs).toContain('setButtonIcon(lanQrBtn, "smartphone"');
-  expect(styleCss).toContain(".lan-qr-btn");
   expect(styleCss).toContain(".panel-toggle-btn:hover");
   expect(styleCss).toContain('.panel-toggle-btn[aria-pressed="true"]');
 });

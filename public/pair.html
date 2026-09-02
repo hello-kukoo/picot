@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Picot — Pair device</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        font-family:
+          system-ui,
+          -apple-system,
+          "PingFang SC",
+          sans-serif;
+        background: #101014;
+        color: #e8e8ec;
+        display: grid;
+        place-items: center;
+        min-height: 100vh;
+        margin: 0;
+      }
+      .card {
+        max-width: 380px;
+        width: calc(100% - 32px);
+        padding: 32px 28px;
+        background: #18181f;
+        border: 1px solid #26262e;
+        border-radius: 12px;
+        text-align: center;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 10px;
+      }
+      p {
+        font-size: 13px;
+        line-height: 1.5;
+        color: #9a9aa4;
+        margin: 0 0 14px;
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 10px 12px;
+        font-size: 14px;
+        border-radius: 8px;
+        border: 1px solid #33333c;
+        background: #0c0c10;
+        color: inherit;
+      }
+      button {
+        margin-top: 12px;
+        padding: 10px 18px;
+        font-size: 14px;
+        border-radius: 8px;
+        border: 0;
+        background: #4c6ef5;
+        color: #fff;
+      }
+      button:disabled {
+        opacity: 0.5;
+      }
+      .status {
+        margin-top: 14px;
+        font-size: 13px;
+        white-space: pre-line;
+        color: #9a9aa4;
+      }
+      .status.ok {
+        color: #51cf66;
+      }
+      .status.err {
+        color: #ff8787;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Picot</h1>
+      <p id="hint">
+        Enter the pairing token shown in Picot (valid for 5 minutes).<br />
+        在 Picot 中查看配对令牌（5 分钟内有效）。
+      </p>
+      <input
+        id="token"
+        placeholder="picot_pair_…"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <button id="pair">Pair / 配对</button>
+      <div class="status" id="status"></div>
+    </div>
+    <script>
+      (() => {
+        var statusEl = document.getElementById("status");
+        var input = document.getElementById("token");
+        var pairBtn = document.getElementById("pair");
+        var _deviceId = null;
+
+        function setStatus(text, kind) {
+          statusEl.textContent = text;
+          statusEl.className = `status${kind ? ` ${kind}` : ""}`;
+        }
+
+        function storedDeviceToken() {
+          try {
+            return localStorage.getItem("picot.deviceToken") || "";
+          } catch {
+            return "";
+          }
+        }
+
+        function deviceId_() {
+          try {
+            const existing = localStorage.getItem("picot.deviceId");
+            if (existing) return existing;
+            const id =
+              window.crypto && crypto.randomUUID
+                ? crypto.randomUUID()
+                : `device-${Date.now()}`;
+            localStorage.setItem("picot.deviceId", id);
+            return id;
+          } catch {
+            return `device-${Date.now()}`;
+          }
+        }
+
+        function exchange(token) {
+          setStatus("Pairing… / 配对中…");
+          pairBtn.disabled = true;
+          fetch("/v2/auth/exchange", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              pairingToken: token,
+              deviceId: deviceId_(),
+            }),
+          })
+            .then((res) => {
+              if (!res.ok) {
+                throw new Error(
+                  res.status === 401
+                    ? "Token rejected or expired / 令牌无效或已过期"
+                    : `HTTP ${res.status}`,
+                );
+              }
+              return res.json();
+            })
+            .then((data) => {
+              try {
+                localStorage.setItem("picot.deviceToken", data.deviceToken);
+              } catch {}
+              return fetch("/v2/mobile/status", {
+                headers: { Authorization: `Bearer ${data.deviceToken}` },
+              });
+            })
+            .then((res) => {
+              if (!res.ok) throw new Error(`HTTP ${res.status}`);
+              return res.json();
+            })
+            .then((s) => {
+              setStatus(
+                `Paired ✓\nPicot ${s.appVersion || ""} · pi ${s.piVersion || ""}`,
+                "ok",
+              );
+              input.remove();
+              pairBtn.remove();
+            })
+            .catch((err) => {
+              setStatus(err.message || String(err), "err");
+              pairBtn.disabled = false;
+            });
+        }
+
+        try {
+          if (storedDeviceToken()) {
+            setStatus("This device is already paired. / 此设备已配对。", "ok");
+            input.remove();
+            pairBtn.remove();
+            return;
+          }
+        } catch {}
+
+        var fromHash = /[?#&]p=([^&]+)/.exec(
+          location.hash || location.search || "",
+        );
+        if (fromHash) {
+          exchange(decodeURIComponent(fromHash[1]));
+        } else {
+          pairBtn.addEventListener("click", () => {
+            var token = input.value.trim();
+            if (token) exchange(token);
+          });
+          input.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") pairBtn.click();
+          });
+        }
+      })();
+    </script>
+  </body>
+</html>

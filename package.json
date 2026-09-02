@@ -18,7 +18,7 @@
   },
   "scripts": {
     "tauri": "tauri",
-    "dev": "bun run fetch:pi && bun run fetch:terminal-font && bun run fetch:cjk-font && bun run build:frontend && PATH=\"$HOME/.cargo/bin:$PATH\" tauri dev",
+    "dev": "bun run fetch:pi && bun run fetch:terminal-font && bun run fetch:cjk-font && bun run build:frontend && PATH=\"$HOME/.cargo/bin:$PATH\" tauri dev --config src-tauri/tauri.dev.conf.json",
     "fetch:pi": "bun run scripts/fetch-pi-binary.js",
     "fetch:terminal-font": "bun run scripts/fetch-terminal-font.js",
     "fetch:cjk-font": "bun run scripts/fetch-cjk-font.js",
@@ -51,7 +51,6 @@
     "check:inventory": "bun run scripts/check-migration-inventory.mjs",
     "rehearsal:recovery": "bun run scripts/recovery-rehearsal.mjs --out docs/superpowers/specs/2026-08-28-registry-runtime-recovery-rehearsal.md",
     "check:rehearsal": "bun run scripts/recovery-rehearsal.mjs --check",
-    "perf:baseline": "bun run scripts/perf-baseline.mjs",
     "perf:p3": "bun run scripts/perf-p3.mjs",
     "check:rust": "bash scripts/check-rust.sh"
   },

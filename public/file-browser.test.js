@@ -112,22 +112,13 @@ describe("FileBrowser.load", () => {
     const container = makeContainer();
     const pathEl = makePathEl();
     const messageInput = makeMessageInput();
-    const browser = new FileBrowser(container, pathEl, messageInput);
-
-    const fetchMock = vi.fn().mockResolvedValue({
-      json: () =>
-        Promise.resolve({
-          path: "/tmp/project",
-          items: [],
-        }),
+    const browser = new FileBrowser(container, pathEl, messageInput, {
+      listFiles: vi.fn(async () => ({ path: "/tmp/project", items: [] })),
     });
-    globalThis.fetch = fetchMock;
 
     await browser.load("/tmp/project");
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const url = fetchMock.mock.calls[0][0];
-    expect(url).toBe("/api/files?path=%2Ftmp%2Fproject&scope=workspace");
+    expect(browser.listFiles).toHaveBeenCalledWith("/tmp/project");
     expect(browser.currentPath).toBe("/tmp/project");
     expect(pathEl.textContent).toBe("/tmp/project");
   });
@@ -136,21 +127,13 @@ describe("FileBrowser.load", () => {
     const container = makeContainer();
     const pathEl = makePathEl();
     const messageInput = makeMessageInput();
-    const browser = new FileBrowser(container, pathEl, messageInput);
-
-    const fetchMock = vi.fn().mockResolvedValue({
-      json: () =>
-        Promise.resolve({
-          path: "/home/user/project",
-          items: [],
-        }),
+    const browser = new FileBrowser(container, pathEl, messageInput, {
+      listFiles: vi.fn(async () => ({ path: "/home/user/project", items: [] })),
     });
-    globalThis.fetch = fetchMock;
 
     await browser.load();
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toBe("/api/files?scope=workspace");
+    expect(browser.listFiles).toHaveBeenCalledWith("");
     expect(browser.currentPath).toBe("/home/user/project");
   });
 
@@ -168,9 +151,7 @@ describe("FileBrowser.load", () => {
     const container = makeContainer();
     const pathEl = makePathEl();
     const messageInput = makeMessageInput();
-    const browser = new FileBrowser(container, pathEl, messageInput);
-
-    // Two deferred fetches: A (slow) then B (fast). B resolves first.
+    // Two deferred host list requests: A (slow) then B (fast). B resolves first.
     let resolveA;
     let resolveB;
     const fetchA = new Promise((resolve) => {
@@ -180,8 +161,8 @@ describe("FileBrowser.load", () => {
       resolveB = resolve;
     });
 
-    const fetchMock = vi.fn().mockReturnValueOnce(fetchA).mockReturnValueOnce(fetchB);
-    globalThis.fetch = fetchMock;
+    const listFiles = vi.fn().mockReturnValueOnce(fetchA).mockReturnValueOnce(fetchB);
+    const browser = new FileBrowser(container, pathEl, messageInput, { listFiles });
 
     // Start load(A), then immediately load(B) before A resolves.
     const loadA = browser.load("/workspace-a");
@@ -189,14 +170,16 @@ describe("FileBrowser.load", () => {
 
     // Resolve B first — it should render workspace B.
     resolveB({
-      json: () => Promise.resolve({ path: "/workspace-b", items: [] }),
+      path: "/workspace-b",
+      items: [],
     });
     await loadB;
     expect(browser.currentPath).toBe("/workspace-b");
 
     // Now resolve A (stale) — it must NOT overwrite B.
     resolveA({
-      json: () => Promise.resolve({ path: "/workspace-a", items: [] }),
+      path: "/workspace-a",
+      items: [],
     });
     await loadA;
     expect(browser.currentPath).toBe("/workspace-b");
@@ -206,53 +189,45 @@ describe("FileBrowser.load", () => {
 
 describe("FileBrowser refresh and visibility", () => {
   test("refreshes the current directory and preserves showHidden in the request", async () => {
-    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
+    const listFiles = vi.fn(async (path) => ({ path, items: [] }));
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput(), {
+      listFiles,
+    });
     browser.currentPath = "/tmp/project/src";
     browser.showHidden = true;
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ path: "/tmp/project/src", items: [] }),
-    });
 
     await browser.refresh();
 
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      "/api/files?path=%2Ftmp%2Fproject%2Fsrc&scope=workspace&showHidden=1",
-    );
+    expect(listFiles).toHaveBeenCalledWith("/tmp/project/src");
   });
 
   test("refreshes the active workspace root without an explicit stale path", async () => {
-    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput());
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ path: "/tmp/project", items: [] }),
+    const listFiles = vi.fn(async () => ({ path: "/tmp/project", items: [] }));
+    const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput(), {
+      listFiles,
     });
 
     await browser.refresh();
 
-    expect(globalThis.fetch).toHaveBeenCalledWith("/api/files?scope=workspace");
+    expect(listFiles).toHaveBeenCalledWith("");
   });
 
   test("enabling hidden entries notifies once and reloads with showHidden=1", async () => {
     const onShowHiddenChange = vi.fn();
+    const listFiles = vi.fn(async (path) => ({ path, items: [] }));
     const browser = new FileBrowser(makeContainer(), makePathEl(), makeMessageInput(), {
       onShowHiddenChange,
+      listFiles,
     });
     browser.currentPath = "/tmp/project";
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ path: "/tmp/project", items: [] }),
-    });
 
     await browser.setShowHidden(true);
     await browser.setShowHidden(true);
 
     expect(onShowHiddenChange).toHaveBeenCalledTimes(1);
     expect(onShowHiddenChange).toHaveBeenCalledWith(true);
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      "/api/files?path=%2Ftmp%2Fproject&scope=workspace&showHidden=1",
-    );
+    expect(listFiles).toHaveBeenCalledTimes(1);
+    expect(listFiles).toHaveBeenCalledWith("/tmp/project");
   });
 
   test("resets hidden-entry visibility on a workspace change", () => {

@@ -1,67 +1,6 @@
 // ABOUTME: Pure helpers for session-port routing, mirror-sync scoping, and workspace transitions.
 // ABOUTME: Gating predicates determine when cross-workspace file loads and UI updates must be deferred.
 
-export function findPortForSession(instances, sessionFile, fallbackPort) {
-  const match = Array.isArray(instances)
-    ? instances.find((instance) => instance?.sessionFile === sessionFile)
-    : null;
-  return typeof match?.port === "number" ? match.port : fallbackPort;
-}
-
-export function getWorkspacePathForPort(instances, port) {
-  const match = Array.isArray(instances)
-    ? instances.find((instance) => instance?.port === port)
-    : null;
-  return match?.cwd || "";
-}
-
-export function shouldSpawnForCrossWorkspaceSelection(
-  instances,
-  foregroundPort,
-  selectedProjectPath,
-) {
-  if (!selectedProjectPath) return false;
-  const foregroundCwd = getWorkspacePathForPort(instances, foregroundPort);
-  return Boolean(foregroundCwd && foregroundCwd !== selectedProjectPath);
-}
-
-export function isForegroundMirrorSync(syncPort, foregroundPort) {
-  return !(
-    typeof syncPort === "number" &&
-    typeof foregroundPort === "number" &&
-    syncPort !== foregroundPort
-  );
-}
-
-export function isExpectedMirrorSession(expectedSessionFile, receivedSessionFile) {
-  return (
-    typeof expectedSessionFile !== "string" ||
-    !expectedSessionFile ||
-    expectedSessionFile === receivedSessionFile
-  );
-}
-
-export function applyForegroundMirrorSession({
-  syncPort,
-  foregroundPort,
-  sessionFile,
-  expectedSessionFile = null,
-  setMirrorActiveSessionFile,
-  setSidebarActive,
-}) {
-  if (
-    !isForegroundMirrorSync(syncPort, foregroundPort) ||
-    !isExpectedMirrorSession(expectedSessionFile, sessionFile)
-  ) {
-    return false;
-  }
-
-  const activeSessionFile = sessionFile || null;
-  setMirrorActiveSessionFile(activeSessionFile);
-  if (activeSessionFile) setSidebarActive(activeSessionFile);
-  return true;
-}
-
 export function deferFileBrowserWorkspace(sessionFile, projectPath, currentWorkspacePath) {
   if (typeof projectPath !== "string" || !projectPath || projectPath === currentWorkspacePath) {
     return null;
@@ -91,13 +30,12 @@ export function confirmDeferredFileBrowserWorkspace(pendingWorkspace, sessionFil
 
 /**
  * Whether a workspace-scoped file browser load should be deferred right now.
- * During a cross-workspace session switch the embedded server is still scoped
- * to the previous workspace until its replacement extension emits the mirror
- * snapshot that confirms the new session. Any `/api/files?scope=workspace`
- * request in that window resolves the requested path against the stale root
- * and returns 403. `pendingFileBrowserWorkspace` marks that window; while it is
- * set, callers (poll, toggle, select, activate) must defer — the authoritative
- * load fires from the mirror-sync handler.
+ * During a cross-workspace session switch the host is still scoped to the
+ * previous workspace until its replacement runtime emits the mirror snapshot
+ * that confirms the new session. Any workspace file request in that window
+ * could resolve against the stale root and return 403. `pendingFileBrowserWorkspace`
+ * marks that window; while it is set, callers (poll, toggle, select, activate)
+ * must defer — the authoritative load fires from the mirror-sync handler.
  */
 export function shouldSuppressFileBrowserLoad(pendingWorkspace) {
   return pendingWorkspace != null;
@@ -109,14 +47,12 @@ export function shouldSuppressFileBrowserLoad(pendingWorkspace) {
  * transition causes 403 outsideWorkspace against the wrong server. Suppress if:
  * 1. A cross-workspace switch is pending (pendingWorkspace is active)
  * 2. Current workspace path does not match the loaded file browser workspace
- * 3. Current port does not match the loaded file browser port
+ * 3. Current workspace path does not match loaded file browser path
  */
 export function shouldSuppressFileBrowserRefresh({
   pendingWorkspace,
   currentWorkspacePath,
   fileBrowserWorkspacePath,
-  currentPort,
-  fileBrowserWorkspacePort,
 } = {}) {
   if (shouldSuppressFileBrowserLoad(pendingWorkspace)) return true;
   const currentNormalized =
@@ -124,13 +60,6 @@ export function shouldSuppressFileBrowserRefresh({
   const loadedNormalized =
     typeof fileBrowserWorkspacePath === "string" ? fileBrowserWorkspacePath.trim() : "";
   if (loadedNormalized && currentNormalized && loadedNormalized !== currentNormalized) {
-    return true;
-  }
-  if (
-    fileBrowserWorkspacePort != null &&
-    currentPort != null &&
-    fileBrowserWorkspacePort !== currentPort
-  ) {
     return true;
   }
   return false;

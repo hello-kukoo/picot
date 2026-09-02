@@ -46,22 +46,18 @@ import {
 } from "./preferences-client.js";
 import { QuickChatDialog } from "./quick-chat-dialog.js";
 import { getOnboardingState } from "./session/onboarding.js";
-import { resolveNewSessionLiveFile } from "./session/refresh.js";
 import {
-  applyForegroundMirrorSession,
   confirmDeferredFileBrowserWorkspace,
   deferFileBrowserWorkspace,
-  findPortForSession,
-  getWorkspacePathForPort,
-  isExpectedMirrorSession,
   shouldSuppressFileBrowserLoad,
   shouldSuppressFileBrowserRefresh,
 } from "./session/routing.js";
 import { anchorHistoryToBottom } from "./session/scroll-anchor.js";
 import { setupSessionInfo } from "./session/session-info.js";
 import { SessionUiStateStore } from "./session-ui-state.js";
-import { LegacyConfigGateway } from "./settings/config-gateway-legacy.js";
+import { ConfigGateway } from "./settings/config-gateway.js";
 import { setupExtensionsTabShell } from "./settings/extensions-tab-shell.js";
+import { setupMobileAccess } from "./settings/mobile-access.js";
 import { setupModelsPage } from "./settings/models-page.js";
 import { setupPackageBrowse } from "./settings/package-browse.js";
 import { setupPackageManager } from "./settings/package-manager.js";
@@ -121,11 +117,9 @@ import { setupSkillSlashCommand } from "./ui/skill-slash-command.js";
 import { ToolCardRenderer } from "./ui/tool-card.js";
 import { WindowCloseCoordinator } from "./window-close-coordinator.js";
 import {
-  buildWorkspaceUrl,
   openFolderAsWorkspace,
   startInWindowNewSession,
   startNewProjectChat,
-  withBrokerWs,
 } from "./workspace/actions.js";
 import { FileBrowser } from "./workspace/file-browser.js";
 import {
@@ -145,22 +139,6 @@ const savedTheme = getCurrentTheme();
 applyTheme(savedTheme);
 await initI18n();
 
-const fetchInstances = async () => {
-  try {
-    const res = await fetch("/api/instances");
-    if (!res.ok) return [];
-    const data = await res.json();
-    return data.instances || [];
-  } catch {
-    return [];
-  }
-};
-const getCurrentPort = () => {
-  const fromTransport = transport?.currentPort?.();
-  if (typeof fromTransport === "number") return fromTransport;
-  const fromLocation = Number(location.port);
-  return Number.isFinite(fromLocation) && fromLocation > 0 ? fromLocation : 47821;
-};
 const mobileClientMode = new URLSearchParams(window.location.search).get("mobile") === "1";
 // Workspace Focus mode orchestration state.
 // `currentFocusProject` is the project whose task-workspace sidebar is
@@ -192,10 +170,10 @@ const navigateInWindow = (url, metadata = {}) => {
       return;
     }
     const requestedFocusId = currentUrl.searchParams.get(FOCUS_WORKSPACE_PARAM);
-    // During a cross-port navigation (e.g. switching to a freshly spawned pi
-    // port), currentFocusProject has not been re-resolved yet on the new page
-    // load. Fall back to the focusWorkspaceId the current URL still carries so
-    // focus survives the port hop; withFocusParam re-encodes it onto the target
+    // During navigation to a freshly spawned native runtime, the current
+    // focus project has not been re-resolved yet on page load. Fall back to
+    // focusWorkspaceId from the current URL; withFocusParam re-encodes it onto
+    // the target
     // URL only when targetCwd matches that project's path, and strips it
     // otherwise. Once the new page boots and resolveFocusState runs,
     // currentFocusProject is repopulated from the sidebar and this fallback is
@@ -213,18 +191,6 @@ const navigateInWindow = (url, metadata = {}) => {
   }
   window.location.assign(targetUrl.toString());
 };
-
-async function navigateToWorkspacePort(targetCwd, targetPort) {
-  if (typeof targetPort !== "number" || targetPort === getCurrentPort()) return;
-  if (typeof transport.prepareWorkspaceTarget === "function") {
-    const prepared = await transport.prepareWorkspaceTarget(targetCwd, { targetPort });
-    if (typeof prepared?.transitionGeneration !== "number") {
-      throw new Error("Workspace navigation was not prepared");
-    }
-    await transport.commitWorkspaceTransition(prepared.transitionGeneration);
-  }
-  navigateInWindow(withBrokerWs(buildWorkspaceUrl(targetPort), transport), { targetCwd });
-}
 
 // ──────────────────────────────────────────────────────────────────────
 // Workspace Focus mode orchestration
@@ -386,11 +352,7 @@ function refreshFocusView() {
 async function fetchWorkspaceRepository(workspaceId) {
   if (!workspaceId) return null;
   try {
-    const params = new URLSearchParams();
-    params.set("workspaceId", workspaceId);
-    const res = await fetch(`/api/workspace-info?${params}`);
-    if (!res.ok) return null;
-    const data = await res.json();
+    const data = await transport.workspaceInfo();
     if (data?.isGit === true && data.repository) return data.repository;
     return null;
   } catch {
@@ -451,9 +413,9 @@ function resolveAndApplyFocus() {
 // swap fails before navigation (e.g. openWorkspace rejects).
 function showSwapOverlay(label) {
   // Snapshot ephemeral UI state before the page navigates away. The new
-  // page (on a different pi port) boots fresh; consumeNavState() restores
-  // scroll positions, sidebar expansion, search query, and the input draft
-  // so the workspace switch feels continuous instead of a reset to initial.
+  // page boots fresh; consumeNavState() restores scroll positions, sidebar
+  // expansion, search query, and input draft so workspace switch feels
+  // continuous instead of a reset to initial.
   try {
     snapshotNavState({
       messageScroll: messagesContainer ? messagesContainer.scrollTop : null,
@@ -526,15 +488,15 @@ function dismissBootSwapOverlayWhenReady() {
 installHostOriginFetch(window);
 const wsUrl = resolveWebSocketUrl(window);
 const wsClient = new WebSocketClient(wsUrl);
-// Unified control transport: every process/window lifecycle + native op goes
-// through the broker WebSocket (broker_control). No Tauri IPC hooks — the
-// desktop WebView, a remote client, and a mobile client all use the same API.
-// Native-only ops are gated on
-// `transport.capabilities.native` (advertised by the broker handshake).
+// Unified control transport: every process/window lifecycle and native op goes
+// through HostServer v2 WebSocket. Pi runtime commands use runtime_request;
+// host lifecycle uses host_request.
 const transport = initTransport({ wsClient, env: window });
-// True once the broker advertises a native (OS/window) control handler — i.e.
-// we're attached to the desktop host. Drives native-only UI gating. Starts
-// false and flips when the `capabilities` frame arrives (see listener below).
+// Canonical workspace pages obtain host-derived runtime identity before opening
+// the socket. Browser URL state never supplies instance or owner identity.
+if (wsClient.canonicalRoute) {
+  await wsClient.loadCanonicalTarget();
+}
 // `?mobile=1` is a browser client even if it reaches the desktop broker, so it
 // must not use native workspace/window controls.
 const nativeAvailable = () => !mobileClientMode && transport.capabilities.native;
@@ -571,7 +533,6 @@ const sidebar = new SessionSidebar(
     },
     onWorkspaceFocus: (project) => enterFocus(project),
     isCurrentWorkspace: (project) => project?.path === getCurrentWorkspacePath(),
-    getLiveInstances: () => liveInstances,
     onSessionNotice: (message) => {
       if (typeof messageRenderer?.renderSystemMessage === "function") {
         messageRenderer.renderSystemMessage(message);
@@ -602,10 +563,6 @@ window.__saNav = {
   get transport() {
     return transport;
   },
-  fetchInstances,
-  getCurrentPort,
-  buildWorkspaceUrl,
-  withBrokerWs,
   navigateInWindow,
   startInWindowNewSession,
 };
@@ -763,27 +720,20 @@ const compactCoordinator = createCompactCoordinator({
 let mirrorActiveSessionFile = null; // The live session file path from the TUI
 let viewingActiveSession = true; // Whether we're viewing the live session or a historical one
 let isMirrorMode = false; // Set when mirror_sync received
-let liveInstances = []; // All running Picot instances [{port, sessionFile, cwd}]
 let workspaceLaunchInProgress = false;
 // When true, the next foreground message lifecycle events should reload the
 // sidebar until the newly persisted session file appears in the list.
 let pendingNewSessionRefresh = false;
 let pendingNewSessionPreviousFile = null;
-// When set while streaming, holds the session filePath to switch to once the
-// current agent run ends. The history is rendered immediately; pi gets the
-// switch_session RPC only after agent_end so the running call is not aborted.
-let pendingSessionSwitchPath = null;
-// A cross-workspace session switch replaces the embedded server's active
-// workspace asynchronously. Keep the requested root until its post-switch
-// mirror snapshot confirms that the new session is active; loading it earlier
-// asks the old server to read a path outside its workspace and returns 403.
+// A cross-workspace session switch changes host runtime scope asynchronously.
+// Keep requested root until post-switch mirror snapshot confirms new session;
+// loading earlier could read path against stale workspace and return 403.
 let pendingFileBrowserWorkspace = null;
 let sessionsLoaded = false;
 // Serializes handleSessionSelect: the function is a long async sequence that
-// mutates shared routing state (foregroundPort, mirrorActiveSessionFile,
-// viewingActiveSession, pendingSessionSwitchPath). Two overlapping invocations
-// (fast double-click on different sessions) would interleave their awaits and
-// corrupt that state, so a second call queues behind the first.
+// mutates shared routing state (mirrorActiveSessionFile, viewingActiveSession).
+// Two overlapping invocations (fast double-click on different sessions) would
+// interleave their awaits and corrupt that state, so a second call queues behind the first.
 let sessionSelectChain = Promise.resolve();
 let deferredMirrorSync = null;
 // A selection may render its saved JSONL before its pi process has completed a
@@ -803,26 +753,20 @@ let pendingPostSyncComposer = null;
 // sync instead of one per turn unconditionally.
 let infoTreeDirty = false;
 let lastRenderedWelcomeWorkspacePath = null;
-// Maps port -> sessionFile for each pi process we're tracking
-const portSessionMap = new Map();
-let foregroundPort = getCurrentPort();
 let foregroundWorkspacePath = "";
-const getActivePort = () => foregroundPort;
 function logSessionRoute(label, details = {}) {
   console.debug(`[Session route] ${label}`, {
-    foregroundPort,
     activeSessionFile: sidebar?.activeSessionFile || null,
     mirrorActiveSessionFile,
     viewingActiveSession,
     isStreaming: state?.isStreaming,
     wsSessionId: wsClient?.sessionId || null,
-    wsSourcePort: wsClient?.sourcePort || null,
     ...details,
   });
 }
 wsClient.setRoutingContext({
   workspaceId: `workspace:${getCurrentWorkspacePath() || "unknown"}`,
-  sourcePort: foregroundPort,
+  instanceId: wsClient.getRuntimeTarget()?.instanceId,
 });
 
 const workspaceIndicatorEl = document.createElement("div");
@@ -857,22 +801,8 @@ function updateGitBranchIndicator(branch = "") {
   gitBranchEl.title = t("git.branchName", { name });
 }
 
-async function refreshGitBranch() {
-  try {
-    const params = new URLSearchParams();
-    if (typeof foregroundPort === "number" && Number.isFinite(foregroundPort)) {
-      params.set("foregroundPort", String(foregroundPort));
-    }
-    const res = await fetch(`/api/git-branch${params.size ? `?${params.toString()}` : ""}`);
-    if (!res.ok) {
-      updateGitBranchIndicator("");
-      return;
-    }
-    const data = await res.json();
-    updateGitBranchIndicator(data?.branch || "");
-  } catch {
-    updateGitBranchIndicator("");
-  }
+function refreshGitBranch() {
+  updateGitBranchIndicator(gitPanel.snapshot?.branch || "");
 }
 
 function updateWorkspaceIndicator(path = "") {
@@ -890,16 +820,8 @@ function updateWorkspaceIndicator(path = "") {
   if (typeof refreshHeaderOpenAppButton === "function") refreshHeaderOpenAppButton();
 }
 
-function syncWorkspaceIndicatorFromInstances() {
-  const workspacePath = getWorkspacePathForPort(liveInstances, foregroundPort);
-  if (workspacePath) foregroundWorkspacePath = workspacePath;
-  updateWorkspaceIndicator(workspacePath || foregroundWorkspacePath);
-  refreshFileBrowserForWorkspace(workspacePath || foregroundWorkspacePath);
-  refreshGitBranch();
-}
-
 function getCurrentWorkspacePath() {
-  return getWorkspacePathForPort(liveInstances, foregroundPort) || foregroundWorkspacePath;
+  return foregroundWorkspacePath;
 }
 
 function workspacePathFromId(workspaceId) {
@@ -1006,6 +928,7 @@ const fileBrowser = new FileBrowser(fileList, fileSidebarPath, messageInput, {
   },
   onShowHiddenChange: syncFileSidebarHiddenToggle,
   openPath: (filePath) => transport.openInApp(filePath),
+  listFiles: (relativePath) => transport.listFiles(relativePath),
 });
 setupResizablePanel(fileSidebar, {
   storageKey: "pi-studio-file-sidebar-width",
@@ -1038,7 +961,6 @@ const filePreviewPanel = new FilePreviewPanel({
 // turn) coalesces into one sidebar listing reload; only refresh a listing
 // that is already rendered so a never-opened browser is not force-loaded.
 let fileBrowserWorkspacePath = null;
-let fileBrowserWorkspacePort = null;
 let fileBrowserRefreshTimer = null;
 
 function cancelFileBrowserRefresh() {
@@ -1055,8 +977,6 @@ function scheduleFileBrowserRefresh() {
       pendingWorkspace: pendingFileBrowserWorkspace,
       currentWorkspacePath: getCurrentWorkspacePath(),
       fileBrowserWorkspacePath,
-      currentPort: getCurrentPort(),
-      fileBrowserWorkspacePort,
     })
   ) {
     return;
@@ -1070,8 +990,6 @@ function scheduleFileBrowserRefresh() {
         pendingWorkspace: pendingFileBrowserWorkspace,
         currentWorkspacePath: getCurrentWorkspacePath(),
         fileBrowserWorkspacePath,
-        currentPort: getCurrentPort(),
-        fileBrowserWorkspacePort,
       })
     ) {
       return;
@@ -1554,19 +1472,12 @@ async function refreshFileBrowserForWorkspace(
   path = getCurrentWorkspacePath(),
   { force = false } = {},
 ) {
-  // During a cross-workspace session switch the embedded server is still
-  // scoped to the previous workspace until the mirror snapshot confirms the
-  // new session. Any workspace-scoped load in that window resolves the
-  // requested path against the stale root and returns 403. Defer instead —
-  // `handleMirrorSync` fires the authoritative load once the new server is
-  // active (after clearing `pendingFileBrowserWorkspace`).
+  // During a cross-workspace session switch the host remains scoped to the
+  // previous workspace until mirror snapshot confirms the new session. Defer
+  // workspace-scoped loads until `handleMirrorSync` confirms the new scope.
   if (shouldSuppressFileBrowserLoad(pendingFileBrowserWorkspace)) return true;
   const normalized = typeof path === "string" ? path.trim() : "";
-  if (
-    !force &&
-    normalized === fileBrowserWorkspacePath &&
-    getCurrentPort() === fileBrowserWorkspacePort
-  ) {
+  if (!force && normalized === fileBrowserWorkspacePath) {
     return true;
   }
   const switched = await filePreviewPanel.setWorkspaceRoot(normalized);
@@ -1577,14 +1488,10 @@ async function refreshFileBrowserForWorkspace(
   const isCollapsed = fileSidebar.classList.contains("collapsed");
   if (isCollapsed && !force) {
     fileBrowserWorkspacePath = normalized;
-    fileBrowserWorkspacePort = getCurrentPort();
     return true;
   }
-  // Let the active Pi resolve its own workspace root. Passing the previous
-  // workspace path here races session transitions and produces 403 outsideWorkspace.
   await fileBrowser.load();
   fileBrowserWorkspacePath = normalized;
-  fileBrowserWorkspacePort = getCurrentPort();
   return true;
 }
 
@@ -1668,11 +1575,8 @@ async function syncGitEntryForWorkspace(workspaceId) {
   if (!workspaceId) return;
   const seq = ++gitEntryProbeSeq;
   try {
-    const params = new URLSearchParams();
-    params.set("workspaceId", workspaceId);
-    const res = await fetch(`/api/workspace-info?${params.toString()}`);
+    const data = await transport.workspaceInfo();
     if (seq !== gitEntryProbeSeq) return; // superseded by a newer workspace
-    const data = res.ok ? await res.json() : null;
     if (seq !== gitEntryProbeSeq) return;
     // Only an explicit non-Git answer hides the entry; anything inconclusive
     // (missing flag) defers to the git status probe.
@@ -1860,33 +1764,8 @@ const infoPanelEl = document.getElementById("info-panel");
 
 /** Correlated request/response over the shared WS command channel. */
 function wsRequest(command, timeoutMs = 15000) {
-  // v2 has no `commandResponse` event: the reply is a requestId-correlated
-  // `runtime_response`, so the client's own pending map owns the correlation.
-  if (wsClient.protocolVersion === 2) {
-    return wsClient.sendRuntime(command, { timeoutMs });
-  }
-  return new Promise((resolve, reject) => {
-    const requestId = wsClient.send(command);
-    if (!requestId) {
-      reject(new Error(t("errors.wsNotConnected")));
-      return;
-    }
-    const timer = setTimeout(() => {
-      wsClient.removeEventListener("commandResponse", onResp);
-      reject(new Error(t("errors.requestTimeout")));
-    }, timeoutMs);
-    const onResp = (e) => {
-      if (e.detail?.id !== requestId) return;
-      clearTimeout(timer);
-      wsClient.removeEventListener("commandResponse", onResp);
-      if (e.detail.success === false) {
-        reject(new Error(e.detail.error || t("errors.requestFailed")));
-      } else {
-        resolve(e.detail.data);
-      }
-    };
-    wsClient.addEventListener("commandResponse", onResp);
-  });
+  // All runtime requests use v2 correlation. No legacy broker fallback exists.
+  return wsClient.sendRuntime(command, { timeoutMs });
 }
 
 /** Authoritative light tree refresh (entries + leafId only, no chat re-render). */
@@ -1930,7 +1809,7 @@ async function handleResumeBranch(entryId) {
     return;
   }
   try {
-    await transport.navigateTree(entryId, { port: getActivePort() });
+    await transport.navigateTree(entryId);
     // Pi emits session_tree; the event handler re-syncs chat + tree. Per the
     // design, resuming clears the composer (the old branch's draft belongs
     // to the old branch). The clear is programmatic (no input event), so
@@ -2288,7 +2167,7 @@ messagesContainer.addEventListener("messagefork", async (e) => {
     // `session_start { reason: "fork" }`; the resulting mirror_sync snapshot
     // re-renders the forked history and updates routing. We only nudge the
     // sidebar so the new forked session file appears in the list.
-    await transport.fork(entryId, getActivePort());
+    await wsRequest({ type: "fork", entryId });
     refreshSidebarAfterUserPrompt();
     // Design: after a fork the composer is prefilled with the forked user
     // message's text, awaiting edits — never auto-sent. Deferred to the
@@ -2329,7 +2208,7 @@ messagesContainer.addEventListener("messageedit", async (e) => {
     // leaf = the user entry's parent, editorText = the original prompt. The
     // resulting session_tree event re-syncs chat + tree; the old branch's
     // descendants become the Info tree's inactive branch.
-    await transport.navigateTree(entryId, { port: getActivePort() });
+    await transport.navigateTree(entryId);
     if (typeof text === "string") {
       messageInput.value = text;
       messageInput.style.height = "auto";
@@ -2370,13 +2249,6 @@ wsClient.addEventListener("disconnected", () => {
   updateConnectionStatus("disconnected");
   sidebar.clearStreaming();
 
-  // Deferred session switch requires agent_end to complete, which won't fire
-  // after a crash/disconnect. Unblock input immediately so the user isn't stuck.
-  if (pendingSessionSwitchPath) {
-    pendingSessionSwitchPath = null;
-    updateUI();
-  }
-
   // If the streaming state is still true 3 s after disconnect (pi likely
   // crashed — agent_end won't re-fire after reconnect), unlock the UI.
   // Brief intentional reconnects (Case 1 session switch) complete in < 100 ms
@@ -2395,42 +2267,40 @@ wsClient.addEventListener("reconnectFailed", () => {
   messageRenderer.renderError(t("errors.connectionLost"));
 });
 
-wsClient.addEventListener("rpcEvent", (e) => {
-  handleRPCEvent(e.detail);
-});
-
-wsClient.addEventListener("serverError", (e) => {
-  messageRenderer.renderError(e.detail.message);
-});
-
-// The broker could not deliver a command to any live pi process. For a tracked
-// prompt this means the user's message was dropped — surface it, clear the
-// optimistic streaming/typing state, and restore the text so it isn't lost.
-wsClient.addEventListener("commandUndeliverable", (e) => {
-  const { requestId, reason, command } = e.detail || {};
+wsClient.addEventListener("runtimeError", (e) => {
+  const { requestId, code, message } = e.detail || {};
   const pending = requestId ? inFlightPrompts.get(requestId) : null;
-  if (!pending) {
-    console.warn("[WS] command undeliverable:", { command, reason, requestId });
-    return;
-  }
+  if (!pending) return;
   clearTimeout(pending.timer);
   inFlightPrompts.delete(requestId);
   state.setStreaming(false);
   showTypingIndicator(false);
-  const detail =
-    reason === "no_route"
-      ? t("errors.commandUndeliverableNoRoute")
-      : t("errors.commandUndeliverableUnreachable");
-  messageRenderer.renderError(t("errors.messageNotDelivered", { detail }));
+  messageRenderer.renderError(t("errors.messageNotDelivered", { detail: message || code }));
   if (pending.message && !messageInput.value.trim()) {
     messageInput.value = pending.message;
     messageInput.style.height = "auto";
   }
 });
 
-// Mirror mode: receive full state snapshot on connect
-wsClient.addEventListener("mirrorSync", (e) => {
-  handleMirrorSync(e.detail);
+wsClient.addEventListener("runtimeEvent", (e) => {
+  const frame = e.detail;
+  if (!frame?.event) return;
+  handleRPCEvent({ ...frame.event, __target: frame.target, __sequence: frame.sequence });
+});
+
+wsClient.addEventListener("runtimeSnapshot", (e) => {
+  const frame = e.detail;
+  const snapshotState = frame?.state || {};
+  const pi = snapshotState.pi && typeof snapshotState.pi === "object" ? snapshotState.pi : {};
+  handleMirrorSync({
+    ...pi,
+    workspaceId: frame.target?.workspaceId,
+    sessionId: frame.target?.sessionId,
+    instanceId: frame.target?.instanceId,
+    sequence: frame.sequence,
+    messages: snapshotState.messages || [],
+    stats: snapshotState.stats || {},
+  });
 });
 
 // ═══════════════════════════════════════
@@ -2438,24 +2308,7 @@ wsClient.addEventListener("mirrorSync", (e) => {
 // ═══════════════════════════════════════
 
 function handleRPCEvent(event) {
-  const eventSessionFile = event?.__broker?.sessionId || null;
-  const eventSourcePort = event?.__broker?.sourcePort ?? null;
-
-  // Port-based guard: the broker broadcasts every upstream's events to all UI
-  // clients, so an event from a *different* pi process (e.g. the previous
-  // session that is still streaming after the user started a new parallel
-  // session) must never render into the foreground UI. A brand-new session
-  // has no session file yet, so the sessionId guard below can't catch this —
-  // the source port is the only reliable discriminator at that moment.
-  if (
-    typeof eventSourcePort === "number" &&
-    typeof foregroundPort === "number" &&
-    eventSourcePort !== foregroundPort
-  ) {
-    if (eventSessionFile) handleBackgroundRPCEvent(eventSessionFile, event);
-    return;
-  }
-
+  const eventSessionFile = event?.__target?.sessionId || null;
   if (
     eventSessionFile &&
     sidebar.activeSessionFile &&
@@ -2465,10 +2318,8 @@ function handleRPCEvent(event) {
     return;
   }
 
-  // While the user is previewing a different session, suppress all live
-  // rendering so the history view isn't overwritten by streaming output.
-  // agent_end still needs to fire so we can complete the deferred switch.
-  if (pendingSessionSwitchPath && event.type !== "agent_end") return;
+  // While user previews a different session, suppress live rendering so
+  // history view is not overwritten by another runtime's output.
 
   switch (event.type) {
     case "agent_start":
@@ -2495,7 +2346,6 @@ function handleRPCEvent(event) {
       // session — with its first message as the title — show up immediately.
       if (pendingNewSessionRefresh) {
         refreshSidebarForNewSession(event).catch(() => {});
-        pollInstances().catch(() => {});
       }
       break;
     case "message_update":
@@ -2548,7 +2398,7 @@ function handleRPCEvent(event) {
       // Pi moved the active leaf natively (Info panel Resume / message Edit).
       // Re-sync from the authoritative snapshot: chat re-renders the new
       // active path and the Info tree flips active/inactive state.
-      wsClient.send({ type: "mirror_sync_request" });
+      wsClient.requestSnapshot();
       break;
   }
 }
@@ -2568,7 +2418,6 @@ function handleBackgroundRPCEvent(sessionFile, event) {
       sidebar.setStreaming(sessionFile, false);
       sidebar.markUnread(sessionFile);
       sidebar.loadSessions({ quiet: true }).catch(() => {});
-      pollInstances().catch(() => {});
       break;
     }
     case "message_end":
@@ -2660,20 +2509,15 @@ async function refreshSidebarForNewSession(event = null, attempt = 0) {
   }
 
   if (attempt < 4) {
-    await pollInstances().catch(() => {});
     await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
     return refreshSidebarForNewSession(event, attempt + 1);
   }
 }
 
 function getCurrentLiveSessionFile(event = null) {
-  return resolveNewSessionLiveFile({
-    event,
-    liveInstances,
-    foregroundPort,
-    mirrorActiveSessionFile,
-    excludedSessionFile: pendingNewSessionPreviousFile,
-  });
+  return [event?.__target?.sessionId, mirrorActiveSessionFile].find(
+    (file) => file && file !== pendingNewSessionPreviousFile,
+  );
 }
 
 function handleAgentSettled() {
@@ -2786,21 +2630,6 @@ function handleAgentEnd(event = null) {
   currentStreamingElement = null;
   currentStreamingText = "";
   updateUI();
-
-  // Deferred session switch: user clicked a history session while streaming.
-  // Now that the agent run is done, tell pi to switch — no abort needed.
-  if (pendingSessionSwitchPath) {
-    const targetPath = pendingSessionSwitchPath;
-    pendingSessionSwitchPath = null;
-    const live = getCurrentLiveSessionFile();
-    if (live) sidebar.setStreaming(live, false);
-    foregroundPort = findPortForSession(liveInstances, targetPath, foregroundPort);
-    syncWorkspaceIndicatorFromInstances();
-    transport.switchSession(targetPath, foregroundPort).catch((e) => {
-      messageRenderer.renderError(t("errors.failedToSwitchSession", { error: e }));
-    });
-    return;
-  }
 
   const live = getCurrentLiveSessionFile(event);
   if (live) {
@@ -2943,8 +2772,8 @@ function handleMessageUpdate(event) {
 
 function handleMessageEnd(message, eventSessionFile = null, entryId = null) {
   if (message?.role === "user" && entryId) {
-    // Pi persisted the user entry (embedded-server enriches message_end with
-    // the leaf id). Tag the live-rendered element so Info-tree scroll and
+    // Pi persisted user entry and included leaf id. Tag live-rendered element
+    // so Info-tree scroll and
     // Fork/Edit work immediately, before the next full snapshot.
     const untagged = messagesContainer.querySelector(".message.user:not([data-entry-id])");
     if (untagged) untagged.dataset.entryId = entryId;
@@ -3106,10 +2935,10 @@ function handleExtensionUIRequest(event) {
       }
       dialogHandler.showNotification(event);
       break;
-    // `setStatus` and `setWidget` are informational labels/widgets the
-    // embedded server and pi extensions push (e.g. "Embedded: 127.0.0.1:47821",
-    // plannotator progress). They have no browser-side surface, so acknowledge
-    // them silently instead of logging unknown-method warnings. The rpiv-todo
+    // `setStatus` and `setWidget` are informational labels/widgets Pi
+    // extensions push (e.g. plannotator progress). They have no browser-side
+    // surface, so acknowledge them silently instead of logging unknown-method
+    // warnings. The rpiv-todo
     // extension is the exception — its `setWidget` with widgetKey="rpiv-todos"
     // asks the host UI to surface the mirror, so expand it instead.
     case "setStatus":
@@ -3244,10 +3073,8 @@ function clearMessageQueue() {
 // Prompts are sent fire-and-forget over the WebSocket. The broker replies with
 // `command_undeliverable` (correlated by requestId) when it cannot route the
 // command to a live pi process. We track in-flight prompt requestIds here so the
-// `commandUndeliverable` handler can tell a real dropped prompt apart from
-// background/system commands and recover the user's text. Entries self-expire:
-// the broker decides deliverability synchronously, so anything not reported
-// undeliverable within a few seconds was forwarded successfully.
+// Runtime errors are correlated by requestId so a dropped prompt restores its
+// text instead of silently disappearing. Entries self-expire after dispatch.
 const inFlightPrompts = new Map();
 
 function trackPromptDelivery(requestId, message) {
@@ -3259,7 +3086,6 @@ function trackPromptDelivery(requestId, message) {
 function refreshSidebarAfterUserPrompt() {
   const refresh = () => {
     sidebar.loadSessions({ quiet: true }).catch(() => {});
-    pollInstances().catch(() => {});
   };
   refresh();
   setTimeout(refresh, 500);
@@ -3476,15 +3302,35 @@ const HOST_CONTROL_COMMANDS = new Map([
   ["is_dev", () => transport.isDev()],
 ]);
 
-// No native implementation exists yet for these legacy `/api/rpc` commands.
-// They fail loudly (visible status + console) instead of returning an empty
-// success, which is how the retired embedded-server surface used to mask gaps.
-const UNSUPPORTED_RPC_COMMANDS = new Set([
-  "list_skills",
-  "list_skill_inventory",
-  "set_skill_enabled",
-  "list_package_skill_inventory",
-  "set_default_thinking_level",
+// Skills surfaces were retired with /api/rpc and are now native host
+// controls; the slash-command list reads the runtime's own command registry
+// (get_commands), so a `/skill:` typed in the composer always matches Pi.
+const RUNTIME_GET_COMMANDS_TIMEOUT_MS = 15000;
+async function listSkillsViaRuntime() {
+  const data = await wsRequest({ type: "get_commands" }, RUNTIME_GET_COMMANDS_TIMEOUT_MS);
+  const commands = Array.isArray(data?.commands) ? data.commands : [];
+  return {
+    skills: commands
+      .filter(
+        (command) =>
+          command?.source === "skill" &&
+          typeof command?.name === "string" &&
+          command.name.length > 0,
+      )
+      .map((command) => ({
+        command: `/${command.name}`,
+        name: command.name.replace(/^skill:/, ""),
+        description: typeof command?.description === "string" ? command.description.trim() : "",
+        scope: command?.location === "project" ? "project" : "personal",
+      })),
+  };
+}
+const SKILL_HOST_COMMANDS = new Map([
+  ["list_skills", () => listSkillsViaRuntime()],
+  ["list_skill_inventory", (cmd) => transport.listSkillInventory(cmd.scope)],
+  ["list_package_skill_inventory", (cmd) => transport.listPackageSkillInventory(cmd.scope)],
+  ["set_skill_enabled", (cmd) => transport.setSkillEnabled(cmd.scope, cmd.target, cmd.enabled)],
+  ["set_default_thinking_level", (cmd) => transport.setDefaultThinkingLevel(cmd.level)],
 ]);
 
 function nativeRpcCommand(cmd) {
@@ -3502,7 +3348,22 @@ function nativeRpcCommand(cmd) {
       (error) => ({ success: false, error: error?.message || String(error) }),
     );
   }
-  if (UNSUPPORTED_RPC_COMMANDS.has(type) || typeof type !== "string") {
+  if (SKILL_HOST_COMMANDS.has(type) || typeof type !== "string") {
+    const handler = SKILL_HOST_COMMANDS.get(type);
+    if (!handler) {
+      return Promise.resolve({
+        success: false,
+        error: `${type} has no native runtime implementation`,
+      });
+    }
+    return Promise.resolve()
+      .then(() => handler(cmd))
+      .then(
+        (data) => ({ success: true, data: data ?? {} }),
+        (error) => ({ success: false, error: error?.message || String(error) }),
+      );
+  }
+  if (typeof type !== "string") {
     return Promise.resolve({
       success: false,
       error: `${type || "command"} has no native runtime implementation`,
@@ -4232,8 +4093,8 @@ async function applySessionUiProfile(sessionFile) {
     (entry) => entry.provider === profile.provider && entry.id === profile.modelId,
   );
   if (!model) {
-    // availableModels may not have loaded yet (cold mirror_sync racing the
-    // /api/models fetch). Log instead of silently dropping the context window.
+    // availableModels may not have loaded yet during cold mirror_sync. Log
+    // instead of silently dropping context window.
     console.warn(
       "[session-ui] profile model not yet in registry:",
       `${profile.provider}/${profile.modelId}`,
@@ -4301,11 +4162,7 @@ function snapshotReportedProfile(reported) {
 }
 
 async function resetUiForNewSession() {
-  pendingNewSessionPreviousFile =
-    mirrorActiveSessionFile ||
-    sidebar.activeSessionFile ||
-    liveInstances.find((i) => i?.port === foregroundPort)?.sessionFile ||
-    null;
+  pendingNewSessionPreviousFile = mirrorActiveSessionFile || sidebar.activeSessionFile || null;
   state.reset();
   clearConversationRenderers();
   filePreviewFollow.clear();
@@ -4315,7 +4172,6 @@ async function resetUiForNewSession() {
   resolveAndApplyFocus();
   mirrorActiveSessionFile = null;
   viewingActiveSession = true;
-  pendingSessionSwitchPath = null;
   restoreSessionUiState(null);
   updateMirrorInputState();
   updateUI();
@@ -4327,33 +4183,7 @@ async function resetUiForNewSession() {
   // doesn't persist a brand-new session to disk until the first message round-trip.
   pendingNewSessionRefresh = true;
 
-  pollInstances().catch(() => {});
   sidebar.loadSessions().catch(() => {});
-}
-
-async function activateNewParallelSession(port, cwd) {
-  logSessionRoute("activateNewParallelSession:start", { port, cwd });
-  foregroundPort = port;
-  portSessionMap.delete(port);
-  if (cwd) {
-    foregroundWorkspacePath = cwd;
-    updateWorkspaceIndicator(cwd);
-    // Defer the file browser load: the new pi's server is not yet scoped to
-    // `cwd` until its session_start fires. Setting the pending token makes
-    // `refreshFileBrowserForWorkspace` (including the 5s poll path) skip the
-    // load; `handleMirrorSync` clears it and fires the authoritative load once
-    // the new server confirms. sessionFile is null — the file isn't assigned
-    // until pi's first message round-trip.
-    pendingFileBrowserWorkspace = deferFileBrowserWorkspace(null, cwd, fileBrowserWorkspacePath);
-  }
-  wsClient.setRoutingContext({
-    workspaceId: `workspace:${cwd || getCurrentWorkspacePath() || "unknown"}`,
-    sessionId: null,
-    sourcePort: foregroundPort,
-  });
-  await resetUiForNewSession();
-  pollInstances().catch(() => {});
-  logSessionRoute("activateNewParallelSession:done", { port, cwd });
 }
 
 async function newSession() {
@@ -4362,40 +4192,15 @@ async function newSession() {
     // `new_session` RPC aborts/settles any active stream safely (it persists
     // the aborted turn to the old session before switching), so there is no
     // need to spawn a dedicated process while streaming. Spawning a parallel
-    // process would force a cross-port page navigation (full reload + white
-    // flash), which we deliberately avoid.
+    // process would force a full page navigation and white flash, which we
+    // deliberately avoid.
     await startInWindowNewSession({
       transport,
       getCurrentCwd: getCurrentWorkspacePath,
-      getCurrentPort: getActivePort,
-      fetchInstances,
       navigate: navigateInWindow,
       onBeforeSwap: onBeforeInstanceSwap,
-      shouldSpawnParallel: () => false,
-      onInPlaceSessionCreated: () => {
-        resetUiForNewSession().catch(() => {});
-      },
-      onParallelSessionCreated: activateNewParallelSession,
       renderError: (message) => messageRenderer.renderError(message),
     });
-    return;
-  }
-
-  if (canUseSessionControl()) {
-    lastInputTokens = 0;
-    resetHeaderStatusBar();
-    updateTokenUsage();
-    try {
-      await transport.newSession(getActivePort());
-      await resetUiForNewSession();
-    } catch (_err) {
-      messageRenderer.renderError(t("errors.newSessionFailed"));
-      return;
-    }
-    if (isMobile()) {
-      sidebarEl.classList.add("collapsed");
-      sidebarOverlay.classList.remove("visible");
-    }
     return;
   }
 
@@ -4452,14 +4257,8 @@ async function handleNewProjectChat(project) {
     const launched = await startNewProjectChat({
       project,
       transport,
-      getCurrentPort: getActivePort,
       getCurrentCwd: getCurrentWorkspacePath,
       shouldSpawnParallel: () => mobileClientMode,
-      onInPlaceSessionCreated: () => {
-        resetUiForNewSession().catch(() => {});
-      },
-      onParallelSessionCreated: mobileClientMode ? null : activateNewParallelSession,
-      fetchInstances,
       navigate: navigateInWindow,
       onBeforeSwap: onBeforeInstanceSwap,
       beforeWorkspaceTransition: prepareEphemeralWorkspaceTransition,
@@ -4491,7 +4290,6 @@ async function handleSessionSelectImpl(session, project) {
     selectedSession: session?.filePath,
     projectPath: project?.path,
     projectDir: project?.dirName,
-    liveInstances,
   });
   // Drop the previous session's todo snapshot before any async work. The
   // history load below is the only path that re-hydrates the panel, and if
@@ -4503,27 +4301,14 @@ async function handleSessionSelectImpl(session, project) {
   // let a stale toolCallId surface another session's file.
   filePreviewFollow.clear();
   cancelFileBrowserRefresh();
-  // An explicit session selection supersedes any pending deferred switch.
-  // Leaving it set would (a) suppress all live rendering for the newly
-  // selected session via the `pendingSessionSwitchPath` guard in
-  // `handleRPCEvent`, and (b) yank the user to the stale deferred target on
-  // the next `agent_end`. Clearing it here is what keeps tool-call/streaming
-  // updates flowing after an A → B → A switch.
-  if (pendingSessionSwitchPath && pendingSessionSwitchPath !== session.filePath) {
-    logSessionRoute("select:clear-stale-deferred", {
-      pendingSessionSwitchPath,
-      selectedSession: session?.filePath,
-    });
-    pendingSessionSwitchPath = null;
-  }
   persistComposerDraft();
   sidebar.setActive(session.filePath);
   restoreSessionUiState(session.filePath);
   resolveAndApplyFocus();
-  const targetLiveInstance = liveInstances.find(
-    (instance) => instance.sessionFile === session.filePath,
-  );
-  foregroundPort = findPortForSession(liveInstances, session.filePath, foregroundPort);
+  const targetLiveInstance =
+    wsClient.getRuntimeTarget()?.sessionId === session.filePath
+      ? wsClient.getRuntimeTarget()
+      : null;
   // Record the deferred target BEFORE touching the workspace indicator. The
   // mirror_sync handler consumes this token to fire the authoritative file-tree
   // load once the new server's session_start confirms the switch.
@@ -4533,13 +4318,9 @@ async function handleSessionSelectImpl(session, project) {
     selectedWorkspacePath,
     fileBrowserWorkspacePath,
   );
-  // Cross-workspace select: the session's recorded cwd owns the
-  // workspace label and file tree, regardless of whether a live pi for it
-  // exists yet. `syncWorkspaceIndicatorFromInstances` reads from
-  // liveInstances (which is stale here — foregroundPort still points at the
-  // previous workspace's process for a history session), so set the
-  // foreground workspace from the session cwd explicitly. The pending token
-  // defers the file-tree load until mirror_sync confirms the new server.
+  // Cross-workspace select: session's recorded cwd owns workspace label and
+  // file tree, regardless of whether a runtime for it exists yet. The pending
+  // token defers the file-tree load until mirror sync confirms target.
   if (selectedWorkspacePath && selectedWorkspacePath !== fileBrowserWorkspacePath) {
     foregroundWorkspacePath = selectedWorkspacePath;
     updateWorkspaceIndicator(selectedWorkspacePath);
@@ -4553,49 +4334,31 @@ async function handleSessionSelectImpl(session, project) {
     }
     // A workspace switch changes the HTTP origin that serves the file API.
     // Navigate before any branch can fall through to an in-process switch.
-    const targetPort = targetLiveInstance?.port ?? foregroundPort;
-    if (typeof targetPort === "number") {
-      try {
-        if (targetPort !== getCurrentPort()) {
-          await navigateToWorkspacePort(selectedWorkspacePath, targetPort);
-          return;
-        }
-        // A same-port workspace switch does not navigate, but it still must
-        // commit the owner workspace transition. Otherwise the broker keeps
-        // the first workspace's root and generation forever, and every Git
-        // status request continues to read that original repository.
-        const prepared = await transport.prepareWorkspaceTarget(selectedWorkspacePath, {
-          targetPort,
-          reuseExisting: true,
-        });
-        if (typeof prepared?.transitionGeneration !== "number") {
-          throw new Error("Workspace transition was not prepared");
-        }
-        await transport.commitWorkspaceTransition(prepared.transitionGeneration);
-      } catch (error) {
-        console.error("[Session route] workspace transition failed:", error);
+    try {
+      const prepared = await transport.prepareWorkspaceTarget(selectedWorkspacePath, {
+        sessionPath: session.filePath,
+        reuseExisting: Boolean(targetLiveInstance),
+      });
+      if (typeof prepared?.transitionGeneration !== "number") {
+        throw new Error("Workspace transition was not prepared");
       }
+      await transport.commitWorkspaceTransition(prepared.transitionGeneration);
+      navigateInWindow(prepared.targetOrigin, { targetCwd: selectedWorkspacePath });
+      return;
+    } catch (error) {
+      console.error("[Session route] workspace transition failed:", error);
+      messageRenderer.renderError(t("errors.failedToSwitchSession", { error }));
+      return;
     }
-    // Clear stale Git panel state so old workspace files never leak in.
-    gitPanel.snapshot = null;
-    gitPanel.notGitRepo = false;
-    gitPanel.gitUnavailable = false;
-    gitPanel.selected = new Set();
-    gitPanel.commitMessage = "";
-    gitPanel.pendingConfirmationToken = null;
-    gitPanel.historyPanel?.clearSession();
-    if (!gitPanelElement.classList.contains("hidden")) void gitPanel.refresh();
   } else {
-    syncWorkspaceIndicatorFromInstances();
+    updateWorkspaceIndicator(foregroundWorkspacePath);
   }
-  // Do not load the target workspace yet. `switch_session` only acknowledges
-  // the RPC write; the current server remains scoped to the previous
-  // workspace until its replacement extension sends a mirror snapshot.
+  // Native transitions above navigate to a host-origin workspace route. The
+  // remaining path is browser/dev compatibility only.
   if (session.filePath) {
     wsClient.setRoutingContext({
       workspaceId: `workspace:${selectedWorkspacePath || getCurrentWorkspacePath() || "unknown"}`,
       sessionId: session.filePath,
-      sourcePort: foregroundPort,
     });
   }
   logSessionRoute("select:routed", {
@@ -4609,7 +4372,6 @@ async function handleSessionSelectImpl(session, project) {
   // Native host: switch session via control command to the current pi instance
   if (nativeAvailable() && session.filePath) {
     pendingMirrorSessionFile = session.filePath;
-    const wasStreaming = state.isStreaming;
     clearMessageQueue();
     state.reset();
     if (sidebar.isStreaming(session.filePath)) {
@@ -4624,13 +4386,13 @@ async function handleSessionSelectImpl(session, project) {
     if (targetLiveInstance) {
       logSessionRoute("select:target-live-sync", {
         selectedSession: session.filePath,
-        targetPort: targetLiveInstance.port,
+        targetInstanceId: targetLiveInstance.instanceId,
       });
       mirrorActiveSessionFile = session.filePath;
       sessionInfo.refresh();
       viewingActiveSession = true;
       updateMirrorInputState();
-      wsClient.send({ type: "mirror_sync_request" });
+      wsClient.requestSnapshot();
       if (isMobile()) {
         sidebarEl.classList.add("collapsed");
         sidebarOverlay.classList.remove("visible");
@@ -4638,78 +4400,23 @@ async function handleSessionSelectImpl(session, project) {
       return;
     }
 
-    const selectedProjectCwd = selectedWorkspacePath;
-
-    // A non-streaming session switch can safely reuse the current Pi process.
-    // This preserves the single-page UI and lets the authoritative mirror
-    // snapshot update the server workspace before refreshing the file tree.
-    if (wasStreaming) {
-      if (transport.spawnSessionProcess) {
-        let targetPort = null;
-        try {
-          const cwd = selectedProjectCwd || getCurrentWorkspacePath();
-          targetPort = await transport.spawnSessionProcess(session.filePath, cwd);
-        } catch (e) {
-          console.error(
-            "[App] Failed to spawn session process, falling back to deferred/current switch:",
-            e,
-          );
-        }
-        if (targetPort != null) {
-          logSessionRoute("select:spawned-dedicated", {
-            selectedSession: session.filePath,
-            targetPort,
-          });
-          foregroundPort = targetPort;
-          portSessionMap.set(targetPort, session.filePath);
-          wsClient.setRoutingContext({
-            sessionId: session.filePath,
-            sourcePort: foregroundPort,
-          });
-          try {
-            await navigateToWorkspacePort(selectedWorkspacePath, targetPort);
-            return;
-          } catch (error) {
-            console.error("[Session route] workspace navigation failed:", error);
-          }
-          pollInstances().catch(() => {});
-          wsClient.send({ type: "mirror_sync_request" });
-          if (isMobile()) {
-            sidebarEl.classList.add("collapsed");
-            sidebarOverlay.classList.remove("visible");
-          }
-          return;
-        }
-      }
-      if (wasStreaming) {
-        messageRenderer.renderError("Failed to open session in its workspace process.");
-        if (isMobile()) {
-          sidebarEl.classList.add("collapsed");
-          sidebarOverlay.classList.remove("visible");
-        }
-        return;
-      }
-      // Fallback: defer the switch until the current agent run ends.
-      // This preserves the old safe behavior when spawn is unavailable or fails.
-      pendingSessionSwitchPath = session.filePath;
-      updateUI();
-      if (isMobile()) {
-        sidebarEl.classList.add("collapsed");
-        sidebarOverlay.classList.remove("visible");
-      }
-      return;
-    }
-
+    // Historical sessions get their own native runtime. Reusing current Pi
+    // process would require retired switch_session semantics and would stop
+    // any other session running in that process.
     try {
-      logSessionRoute("select:switch-current-process", {
-        selectedSession: session.filePath,
-        targetPort: foregroundPort,
+      const prepared = await transport.prepareWorkspaceTarget(selectedWorkspacePath, {
+        sessionPath: session.filePath,
+        forceNewSession: true,
+        reuseExisting: false,
       });
-      await transport.switchSession(session.filePath, foregroundPort);
-      wsClient.send({ type: "mirror_sync_request" });
-    } catch (e) {
+      if (typeof prepared?.transitionGeneration !== "number") {
+        throw new Error("Session runtime transition was not prepared");
+      }
+      await transport.commitWorkspaceTransition(prepared.transitionGeneration);
+      navigateInWindow(prepared.targetOrigin, { targetCwd: selectedWorkspacePath });
+    } catch (error) {
       if (pendingMirrorSessionFile === session.filePath) pendingMirrorSessionFile = null;
-      messageRenderer.renderError(t("errors.failedToSwitchSession", { error: e }));
+      messageRenderer.renderError(t("errors.failedToSwitchSession", { error }));
     }
     if (isMobile()) {
       sidebarEl.classList.add("collapsed");
@@ -4747,20 +4454,11 @@ async function renderSelectedSessionHistory(session, project) {
   }
 
   try {
-    const url = `/api/sessions/${encodeURIComponent(dirName)}/${encodeURIComponent(file)}`;
-    logSessionRoute("history:fetch", {
-      url,
+    const data = await transport.sessionHistory(session.id);
+    logSessionRoute("history:transport", {
       selectedSession: session.filePath,
-      dirName,
-      file,
+      sessionId: session.id,
     });
-    const res = await fetch(url);
-    logSessionRoute("history:fetch-result", {
-      url,
-      status: res.status,
-      ok: res.ok,
-    });
-    const data = await res.json();
     clearConversationRenderers();
     logSessionRoute("history:render", {
       selectedSession: session.filePath,
@@ -4797,11 +4495,7 @@ async function switchSession(sessionFile, session = null, project = null) {
 
       if (dirName && file) {
         try {
-          const res = await fetch(
-            `/api/sessions/${encodeURIComponent(dirName)}/${encodeURIComponent(file)}`,
-          );
-          console.log("[App] History fetch status:", res.status);
-          const data = await res.json();
+          const data = await transport.sessionHistory(session.id);
           console.log("[App] History entries:", data.entries?.length || 0);
 
           clearConversationRenderers();
@@ -4818,20 +4512,19 @@ async function switchSession(sessionFile, session = null, project = null) {
 
     // In mirror mode, check if this session is live on any instance
     if (isMirrorMode) {
-      const liveInstance = liveInstances.find((i) => i.sessionFile === sessionFile);
-      if (liveInstance) {
-        foregroundPort = liveInstance.port;
-        syncWorkspaceIndicatorFromInstances();
+      const liveTarget =
+        wsClient.getRuntimeTarget()?.sessionId === sessionFile ? wsClient.getRuntimeTarget() : null;
+      if (liveTarget) {
         mirrorActiveSessionFile = sessionFile;
         sessionInfo.refresh();
         viewingActiveSession = true;
         wsClient.setRoutingContext({
-          workspaceId: `workspace:${liveInstance.cwd || getCurrentWorkspacePath() || "unknown"}`,
+          workspaceId: liveTarget.workspaceId,
           sessionId: sessionFile,
-          sourcePort: foregroundPort,
+          instanceId: liveTarget.instanceId,
         });
         updateMirrorInputState();
-        wsClient.send({ type: "mirror_sync_request" });
+        wsClient.requestSnapshot();
         return;
       }
 
@@ -4840,20 +4533,20 @@ async function switchSession(sessionFile, session = null, project = null) {
       updateMirrorInputState();
 
       if (viewingActiveSession) {
-        // Re-request live state from the extension
-        wsClient.send({ type: "mirror_sync_request" });
+        // Re-request live state from HostServer
+        wsClient.requestSnapshot();
       }
-    } else {
-      const res = await fetch("/api/sessions/switch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionFile }),
+    } else if (sessionFile && session) {
+      const prepared = await transport.prepareWorkspaceTarget(session.cwd || project?.path, {
+        sessionPath: sessionFile,
+        forceNewSession: true,
+        reuseExisting: false,
       });
-
-      if (!res.ok) {
-        const err = await res.json();
-        messageRenderer.renderError(t("errors.failedToSwitchSession", { error: err.error }));
+      if (typeof prepared?.transitionGeneration !== "number") {
+        throw new Error("Session runtime transition was not prepared");
       }
+      await transport.commitWorkspaceTransition(prepared.transitionGeneration);
+      navigateInWindow(prepared.targetOrigin, { targetCwd: session.cwd || project?.path });
     }
   } catch (error) {
     console.error("[App] Failed to switch session:", error);
@@ -4884,27 +4577,21 @@ function handleMirrorSync(data) {
   // after the user switched to an older session). Such a stray snapshot must
   // NOT hijack the foreground UI: applying it would clobber the rendered
   // history AND — critically — reset the routing context to the background
-  // process's session/port, causing the user's next message to be sent into
+  // process's session, causing the user's next message to be sent into
   // that previous session instead of the one they're now viewing.
-  const syncPort = typeof data.port === "number" ? data.port : null;
-  const appliedForegroundSession = applyForegroundMirrorSession({
-    syncPort,
-    foregroundPort,
-    sessionFile: data.sessionFile,
-    expectedSessionFile: pendingMirrorSessionFile,
-    setMirrorActiveSessionFile: (filePath) => {
-      mirrorActiveSessionFile = filePath;
-    },
-    setSidebarActive: (filePath) => {
-      sidebar.setActive(filePath);
-      restoreSessionUiState(filePath);
-      resolveAndApplyFocus();
-    },
-  });
+  const receivedSessionFile = data.sessionFile || data.sessionId || null;
+  const currentTarget = wsClient.getRuntimeTarget();
+  const appliedForegroundSession =
+    (!pendingMirrorSessionFile || pendingMirrorSessionFile === receivedSessionFile) &&
+    (!currentTarget || currentTarget.sessionId === receivedSessionFile);
+  if (appliedForegroundSession && receivedSessionFile) {
+    mirrorActiveSessionFile = receivedSessionFile;
+    sidebar.setActive(receivedSessionFile);
+    restoreSessionUiState(receivedSessionFile);
+    resolveAndApplyFocus();
+  }
   if (!appliedForegroundSession) {
     logSessionRoute("mirrorSync:ignored-background", {
-      syncPort,
-      foregroundPort,
       sessionFile: data.sessionFile,
     });
     const bgFile = data.sessionFile || data.sessionId;
@@ -4932,14 +4619,13 @@ function handleMirrorSync(data) {
 
   if (
     pendingMirrorSessionFile &&
-    isExpectedMirrorSession(pendingMirrorSessionFile, data.sessionFile)
+    pendingMirrorSessionFile === (data.sessionFile || data.sessionId)
   ) {
     pendingMirrorSessionFile = null;
   }
 
   console.log("[Mirror] Received state snapshot:", data.entries?.length, "entries");
   isMirrorMode = true;
-  if (data.sessionFile) portSessionMap.set(foregroundPort, data.sessionFile);
 
   // Track the foreground session route.
   const pendingWorkspace = confirmDeferredFileBrowserWorkspace(
@@ -4948,7 +4634,7 @@ function handleMirrorSync(data) {
   );
   // The server's mirror workspace is authoritative. A sidebar project path can
   // differ from the session cwd (for example, when a session was moved or
-  // imported), and using it would make /api/files reject the path as outside
+  // imported), and using it would make host data reject the path as outside
   // the process workspace.
   const syncWorkspacePath = workspacePathFromId(data.workspaceId) || pendingWorkspace?.path || "";
   if (syncWorkspacePath) {
@@ -4959,11 +4645,23 @@ function handleMirrorSync(data) {
   if (pendingWorkspace) {
     pendingFileBrowserWorkspace = null;
   }
+  const authoritativeWorkspaceId =
+    (syncWorkspacePath && `workspace:${syncWorkspacePath}`) ||
+    data.workspaceId ||
+    `workspace:${getCurrentWorkspacePath() || "unknown"}`;
+  const authoritativeSessionId = data.sessionId || data.sessionFile || null;
+  // Commit authoritative route before any host data or Git probe. Those v2
+  // requests derive workspace scope from WebSocketClient's current route.
+  wsClient.setRoutingContext({
+    workspaceId: authoritativeWorkspaceId,
+    sessionId: authoritativeSessionId,
+    instanceId: data.instanceId,
+  });
   // Refresh the file tree whenever the mirror-synced workspace differs from
   // the one currently shown. The select path defers its load to here (via
   // pendingWorkspace), but a workspace can also change without a deferred
-  // token — e.g. a reload landing on a new port, or an in-place switch whose
-  // pending token was cleared by an earlier sync. Force-refreshing on any
+  // token — e.g. a reload landing on a new runtime, or an in-place switch
+  // whose pending token was cleared by an earlier sync. Force-refreshing on any
   // divergence is what keeps the tree in sync once the server's session_start
   // has rebound latestCtx to the right workspace.
   if (syncWorkspacePath && syncWorkspacePath !== fileBrowserWorkspacePath) {
@@ -4994,14 +4692,6 @@ function handleMirrorSync(data) {
     // truth for the newly-active workspace.
     void syncGitEntryForWorkspace(data.workspaceId);
   }
-  wsClient.setRoutingContext({
-    workspaceId:
-      (syncWorkspacePath && `workspace:${syncWorkspacePath}`) ||
-      data.workspaceId ||
-      `workspace:${getCurrentWorkspacePath() || "unknown"}`,
-    sessionId: data.sessionId || data.sessionFile || null,
-    sourcePort: data.port || foregroundPort,
-  });
   viewingActiveSession = true;
   // The snapshot's `isStreaming` comes from the pi process's instantaneous
   // `!ctx.isIdle()`, which can momentarily read false between messages / tool
@@ -5089,30 +4779,6 @@ function updateMirrorLiveIndicator() {
     el.classList.toggle("mirror-live", sidebar.streamingFiles.has(el.dataset.filePath));
   });
 }
-
-// Poll for running instances to mark all live sessions
-async function pollInstances() {
-  try {
-    const res = await fetch("/api/instances");
-    if (res.ok) {
-      const data = await res.json();
-      liveInstances = data.instances || [];
-      logSessionRoute("instances:poll", {
-        count: liveInstances.length,
-        instances: liveInstances,
-      });
-      updateMirrorLiveIndicator();
-      syncWorkspaceIndicatorFromInstances();
-      if (document.querySelector(".welcome")) {
-        renderWorkspaceWelcome();
-      }
-    }
-  } catch {}
-}
-
-// Poll every 5 seconds
-setInterval(pollInstances, 5000);
-pollInstances();
 
 // Enable/disable input based on whether we're viewing the live session
 function updateMirrorInputState() {
@@ -5509,11 +5175,7 @@ let lanUrls = [];
 
 async function refreshLanUrl() {
   try {
-    const res = await fetch("/api/health");
-    if (!res.ok) {
-      return;
-    }
-    const data = await res.json();
+    const data = await transport.hostHealth();
     tailscaleUrl = typeof data?.tailscaleUrl === "string" ? data.tailscaleUrl : tailscaleUrl;
     lanUrls = Array.isArray(data?.lanUrls)
       ? data.lanUrls.filter((value) => typeof value === "string" && value.trim())
@@ -5583,14 +5245,7 @@ function updateUI() {
     flushQueue();
   }
 
-  // Viewing a history session while original is still streaming —
-  // block input until agent_end triggers the deferred switch_session.
-  if (pendingSessionSwitchPath) {
-    messageInput.disabled = true;
-    sendBtn.disabled = true;
-    abortBtn.classList.add("hidden");
-    messageInput.placeholder = t("input.waitingForSession");
-  } else if (onboarding.canQuery) {
+  if (onboarding.canQuery) {
     messageInput.placeholder = t("input.typeMessage");
   }
 }
@@ -5598,10 +5253,6 @@ function updateUI() {
 // ═══════════════════════════════════════
 // WebSocket session switch handler
 // ═══════════════════════════════════════
-
-wsClient.addEventListener("sessionSwitch", () => {
-  console.log("[App] Session switched");
-});
 
 // ═══════════════════════════════════════
 // Theme / Settings
@@ -5747,16 +5398,15 @@ const updater = createAppUpdater({
 });
 void updater.initUpdaterUI();
 
-// Native capabilities arrive asynchronously over the broker WS (the handshake
-// frame lands right after connect). Re-evaluate native-gated UI once it's known
-// so buttons that were hidden on first paint appear when attached to the host.
+// Host capabilities arrive asynchronously after the v2 hello handshake.
+// Re-evaluate native-gated UI once authenticated.
 // App-global registry changed on the host (any window or prune). Refresh the
 // sidebar everywhere so all native windows stay in sync.
 wsClient.addEventListener("registryChanged", () => {
   void sidebar.loadSessions({ quiet: true });
 });
 
-wsClient.addEventListener("capabilities", () => {
+wsClient.addEventListener("hostCapabilities", () => {
   refreshHeaderOpenAppButton();
   void loadHeaderOpenApps();
   void updater.initUpdaterUI();
@@ -5769,8 +5419,8 @@ wsClient.addEventListener("capabilities", () => {
     void packageManager?.refresh();
     void extensionUpdateIndicator?.refresh();
   }
-  // First capabilities frame may arrive after the initial loadSessions:
-  // switch the sidebar to its registry data source now that native is known.
+  // The first authenticated hello may arrive after initial loadSessions;
+  // refresh registry-backed sidebar data now.
   void sidebar.loadSessions({ quiet: true });
   void reconcilePreferencesOnce();
 });
@@ -5939,6 +5589,7 @@ async function openSettings(tabKey = "general", options = {}) {
     if (!settingsPanel.classList.contains("hidden")) loadPiVersion();
   }, 300);
   void refreshLanUrl();
+  void mobileAccessCard.refresh();
   // Fetch current state for toggles
   try {
     const data = await rpcCommand({ type: "get_state" }, null, true);
@@ -6026,7 +5677,17 @@ const settingsToggles = setupSettingsToggles({
   },
 });
 
-const configGateway = new LegacyConfigGateway({ transport });
+const mobileAccessCard = setupMobileAccess({
+  transport,
+  toggle: document.getElementById("toggle-mobile-access"),
+  details: document.getElementById("mobile-access-details"),
+  pairBtn: document.getElementById("mobile-pair-btn"),
+  pairing: document.getElementById("mobile-access-pairing"),
+  qrCanvas: document.getElementById("mobile-qr-canvas"),
+  tokenEl: document.getElementById("mobile-pair-token"),
+  restartHint: document.getElementById("mobile-restart-hint"),
+});
+const configGateway = new ConfigGateway({ transport });
 ({ loadInlineConfigEditor, loadAgentsMdEditor, loadAppendSystemMdEditor } = setupSettingsConfig({
   configGateway,
   clearSettingsSaveMessage,
@@ -6226,8 +5887,6 @@ async function handleOpenFolder() {
   try {
     await openFolderAsWorkspace({
       transport,
-      fetchInstances,
-      getCurrentPort: getActivePort,
       navigate: navigateInWindow,
       onBeforeSwap: onBeforeInstanceSwap,
       beforeWorkspaceTransition: prepareEphemeralWorkspaceTransition,
@@ -6245,11 +5904,10 @@ restorePageFromHash();
 wsClient.connect();
 dismissBootSwapOverlayWhenReady();
 
-// --- Cross-port navigation state restore (B) + sidebar cache (C) ---
-// If the page booted because of a workspace/session swap, restore the
-// snapshot taken right before the navigation so scroll, sidebar expansion,
-// and input draft survive. Separately, hydrate the sidebar from a cached
-// project tree so it renders instantly before the real loadSessions fetch.
+// --- Native navigation state restore (B) + sidebar cache (C) ---
+// If page booted because of workspace/session swap, restore the snapshot taken
+// right before navigation so scroll, sidebar expansion, and input draft survive.
+// Separately, hydrate sidebar from cached project tree before real loadSessions.
 const cachedProjects = readCachedSidebarProjects();
 // readCachedSidebarProjects already filters to complete projects (valid
 // workspaceId + path + sessions array), so hydration never renders broken
@@ -6266,7 +5924,7 @@ if (cachedProjects) {
 renderWorkspaceWelcome();
 sidebar.loadSessions().then((projects) => {
   sessionsLoaded = true;
-  // Cache the fresh sidebar data for the next cross-port navigation (C).
+  // Cache fresh sidebar data for next native navigation (C).
   try {
     cacheSidebarProjects(projects || sidebar.projects);
   } catch {

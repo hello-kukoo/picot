@@ -4,7 +4,7 @@
   "description": "Default desktop capability for Pi Agent",
   "local": true,
   "remote": {
-    "urls": ["http://localhost:*"]
+    "urls": ["http://localhost:*", "http://127.0.0.1:*"]
   },
   "windows": ["*"],
   "permissions": [

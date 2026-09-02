@@ -244,20 +244,20 @@ Picot 目前发布的 macOS 版本未经 Apple 开发者 ID 签名/公证，系�
 
 ### 架构
 
-Picot 启动 Rust `HostServer` 和受管的 native `pi --mode rpc` 进程。WebView 连接 host 的 `/v2/ws`，host 再通过 stdio RPC 与 Pi 通信。打包的 `embedded-server.mjs` 扩展负责 Tauri WebView 所通信的 HTTP/WebSocket 层（静态资源、`/api/*`、`/ws`）；`picot-bridge.mjs` 只注册 Picot 专用 Pi 命令。
+Picot 启动 Rust `HostServer` 和受管的 native `pi --mode rpc` 进程。WebView 只连接 host 的 `/v2/ws`，host 再通过 stdio RPC 与 Pi 通信。`picot-bridge.mjs` 只注册 Picot 专用 Pi 命令；Pi 不再提供 HTTP 或 WebSocket 服务。
 
 ```
 ┌──────────────────────────────────────────────────────┐
 │ Picot .app                                       │
 │                                                      │
 │   Tauri + native HostServer (Rust)                   │
-│      ├─► 启动 pi --mode rpc --extension embedded-server.mjs --extension picot-bridge.mjs │
+│      ├─► 启动 pi --mode rpc --extension picot-bridge.mjs                         │
 │      ├─► 通过 /v2/ws 桥接 stdio RPC 帧              │
 │      └─► OS 窗口 ──► WebView ──► native host HTTP    │
 │                                                      │
 │   resources/                                         │
 │      ├─ public/             (前端)                   │
-│      ├─ extensions/         (embedded-server + picot-bridge) │
+│      ├─ extensions/         (picot-bridge + 可选 Pi 扩展) │
 │      └─ pi/                 (bun 编译的 pi 二进制)   │
 └──────────────────────────────────────────────────────┘
                        │

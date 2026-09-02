@@ -2,7 +2,7 @@
 // ABOUTME: Locks per-file targets so a settings save can never write the wrong file.
 
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { LegacyConfigGateway } from "./config-gateway-legacy.js";
+import { ConfigGateway } from "./config-gateway.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -18,30 +18,71 @@ function fakeTransport() {
     openExternal: vi.fn(async () => ({})),
     getOauthLoginCapabilities: vi.fn(async () => ({ providers: [] })),
     logoutOauthLogin: vi.fn(async () => ({})),
+    listModelCatalog: vi.fn(async () => ({ providers: [] })),
+    setApiKey: vi.fn(async () => ({ provider: "anthropic" })),
+    removeApiKey: vi.fn(async () => ({ provider: "anthropic" })),
+    setModelVisibility: vi.fn(async () => ({ visible: true })),
+    checkModelHealth: vi.fn(async () => ({ results: [] })),
   };
 }
 
-describe("LegacyConfigGateway", () => {
-  test("reports model catalog as unsupported instead of calling a retired surface", async () => {
+describe("ConfigGateway", () => {
+  test("routes model catalog to the native host control", async () => {
     const transport = fakeTransport();
 
-    await expect(
-      new LegacyConfigGateway({ transport }).call("list_model_catalog"),
-    ).resolves.toEqual({
-      ok: false,
-      error: expect.stringContaining("no native runtime implementation"),
+    await expect(new ConfigGateway({ transport }).call("list_model_catalog")).resolves.toEqual({
+      ok: true,
+      data: { providers: [] },
     });
-    // The gap must not be papered over with a request to any other host op.
+    expect(transport.listModelCatalog).toHaveBeenCalledTimes(1);
+    // The catalog must not be papered over with a request to any other host op.
     expect(transport.settingsGet).not.toHaveBeenCalled();
     expect(transport.agentTextFileGet).not.toHaveBeenCalled();
     expect(transport.getOauthLoginCapabilities).not.toHaveBeenCalled();
+  });
+
+  test("routes api-key mutations to the native host controls", async () => {
+    const transport = fakeTransport();
+
+    await expect(
+      new ConfigGateway({ transport }).call("set_api_key", {
+        provider: "anthropic",
+        apiKey: "sk-test",
+      }),
+    ).resolves.toEqual({ ok: true, data: { provider: "anthropic" } });
+    expect(transport.setApiKey).toHaveBeenCalledWith("anthropic", "sk-test");
+
+    await expect(
+      new ConfigGateway({ transport }).call("remove_api_key", { provider: "anthropic" }),
+    ).resolves.toEqual({ ok: true, data: { provider: "anthropic" } });
+    expect(transport.removeApiKey).toHaveBeenCalledWith("anthropic");
+  });
+
+  test("routes visibility and health checks to the native host controls", async () => {
+    const transport = fakeTransport();
+
+    await expect(
+      new ConfigGateway({ transport }).call("set_model_visibility", {
+        provider: "anthropic",
+        modelId: "claude",
+        visible: false,
+      }),
+    ).resolves.toEqual({ ok: true, data: { visible: true } });
+    expect(transport.setModelVisibility).toHaveBeenCalledWith("anthropic", "claude", false);
+
+    await expect(
+      new ConfigGateway({ transport }).call("check_model_health", {
+        provider: "anthropic",
+      }),
+    ).resolves.toEqual({ ok: true, data: { results: [] } });
+    expect(transport.checkModelHealth).toHaveBeenCalledWith("anthropic", "");
   });
 
   test("writes models.json through the JSON control that keeps the host backup", async () => {
     const transport = fakeTransport();
 
     await expect(
-      new LegacyConfigGateway({ transport }).call("write_models_config", {
+      new ConfigGateway({ transport }).call("write_models_config", {
         content: '{"providers":{}}',
       }),
     ).resolves.toEqual({ ok: true });
@@ -53,7 +94,7 @@ describe("LegacyConfigGateway", () => {
     const transport = fakeTransport();
 
     await expect(
-      new LegacyConfigGateway({ transport }).call("write_agent_config", {
+      new ConfigGateway({ transport }).call("write_agent_config", {
         content: '{"theme":"dark"}',
       }),
     ).resolves.toEqual({ ok: true });
@@ -68,7 +109,7 @@ describe("LegacyConfigGateway", () => {
     const transport = fakeTransport();
 
     await expect(
-      new LegacyConfigGateway({ transport }).call("write_models_config", { content: "{oops" }),
+      new ConfigGateway({ transport }).call("write_models_config", { content: "{oops" }),
     ).resolves.toEqual({ ok: false, error: "Config must be valid JSON" });
     expect(transport.settingsPut).not.toHaveBeenCalled();
   });
@@ -80,7 +121,7 @@ describe("LegacyConfigGateway", () => {
       path: "/home/.pi/agent/AGENTS.md",
     });
 
-    await expect(new LegacyConfigGateway({ transport }).call("read_agents_md")).resolves.toEqual({
+    await expect(new ConfigGateway({ transport }).call("read_agents_md")).resolves.toEqual({
       ok: true,
       data: { path: "/home/.pi/agent/AGENTS.md", content: "# Global rules", exists: true },
     });
@@ -91,7 +132,7 @@ describe("LegacyConfigGateway", () => {
     const transport = fakeTransport();
 
     await expect(
-      new LegacyConfigGateway({ transport }).call("write_append_system_md", {
+      new ConfigGateway({ transport }).call("write_append_system_md", {
         content: "Be terse.",
       }),
     ).resolves.toEqual({ ok: true });
@@ -109,9 +150,7 @@ describe("LegacyConfigGateway", () => {
       path: "/home/.pi/agent/models.json",
     });
 
-    await expect(
-      new LegacyConfigGateway({ transport }).call("read_models_config"),
-    ).resolves.toEqual({
+    await expect(new ConfigGateway({ transport }).call("read_models_config")).resolves.toEqual({
       ok: true,
       data: {
         path: "/home/.pi/agent/models.json",
@@ -133,7 +172,7 @@ describe("LegacyConfigGateway", () => {
         transport.agentTextFileGet.mockRejectedValueOnce(missing);
       if (transport.settingsGet.mock) transport.settingsGet.mockRejectedValueOnce(missing);
 
-      await expect(new LegacyConfigGateway({ transport }).call(operation)).resolves.toEqual({
+      await expect(new ConfigGateway({ transport }).call(operation)).resolves.toEqual({
         ok: true,
         data: { path: "", content: "", exists: false },
       });
@@ -145,7 +184,7 @@ describe("LegacyConfigGateway", () => {
     transport.agentTextFilePut.mockRejectedValueOnce(new Error("registry unavailable"));
 
     await expect(
-      new LegacyConfigGateway({ transport }).call("write_agents_md", { content: "x" }),
+      new ConfigGateway({ transport }).call("write_agents_md", { content: "x" }),
     ).resolves.toEqual({ ok: false, error: "registry unavailable" });
   });
 
@@ -154,7 +193,7 @@ describe("LegacyConfigGateway", () => {
     transport.settingsGet.mockReturnValueOnce(new Promise(() => {}));
 
     await expect(
-      new LegacyConfigGateway({ transport }).call("read_agent_config", {}, { timeoutMs: 1 }),
+      new ConfigGateway({ transport }).call("read_agent_config", {}, { timeoutMs: 1 }),
     ).resolves.toMatchObject({ ok: false, error: expect.stringContaining("timed out") });
   });
 
@@ -162,7 +201,7 @@ describe("LegacyConfigGateway", () => {
     const transport = fakeTransport();
 
     await expect(
-      new LegacyConfigGateway({ transport }).call("open_external", {
+      new ConfigGateway({ transport }).call("open_external", {
         url: "https://example.test/device",
       }),
     ).resolves.toEqual({ ok: true });
@@ -177,7 +216,7 @@ test("maps OAuth login capabilities through the host control", async () => {
   });
 
   await expect(
-    new LegacyConfigGateway({ transport }).call("get_oauth_login_capabilities"),
+    new ConfigGateway({ transport }).call("get_oauth_login_capabilities"),
   ).resolves.toEqual({
     ok: true,
     data: { providers: [{ providerId: "openai-codex", deviceCode: true, configured: false }] },
@@ -189,7 +228,7 @@ test("maps OAuth capabilities failure to ok:false", async () => {
   transport.getOauthLoginCapabilities.mockRejectedValueOnce(new Error("unavailable"));
 
   await expect(
-    new LegacyConfigGateway({ transport }).call("get_oauth_login_capabilities"),
+    new ConfigGateway({ transport }).call("get_oauth_login_capabilities"),
   ).resolves.toEqual({ ok: false, error: "unavailable" });
 });
 
@@ -197,13 +236,13 @@ test("maps OAuth logout through the host control with the provider param", async
   const transport = fakeTransport();
 
   await expect(
-    new LegacyConfigGateway({ transport }).call("logout_oauth_login", { provider: "openai-codex" }),
+    new ConfigGateway({ transport }).call("logout_oauth_login", { provider: "openai-codex" }),
   ).resolves.toEqual({ ok: true });
   expect(transport.logoutOauthLogin).toHaveBeenCalledWith({ provider: "openai-codex" });
 });
 
 test("reports every operation as unavailable when no transport is wired", async () => {
-  const gateway = new LegacyConfigGateway();
+  const gateway = new ConfigGateway();
 
   await expect(gateway.call("read_models_config")).resolves.toEqual({
     ok: false,
@@ -220,7 +259,8 @@ test("reports every operation as unavailable when no transport is wired", async 
 });
 
 test("still throws on an unknown operation", async () => {
-  await expect(
-    new LegacyConfigGateway({ transport: fakeTransport() }).call("nope"),
-  ).resolves.toEqual({ ok: false, error: "Unknown operation: nope" });
+  await expect(new ConfigGateway({ transport: fakeTransport() }).call("nope")).resolves.toEqual({
+    ok: false,
+    error: "Unknown operation: nope",
+  });
 });

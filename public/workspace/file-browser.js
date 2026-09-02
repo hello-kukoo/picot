@@ -23,6 +23,7 @@ export class FileBrowser {
     // Native reveal/open is a host control, never an HTTP route: an ephemeral or
     // host-origin window has no Pi HTTP server to POST `/api/open` to.
     this.openPath = options.openPath || null;
+    this.listFiles = options.listFiles || null;
     this.showHidden = false;
     this.currentPath = null;
     this.workspaceRoot = "";
@@ -63,18 +64,13 @@ export class FileBrowser {
     this.showFileStatus("loading");
 
     try {
-      const params = new URLSearchParams();
-      if (dirPath) params.set("path", dirPath);
-      params.set("scope", "workspace");
-      if (this.showHidden) params.set("showHidden", "1");
-      const url = `/api/files?${params.toString()}`;
-      const res = await fetch(url);
-      const data = await res.json();
+      if (typeof this.listFiles !== "function") throw new Error("Host file listing unavailable");
+      const data = await this.listFiles(dirPath || "");
 
       // A newer load() or setWorkspaceRoot() has superseded this request.
       if (sequence !== this.loadSequence) return;
-      if (res.ok === false || data.error) {
-        this.showFileStatus("failed", data.error || `HTTP ${res.status}`);
+      if (data?.error) {
+        this.showFileStatus("failed", data.error);
         return;
       }
 

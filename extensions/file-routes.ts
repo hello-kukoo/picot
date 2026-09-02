@@ -3,7 +3,7 @@
  *
  * These functions provide path safety, file classification, text reading with
  * size limits, and conditional write with mtime-based conflict detection.
- * They are consumed by the HTTP route handlers in embedded-server.ts.
+ * They are consumed by host-side file handlers and extension preview helpers.
  */
 import * as fs from "node:fs";
 import type * as http from "node:http";

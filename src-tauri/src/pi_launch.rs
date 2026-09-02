@@ -1,11 +1,11 @@
 // ABOUTME: Shared Pi launch contract helpers for binary, arguments, paths, stderr, and environment.
-// ABOUTME: Keeps legacy and native launch inputs behaviorally identical.
-#![allow(dead_code)] // DEPRECATED: legacy embedded-server stack, physical deletion at D10 Stage 2 (all live call sites removed)
-use std::io::{BufRead, BufReader};
+// ABOUTME: Keeps native Pi launch inputs consistent across runtime types.
+#[cfg(target_os = "windows")]
+use std::io;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{ChildStderr, Command};
+use std::process::Command;
 use std::sync::OnceLock;
 
 use crate::native_pi_manager::{NativeLaunchSpec, NativeRuntimeType, ReadinessPolicy};
@@ -14,23 +14,11 @@ use base64::Engine;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-/// `scripts/pi-version.json` baked into the binary at compile time so we can
-/// forward the locked pi version to the embedded server (which displays it
-/// in the UI footer) without re-running fetch logic at startup.
+/// `scripts/pi-version.json` baked into the binary at compile time so the
+/// host can expose the locked Pi version without re-running fetch logic.
 const PI_VERSION_JSON: &str = include_str!("../../scripts/pi-version.json");
-/// Generalized spawn request. The host owns every field; callers never inject
-/// capability, owner tokens, executables, or arbitrary flags through this.
-#[derive(Clone, Debug)]
-pub struct PiSpawnSpec {
-    pub cwd: PathBuf,
-    pub port: u16,
-    pub session_path: Option<String>,
-    pub no_session: bool,
-    pub no_tools: bool,
-    pub environment: Vec<(String, String)>,
-}
 
-/// Locked pi version string (e.g. "0.77.0"). Resolved lazily on first call.
+/// Locked Pi version string (e.g. "0.77.0"). Resolved lazily on first call.
 pub fn locked_pi_version() -> &'static str {
     static CACHED: OnceLock<String> = OnceLock::new();
     CACHED.get_or_init(|| {
@@ -69,84 +57,6 @@ pub(crate) fn configure_child_process_for_windows(command: &mut Command) {
 
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn configure_child_process_for_windows(_command: &mut Command) {}
-
-/// Redact child-process diagnostics before they enter logs or UI error payloads.
-/// Paths, bearer/token-like values, and control characters must not cross this
-/// boundary; operators still get stable failure context without raw Pi output.
-pub(crate) fn redact_child_diagnostic(input: &str) -> String {
-    let mut output = String::with_capacity(input.len().min(4096));
-    let tokens: Vec<&str> = input.split_whitespace().collect();
-    let mut redact_next = false;
-    for (index, token) in tokens.iter().enumerate() {
-        if index > 0 {
-            output.push(' ');
-        }
-        if redact_next {
-            output.push_str("<redacted>");
-            redact_next = false;
-            continue;
-        }
-        let is_path = token.starts_with("/Users/")
-            || token.starts_with("/home/")
-            || token.starts_with("/tmp/")
-            || token.starts_with("/private/")
-            || token.starts_with("/var/")
-            || token.starts_with('\\')
-            || token.contains(":\\")
-            || token.starts_with("PI_STUDIO_SKILL_INSTALL_SECRET=")
-            || token.starts_with("Bearer")
-            || token.to_ascii_lowercase().contains("token=")
-            || token.to_ascii_lowercase().contains("secret=");
-        if is_path {
-            output.push_str("<redacted>");
-            redact_next = *token == "Bearer";
-        } else {
-            output.extend(token.chars().filter(|c| !c.is_control()).take(512));
-        }
-    }
-    output.chars().take(4096).collect()
-}
-
-pub(crate) fn format_pi_stderr_log_line(port: u16, line: &str) -> String {
-    format!(
-        "[pi-desktop] pi stderr port={port}: {}",
-        redact_child_diagnostic(line)
-    )
-}
-
-#[cfg(test)]
-mod diagnostic_tests {
-    use super::redact_child_diagnostic;
-
-    #[test]
-    fn redacts_paths_and_bootstrap_secrets() {
-        let result = redact_child_diagnostic(
-            "failed /Users/lin/.pi/settings.json PI_STUDIO_SKILL_INSTALL_SECRET=secret123 Bearer abc",
-        );
-        assert!(!result.contains("/Users/lin"));
-        assert!(!result.contains("secret123"));
-        assert!(!result.contains("Bearer abc"));
-        assert!(result.contains("<redacted>"));
-    }
-}
-
-/// Forward Pi's stderr into Picot's log so release builds retain startup errors.
-pub(crate) fn spawn_pi_stderr_logger(stderr: ChildStderr, port: u16) {
-    std::thread::spawn(move || {
-        for line in BufReader::new(stderr).lines() {
-            match line {
-                Ok(line) if !line.is_empty() => {
-                    log::error!("{}", format_pi_stderr_log_line(port, &line));
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    log::warn!("[pi-desktop] failed reading pi stderr port={port}: {error}");
-                    break;
-                }
-            }
-        }
-    });
-}
 
 /// Build an augmented PATH for child processes.
 ///
@@ -257,19 +167,11 @@ pub(crate) fn strip_verbatim_prefix(path: &str) -> String {
     }
 }
 
-/// Return a path to the embedded-server extension that is safe to pass as a
-/// `--extension` argument to the embedded pi binary.
+/// Prepare a Picot extension path for Pi's native RPC process.
 ///
-/// On Windows the Bun-compiled pi binary truncates `--extension` values at the
-/// first space (e.g. `C:\...\Picot\...\embedded-server.mjs` is loaded as
-/// `C:\...\Pi`), which then fails to load and segfaults the process. Since Pi
-/// Studio always installs under a space-containing path, we mirror the
-/// extension file into a space-free directory under the system temp dir and
-/// return that path instead. The copy is idempotent (skipped when an existing
-/// mirror already matches by length + mtime), so repeated spawns are cheap.
-///
-/// On non-Windows platforms, or when the path has no space, the original path
-/// is returned unchanged.
+/// On Windows, the bundled Pi binary cannot load extension paths containing
+/// spaces. Mirror such paths into a space-free temporary directory; other
+/// platforms use the original path unchanged.
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn sanitize_extension_path_for_pi(original: &str) -> String {
     original.to_string()
@@ -280,76 +182,32 @@ pub(crate) fn sanitize_extension_path_for_pi(original: &str) -> String {
     if !original.contains(' ') {
         return original.to_string();
     }
-
     match mirror_to_space_free_dir(Path::new(original)) {
-        Ok(mirrored) => {
-            log::info!(
-                "[pi-desktop] extension path contains spaces; mirrored to space-free path: {} -> {}",
-                original,
-                mirrored.display()
-            );
-            mirrored.to_string_lossy().to_string()
-        }
-        Err(e) => {
-            // Non-fatal: fall back to the original path. Worst case is the
-            // pre-existing crash, but we don't want the mirroring step itself
-            // to be a new hard failure mode.
-            log::warn!(
-                "[pi-desktop] failed to mirror extension to space-free path ({}); using original: {}",
-                e,
-                original
-            );
+        Ok(mirrored) => mirrored.to_string_lossy().to_string(),
+        Err(error) => {
+            log::warn!("[picot-host] extension path mirror failed ({error}); using original path");
             original.to_string()
         }
     }
 }
 
-/// Copy `src` into `<temp>/pi-studio-ext/<filename>` (a space-free directory),
-/// skipping the copy when an up-to-date mirror already exists. Returns the
-/// mirrored path.
 #[cfg(target_os = "windows")]
-pub(crate) fn mirror_to_space_free_dir(src: &Path) -> std::io::Result<PathBuf> {
+fn mirror_to_space_free_dir(src: &Path) -> std::io::Result<PathBuf> {
     let file_name = src.file_name().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
             "extension path has no file name",
         )
     })?;
-
     let mut dest_dir = std::env::temp_dir();
-    // Guard: if the temp dir itself contains a space, fall back to a
-    // well-known space-free root so the workaround actually helps.
     if dest_dir.to_string_lossy().contains(' ') {
-        dest_dir = PathBuf::from("C:\\ProgramData\\pi-studio");
+        dest_dir = PathBuf::from("C:\\ProgramData\\picot");
     }
-    dest_dir.push("pi-studio-ext");
+    dest_dir.push("native-extensions");
     std::fs::create_dir_all(&dest_dir)?;
-
     let dest = dest_dir.join(file_name);
-
-    if mirror_is_up_to_date(src, &dest) {
-        return Ok(dest);
-    }
-
     std::fs::copy(src, &dest)?;
     Ok(dest)
-}
-
-/// Cheap freshness check: the mirror is considered current when it exists and
-/// matches the source by byte length and modified time. This avoids re-copying
-/// the extension on every spawn while still picking up updated builds.
-#[cfg(target_os = "windows")]
-pub(crate) fn mirror_is_up_to_date(src: &Path, dest: &Path) -> bool {
-    let (Ok(src_meta), Ok(dest_meta)) = (std::fs::metadata(src), std::fs::metadata(dest)) else {
-        return false;
-    };
-    if src_meta.len() != dest_meta.len() {
-        return false;
-    }
-    match (src_meta.modified(), dest_meta.modified()) {
-        (Ok(src_mtime), Ok(dest_mtime)) => dest_mtime >= src_mtime,
-        _ => false,
-    }
 }
 
 /// Resolve the directory used by Pi for its agent state and extensions.
@@ -386,7 +244,7 @@ pub(crate) fn resolve_pi_agent_root() -> Result<PathBuf, String> {
         )
     })?;
     // `canonicalize` on Windows returns a `\\?\`-prefixed extended-length
-    // path. Bun (the embedded pi runtime) cannot resolve modules from such a
+    // path. Bun (the bundled Pi runtime) cannot resolve modules from such a
     // path, so every package extension fails with
     // `Cannot find module '\\?\C:\...\node_modules\<pkg>\dist\index.js'`,
     // which presents as a health-check timeout with no window. Strip the
@@ -396,65 +254,7 @@ pub(crate) fn resolve_pi_agent_root() -> Result<PathBuf, String> {
     )))
 }
 
-/// Copy caller-provided environment markers while keeping the agent root under
-/// host control. The canonical root is appended last so it cannot be replaced
-/// by an inherited or caller-provided value.
-pub(crate) fn build_spawn_environment(
-    spec: &PiSpawnSpec,
-    install_secret: &str,
-) -> Result<Vec<(String, String)>, String> {
-    if spec
-        .environment
-        .iter()
-        .any(|(key, _)| key == "PI_CODING_AGENT_DIR")
-    {
-        return Err(
-            "PI_CODING_AGENT_DIR is reserved and cannot be supplied in spawn environment"
-                .to_string(),
-        );
-    }
-
-    let mut environment = spec.environment.clone();
-    environment.push((
-        "PI_CODING_AGENT_DIR".to_string(),
-        resolve_pi_agent_root()?.to_string_lossy().into_owned(),
-    ));
-    environment.push((
-        "PI_STUDIO_SKILL_INSTALL_SECRET".to_string(),
-        install_secret.to_string(),
-    ));
-    Ok(environment)
-}
-
-/// Build the pi CLI argument vector for a spawn spec. Pure and separately
-/// tested so the side-chat / quick-chat flag combinations are locked down
-/// without spawning a real process.
-pub(crate) fn build_pi_args(
-    extension_path: &str,
-    spec: &PiSpawnSpec,
-) -> Result<Vec<String>, String> {
-    if spec.no_session && spec.session_path.is_some() {
-        return Err("cannot combine --no-session with an explicit session path".to_string());
-    }
-    let mut args = vec![
-        "--extension".to_string(),
-        extension_path.to_string(),
-        "--mode".to_string(),
-        "rpc".to_string(),
-    ];
-    if spec.no_session {
-        args.push("--no-session".to_string());
-    } else if let Some(session) = &spec.session_path {
-        args.push("--session".to_string());
-        args.push(session.clone());
-    }
-    if spec.no_tools {
-        args.push("--no-tools".to_string());
-    }
-    Ok(args)
-}
-
-/// Build native launch inputs without constructing the legacy PiManager.
+/// Build native launch inputs without constructing a port-addressed manager.
 pub(crate) fn native_launch_spec(
     static_dir: &Path,
     cwd: &str,
@@ -512,9 +312,10 @@ pub(crate) fn native_launch_spec_for(
     Ok(spec)
 }
 
-/// Resolve the picot bridge extension used by native Pi runtimes.
+/// Resolve the Picot bridge extension used by native Pi runtimes.
 ///
-/// Native launch must not depend on the legacy PiManager for launch inputs.
+/// Native launch owns this resolution directly; it never depends on a
+/// port-based manager or a Pi-served HTTP/WS extension.
 pub(crate) fn resolve_picot_bridge_extension_path(static_dir: &Path) -> Result<PathBuf, String> {
     let mut candidates = Vec::new();
     if let Some(parent) = static_dir.parent() {
@@ -598,7 +399,7 @@ pub(crate) fn resolve_bundled_pi(static_dir: &Path) -> Result<PathBuf, String> {
         .collect::<Vec<_>>()
         .join("\n");
     Err(format!(
-        "Could not find embedded pi binary. Tried:\n{}\n\n\
+        "Could not find bundled pi binary. Tried:\n{}\n\n\
              For dev: run `bun run fetch:pi` from the repo root.\n\
              For release: the .app bundle is missing `resources/pi/{}`. \
              Reinstall Picot.",

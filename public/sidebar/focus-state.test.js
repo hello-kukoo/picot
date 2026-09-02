@@ -42,13 +42,9 @@ describe("withFocusParam", () => {
     expect(url.searchParams.has(FOCUS_WORKSPACE_PARAM)).toBe(false);
   });
 
-  test("preserves unrelated params such as brokerWs", () => {
-    const url = withFocusParam(
-      "/work/alpha",
-      ALPHA,
-      "http://localhost:3001/?brokerWs=ws%3A%2F%2Flocalhost%3A9999",
-    );
-    expect(url.searchParams.get("brokerWs")).toBe("ws://localhost:9999");
+  test("preserves unrelated application params", () => {
+    const url = withFocusParam("/work/alpha", ALPHA, "http://localhost:3001/?mobile=1");
+    expect(url.searchParams.get("mobile")).toBe("1");
     expect(url.searchParams.get(FOCUS_WORKSPACE_PARAM)).toBe(alphaId);
   });
 });

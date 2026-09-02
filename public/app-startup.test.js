@@ -21,7 +21,52 @@ class FakeWebSocket extends EventTarget {
   }
 
   send(message) {
-    this.sent.push(JSON.parse(message));
+    const frame = JSON.parse(message);
+    this.sent.push(frame);
+    if (frame.type === "data_request") {
+      let response = null;
+      if (frame.operation === "workspace_info") {
+        response = {
+          isGit:
+            !String(frame.workspaceId || "").includes("non-git") &&
+            !String(frame.workspaceId || "").includes("nongit"),
+        };
+      }
+      if (response) {
+        queueMicrotask(() =>
+          this.onmessage?.({
+            data: JSON.stringify({
+              type: "data_response",
+              requestId: frame.requestId,
+              ok: true,
+              ...response,
+            }),
+          }),
+        );
+      }
+    }
+    if (frame.type === "host_request") {
+      let response = null;
+      if (frame.operation === "workspace.list") {
+        response = { workspaces: [], removed: [] };
+      } else if (frame.operation === "runtime_instances") {
+        response = { instances: [] };
+      } else if (frame.operation === "list_skill_inventory") {
+        response = { skills: [] };
+      }
+      if (response) {
+        queueMicrotask(() =>
+          this.onmessage?.({
+            data: JSON.stringify({
+              type: frame.operation === "workspace_info" ? "data_response" : "host_response",
+              requestId: frame.requestId,
+              ok: true,
+              response,
+            }),
+          }),
+        );
+      }
+    }
   }
 
   close() {
@@ -192,16 +237,18 @@ test("retries Git status when workspace generation arrives after opening Git", a
   document.getElementById("file-sidebar-git-tab").click();
   expect(socket.sent).toHaveLength(0);
 
-  socket.onmessage({ data: JSON.stringify({ type: "capabilities", class: "native" }) });
+  socket.onmessage({ data: JSON.stringify({ type: "hello_ack", protocolVersion: 2 }) });
   socket.onmessage({
     data: JSON.stringify({ type: "owner_bootstrap", workspaceGeneration: 7, instances: [] }),
   });
 
   expect(socket.sent).toContainEqual({
-    type: "git_command",
+    type: "host_request",
+    protocolVersion: 2,
     requestId: "git-1",
     workspaceGeneration: 7,
-    command: { type: "status" },
+    operation: "git_status",
+    args: {},
   });
 });
 
@@ -210,7 +257,7 @@ test("surfaces terminal start failures and refreshes the terminal list", async (
   const socket = FakeWebSocket.instances.at(-1);
   socket.readyState = FakeWebSocket.OPEN;
 
-  socket.onmessage({ data: JSON.stringify({ type: "capabilities", class: "native" }) });
+  socket.onmessage({ data: JSON.stringify({ type: "hello_ack", protocolVersion: 2 }) });
   socket.onmessage({
     data: JSON.stringify({ type: "owner_bootstrap", workspaceGeneration: 7, instances: [] }),
   });
@@ -242,7 +289,7 @@ test("does not show an unclassified terminal command failure as a start error", 
   const socket = FakeWebSocket.instances.at(-1);
   socket.readyState = FakeWebSocket.OPEN;
 
-  socket.onmessage({ data: JSON.stringify({ type: "capabilities", class: "native" }) });
+  socket.onmessage({ data: JSON.stringify({ type: "hello_ack", protocolVersion: 2 }) });
   socket.onmessage({
     data: JSON.stringify({ type: "owner_bootstrap", workspaceGeneration: 7, instances: [] }),
   });
@@ -268,7 +315,7 @@ test("shows the not-a-git message only for the current status probe", async () =
   document.getElementById("file-sidebar-git-tab").click();
   expect(socket.sent).toHaveLength(0);
 
-  socket.onmessage({ data: JSON.stringify({ type: "capabilities", class: "native" }) });
+  socket.onmessage({ data: JSON.stringify({ type: "hello_ack", protocolVersion: 2 }) });
   socket.onmessage({
     data: JSON.stringify({ type: "owner_bootstrap", workspaceGeneration: 7, instances: [] }),
   });
@@ -287,7 +334,7 @@ test("shows the not-a-git message only for the current status probe", async () =
   expect(panel.textContent).not.toContain("This workspace is not a Git repository");
 
   // The actual status probe fails because the workspace is not a Git
-  // repository; the broker answers with a git_command_failed frame instead of
+  // repository; HostServer answers with a git_command_failed frame instead of
   // git_status, and only that requestId flips the panel.
   socket.onmessage({
     data: JSON.stringify({
@@ -315,7 +362,7 @@ test("hides the Git tab and returns to Files when the workspace is not a Git rep
   gitTab.click();
   expect(gitTab.getAttribute("aria-selected")).toBe("true");
 
-  socket.onmessage({ data: JSON.stringify({ type: "capabilities", class: "native" }) });
+  socket.onmessage({ data: JSON.stringify({ type: "hello_ack", protocolVersion: 2 }) });
   socket.onmessage({
     data: JSON.stringify({ type: "owner_bootstrap", workspaceGeneration: 7, instances: [] }),
   });
@@ -343,7 +390,7 @@ test("restores the Git tab once a status probe proves the workspace is a Git rep
   // Simulate a prior non-Git discovery that hid the tab.
   gitTab.classList.add("hidden");
 
-  socket.onmessage({ data: JSON.stringify({ type: "capabilities", class: "native" }) });
+  socket.onmessage({ data: JSON.stringify({ type: "hello_ack", protocolVersion: 2 }) });
   socket.onmessage({
     data: JSON.stringify({ type: "owner_bootstrap", workspaceGeneration: 7, instances: [] }),
   });
@@ -383,22 +430,23 @@ test("proactively hides the Git tab via workspace-info on the first mirror sync"
   const gitTab = document.getElementById("file-sidebar-git-tab");
   expect(gitTab.classList.contains("hidden")).toBe(false);
 
-  socket.onmessage({ data: JSON.stringify({ type: "capabilities", class: "native" }) });
+  socket.onmessage({ data: JSON.stringify({ type: "hello_ack", protocolVersion: 2 }) });
   // Mirror snapshots carry the server's `workspace:<cwd>` routing id
   // (withRouteMeta); the Git-entry probe must re-query it verbatim.
   socket.onmessage({
     data: JSON.stringify({
-      type: "mirror_sync",
-      entries: [],
-      sessionFile: "/sessions/demo.jsonl",
-      workspaceId: "workspace:/tmp/non-git",
+      type: "runtime_snapshot",
+      target: { workspaceId: "workspace:/tmp/non-git", sessionId: "/sessions/demo.jsonl" },
+      state: { pi: { entries: [], sessionFile: "/sessions/demo.jsonl" } },
     }),
   });
 
   await vi.waitFor(() => expect(gitTab.classList.contains("hidden")).toBe(true));
-  expect(globalThis.fetch).toHaveBeenCalledWith(
-    expect.stringContaining("workspaceId=workspace%3A%2Ftmp%2Fnon-git"),
-  );
+  expect(
+    socket.sent.some(
+      (frame) => frame.type === "data_request" && frame.operation === "workspace_info",
+    ),
+  ).toBe(true);
 });
 
 test("re-hides the Git tab when switching to a non-Git workspace while the panel is open", async () => {
@@ -424,16 +472,15 @@ test("re-hides the Git tab when switching to a non-Git workspace while the panel
   const filesTab = document.getElementById("file-sidebar-files-tab");
 
   // Enter a Git workspace and open the Git tab.
-  socket.onmessage({ data: JSON.stringify({ type: "capabilities", class: "native" }) });
+  socket.onmessage({ data: JSON.stringify({ type: "hello_ack", protocolVersion: 2 }) });
   socket.onmessage({
     data: JSON.stringify({ type: "owner_bootstrap", workspaceGeneration: 7, instances: [] }),
   });
   socket.onmessage({
     data: JSON.stringify({
-      type: "mirror_sync",
-      entries: [],
-      sessionFile: "/sessions/a.jsonl",
-      workspaceId: "workspace:/work/git-a",
+      type: "runtime_snapshot",
+      target: { workspaceId: "workspace:/work/git-a", sessionId: "/sessions/a.jsonl" },
+      state: { pi: { entries: [], sessionFile: "/sessions/a.jsonl" } },
     }),
   });
   await vi.waitFor(() => expect(gitTab.classList.contains("hidden")).toBe(false));
@@ -446,10 +493,9 @@ test("re-hides the Git tab when switching to a non-Git workspace while the panel
   });
   socket.onmessage({
     data: JSON.stringify({
-      type: "mirror_sync",
-      entries: [],
-      sessionFile: "/sessions/b.jsonl",
-      workspaceId: "workspace:/work/nongit-b",
+      type: "runtime_snapshot",
+      target: { workspaceId: "workspace:/work/nongit-b", sessionId: "/sessions/b.jsonl" },
+      state: { pi: { entries: [], sessionFile: "/sessions/b.jsonl" } },
     }),
   });
 
@@ -482,29 +528,28 @@ test("hides the Git tab on entry to a non-Git workspace via the entry status pro
   const gitTab = document.getElementById("file-sidebar-git-tab");
   expect(gitTab.classList.contains("hidden")).toBe(false);
 
-  socket.onmessage({ data: JSON.stringify({ type: "capabilities", class: "native" }) });
+  socket.onmessage({ data: JSON.stringify({ type: "hello_ack", protocolVersion: 2 }) });
   socket.onmessage({
     data: JSON.stringify({ type: "owner_bootstrap", workspaceGeneration: 9, instances: [] }),
   });
   socket.onmessage({
     data: JSON.stringify({
-      type: "mirror_sync",
-      entries: [],
-      sessionFile: "/sessions/non-git.jsonl",
-      workspaceId: "workspace:/work/nongit-entry",
+      type: "runtime_snapshot",
+      target: { workspaceId: "workspace:/work/nongit-entry", sessionId: "/sessions/non-git.jsonl" },
+      state: { pi: { entries: [], sessionFile: "/sessions/non-git.jsonl" } },
     }),
   });
 
   // The entry probe must be sent even though the Git panel is closed.
   await vi.waitFor(() => {
     const probe = socket.sent.find(
-      (frame) => frame.type === "git_command" && frame.command?.type === "status",
+      (frame) => frame.type === "host_request" && frame.operation === "git_status",
     );
     expect(probe).toBeTruthy();
     return probe;
   });
   const probe = socket.sent.find(
-    (frame) => frame.type === "git_command" && frame.command?.type === "status",
+    (frame) => frame.type === "host_request" && frame.operation === "git_status",
   );
 
   // The non-Git status probe fails, which must hide the Git tab on its own.
