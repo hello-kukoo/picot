@@ -64,6 +64,9 @@ class FakeWebSocket extends EventTarget {
   static CLOSING = 2;
   static CLOSED = 3;
   static instances = [];
+  // Test toggle: when true the fake host never answers snapshot requests,
+  // simulating a runtime that is still spawning.
+  static suppressSnapshot = false;
 
   constructor() {
     super();
@@ -97,6 +100,7 @@ class FakeWebSocket extends EventTarget {
       return;
     }
     if (frame.type === "runtime_snapshot_request") {
+      if (FakeWebSocket.suppressSnapshot) return;
       const reply = hostSnapshotFrame();
       reply.requestId = frame.requestId;
       this.reply(reply);
@@ -255,4 +259,31 @@ test("canonical page renders history from the runtime snapshot", async () => {
       (frame) => frame.workspaceId === undefined || frame.workspaceId === "ws-uuid-1",
     ),
   ).toBe(true);
+});
+
+test("/picot-config reads wait for a foreground snapshot before dispatching", async () => {
+  // The skills page eagerly activates at startup and would otherwise fire
+  // list_skill_inventory into a runtime that is still spawning.
+  FakeWebSocket.suppressSnapshot = true;
+  try {
+    await import("./app.js?config-gate");
+    const socket = FakeWebSocket.instances.at(-1);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const configFrames = () =>
+      socket.sent.filter(
+        (frame) =>
+          frame.type === "runtime_request" &&
+          String(frame.command?.message || "").includes("list_skill_inventory"),
+      );
+    // Gate closed: no snapshot has proven the runtime live yet.
+    expect(configFrames()).toHaveLength(0);
+
+    // Deliver the first foreground snapshot: the gate opens and exactly the
+    // deferred startup inventory read dispatches.
+    socket.reply(hostSnapshotFrame());
+    await vi.waitFor(() => expect(configFrames()).toHaveLength(1));
+    expect(configFrames()[0].command.type).toBe("prompt");
+  } finally {
+    FakeWebSocket.suppressSnapshot = false;
+  }
 });

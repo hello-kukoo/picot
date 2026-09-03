@@ -42,6 +42,8 @@ import {
   saveUserRenderPreference,
 } from "./preferences-client.js";
 import { QuickChatDialog } from "./quick-chat-dialog.js";
+import { resolvePreparedRuntimeTarget } from "./session/in-place-runtime-target.js";
+import { shouldRefreshSidebarForNewSession } from "./session/new-session-refresh.js";
 import { getOnboardingState } from "./session/onboarding.js";
 import {
   confirmDeferredFileBrowserWorkspace,
@@ -53,6 +55,7 @@ import { anchorHistoryToBottom } from "./session/scroll-anchor.js";
 import { setupSessionInfo } from "./session/session-info.js";
 import { SessionUiStateStore } from "./session-ui-state.js";
 import { ConfigGateway, consumeConfigResponseFrame } from "./settings/config-gateway.js";
+import { createConfigReadiness } from "./settings/config-readiness.js";
 import { setupExtensionsTabShell } from "./settings/extensions-tab-shell.js";
 import { setupMobileAccess } from "./settings/mobile-access.js";
 import { setupModelsPage } from "./settings/models-page.js";
@@ -373,6 +376,7 @@ function resolveAndApplyFocus() {
     requestedId,
     projects: sidebar.projects,
     activeSessionFile: sidebar.activeSessionFile,
+    runtimeWorkspaceId: wsClient.getRuntimeTarget()?.workspaceId,
   });
   if (state === "pending") return;
   if (state === "matched") {
@@ -500,12 +504,25 @@ const transport = initTransport({ wsClient, env: window });
 // Settings data-plane runtime adapter: /picot-config prompts ride the same v2
 // runtime_request channel as chat; sendRuntime resolves with Pi's reply data.
 const settingsRuntime = {
-  request: (command) => wsClient.sendRuntime(command),
+  request: (command, target, options) => wsClient.sendRuntime(command, target, options),
 };
 const getSettingsRuntimeTarget = () => wsClient.getRuntimeTarget();
+// Startup configuration reads (the skills page activates eagerly) must not
+// fire into a runtime that is still spawning. The gate opens with the first
+// foreground snapshot of the CURRENT routing triple and re-arms whenever an
+// in-page session adoption swaps the triple — readiness tracks the target,
+// it never stays open for a runtime that has not proven itself live.
+const configReadiness = createConfigReadiness({
+  targetKeyOf: () => {
+    const target = getSettingsRuntimeTarget();
+    if (!target?.workspaceId || !target?.sessionId) return null;
+    return [target.workspaceId, target.sessionId, target.instanceId ?? ""].join("\u0000");
+  },
+});
 const configGateway = new ConfigGateway({
   runtime: settingsRuntime,
   getTarget: getSettingsRuntimeTarget,
+  waitUntilReady: configReadiness.waitUntilReady,
 });
 // OAuth login flows share the config transport; their __picotOauth frames
 // must be consumed before the config gateway sees them (design §5 M3).
@@ -763,6 +780,7 @@ let workspaceLaunchInProgress = false;
 // sidebar until the newly persisted session file appears in the list.
 let pendingNewSessionRefresh = false;
 let pendingNewSessionPreviousFile = null;
+let newSessionRefreshPromise = null;
 // A cross-workspace session switch changes host runtime scope asynchronously.
 // Keep requested root until post-switch mirror snapshot confirms new session;
 // loading earlier could read path against stale workspace and return 403.
@@ -802,11 +820,6 @@ function logSessionRoute(label, details = {}) {
     ...details,
   });
 }
-wsClient.setRoutingContext({
-  workspaceId: `workspace:${getCurrentWorkspacePath() || "unknown"}`,
-  instanceId: wsClient.getRuntimeTarget()?.instanceId,
-});
-
 const workspaceIndicatorEl = document.createElement("div");
 workspaceIndicatorEl.id = "workspace-indicator";
 workspaceIndicatorEl.className = "pill workspace-indicator hidden";
@@ -2349,6 +2362,22 @@ wsClient.addEventListener("runtimeSnapshot", (e) => {
   const frame = e.detail;
   const snapshotState = frame?.state || {};
   const pi = snapshotState.pi && typeof snapshotState.pi === "object" ? snapshotState.pi : {};
+  const snapshotTarget = frame?.target;
+  const currentTarget = wsClient.getRuntimeTarget();
+  const isBackgroundSnapshot =
+    snapshotTarget &&
+    currentTarget &&
+    (snapshotTarget.workspaceId !== currentTarget.workspaceId ||
+      snapshotTarget.sessionId !== currentTarget.sessionId ||
+      snapshotTarget.instanceId !== currentTarget.instanceId);
+  if (isBackgroundSnapshot) {
+    const sessionFile = pi.sessionFile || snapshotTarget.sessionId;
+    if (sessionFile) sidebar.setStreaming(sessionFile, Boolean(pi.isStreaming));
+    return;
+  }
+  // First foreground snapshot proves the current runtime target is live:
+  // release its deferred configuration reads and fail-fast stale waiters.
+  configReadiness.noteForegroundSnapshot();
   console.info("[SESSION-LOAD] snapshot received", {
     target: frame.target?.sessionId ?? null,
     sessionFile: pi.sessionFile ?? null,
@@ -2414,7 +2443,7 @@ function handleRPCEvent(event) {
     case "agent_end":
       handleAgentEnd(event);
       if (pendingNewSessionRefresh) {
-        refreshSidebarForNewSession(event).catch(() => {});
+        scheduleNewSessionSidebarRefresh(event);
       }
       // Turn boundary: live appends already grew the tree incrementally; only
       // a full get_session_tree sync runs when an append failed (dirty) —
@@ -2431,7 +2460,7 @@ function handleRPCEvent(event) {
       // refreshing on the user message (not just the assistant turn) makes the
       // session — with its first message as the title — show up immediately.
       if (pendingNewSessionRefresh) {
-        refreshSidebarForNewSession(event).catch(() => {});
+        scheduleNewSessionSidebarRefresh(event);
       }
       break;
     case "message_update":
@@ -2440,7 +2469,7 @@ function handleRPCEvent(event) {
     case "message_end":
       handleMessageEnd(event.message, eventSessionFile, event.entryId);
       if (pendingNewSessionRefresh) {
-        refreshSidebarForNewSession(event).catch(() => {});
+        scheduleNewSessionSidebarRefresh(event);
       }
       break;
     case "tool_execution_start":
@@ -2558,6 +2587,14 @@ function handleCompactionEnd(event) {
  * the row isn't there"). So we reload, and if the freshly created session still
  * isn't in the list, retry a few times with a short backoff before giving up.
  */
+function scheduleNewSessionSidebarRefresh(event) {
+  if (newSessionRefreshPromise) return newSessionRefreshPromise;
+  newSessionRefreshPromise = refreshSidebarForNewSession(event).finally(() => {
+    newSessionRefreshPromise = null;
+  });
+  return newSessionRefreshPromise;
+}
+
 async function refreshSidebarForNewSession(event = null, attempt = 0) {
   // Cached registry rows would mask the brand-new session file: refresh the
   // current workspace's cache first so the reload below can observe it.
@@ -2566,15 +2603,21 @@ async function refreshSidebarForNewSession(event = null, attempt = 0) {
 
   const liveFile = getCurrentLiveSessionFile(event);
   if (liveFile) {
-    // Read the result this call actually fetched (not sidebar.projects, which a
-    // concurrent load could leave stale) so we detect the new session as soon as
-    // any fetch observes it on disk.
-    const found = (projects || sidebar.projects).some((p) =>
-      p.sessions.some((s) => s.filePath === liveFile),
-    );
-    if (found) {
-      sidebar.setActive(liveFile);
-      restoreSessionUiState(liveFile);
+    // The native route session ID identifies the runtime, while a scanned row
+    // identifies its JSONL by absolute filePath. Resolve either identity from
+    // the response this refresh fetched; otherwise fresh rows never replace
+    // the provisional row and their streaming indicator stays orphaned.
+    const found = (projects || sidebar.projects)
+      .flatMap((project) => project.sessions || [])
+      .find((session) => session.filePath === liveFile || session.id === liveFile);
+    if (found?.filePath) {
+      if (sidebar.isStreaming(liveFile)) {
+        sidebar.setStreaming(liveFile, false);
+        sidebar.setStreaming(found.filePath, true);
+      }
+      sidebar.provisionalSession = null;
+      sidebar.setActive(found.filePath);
+      restoreSessionUiState(found.filePath);
       resolveAndApplyFocus();
       // The new session may not have had a stable identity when its first
       // assistant event arrived. Once the persisted file is known, hydrate
@@ -2593,7 +2636,10 @@ async function refreshSidebarForNewSession(event = null, attempt = 0) {
 }
 
 function getCurrentLiveSessionFile(event = null) {
-  return [event?.__target?.sessionId, mirrorActiveSessionFile].find(
+  // Once mirror_sync has supplied Pi's persisted JSONL path, it is the UI
+  // identity. The route target remains a runtime ID for fresh, unpersisted
+  // sessions and is only a fallback for the provisional green indicator.
+  return [mirrorActiveSessionFile, event?.__target?.sessionId].find(
     (file) => file && file !== pendingNewSessionPreviousFile,
   );
 }
@@ -3141,12 +3187,7 @@ composerCard.addEventListener(
 // Send message (with images)
 // ═══════════════════════════════════════
 
-let messageQueue = [];
-
-function clearMessageQueue() {
-  messageQueue = [];
-  renderQueuedMessages();
-}
+const messageQueue = [];
 
 // Prompts are sent fire-and-forget over the WebSocket. The broker replies with
 // `command_undeliverable` (correlated by requestId) when it cannot route the
@@ -3163,6 +3204,23 @@ function trackPromptDelivery(requestId, message) {
 
 function refreshSidebarAfterUserPrompt() {
   sidebar.refresh().catch(() => {});
+}
+
+function markPendingNewSessionRefresh() {
+  pendingNewSessionRefresh = shouldRefreshSidebarForNewSession({ mirrorActiveSessionFile });
+}
+
+function subscribeToLiveRuntimeTargets() {
+  transport
+    .runtimeInstances()
+    .then((data) => {
+      for (const instance of data?.instances || []) {
+        if (!instance?.workspaceId || !instance?.sessionId || !instance?.instanceId) continue;
+        wsClient.subscribeRuntimeTarget(instance);
+        wsClient.requestRuntimeSnapshot(instance);
+      }
+    })
+    .catch(() => {});
 }
 
 function sendMessage() {
@@ -3195,6 +3253,10 @@ function sendMessage() {
   }
 
   lastSentMessage = message;
+  // Direct sends bypass flushQueue(). Mark a fresh runtime here too, or its
+  // first persisted JSONL never triggers refreshSidebarForNewSession() and
+  // appears only after the user manually refreshes the sidebar.
+  markPendingNewSessionRefresh();
   renderNavigableUserMessage({ content: message, images: cmd.images, timestamp: Date.now() });
   trackPromptDelivery(wsClient.send(cmd), message);
 }
@@ -3275,9 +3337,7 @@ function getOrCreatePiQueueEl() {
 
 function flushQueue() {
   if (messageQueue.length > 0 && !state.isStreaming) {
-    if (!hasAnySessionsLoaded()) {
-      pendingNewSessionRefresh = true;
-    }
+    markPendingNewSessionRefresh();
 
     const cmd = messageQueue.shift();
     renderNavigableUserMessage({ content: cmd.message, images: cmd.images, timestamp: Date.now() });
@@ -4108,7 +4168,7 @@ setupSessionSearchDialog({
     for (const project of sidebar?.projects ?? []) {
       const target = (project.sessions ?? []).find((item) => item.filePath === session.id);
       if (target) {
-        switchSession(target.filePath, target, project);
+        void handleSessionSelect(target, project);
         return;
       }
     }
@@ -4277,9 +4337,9 @@ async function resetUiForNewSession() {
   // A brand-new session starts with no prior aggregate or context usage.
   resetHeaderStatusBar();
 
-  // Mark that the next assistant turn should refresh the sidebar, since pi
-  // doesn't persist a brand-new session to disk until the first message round-trip.
-  pendingNewSessionRefresh = true;
+  // Existing Pi sessions already expose a persisted JSONL path. Only a fresh
+  // runtime needs one discovery refresh after its first message round-trip.
+  markPendingNewSessionRefresh();
 }
 
 async function newSession() {
@@ -4470,67 +4530,43 @@ async function handleSessionSelectImpl(session, project) {
   resetHeaderStatusBar();
   updateTokenUsage();
 
-  // Native host: switch session via control command to the current pi instance
+  // A Pi process owns one active session. Same-workspace selection adopts the
+  // target runtime in this document: no WebView reload, no extension bootstrap
+  // warnings, and no flash before the snapshot atomically replaces history.
   if (nativeAvailable() && session.filePath) {
-    pendingMirrorSessionFile = session.filePath;
-    clearMessageQueue();
-    state.reset();
-    if (sidebar.isStreaming(session.filePath)) {
-      state.setStreaming(true);
-      showTypingIndicator(true);
-    } else {
-      showTypingIndicator(false);
-    }
-    updateUI();
-    await renderSelectedSessionHistory(session, project);
-
-    if (targetLiveInstance) {
-      logSessionRoute("select:target-live-sync", {
-        selectedSession: session.filePath,
-        targetInstanceId: targetLiveInstance.instanceId,
+    try {
+      const prepared = await transport.prepareWorkspaceTarget(selectedWorkspacePath, {
+        sessionPath: session.filePath,
+        reuseExisting: Boolean(targetLiveInstance),
       });
+      if (typeof prepared?.transitionGeneration !== "number") {
+        throw new Error("Session runtime transition was not prepared");
+      }
+      await transport.commitWorkspaceTransition(prepared.transitionGeneration);
+      const instances = (await transport.runtimeInstances())?.instances || [];
+      const target = resolvePreparedRuntimeTarget(instances, prepared);
+      if (!target) throw new Error("Prepared session runtime is unavailable");
+      wsClient.setRoutingContext(target);
+      // Keep reload and browser navigation anchored to the adopted runtime.
+      // The target comes from host prepare/commit, never sidebar input.
+      const targetRoute = new URL(
+        `/workspaces/${encodeURIComponent(target.workspaceId)}/sessions/${encodeURIComponent(target.sessionId)}`,
+        window.location.href,
+      );
+      history.pushState(
+        null,
+        "",
+        withFocusParam(selectedWorkspacePath, currentFocusProject, targetRoute).toString(),
+      );
       mirrorActiveSessionFile = session.filePath;
-      sessionInfo.refresh();
+      pendingMirrorSessionFile = session.filePath;
       viewingActiveSession = true;
       updateMirrorInputState();
-      wsClient.requestSnapshot();
-      if (isMobile()) {
-        sidebarEl.classList.add("collapsed");
-        sidebarOverlay.classList.remove("visible");
-      }
-      return;
-    }
-
-    // Same-workspace historical session: switch IN-PLACE on the current Pi
-    // process (upstream pattern). Pi's `switch_session` rpc swaps the active
-    // session inside this runtime, we pull the authoritative snapshot, and
-    // the sidebar is never touched — no page navigation, no fold-state loss.
-    // Spawning a parallel runtime + full navigation stays reserved for
-    // cross-workspace selects (different runtime scope entirely).
-    try {
-      console.info("[SESSION-LOAD] in-place switch started", {
-        sessionFile: session.filePath,
-      });
-      const result = await wsClient.sendRuntime(
-        { type: "switch_session", sessionPath: session.filePath },
-        { timeoutMs: 30000 },
-      );
-      console.info("[SESSION-LOAD] in-place switch completed", {
-        sessionFile: session.filePath,
-        cancelled: Boolean(result?.cancelled),
-      });
-      // Pi switched in-process; pull the authoritative snapshot to re-render
-      // history, model, stats, and toolbars. pendingMirrorSessionFile above
-      // lets handleMirrorSync accept the post-switch snapshot as foreground.
-      wsClient.requestSnapshot();
+      wsClient.subscribeRuntimeTarget(target);
+      wsClient.requestRuntimeSnapshot(target);
     } catch (error) {
-      console.error("[Session route] in-place switch failed:", error);
-      if (pendingMirrorSessionFile === session.filePath) pendingMirrorSessionFile = null;
+      console.error("[Session route] runtime transition failed:", error);
       messageRenderer.renderError(t("errors.failedToSwitchSession", { error }));
-    }
-    if (isMobile()) {
-      sidebarEl.classList.add("collapsed");
-      sidebarOverlay.classList.remove("visible");
     }
     return;
   }
@@ -4541,48 +4577,6 @@ async function handleSessionSelectImpl(session, project) {
   if (isMobile()) {
     sidebarEl.classList.add("collapsed");
     sidebarOverlay.classList.remove("visible");
-  }
-}
-
-async function renderSelectedSessionHistory(session, project) {
-  clearConversationRenderers();
-  if (!session || !project) {
-    renderWorkspaceWelcome();
-    return;
-  }
-
-  messageRenderer.renderSystemMessage(t("status.loadingSession"));
-  const dirName = project?.dirName;
-  const file = session.file;
-  if (!dirName || !file) {
-    logSessionRoute("history:skip-missing-path", {
-      selectedSession: session?.filePath,
-      dirName,
-      file,
-    });
-    return;
-  }
-
-  try {
-    const data = await transport.sessionHistory(session.id);
-    logSessionRoute("history:transport", {
-      selectedSession: session.filePath,
-      sessionId: session.id,
-    });
-    clearConversationRenderers();
-    logSessionRoute("history:render", {
-      selectedSession: session.filePath,
-      entries: data.entries?.length || 0,
-    });
-    renderSessionHistory(data.entries || [], {
-      searchQuery: sidebar.searchQuery,
-    });
-  } catch (e) {
-    console.error("[Session route] history:fetch-error", {
-      selectedSession: session?.filePath,
-      error: e,
-    });
-    messageRenderer.renderError(t("errors.failedToLoadSession", { error: e }));
   }
 }
 
@@ -4605,7 +4599,7 @@ async function switchSession(sessionFile, session = null, project = null) {
 
       if (dirName && file) {
         try {
-          const data = await transport.sessionHistory(session.id);
+          const data = await transport.sessionHistory(session.id, session.filePath);
           console.log("[App] History entries:", data.entries?.length || 0);
 
           clearConversationRenderers();
@@ -4924,7 +4918,7 @@ async function hydrateDiskHistoryFallback(sessionFile) {
     return;
   }
   try {
-    const data = await transport.sessionHistory(row.id);
+    const data = await transport.sessionHistory(row.id, row.filePath);
     const entries = Array.isArray(data?.entries) ? data.entries : [];
     // The user may have switched sessions while the fetch was in flight;
     // only render if this session is still the active view.
@@ -5595,9 +5589,12 @@ wsClient.addEventListener("hostCapabilities", () => {
     void packageManager?.refresh();
     void extensionUpdateIndicator?.refresh();
   }
-  // The first authenticated hello may arrive after the initial refresh;
-  // reload registry-backed sidebar data through the same unified entry.
-  void sidebar.refresh();
+  // Registry rows require authenticated host capability. Native startup
+  // refreshes exactly once here, after the hello handshake.
+  void refreshInitialSidebar();
+  // A same-workspace navigation creates a fresh page. Restore subscriptions
+  // for background runtimes so their green-dot lifecycle remains live.
+  subscribeToLiveRuntimeTargets();
   void reconcilePreferencesOnce();
 });
 
@@ -6081,8 +6078,13 @@ wsClient.connect();
 dismissBootSwapOverlayWhenReady();
 
 // --- Native navigation state restore (B) + sidebar cache (C) ---
-// If page booted because of workspace/session swap, restore the snapshot taken
-// right before navigation so scroll, sidebar expansion, and input draft survive.
+// Restore expansion/search before the first registry load: expanded rows must
+// fetch their lazy session lists during that load, not only after a manual refresh.
+const pendingNavState = consumeNavState();
+if (pendingNavState) {
+  sidebar.expandedWorkspaces = pendingNavState.expandedWorkspaces;
+  sidebar.searchQuery = pendingNavState.searchQuery;
+}
 // Separately, hydrate sidebar from cached project tree before real loadSessions.
 const cachedProjects = readCachedSidebarProjects();
 // readCachedSidebarProjects already filters to complete projects (valid
@@ -6098,57 +6100,57 @@ if (cachedProjects) {
 }
 
 renderWorkspaceWelcome();
-sidebar.refresh().then((projects) => {
-  sessionsLoaded = true;
-  // Cache fresh sidebar data for next native navigation (C).
-  try {
-    cacheSidebarProjects(projects || sidebar.projects);
-  } catch {
-    /* best-effort */
-  }
-  updateUI();
-  // Restore the navigation snapshot now that sidebar + chat are rendered (B).
-  try {
-    const navState = consumeNavState();
-    if (navState) {
-      if (navState.sidebarScroll != null && sidebarEl) {
+let initialSidebarRefreshStarted = false;
+function refreshInitialSidebar() {
+  if (initialSidebarRefreshStarted) return;
+  initialSidebarRefreshStarted = true;
+  sidebar.refresh().then((projects) => {
+    const runtimeTarget = wsClient.getRuntimeTarget();
+    if (runtimeTarget) {
+      sidebar.setProvisionalSession({
+        workspaceId: runtimeTarget.workspaceId,
+        sessionId: runtimeTarget.sessionId,
+      });
+    }
+    sessionsLoaded = true;
+    // Cache fresh sidebar data for next native navigation (C).
+    try {
+      cacheSidebarProjects(projects || sidebar.projects);
+    } catch {
+      /* best-effort */
+    }
+    updateUI();
+    // Registry data is now rendered with restored expansion/search. Apply the
+    // remaining positional state only after the DOM exists.
+    if (pendingNavState) {
+      if (pendingNavState.sidebarScroll != null && sidebarEl) {
         requestAnimationFrame(() => {
-          sidebarEl.scrollTop = navState.sidebarScroll;
+          sidebarEl.scrollTop = pendingNavState.sidebarScroll;
         });
       }
-      if (navState.expandedWorkspaces.size > 0 && sidebar) {
-        for (const id of navState.expandedWorkspaces) {
-          sidebar.expandedWorkspaces.add(id);
-        }
-        sidebar.render();
-      }
-      if (navState.searchQuery && sidebar) {
-        sidebar.searchQuery = navState.searchQuery;
-        sidebar.render();
-      }
-      if (navState.messageScroll != null && messagesContainer) {
+      if (pendingNavState.messageScroll != null && messagesContainer) {
         requestAnimationFrame(() => {
-          messagesContainer.scrollTop = navState.messageScroll;
+          messagesContainer.scrollTop = pendingNavState.messageScroll;
         });
       }
-      if (navState.inputDraft && messageInput && !messageInput.value) {
-        messageInput.value = navState.inputDraft;
+      if (pendingNavState.inputDraft && messageInput && !messageInput.value) {
+        messageInput.value = pendingNavState.inputDraft;
       }
     }
-  } catch {
-    /* restore is best-effort */
-  }
-  if (!hasAnySessionsLoaded()) {
-    renderWorkspaceWelcome();
-  }
-  if (deferredMirrorSync) {
-    const syncData = deferredMirrorSync;
-    deferredMirrorSync = null;
-    handleMirrorSync(syncData);
-  }
-  if (isMirrorMode) updateMirrorLiveIndicator();
-  resolveAndApplyFocus();
-});
+    if (!hasAnySessionsLoaded()) {
+      renderWorkspaceWelcome();
+    }
+    if (deferredMirrorSync) {
+      const syncData = deferredMirrorSync;
+      deferredMirrorSync = null;
+      handleMirrorSync(syncData);
+    }
+    if (isMirrorMode) updateMirrorLiveIndicator();
+    resolveAndApplyFocus();
+  });
+}
+// Mobile mode has no native host-capability handshake.
+if (mobileClientMode) refreshInitialSidebar();
 
 // Dismiss mobile splash screen
 const splash = document.getElementById("mobile-splash");

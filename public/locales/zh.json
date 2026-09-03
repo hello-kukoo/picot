@@ -480,6 +480,7 @@
     "showLess": "收起",
     "untitled": "未命名",
     "emptySession": "空会话",
+    "newSession": "新对话",
     "rename": "重命名",
     "renameSessionAriaLabel": "重命名会话",
     "renameInputPlaceholder": "会话名称",

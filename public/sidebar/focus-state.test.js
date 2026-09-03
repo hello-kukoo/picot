@@ -42,6 +42,16 @@ describe("withFocusParam", () => {
     expect(url.searchParams.has(FOCUS_WORKSPACE_PARAM)).toBe(false);
   });
 
+  test("preserves focus when replacing a same-workspace session route", () => {
+    const url = withFocusParam(
+      "/work/alpha",
+      ALPHA,
+      "http://localhost:3001/workspaces/workspace-alpha/sessions/session-b",
+    );
+    expect(url.pathname).toBe("/workspaces/workspace-alpha/sessions/session-b");
+    expect(url.searchParams.get(FOCUS_WORKSPACE_PARAM)).toBe(alphaId);
+  });
+
   test("preserves unrelated application params", () => {
     const url = withFocusParam("/work/alpha", ALPHA, "http://localhost:3001/?mobile=1");
     expect(url.searchParams.get("mobile")).toBe("1");
@@ -83,6 +93,21 @@ describe("resolveFocusState", () => {
       requestedId: alphaId,
       projects,
       activeSessionFile: "/s/a.jsonl",
+    });
+    expect(r.state).toBe("matched");
+    expect(r.project.path).toBe("/work/alpha");
+  });
+
+  test("matches the current runtime workspace before its first session is persisted", () => {
+    const registryProjects = [
+      { path: "/work/alpha", registryId: "workspace-alpha", sessions: [] },
+      { path: "/work/beta", registryId: "workspace-beta", sessions: [] },
+    ];
+    const r = resolveFocusState({
+      requestedId: alphaId,
+      projects: registryProjects,
+      activeSessionFile: null,
+      runtimeWorkspaceId: "workspace-alpha",
     });
     expect(r.state).toBe("matched");
     expect(r.project.path).toBe("/work/alpha");

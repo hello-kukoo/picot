@@ -25,7 +25,7 @@ use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::routing::{any, get, post};
 use axum::Router;
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -435,6 +435,11 @@ impl HostServer {
         }
     }
 
+    /// The native runtime manager this host routes runtime traffic through.
+    pub fn native_manager(&self) -> &NativePiManager {
+        &self.state.runtimes
+    }
+
     /// Install the terminal manager so the WebSocket loop can route
     /// `terminal_command` frames (PTY lifecycle, input, and checkpoints).
     pub fn set_terminal_manager(&self, manager: Arc<crate::terminal_manager::TerminalManager>) {
@@ -824,31 +829,23 @@ async fn compat_workspace_sessions(
     headers: HeaderMap,
     Query(query): Query<WorkspaceSessionsQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    compat_owner_workspace(&state, &headers, None)?;
+    let workspace_id = compat_owner_workspace(&state, &headers, None)?;
     if !query.path.starts_with('/') {
         return Err(api_error(StatusCode::BAD_REQUEST, "invalid_path"));
     }
-    // Legacy multi-bucket merge: every historical dirName bucket for the
-    // workspace contributes its sessions (A-HTTP-35/36 entry contract).
-    let buckets = state
+    let root = state
         .data
-        .session_dirs_for_workspace(Path::new(&query.path));
-    let dir_name = buckets
-        .first()
-        .and_then(|dir| dir.file_name())
-        .map(|name| name.to_string_lossy().into_owned());
-    if query.mode.as_deref() == Some("count") {
-        return Ok(Json(json!({
-            "path": query.path,
-            "dirName": dir_name,
-            "sessions": [],
-            "sessionCount": state.data.count_bucket_sessions(&buckets),
-        })));
-    }
+        .workspace_root(&workspace_id)
+        .map_err(host_data_error_response)?;
+    let count_only = query.mode.as_deref() == Some("count");
+    let (dir_name, sessions, session_count) = state
+        .data
+        .read_workspace_session_bucket(&workspace_id, count_only);
     Ok(Json(json!({
-        "path": query.path,
+        "path": root,
         "dirName": dir_name,
-        "sessions": state.data.list_workspace_session_entries(&buckets),
+        "sessions": sessions,
+        "sessionCount": session_count,
     })))
 }
 
@@ -972,18 +969,15 @@ async fn compat_session_file(
     if unsafe_segment(&dir_name) || unsafe_segment(&file) {
         return Err(api_error(StatusCode::BAD_REQUEST, "Invalid session path"));
     }
-    let root = state
-        .data
-        .workspace_root(&workspace_id)
-        .map_err(host_data_error_response)?;
     let owned = state
         .data
-        .session_dirs_for_workspace(&root)
-        .iter()
-        .any(|dir| {
-            dir.file_name()
-                .is_some_and(|name| name.to_string_lossy() == dir_name)
-        });
+        .session_bucket_for_workspace(&workspace_id)
+        .and_then(|bucket| {
+            bucket
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .is_some_and(|bucket| bucket == dir_name);
     if !owned {
         return Err(api_error(StatusCode::NOT_FOUND, "Session not found"));
     }
@@ -1229,22 +1223,20 @@ fn oversized_code(kind: PayloadKind) -> &'static str {
     }
 }
 
-async fn send_checked(socket: &mut WebSocket, value: Value, kind: PayloadKind) -> bool {
+fn outbound_message(value: Value, kind: PayloadKind) -> Message {
     if validate(&value, kind).is_err() {
         let error = structured_error(
             None,
             oversized_code(kind),
             "Outbound payload exceeds protocol limit",
         );
-        return socket
-            .send(Message::Text(error.to_string().into()))
-            .await
-            .is_ok();
+        return Message::Text(error.to_string().into());
     }
-    socket
-        .send(Message::Text(value.to_string().into()))
-        .await
-        .is_ok()
+    Message::Text(value.to_string().into())
+}
+
+async fn send_checked(socket: &mut WebSocket, value: Value, kind: PayloadKind) -> bool {
+    socket.send(outbound_message(value, kind)).await.is_ok()
 }
 
 async fn websocket_upgrade(
@@ -1483,9 +1475,21 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
             }
         }
     }
+    // One writer owns the socket. Routed requests run independently so a slow
+    // Pi RPC cannot block sidebar data-plane reads or runtime event delivery.
+    let (mut socket_sink, mut socket_stream) = socket.split();
+    let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
+    let writer = tokio::spawn(async move {
+        while let Some(message) = outgoing_rx.recv().await {
+            if socket_sink.send(message).await.is_err() {
+                break;
+            }
+        }
+    });
+
     loop {
         tokio::select! {
-            incoming = socket.next() => {
+            incoming = socket_stream.next() => {
                 let Some(Ok(message)) = incoming else { break };
                 let Message::Text(text) = message else {
                     if matches!(message, Message::Close(_)) { break; }
@@ -1494,7 +1498,10 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                 let frame = match serde_json::from_str::<Value>(&text) {
                     Ok(frame) => frame,
                     Err(_) => {
-                        let _ = send_error(&mut socket, None, "invalid_json", "Invalid JSON frame").await;
+                        let _ = outgoing_tx.send(outbound_message(
+                            structured_error(None, "invalid_json", "Invalid JSON frame"),
+                            PayloadKind::Response,
+                        ));
                         continue;
                     }
                 };
@@ -1507,53 +1514,73 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                 // to the instance runtime. Responses flow back as
                 // `ephemeral_event` frames on the owner's event stream.
                 if frame.get("type").and_then(Value::as_str) == Some("ephemeral_command") {
-                    let hub = state
-                        .ephemeral_hub
-                        .lock()
-                        .ok()
-                        .and_then(|slot| slot.clone());
-                    let outcome = match (hub, client_context.as_ref()) {
-                        (Some(hub), Some(context))
-                            if context.kind == crate::host_router::ClientKind::Desktop =>
-                        {
-                            let Some(owner) = context.owner_id.as_ref() else {
-                                break;
-                            };
-                            let instance_id = frame
-                                .get("ephemeralInstanceId")
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .to_string();
-                            let generation =
-                                frame.get("generation").and_then(Value::as_u64).unwrap_or(0);
-                            let command_request_id =
-                                frame.get("requestId").and_then(Value::as_str).unwrap_or("");
-                            let payload =
-                                frame.get("payload").cloned().unwrap_or(Value::Null);
-                            hub.forward_command(
-                                &state.runtimes,
-                                owner,
-                                &instance_id,
-                                generation,
-                                payload,
-                                command_request_id,
-                            )
-                            .await
+                    // Off the socket loop: a parked forward_command (slow Pi
+                    // RPC up to its 30s bound) must not stall data-plane
+                    // reads or event delivery for the rest of this socket.
+                    let state = Arc::clone(&state);
+                    let context = client_context.clone();
+                    let outgoing_tx = outgoing_tx.clone();
+                    let request_id = request_id.clone();
+                    tokio::spawn(async move {
+                        let hub = state
+                            .ephemeral_hub
+                            .lock()
+                            .ok()
+                            .and_then(|slot| slot.clone());
+                        let outcome = match (hub, context.as_ref()) {
+                            (Some(hub), Some(context))
+                                if context.kind == crate::host_router::ClientKind::Desktop =>
+                            {
+                                let owner = context
+                                    .owner_id
+                                    .as_ref()
+                                    .ok_or_else(|| {
+                                        "ephemeral transport requires an authenticated owner"
+                                            .to_string()
+                                    });
+                                match owner {
+                                    Ok(owner) => {
+                                        let instance_id = frame
+                                            .get("ephemeralInstanceId")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("")
+                                            .to_string();
+                                        let generation = frame
+                                            .get("generation")
+                                            .and_then(Value::as_u64)
+                                            .unwrap_or(0);
+                                        let command_request_id = frame
+                                            .get("requestId")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("");
+                                        let payload =
+                                            frame.get("payload").cloned().unwrap_or(Value::Null);
+                                        hub.forward_command(
+                                            &state.runtimes,
+                                            owner,
+                                            &instance_id,
+                                            generation,
+                                            payload,
+                                            command_request_id,
+                                        )
+                                        .await
+                                    }
+                                    Err(error) => Err(error),
+                                }
+                            }
+                            _ => Err("ephemeral transport requires a desktop owner".to_string()),
+                        };
+                        if let Err(error) = outcome {
+                            let _ = outgoing_tx.send(outbound_message(
+                                json!({
+                                    "type": "ephemeral_command_failed",
+                                    "requestId": request_id,
+                                    "error": error,
+                                }),
+                                PayloadKind::Response,
+                            ));
                         }
-                        _ => Err("ephemeral transport requires a desktop owner".to_string()),
-                    };
-                    if let Err(error) = outcome {
-                        let _ = send_checked(
-                            &mut socket,
-                            json!({
-                                "type": "ephemeral_command_failed",
-                                "requestId": request_id,
-                                "error": error,
-                            }),
-                            PayloadKind::Response,
-                        )
-                        .await;
-                    }
+                    });
                     continue;
                 }
                 // Terminal PTY lifecycle: owner-scoped `terminal_command`
@@ -1612,7 +1639,7 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                             "error": error,
                         }),
                     };
-                    if !send_checked(&mut socket, outgoing, PayloadKind::Response).await {
+                    if outgoing_tx.send(outbound_message(outgoing, PayloadKind::Response)).is_err() {
                         break;
                     }
                     continue;
@@ -1659,7 +1686,29 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                             Err(_) => Err(("invalid_target", "Runtime target is invalid".into())),
                         }
                     }
-                    Ok(action) => dispatch(action, &state, client_context.as_ref(), progress_sink).await,
+                    Ok(action) => {
+                        let state = Arc::clone(&state);
+                        let context = client_context.clone();
+                        let outgoing_tx = outgoing_tx.clone();
+                        tokio::spawn(async move {
+                            let response = dispatch(action, &state, context.as_ref(), progress_sink).await;
+                            for progress in progress_frames.lock().map(|frames| frames.clone()).unwrap_or_default() {
+                                let _ = outgoing_tx.send(outbound_message(progress, PayloadKind::Progress));
+                            }
+                            let outgoing = match response {
+                                Ok(value) => value,
+                                Err((code, message)) => {
+                                    structured_error(request_id.as_deref(), code, &message)
+                                }
+                            };
+                            let kind = match outgoing.get("type").and_then(Value::as_str) {
+                                Some("runtime_snapshot") => PayloadKind::Snapshot,
+                                _ => PayloadKind::Response,
+                            };
+                            let _ = outgoing_tx.send(outbound_message(outgoing, kind));
+                        });
+                        continue;
+                    }
                     Err((code, message)) => Err((code, message)),
                 };
                 let outgoing = match response {
@@ -1672,16 +1721,11 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                     Some("runtime_event") | Some("event_sequence_gap") => PayloadKind::Event,
                     _ => PayloadKind::Response,
                 };
-                for progress in progress_frames.lock().map(|frames| frames.clone()).unwrap_or_default() {
-                    if !send_checked(&mut socket, progress, PayloadKind::Progress).await {
-                        return;
-                    }
-                }
-                if !send_checked(&mut socket, outgoing, outbound_kind).await {
+                if outgoing_tx.send(outbound_message(outgoing, outbound_kind)).is_err() {
                     break;
                 }
                 for replay in after_response {
-                    if !send_checked(&mut socket, replay, PayloadKind::Event).await {
+                    if outgoing_tx.send(outbound_message(replay, PayloadKind::Event)).is_err() {
                         return;
                     }
                 }
@@ -1695,7 +1739,7 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                                     context.owner_id.as_ref() == Some(owner)
                                 })
                         }) => {
-                            if !send_checked(&mut socket, event.value, PayloadKind::Event).await {
+                            if outgoing_tx.send(outbound_message(event.value, PayloadKind::Event)).is_err() {
                                 break;
                             }
                         }
@@ -1714,7 +1758,7 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                             continue;
                         }
                         let outgoing = runtime_event_frame(event);
-                        if !send_checked(&mut socket, outgoing, PayloadKind::Event).await {
+                        if outgoing_tx.send(outbound_message(outgoing, PayloadKind::Event)).is_err() {
                             break;
                         }
                     }
@@ -1725,7 +1769,7 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                             "event_sequence_gap",
                             "Runtime events were missed; request a snapshot",
                         );
-                        if !send_checked(&mut socket, outgoing, PayloadKind::Event).await {
+                        if outgoing_tx.send(outbound_message(outgoing, PayloadKind::Event)).is_err() {
                             break;
                         }
                     }
@@ -1734,6 +1778,8 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
             }
         }
     }
+    drop(outgoing_tx);
+    let _ = writer.await;
     if let Ok(mut router) = state.router.lock() {
         router.disconnect(&client_id);
     }
@@ -2015,16 +2061,6 @@ async fn dispatch(
                     )
                     .await
                     .map_err(|message| ("snapshot_failed", message))?;
-                let stats_response = state
-                    .runtimes
-                    .request(
-                        &target,
-                        json!({ "type": "get_session_stats" }),
-                        None,
-                        Duration::from_secs(10),
-                    )
-                    .await
-                    .map_err(|message| ("snapshot_failed", message))?;
                 let host_snapshot = state
                     .runtimes
                     .snapshot(&target)
@@ -2038,7 +2074,6 @@ async fn dispatch(
                         "lifecycle": host_snapshot.state,
                         "pi": state_response.get("data").cloned().unwrap_or(Value::Null),
                         "messages": messages_response.pointer("/data/messages").cloned().unwrap_or_else(|| json!([])),
-                        "stats": stats_response.get("data").cloned().unwrap_or(Value::Null),
                     }
                 }));
             }
@@ -2462,11 +2497,13 @@ async fn dispatch(
                         .data
                         .workspace_root(workspace_id)
                         .map_err(host_data_error)?;
-                    let buckets = state.data.session_dirs_for_workspace(&root);
-                    let dir_name = buckets
-                        .first()
-                        .and_then(|dir| dir.file_name())
-                        .map(|name| name.to_string_lossy().into_owned());
+                    let count_only = frame
+                        .get("countOnly")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let (dir_name, sessions, session_count) = state
+                        .data
+                        .read_workspace_session_bucket(workspace_id, count_only);
                     Ok(json!({
                         "type": "data_response",
                         "requestId": request_id,
@@ -2474,8 +2511,8 @@ async fn dispatch(
                         "workspaceId": workspace_id,
                         "path": root.to_string_lossy(),
                         "dirName": dir_name,
-                        "sessions": state.data.list_workspace_session_entries(&buckets),
-                        "sessionCount": state.data.count_bucket_sessions(&buckets),
+                        "sessions": sessions,
+                        "sessionCount": session_count,
                     }))
                 }
                 Some("list_files") => {
@@ -2667,9 +2704,13 @@ async fn dispatch(
                         .get("sessionId")
                         .and_then(Value::as_str)
                         .ok_or(("invalid_session", "sessionId is required".into()))?;
+                    let session_file = frame
+                        .get("sessionFile")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_session", "sessionFile is required".into()))?;
                     let path = state
                         .data
-                        .session_file_path(workspace_id, session_id)
+                        .session_file_path_by_path(workspace_id, session_id, session_file)
                         .ok_or(("session_not_found", "Session is not available".into()))?;
                     let content = fs::read_to_string(path)
                         .map_err(|_| ("session_io_failed", "Session read failed".into()))?;
@@ -2959,6 +3000,7 @@ mod tests {
             tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
         >,
         workspace_id: String,
+        owner_id: String,
     }
 
     async fn desktop_harness(
@@ -3000,7 +3042,7 @@ mod tests {
         )
         .await
         .expect("host server starts");
-        let (_owner, capability) = registry
+        let (owner, capability) = registry
             .create_owner_with_workspace(
                 format!("{label}-window"),
                 workspace.clone(),
@@ -3035,9 +3077,127 @@ mod tests {
             DesktopHarness {
                 socket,
                 workspace_id,
+                owner_id: owner.as_str().to_string(),
             },
             temp,
         )
+    }
+
+    #[tokio::test]
+    async fn stuck_ephemeral_command_does_not_block_same_socket_frames() {
+        use tokio_tungstenite::tungstenite::Message;
+        let (host, mut harness, temp) = desktop_harness("ephemeral-block", None).await;
+
+        // Registry-backed ephemeral record + hub target: the same token
+        // contract production admission enforces (registry generation).
+        let registry = Arc::new(crate::ephemeral_registry::EphemeralRegistry::default());
+        let owner = crate::window_owner::OwnerId::from_string(harness.owner_id.clone());
+        let reservation = registry
+            .reserve_create(&owner, crate::ephemeral_registry::EphemeralKind::SideChat)
+            .unwrap();
+        registry
+            .commit_ready(
+                &reservation,
+                crate::ephemeral_registry::OwnedProcess {
+                    port: 0,
+                    pid: 1,
+                    child_identity: 1,
+                    canonical_cwd: PathBuf::new(),
+                    transition_generation: 0,
+                    temporary_directory: None,
+                },
+            )
+            .unwrap();
+        let instance_id = reservation.instance_id.clone();
+        let (sender, _events) = tokio::sync::broadcast::channel(16);
+        let hub = Arc::new(crate::host_ephemeral::EphemeralHub::new(
+            Arc::clone(&registry),
+            crate::host_control::HostEventSink::new(sender),
+            temp.clone(),
+        ));
+        let target = crate::runtime_coordinator::RuntimeTarget::with_owner(
+            harness.workspace_id.clone(),
+            format!("ephemeral-{instance_id}"),
+            instance_id.clone(),
+            harness.owner_id.as_str(),
+            1,
+        );
+        hub.install_test_target(target.clone());
+        host.set_ephemeral_hub(hub);
+
+        // A live runtime whose reply we control: forward_command parks in
+        // bridge.request until WE answer via the in-memory process handle.
+        let mut process = host.native_manager().register_in_memory(target).unwrap();
+
+        // A non-mutation payload: mutations without an idempotency key fail
+        // fast at admission and would never reach the runtime.
+        harness
+            .socket
+            .send(Message::Text(
+                json!({
+                    "type": "ephemeral_command", "requestId": "ep-stall",
+                    "ephemeralInstanceId": instance_id,
+                    "generation": reservation.generation,
+                    "payload": { "type": "get_state" }
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        // The command reached the runtime: forward_command is now parked in
+        // bridge.request awaiting this reply.
+        let runtime_request = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let request = process.read_request().await.expect("runtime request");
+                if request["type"] == "get_state" {
+                    break request;
+                }
+            }
+        })
+        .await
+        .expect("forward_command must dispatch get_state to the runtime");
+        let _ = runtime_request;
+
+        // Same socket, while the ephemeral command is parked: an unrelated
+        // data-plane probe must still be served.
+        harness
+            .socket
+            .send(Message::Text(
+                json!({
+                    "type": "data_request", "protocolVersion": 2,
+                    "requestId": "probe-1", "operation": "workspace_info",
+                    "workspaceId": harness.workspace_id
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+
+        let probe = tokio::time::timeout(std::time::Duration::from_millis(500), async {
+            loop {
+                let message = harness.socket.next().await.unwrap().unwrap();
+                let frame: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+                if frame["requestId"] == "probe-1" {
+                    break frame;
+                }
+            }
+        })
+        .await
+        .expect("probe must be served while the ephemeral command is parked");
+        assert_eq!(probe["type"], "data_response", "{probe}");
+
+        // Unblock the parked command so the (spawned) arm settles quickly.
+        process
+            .write_frame(json!({
+                "id": runtime_request["id"],
+                "type": "response",
+                "success": true,
+                "data": {}
+            }))
+            .await
+            .unwrap();
+
+        // Deliberately no host.stop(): the socket closes with the test.
     }
 
     #[tokio::test]
@@ -3099,6 +3259,58 @@ mod tests {
         .unwrap();
         assert_eq!(failed["type"], "terminal_command_failed", "{failed}");
         assert_eq!(failed["requestId"], "term-2");
+        let _ = harness.socket.close(None).await;
+        host.stop();
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[tokio::test]
+    async fn data_requests_are_not_blocked_by_slow_host_requests() {
+        use std::time::Duration;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let (host, mut harness, temp) = desktop_harness("data-priority", None).await;
+        host.set_control_handler(Arc::new(|_, _, _| {
+            Box::pin(async move {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                Ok(json!({ "delayed": true }))
+            })
+        }));
+        harness
+            .socket
+            .send(Message::Text(
+                json!({
+                    "type": "host_request", "protocolVersion": 2, "requestId": "slow-host",
+                    "operation": "slow_test_operation", "args": {}
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        harness
+            .socket
+            .send(Message::Text(
+                json!({
+                    "type": "data_request", "protocolVersion": 2, "requestId": "sidebar-count",
+                    "operation": "workspace_sessions", "workspaceId": harness.workspace_id,
+                    "countOnly": true
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+
+        let response = tokio::time::timeout(Duration::from_millis(150), harness.socket.next())
+            .await
+            .expect("sidebar count must not wait for slow host request")
+            .expect("socket stays open")
+            .expect("websocket frame");
+        let response: Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
+        assert_eq!(response["type"], "data_response", "{response}");
+        assert_eq!(response["requestId"], "sidebar-count", "{response}");
+        assert_eq!(response["operation"], "workspace_sessions", "{response}");
+        assert_eq!(response["sessions"], json!([]), "{response}");
+
         let _ = harness.socket.close(None).await;
         host.stop();
         let _ = fs::remove_dir_all(temp);
@@ -3174,6 +3386,32 @@ mod tests {
         assert_eq!(sessions[0]["name"], "History probe");
         assert_eq!(sessions[0]["firstMessage"], "hello history");
         assert_eq!(response["sessionCount"], 1);
+
+        harness
+            .socket
+            .send(Message::Text(
+                json!({
+                    "type": "data_request", "protocolVersion": 2, "requestId": "data-count",
+                    "operation": "workspace_sessions", "workspaceId": harness.workspace_id,
+                    "countOnly": true
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let count_only: Value = serde_json::from_str(
+            harness
+                .socket
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .to_text()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(count_only["sessionCount"], 1);
+        assert_eq!(count_only["sessions"], json!([]));
         let _ = harness.socket.close(None).await;
         host.stop();
         let _ = fs::remove_dir_all(temp);
@@ -3558,6 +3796,10 @@ mod tests {
         );
         assert_eq!(response["requestId"], "state-1");
         assert!(response["state"].is_object());
+        assert!(
+            response["state"].get("stats").is_none(),
+            "snapshot must not fetch stats before an active session is confirmed: {response}"
+        );
         let snapshot_sequence = response["sequence"].as_u64().unwrap();
 
         // Drive one real prompt through HostServer → native bridge → embedded Pi.

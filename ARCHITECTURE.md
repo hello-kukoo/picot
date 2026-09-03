@@ -43,7 +43,7 @@ fn native_runtime_enabled(app) -> bool {
 ```
 
 1. 检查 `PICOT_RUNTIME=native`（debug 构建限定）
-2. 解析注册工作区根目录（`MetadataStore` / `WindowOwnerRegistry`）
+2. 固定选择并注册 `~/.pi/tmp` 作为 cold-start runtime workspace；registry 的排序、pin、最近打开记录不得影响它。每次启动生成新 session id 且不传 session path，故主聊天不会恢复任何历史
 3. 创建 `NativePiManager` + `HostServer`（loopback:0 绑定）
 4. 通过 `pi_launch::native_launch_spec_for` 组装启动输入（binary/args/env/extensions）
 5. `manager.spawn(target, spec)` 派生 pi 进程
@@ -118,6 +118,16 @@ spawn → Starting → Ready → Working ↔ Idle → Stopped
                 ↘ Suspended（resume → Starting with new generation）
 ```
 
+### 工作区会话目录
+
+Pi 默认将 canonical workspace path 映射到一个确定性 bucket：
+
+```text
+~/.pi/agent/sessions/--<canonical-path-with-separators-folded-to-dash>--
+```
+
+workspace 注册时，Picot 先检查该 bucket；只有未命中时才执行一次历史 JSONL header/CWD 发现，并把命中的单个 bucket name 写入 `workspaces.session_bucket`。未命中时仍持久化 Pi 的确定性 bucket name，供 Pi 首次创建 session 使用。Sidebar 的 `workspace_sessions` 读取已持久化 bucket，`countOnly` 仅 `readdir` 计数，完整读取在同一次目录遍历内生成 count 和 session entries；刷新路径不得调用全局 bucket discovery。每个 v2 routed request 独立调度并经单一 socket writer 回传，慢 Pi runtime snapshot 不得阻塞 sidebar data-plane count/list。bucket 缺失表示 0 session，不移除 workspace；workspace canonical path 缺失才按 registry prune 规则删除该 row。
+
 ### 操作注册表（OperationRegistry）
 
 - 逻辑 scope `(owner, workspace, session, generation)`
@@ -142,7 +152,7 @@ spawn → Starting → Ready → Working ↔ Idle → Stopped
 | `paste_offload.rs` | paste 临时文件（TTL/quota/symlink/.gitignore） |
 | `transport_limits.rs` | 帧/响应/事件/快照/进度大小限制 |
 | `cost_compat.rs` | cost-dashboard payload parity |
-| `metadata_store.rs` | SQLite 工作区注册 + preferences；schema 兼容契约：接受 user_version ≤ 6（Corp v4–v6 表归 Corp 构建，public 只读不建），public 迁移只完成 v1–v3 并只盖 v3 戳 |
+| `metadata_store.rs` | SQLite 工作区注册 + preferences；每个注册项持久化单个 Pi `session_bucket`。注册时仅一次 legacy history discovery；sidebar 以后只读此 bucket，不扫描全局 Pi sessions。schema 兼容契约：接受 user_version ≤ 6（Corp v4–v6 表归 Corp 构建，public 只读不建），public 迁移只完成 v1–v3 并只盖 v3 戳；public-owned `session_bucket` 列按存在性增量补齐，绝不改 Corp 版本戳 |
 | `window_owner.rs` | 窗口 owner 注册与 capability |
 | `remote_auth.rs` | 远程设备配对与 device token |
 | `ephemeral_registry.rs` | Side/Quick chat 生命周期 |

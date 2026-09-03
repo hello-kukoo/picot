@@ -251,8 +251,8 @@ export class WsTransport {
     return `/v2/files/raw?${query}`;
   }
 
-  sessionHistory(sessionId) {
-    return this.wsClient.sendData("session_history", { sessionId });
+  sessionHistory(sessionId, sessionFile) {
+    return this.wsClient.sendData("session_history", { sessionId, sessionFile });
   }
 
   sessionRename(filePath, name) {

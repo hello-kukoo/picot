@@ -83,15 +83,15 @@ export class WebSocketClient extends EventTarget {
   }
 
   setRoutingContext({ workspaceId, sessionId, instanceId }) {
-    // Host-origin route IDs are authoritative after navigation.
-    if (!this.canonicalRoute) {
-      if (typeof workspaceId === "string" && workspaceId.trim()) {
-        this.workspaceId = workspaceId.trim();
-      }
-      if (sessionId === null) this.sessionId = null;
-      if (typeof sessionId === "string" && sessionId.trim()) {
-        this.sessionId = sessionId.trim();
-      }
+    // The canonical route is the verified initial target. Same-workspace
+    // transitions adopt a host-prepared target in this document, so it must
+    // not freeze the routing triple after bootstrap.
+    if (typeof workspaceId === "string" && workspaceId.trim()) {
+      this.workspaceId = workspaceId.trim();
+    }
+    if (sessionId === null) this.sessionId = null;
+    if (typeof sessionId === "string" && sessionId.trim()) {
+      this.sessionId = sessionId.trim();
     }
     if (typeof instanceId === "string" && instanceId.trim()) {
       this._instanceIdValue = instanceId.trim();
@@ -275,6 +275,23 @@ export class WebSocketClient extends EventTarget {
     this._requestCanonicalSnapshot();
   }
 
+  requestRuntimeSnapshot(target) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!target?.workspaceId || !target?.sessionId || !target?.instanceId) return;
+    this.ws.send(
+      JSON.stringify({
+        type: "runtime_snapshot_request",
+        protocolVersion: 2,
+        requestId: `snapshot-${++this.requestCounter}`,
+        target: {
+          workspaceId: target.workspaceId,
+          sessionId: target.sessionId,
+          instanceId: target.instanceId,
+        },
+      }),
+    );
+  }
+
   // Send canonical v2 hello. Desktop windows present injected capability.
   _sendClientHello() {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
@@ -400,16 +417,27 @@ export class WebSocketClient extends EventTarget {
     );
   }
 
-  // Runtime command with a correlated `runtime_response`.
-  sendRuntime(command, { timeoutMs } = {}) {
+  // Runtime command with a correlated `runtime_response`. A caller may bind
+  // the request to a prepared target so a same-workspace session adoption
+  // cannot race with another routing-context change.
+  sendRuntime(command, targetOrOptions = null, options = {}) {
+    const hasExplicitTarget =
+      targetOrOptions &&
+      typeof targetOrOptions === "object" &&
+      "workspaceId" in targetOrOptions &&
+      "sessionId" in targetOrOptions &&
+      "instanceId" in targetOrOptions;
+    const target = hasExplicitTarget ? targetOrOptions : this._wireTarget();
+    const requestOptions = hasExplicitTarget ? options : (targetOrOptions ?? {});
+    const { timeoutMs, idempotencyKey } = requestOptions;
     return this._sendRequest(
       (requestId) => ({
         type: "runtime_request",
         protocolVersion: 2,
         requestId,
-        target: this._wireTarget(),
+        target,
         command,
-        idempotencyKey: `ui-${requestId}`,
+        idempotencyKey: idempotencyKey || `ui-${requestId}`,
       }),
       {
         label: `Runtime command "${command?.type || "unknown"}"`,
@@ -464,30 +492,29 @@ export class WebSocketClient extends EventTarget {
     return this.waitForOpen().then(deliver);
   }
 
-  _subscribeCanonicalTarget() {
+  subscribeRuntimeTarget(target) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    if (!this.workspaceId || !this.sessionId) return;
+    if (!target?.workspaceId || !target?.sessionId || !target?.instanceId) return;
     this.ws.send(
       JSON.stringify({
         type: "runtime_subscribe",
         protocolVersion: 2,
         requestId: `sub-${++this.requestCounter}`,
-        target: this._wireTarget(),
+        target: {
+          workspaceId: target.workspaceId,
+          sessionId: target.sessionId,
+          instanceId: target.instanceId,
+        },
       }),
     );
   }
 
+  _subscribeCanonicalTarget() {
+    this.subscribeRuntimeTarget(this._wireTarget());
+  }
+
   _requestCanonicalSnapshot() {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    if (!this.workspaceId || !this.sessionId) return;
-    this.ws.send(
-      JSON.stringify({
-        type: "runtime_snapshot_request",
-        protocolVersion: 2,
-        requestId: `snapshot-${++this.requestCounter}`,
-        target: this._wireTarget(),
-      }),
-    );
+    this.requestRuntimeSnapshot(this._wireTarget());
   }
 
   _canonicalControlEnvelope(command, requestId, args) {

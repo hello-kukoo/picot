@@ -549,3 +549,70 @@ describe("picot config oauth operations", () => {
     expect(ModelRuntime.create).not.toHaveBeenCalled();
   });
 });
+
+// Settings mutations must ride the same proper-lockfile protocol Pi itself
+// uses (skill-inventory.ts withSettingsLock). A bare read-modify-write loses
+// concurrent updates from another window or Pi process — the 07-24 lesson.
+describe("picot config settings writes share the settings lock", () => {
+  const LOCK_HOLD_MS = 250;
+
+  async function writeUnderExternalLock(
+    op: string,
+    params: Record<string, unknown>,
+    initialSettings: Record<string, unknown>,
+    expectedData: Record<string, unknown>,
+    finalAssert: (settings: Record<string, unknown>) => void,
+  ) {
+    const { home, handlePicotConfig } = await loadConfigWithTempHome();
+    const settingsPath = join(home, ".pi", "agent", "settings.json");
+    mkdirSync(dirname(settingsPath), { recursive: true });
+    writeFileSync(settingsPath, JSON.stringify(initialSettings), "utf8");
+
+    // Hold the lock exactly the way another writer would: the shared
+    // `${settings.json}.lock` directory from the proper-lockfile protocol.
+    const lockDir = `${settingsPath}.lock`;
+    mkdirSync(lockDir);
+    const pending = handlePicotConfig(op, params, {});
+    try {
+      await new Promise((resolve) => setTimeout(resolve, LOCK_HOLD_MS));
+      // A bare writer would have replaced the file while the lock was held.
+      const midWrite = JSON.parse(readFileSync(settingsPath, "utf8"));
+      expect(midWrite).toEqual(initialSettings);
+    } finally {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+    // Released: the writer completes through the lock protocol.
+    const result = await pending;
+    expect(result).toEqual({ ok: true, data: expectedData });
+    const finalSettings = JSON.parse(readFileSync(settingsPath, "utf8"));
+    finalAssert(finalSettings);
+    // The lock directory must not survive the write.
+    expect(existsSync(lockDir)).toBe(false);
+  }
+
+  it("set_default_thinking_level waits for the settings lock and preserves unrelated keys", async () => {
+    await writeUnderExternalLock(
+      "set_default_thinking_level",
+      { level: "high", scope: "global" },
+      { defaultThinkingLevel: "low", otherKey: "keep" },
+      expect.objectContaining({ level: "high", scope: "global" }),
+      (settings) => {
+        expect(settings.defaultThinkingLevel).toBe("high");
+        expect(settings.otherKey).toBe("keep");
+      },
+    );
+  });
+
+  it("set_default_auto_compaction waits for the settings lock and preserves unrelated compaction keys", async () => {
+    await writeUnderExternalLock(
+      "set_default_auto_compaction",
+      { enabled: false, scope: "global" },
+      { compaction: { enabled: true, threshold: 42 }, otherKey: "keep" },
+      expect.objectContaining({ enabled: false, scope: "global" }),
+      (settings) => {
+        expect(settings.compaction).toEqual({ enabled: false, threshold: 42 });
+        expect(settings.otherKey).toBe("keep");
+      },
+    );
+  });
+});

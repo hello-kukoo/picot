@@ -52,6 +52,7 @@ import {
   mutateSkillEnabled,
   type SkillScope,
   type SkillTarget,
+  withSettingsLock,
 } from "./skill-inventory";
 
 type ModelHealthStatus = "unknown" | "healthy" | "unhealthy";
@@ -789,12 +790,17 @@ function getDefaultThinkingLevel(scope: unknown, ctx: ConfigContext) {
   return { level: "off", source: "pi_default", path: AGENT_CONFIG_PATH };
 }
 
-function setDefaultThinkingLevel(level: unknown, scope: unknown, ctx: ConfigContext) {
+async function setDefaultThinkingLevel(level: unknown, scope: unknown, ctx: ConfigContext) {
   const thinkingLevel = asThinkingLevel(level);
   const target = resolveSettingsPath(scope, ctx);
-  const settings = readSettingsObject(target.path);
-  settings.defaultThinkingLevel = thinkingLevel;
-  writeSettingsObject(target.path, settings);
+  // Same proper-lockfile protocol Pi and the skills page use: another window
+  // or Pi process may hold the settings lock; a bare read-modify-write
+  // would silently drop its concurrent update.
+  await withSettingsLock(target.path, () => {
+    const settings = readSettingsObject(target.path);
+    settings.defaultThinkingLevel = thinkingLevel;
+    writeSettingsObject(target.path, settings);
+  });
   return { level: thinkingLevel, scope: target.scope, path: target.path };
 }
 
@@ -825,18 +831,20 @@ function getDefaultAutoCompaction(scope: unknown, ctx: ConfigContext) {
   return { enabled: true, source: "pi_default", path: AGENT_CONFIG_PATH };
 }
 
-function setDefaultAutoCompaction(enabled: unknown, scope: unknown, ctx: ConfigContext) {
+async function setDefaultAutoCompaction(enabled: unknown, scope: unknown, ctx: ConfigContext) {
   if (typeof enabled !== "boolean") throw new Error("enabled must be a boolean");
   const target = resolveSettingsPath(scope, ctx);
-  const settings = readSettingsObject(target.path);
-  const existing = settings.compaction;
-  const compaction =
-    existing && typeof existing === "object" && !Array.isArray(existing)
-      ? { ...(existing as Record<string, unknown>) }
-      : {};
-  compaction.enabled = enabled;
-  settings.compaction = compaction;
-  writeSettingsObject(target.path, settings);
+  await withSettingsLock(target.path, () => {
+    const settings = readSettingsObject(target.path);
+    const existing = settings.compaction;
+    const compaction =
+      existing && typeof existing === "object" && !Array.isArray(existing)
+        ? { ...(existing as Record<string, unknown>) }
+        : {};
+    compaction.enabled = enabled;
+    settings.compaction = compaction;
+    writeSettingsObject(target.path, settings);
+  });
   return { enabled, scope: target.scope, path: target.path };
 }
 
@@ -1273,13 +1281,16 @@ export async function handlePicotConfig(
         return { ok: true, data: getDefaultThinkingLevel(params.scope, ctx) };
 
       case "set_default_thinking_level":
-        return { ok: true, data: setDefaultThinkingLevel(params.level, params.scope, ctx) };
+        return { ok: true, data: await setDefaultThinkingLevel(params.level, params.scope, ctx) };
 
       case "get_default_auto_compaction":
         return { ok: true, data: getDefaultAutoCompaction(params.scope, ctx) };
 
       case "set_default_auto_compaction":
-        return { ok: true, data: setDefaultAutoCompaction(params.enabled, params.scope, ctx) };
+        return {
+          ok: true,
+          data: await setDefaultAutoCompaction(params.enabled, params.scope, ctx),
+        };
 
       case "read_models_config":
         return { ok: true, data: readConfigFile(MODELS_CONFIG_PATH, '{\n  "providers": {}\n}\n') };

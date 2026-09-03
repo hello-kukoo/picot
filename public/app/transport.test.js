@@ -42,6 +42,21 @@ describe("WsTransport", () => {
     expect(ws.sendData).toHaveBeenCalledWith("file_mentions", { query: "src/comp" });
   });
 
+  test("sessionHistory sends the scanned session ID and exact JSONL path", async () => {
+    const ws = fakeWsClient();
+    const transport = new WsTransport(ws, {});
+
+    await transport.sessionHistory(
+      "session-123",
+      "/sessions/--workspace--/2026-09-03_session-123.jsonl",
+    );
+
+    expect(ws.sendData).toHaveBeenCalledWith("session_history", {
+      sessionId: "session-123",
+      sessionFile: "/sessions/--workspace--/2026-09-03_session-123.jsonl",
+    });
+  });
+
   test("mobile entry controls send host control commands", async () => {
     const ws = fakeWsClient();
     const transport = createTransport({ wsClient: ws, env: {} });

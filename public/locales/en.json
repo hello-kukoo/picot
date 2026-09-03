@@ -480,6 +480,7 @@
     "showLess": "Show less",
     "untitled": "Untitled",
     "emptySession": "Empty session",
+    "newSession": "New chat",
     "rename": "Rename",
     "renameSessionAriaLabel": "Rename session",
     "renameInputPlaceholder": "Session name",

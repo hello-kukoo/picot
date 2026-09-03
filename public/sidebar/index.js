@@ -93,6 +93,9 @@ export class SessionSidebar {
     this._refreshPromise = null;
     this._refreshRegistryAvailable = null;
     this._refreshScopeKey = null;
+    // A fresh native runtime exists before Pi persists its first JSONL. Keep
+    // one read-only row so its owning workspace and active chat stay visible.
+    this.provisionalSession = null;
     // Keyed-DOM row caches so routine refreshes reuse unchanged nodes
     // (hover/scroll/overlays survive) instead of rebuilding the whole tree.
     this._projectRowCache = new Map();
@@ -396,6 +399,7 @@ export class SessionSidebar {
     this._registryPins = registryPinsFromProjects(merged.projects);
     this.loadCommitted = seq;
     this.projects = merged.projects;
+    this.applyProvisionalSession();
 
     if (removedRows.length > 0) {
       this.onSessionNotice?.(t("sidebar.workspaceMissingRemoved"));
@@ -532,10 +536,21 @@ export class SessionSidebar {
    * active row and loads chat history in the main surface.
    */
   refresh({ workspacePath = null } = {}) {
+    const targetKey = workspacePathKey(workspacePath);
+    const registryAvailable = this.isRegistryAvailable();
+    // Coalesce before changing the request generation. Otherwise a second
+    // click invalidates the first refresh's in-flight list response, then
+    // returns its promise; expanded rows stay visibly empty until retry.
+    if (
+      this._refreshPromise &&
+      this._refreshRegistryAvailable === registryAvailable &&
+      this._refreshScopeKey === targetKey
+    ) {
+      return this._refreshPromise;
+    }
     this._registrySessionLoadGeneration += 1;
     this._registryBusyRows.clear();
     this._registryCountBusyRows.clear();
-    const targetKey = workspacePathKey(workspacePath);
     for (const project of this.projects) {
       if (
         project.source === "registry" &&
@@ -549,14 +564,6 @@ export class SessionSidebar {
     // cache too; the next expansion must not serve the pre-persistence list.
     if (targetKey) this.invalidateWorkspaceSessions(workspacePath);
     this._registryWarmupScheduled = false;
-    const registryAvailable = this.isRegistryAvailable();
-    if (
-      this._refreshPromise &&
-      this._refreshRegistryAvailable === registryAvailable &&
-      this._refreshScopeKey === targetKey
-    ) {
-      return this._refreshPromise;
-    }
     const refreshPromise = this.loadSessions()
       .then(async (projects) => {
         const targets = (projects || []).filter(
@@ -579,6 +586,46 @@ export class SessionSidebar {
     this._refreshRegistryAvailable = registryAvailable;
     this._refreshScopeKey = targetKey;
     return refreshPromise;
+  }
+
+  setProvisionalSession({ workspaceId, sessionId, sessionFile = null } = {}) {
+    if (typeof workspaceId !== "string" || !workspaceId) return;
+    const filePath = typeof sessionFile === "string" && sessionFile ? sessionFile : sessionId;
+    if (typeof filePath !== "string" || !filePath) return;
+    this.provisionalSession = {
+      workspaceId,
+      sessionId,
+      filePath,
+      name: t("sidebar.newSession"),
+      timestamp: new Date().toISOString(),
+      mtime: Date.now(),
+      provisional: true,
+    };
+    this.applyProvisionalSession();
+    this.render();
+  }
+
+  applyProvisionalSession() {
+    const pending = this.provisionalSession;
+    if (!pending) return;
+    const project = this.projects.find(
+      (candidate) =>
+        candidate?.registryId === pending.workspaceId ||
+        candidate?.workspaceId === pending.workspaceId,
+    );
+    if (!project) return;
+    const sessions = Array.isArray(project.sessions) ? project.sessions : [];
+    if (
+      sessions.some(
+        (session) =>
+          !session?.provisional &&
+          (session?.filePath === pending.filePath || session?.id === pending.sessionId),
+      )
+    ) {
+      this.provisionalSession = null;
+      return;
+    }
+    project.sessions = [pending, ...sessions.filter((session) => !session?.provisional)];
   }
 
   async fetchLiveInstances() {
@@ -836,18 +883,16 @@ export class SessionSidebar {
   }
 
   setActive(filePath) {
+    if (this.activeSessionFile === filePath) return;
     this.activeSessionFile = filePath;
     if (filePath && this.unread.has(filePath)) {
       this.unread.delete(filePath);
       this.saveUnread();
     }
-    this.container.querySelectorAll(".session-item").forEach((el) => {
-      const isActive = el.dataset.filePath === filePath;
-      el.classList.toggle("active", isActive);
-      if (isActive) {
-        el.classList.remove("unread");
-      }
-    });
+    // Workspace header actions depend on which project owns the active
+    // session. Render through the keyed row cache so the Focus button appears
+    // immediately without a sidebar data refresh.
+    this.render();
   }
 
   clearActive() {
@@ -1282,21 +1327,31 @@ export class SessionSidebar {
 
   buildSessionItem(session, project, options = {}) {
     const { showDeleteButton = false, deletionBlockedReason = null, onDelete = null } = options;
+    const isProvisional = session?.provisional === true;
+    const onSelect =
+      !isProvisional && this.onSessionSelect
+        ? (selectedSession, selectedProject) =>
+            this.onSessionSelect(selectedSession, selectedProject)
+        : null;
     return buildSessionItemNode({
       session,
       project,
-      isActive: session.filePath === this.activeSessionFile,
+      isActive: session?.provisional === true || session.filePath === this.activeSessionFile,
       isUnread: this.unread.has(session.filePath),
       isStreaming: this.streamingFiles.has(session.filePath),
       showPinButton: false,
-      showDeleteButton,
+      showDeleteButton: isProvisional ? false : showDeleteButton,
       deletionBlockedReason: deletionBlockedReason ?? this.deletionBlockedReason(session.filePath),
       projectSearchText: this.getProjectSearchText(project),
       formattedTime: this.formatTime(session.mtime ?? session.timestamp),
-      onSelect: this.onSessionSelect ? (s, p) => this.onSessionSelect(s, p) : null,
-      onDelete: onDelete || ((filePath) => this.deleteSession(filePath)),
-      onRename: (filePath, session, item) => this.renameSession(filePath, session, item),
-      onContextMenu: (event, item, session) => this.showSessionContextMenu(event, item, session),
+      onSelect,
+      onDelete: isProvisional ? null : onDelete || ((filePath) => this.deleteSession(filePath)),
+      onRename: isProvisional
+        ? null
+        : (filePath, session, item) => this.renameSession(filePath, session, item),
+      onContextMenu: isProvisional
+        ? null
+        : (event, item, session) => this.showSessionContextMenu(event, item, session),
       createIcon: createActionIcon,
     });
   }

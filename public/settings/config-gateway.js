@@ -21,7 +21,15 @@ export function consumeConfigResponseFrame(gateway, frame) {
   return Boolean(
     frame?.type === "runtime_event" &&
       frame.event?.type === "extension_ui_request" &&
-      gateway.consumeNotify(frame.event),
+      gateway.consumeNotify(frame.event, frame.target ?? null),
+  );
+}
+
+function sameRuntimeTarget(left, right) {
+  return (
+    left.workspaceId === right.workspaceId &&
+    left.sessionId === right.sessionId &&
+    (left.instanceId ?? "") === (right.instanceId ?? "")
   );
 }
 
@@ -56,7 +64,7 @@ export class ConfigGateway {
         this.#pending.delete(id);
         reject(new Error(`Configuration request "${op}" timed out`));
       }, timeoutMs);
-      this.#pending.set(id, { resolve, reject, timer });
+      this.#pending.set(id, { resolve, reject, timer, target });
       this.#runtime
         .request({ type: "prompt", message }, target, { idempotencyKey: id })
         .catch((error) => {
@@ -70,7 +78,11 @@ export class ConfigGateway {
   }
 
   // Returns true if the notification was a config response (consumed).
-  consumeNotify(request) {
+  // `expectedTarget` is the routing triple the frame arrived on: a pending
+  // request bound to another runtime target is swallowed without resolving —
+  // its own timeout reports the miss instead of handing a foreign runtime's
+  // payload to this caller.
+  consumeNotify(request, expectedTarget = null) {
     const message = request?.message;
     if (typeof message !== "string" || !message.includes("__picotConfig")) return false;
     let payload;
@@ -83,6 +95,9 @@ export class ConfigGateway {
     if (typeof id !== "string") return false;
     const pending = this.#pending.get(id);
     if (!pending) return true; // ours, but already settled/timed out — still swallow it
+    if (pending.target && expectedTarget && !sameRuntimeTarget(pending.target, expectedTarget)) {
+      return true; // foreign runtime anomaly: swallow, let the timeout fire
+    }
     clearTimeout(pending.timer);
     this.#pending.delete(id);
     const { __picotConfig, ...result } = payload;

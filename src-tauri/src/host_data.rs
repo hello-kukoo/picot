@@ -145,24 +145,51 @@ impl HostDataPlane {
         self
     }
 
-    /// Pi's session-project directory name for a workspace root
-    /// (`encodeSessionDirName`): `--` + path without the leading slash with
-    /// `/`, `\` and `:` folded to `-`, plus a trailing `--`.
-    #[allow(dead_code)]
+    /// Pi's session-project directory name for a workspace root.
     fn encode_session_dir_name(workspace_root: &Path) -> Option<String> {
-        let text = workspace_root.to_string_lossy();
-        let stripped = text.strip_prefix(['/', '\\']).unwrap_or(&text);
-        let encoded: String = stripped
-            .chars()
-            .map(|c| {
-                if matches!(c, '/' | '\\' | ':') {
-                    '-'
-                } else {
-                    c
-                }
+        crate::metadata_store::MetadataStore::session_bucket_name_for_root(workspace_root)
+    }
+
+    /// One-time registration discovery. Prefer Pi's deterministic bucket, then
+    /// inspect legacy buckets whose session headers identify this workspace.
+    pub fn discover_session_bucket(session_root: &Path, workspace_root: &Path) -> Option<String> {
+        let canonical = workspace_root
+            .canonicalize()
+            .unwrap_or_else(|_| workspace_root.to_path_buf());
+        let encoded = Self::encode_session_dir_name(&canonical)?;
+        if session_root.join(&encoded).is_dir() {
+            return Some(encoded);
+        }
+        std::fs::read_dir(session_root)
+            .ok()?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.is_dir()
+                    && sample_bucket_cwd_matches(path, &canonical)
+                    && path.file_name().and_then(|name| name.to_str()).is_some_and(
+                        crate::metadata_store::MetadataStore::is_valid_session_bucket_name,
+                    )
             })
-            .collect();
-        Some(format!("--{encoded}--"))
+            .and_then(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+    }
+
+    /// Resolve the single persisted bucket for a workspace. The registry owns
+    /// this identity; a missing or invalid value has no fallback scan.
+    pub fn session_bucket_for_workspace(&self, workspace_id: &str) -> Option<PathBuf> {
+        let session_root = self.session_root.as_ref()?;
+        let row = self
+            .metadata
+            .lock()
+            .ok()?
+            .get_workspace(workspace_id)
+            .ok()??;
+        let bucket = row.session_bucket?;
+        crate::metadata_store::MetadataStore::is_valid_session_bucket_name(&bucket)
+            .then(|| session_root.join(bucket))
     }
 
     /// Locate the session-project directory for a workspace root: the Pi
@@ -216,78 +243,109 @@ impl HostDataPlane {
         buckets
     }
 
-    /// Legacy workspace-sessions listing: parse each bucket's session
-    /// headers and emit the exact entry contract the sidebar consumes
-    /// (`id/timestamp/name/firstMessage/cwd/file/filePath/mtime/ctime`),
-    /// merged across buckets and sorted by activity time descending.
-    pub fn list_workspace_session_entries(&self, buckets: &[PathBuf]) -> Vec<serde_json::Value> {
-        let mut entries = Vec::new();
-        for dir in buckets {
-            let Ok(files) = std::fs::read_dir(dir) else {
+    /// Read one persisted workspace bucket once. Count-only skips JSONL
+    /// parsing; full mode returns the count from that same directory walk.
+    pub fn read_workspace_session_bucket(
+        &self,
+        workspace_id: &str,
+        count_only: bool,
+    ) -> (Option<String>, Vec<serde_json::Value>, usize) {
+        let Some(bucket) = self.session_bucket_for_workspace(workspace_id) else {
+            return (None, Vec::new(), 0);
+        };
+        let bucket_name = bucket
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned());
+        let files = match std::fs::read_dir(&bucket) {
+            Ok(files) => files,
+            Err(_) => return (bucket_name, Vec::new(), 0),
+        };
+        let mut count = 0;
+        let mut sessions = Vec::new();
+        for file in files.filter_map(Result::ok) {
+            let path = file.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
+                continue;
+            }
+            count += 1;
+            if count_only {
+                continue;
+            }
+            let (Ok(metadata), Some(header)) = (file.metadata(), parse_session_header(&path))
+            else {
                 continue;
             };
-            for file in files.filter_map(Result::ok) {
-                let path = file.path();
-                if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
-                    continue;
-                }
-                let (Ok(metadata), Some(header)) = (file.metadata(), parse_session_header(&path))
-                else {
-                    continue;
-                };
-                let modified = metadata.modified().ok().and_then(|value| {
-                    value
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .ok()
-                        .map(|duration| duration.as_millis())
-                });
-                let created = metadata.created().ok().and_then(|value| {
-                    value
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .ok()
-                        .map(|duration| duration.as_millis())
-                });
-                entries.push(serde_json::json!({
-                    "id": header.id,
-                    "timestamp": header.timestamp,
-                    "name": header.name,
-                    "firstMessage": header.first_message,
-                    "cwd": header.cwd,
-                    "file": path.file_name().map(|name| name.to_string_lossy().into_owned()),
-                    "filePath": path.to_string_lossy(),
-                    "mtime": modified,
-                    "ctime": created,
-                }));
-            }
+            let modified = metadata.modified().ok().and_then(|value| {
+                value
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .map(|duration| duration.as_millis())
+            });
+            let created = metadata.created().ok().and_then(|value| {
+                value
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .map(|duration| duration.as_millis())
+            });
+            sessions.push(serde_json::json!({
+                "id": header.id,
+                "timestamp": header.timestamp,
+                "name": header.name,
+                "firstMessage": header.first_message,
+                "cwd": header.cwd,
+                "file": path.file_name().map(|name| name.to_string_lossy().into_owned()),
+                "filePath": path.to_string_lossy(),
+                "mtime": modified,
+                "ctime": created,
+            }));
         }
-        entries.sort_by(|a, b| session_activity_time(b).total_cmp(&session_activity_time(a)));
-        entries
-    }
-
-    /// Count of `.jsonl` files across the given buckets (legacy count mode:
-    /// readdir-only, no parsing).
-    pub fn count_bucket_sessions(&self, buckets: &[PathBuf]) -> usize {
-        buckets
-            .iter()
-            .filter_map(|dir| std::fs::read_dir(dir).ok())
-            .flat_map(|read| read.filter_map(Result::ok))
-            .filter(|file| {
-                file.path().extension().and_then(|value| value.to_str()) == Some("jsonl")
-            })
-            .count()
+        sessions.sort_by(|left, right| {
+            session_activity_time(right).total_cmp(&session_activity_time(left))
+        });
+        (bucket_name, sessions, count)
     }
 
     /// Session file path for a workspace session
     /// (`<sessions>/<encoded-workspace>/<session-id>.jsonl`).
     pub fn session_file_path(&self, workspace_id: &str, session_id: &str) -> Option<PathBuf> {
-        let root = self.workspace_root(workspace_id).ok()?;
-        self.session_file_path_for_root(&root, session_id)
+        let bucket = self.session_bucket_for_workspace(workspace_id)?;
+        self.session_file_path_in_bucket(&bucket, session_id)
     }
 
-    /// Resolve only a session identifier, never a caller-supplied path. The
-    /// bucket must be one of this workspace's known buckets and the final
-    /// file must remain inside the canonical session root.
-    pub fn session_file_path_for_root(&self, root: &Path, session_id: &str) -> Option<PathBuf> {
+    /// Resolve a sidebar-scanned JSONL path. The path stays untrusted: it must
+    /// canonicalize inside this workspace's persisted bucket and its session
+    /// header must match the separately supplied stable ID.
+    pub fn session_file_path_by_path(
+        &self,
+        workspace_id: &str,
+        session_id: &str,
+        session_path: &str,
+    ) -> Option<PathBuf> {
+        if session_id.is_empty() || session_path.is_empty() {
+            return None;
+        }
+        let bucket = self.session_bucket_for_workspace(workspace_id)?;
+        let session_root = self.session_root.as_ref()?;
+        let canonical_root = session_root.canonicalize().ok()?;
+        let canonical_bucket = bucket.canonicalize().ok()?;
+        if canonical_bucket.strip_prefix(&canonical_root).is_err() {
+            return None;
+        }
+        let resolved = Path::new(session_path).canonicalize().ok()?;
+        if resolved.strip_prefix(&canonical_bucket).is_err()
+            || !resolved.is_file()
+            || resolved
+                .extension()
+                .and_then(|extension| extension.to_str())
+                != Some("jsonl")
+        {
+            return None;
+        }
+        let header = parse_session_header(&resolved)?;
+        (header.id == session_id).then_some(resolved)
+    }
+
+    fn session_file_path_in_bucket(&self, bucket: &Path, session_id: &str) -> Option<PathBuf> {
         if session_id.is_empty()
             || session_id.contains('/')
             || session_id.contains('\\')
@@ -297,26 +355,28 @@ impl HostDataPlane {
             return None;
         }
         let session_root = self.session_root.as_ref()?;
-        let canonical_workspace = root.canonicalize().ok()?;
-        let encoded = Self::encode_session_dir_name(&canonical_workspace)?;
-        let bucket = session_root.join(encoded);
         let canonical_root = session_root.canonicalize().ok()?;
         let canonical_bucket = bucket.canonicalize().ok()?;
         if canonical_bucket.strip_prefix(&canonical_root).is_err() {
             return None;
         }
-        let path = bucket.join(format!("{session_id}.jsonl"));
-        let resolved = path.canonicalize().ok()?;
-        if resolved.strip_prefix(&canonical_bucket).is_err() || !resolved.is_file() {
-            return None;
-        }
-        // Session IDs are file stems in Pi's on-disk format. Require header
-        // identity to match too; a same-named arbitrary JSONL is not a session.
-        let header = parse_session_header(&resolved)?;
-        if header.id != session_id {
-            return None;
-        }
-        Some(resolved)
+        // Pi may prefix the JSONL filename with a timestamp. The session
+        // header is therefore the stable identity, not the filename stem.
+        std::fs::read_dir(&canonical_bucket)
+            .ok()?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find_map(|path| {
+                (path.extension().and_then(|extension| extension.to_str()) == Some("jsonl"))
+                    .then(|| path.canonicalize().ok())
+                    .flatten()
+                    .filter(|resolved| {
+                        resolved.strip_prefix(&canonical_bucket).is_ok() && resolved.is_file()
+                    })
+                    .filter(|resolved| {
+                        parse_session_header(resolved).is_some_and(|header| header.id == session_id)
+                    })
+            })
     }
 
     /// Append a `session_info` name record to a session file (rename).
@@ -1471,6 +1531,100 @@ mod tests {
     }
 
     #[test]
+    fn persisted_bucket_reads_once_and_missing_directory_is_empty() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let sessions = temp.path().join("sessions");
+        fs::create_dir_all(&workspace).unwrap();
+        let (data, workspace_id) = test_data(&workspace);
+        let data = data.with_session_root(sessions.clone());
+        let bucket_name = data
+            .session_bucket_for_workspace(&workspace_id)
+            .and_then(|bucket| {
+                bucket
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .unwrap();
+        assert_eq!(
+            data.read_workspace_session_bucket(&workspace_id, true),
+            (Some(bucket_name.clone()), Vec::new(), 0),
+        );
+
+        let bucket = sessions.join(&bucket_name);
+        fs::create_dir_all(&bucket).unwrap();
+        fs::write(
+            bucket.join("saved.jsonl"),
+            format!(
+                "{{\"type\":\"session\",\"id\":\"saved\",\"cwd\":{}}}\n{{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":\"hello\"}}}}\n",
+                serde_json::to_string(&workspace.canonicalize().unwrap().to_string_lossy()).unwrap()
+            ),
+        )
+        .unwrap();
+        let (dir_name, sessions, count) = data.read_workspace_session_bucket(&workspace_id, false);
+        assert_eq!(dir_name, Some(bucket_name));
+        assert_eq!(count, 1);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0]["id"], "saved");
+    }
+
+    #[test]
+    fn session_file_path_accepts_verified_prefixed_pi_filename() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let sessions = temp.path().join("sessions");
+        fs::create_dir_all(&workspace).unwrap();
+        let (data, workspace_id) = test_data(&workspace);
+        let root = workspace.canonicalize().unwrap();
+        let bucket_name = HostDataPlane::encode_session_dir_name(&root).unwrap();
+        let bucket = sessions.join(&bucket_name);
+        fs::create_dir_all(&bucket).unwrap();
+        let file = bucket.join("2026-09-03T12-00-00-000Z_saved.jsonl");
+        fs::write(
+            &file,
+            format!(
+                "{{\"type\":\"session\",\"id\":\"saved\",\"cwd\":{}}}\n{{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":\"hello\"}}}}\n",
+                serde_json::to_string(&root.to_string_lossy()).unwrap()
+            ),
+        )
+        .unwrap();
+        let data = data.with_session_root(sessions);
+
+        assert_eq!(
+            data.session_file_path_by_path(&workspace_id, "saved", &file.to_string_lossy()),
+            file.canonicalize().ok(),
+        );
+    }
+
+    #[test]
+    fn session_file_path_finds_verified_prefixed_pi_filename_by_header_id() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let sessions = temp.path().join("sessions");
+        fs::create_dir_all(&workspace).unwrap();
+        let (data, workspace_id) = test_data(&workspace);
+        let root = workspace.canonicalize().unwrap();
+        let bucket_name = HostDataPlane::encode_session_dir_name(&root).unwrap();
+        let bucket = sessions.join(&bucket_name);
+        fs::create_dir_all(&bucket).unwrap();
+        let file = bucket.join("2026-09-03T12-00-00-000Z_saved.jsonl");
+        fs::write(
+            &file,
+            format!(
+                "{{\"type\":\"session\",\"id\":\"saved\",\"cwd\":{}}}\n{{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":\"hello\"}}}}\n",
+                serde_json::to_string(&root.to_string_lossy()).unwrap()
+            ),
+        )
+        .unwrap();
+        let data = data.with_session_root(sessions);
+
+        assert_eq!(
+            data.session_file_path(&workspace_id, "saved"),
+            file.canonicalize().ok(),
+        );
+    }
+
+    #[test]
     fn session_file_path_rejects_traversal_and_outside_bucket() {
         let temp = tempfile::tempdir().unwrap();
         let workspace = temp.path().join("workspace");
@@ -1490,7 +1644,7 @@ mod tests {
         )
         .unwrap();
         let data = data.with_session_root(sessions);
-        let resolved = data.session_file_path_for_root(&root, "safe");
+        let resolved = data.session_file_path(&workspace_id, "safe");
         assert!(
             resolved.is_some(),
             "root={root:?} bucket={bucket:?} resolved={resolved:?}"

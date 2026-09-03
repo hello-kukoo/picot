@@ -359,6 +359,25 @@ describe("WebSocketClient broker routing", () => {
     expect(syncs[0].target.instanceId).toBe("secondary");
   });
 
+  test("adopts an in-place target after canonical bootstrap", async () => {
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
+    client.canonicalRoute = true;
+    client.workspaceId = "ws-uuid-1";
+    client.sessionId = "session-a";
+
+    client.setRoutingContext({
+      workspaceId: "ws-uuid-1",
+      sessionId: "session-b",
+      instanceId: "instance-b",
+    });
+
+    expect(client.getRuntimeTarget()).toEqual({
+      workspaceId: "ws-uuid-1",
+      sessionId: "session-b",
+      instanceId: "instance-b",
+    });
+  });
+
   test("frames carry the routing triple with the bootstrap instance", async () => {
     const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
     // Canonical page: bootstrap supplies the authoritative routing identity.
@@ -492,6 +511,28 @@ describe("WebSocketClient broker routing", () => {
     });
   });
 
+  test("subscribes to and snapshots a background runtime with its exact target", () => {
+    const sent = [];
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
+    client.ws = {
+      readyState: WebSocket.OPEN,
+      send: (message) => sent.push(JSON.parse(message)),
+    };
+    const background = {
+      workspaceId: "workspace-a",
+      sessionId: "session-background",
+      instanceId: "instance-background",
+    };
+
+    client.subscribeRuntimeTarget(background);
+    client.requestRuntimeSnapshot(background);
+
+    expect(sent).toEqual([
+      expect.objectContaining({ type: "runtime_subscribe", target: background }),
+      expect.objectContaining({ type: "runtime_snapshot_request", target: background }),
+    ]);
+  });
+
   test("wraps commands with the active runtime instance", () => {
     const sent = [];
     const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
@@ -508,6 +549,37 @@ describe("WebSocketClient broker routing", () => {
     client.send({ type: "mirror_sync_request" });
 
     expect(sent[0].target.instanceId).toBe("47822");
+  });
+
+  test("sendRuntime honors an explicit target instead of the current route", async () => {
+    const sent = [];
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
+    client.ws = {
+      readyState: WebSocket.OPEN,
+      send: (message) => sent.push(JSON.parse(message)),
+    };
+    client.setRoutingContext({
+      workspaceId: "workspace-a",
+      sessionId: "session-a",
+      instanceId: "instance-a",
+    });
+    const target = {
+      workspaceId: "workspace-a",
+      sessionId: "session-b",
+      instanceId: "instance-b",
+    };
+
+    const pending = client.sendRuntime({ type: "prompt", message: "config" }, target, {
+      idempotencyKey: "config-request",
+    });
+
+    expect(sent[0]).toMatchObject({ target, idempotencyKey: "config-request" });
+    client.handleMessage({
+      type: "runtime_response",
+      requestId: sent[0].requestId,
+      response: { success: true, data: {} },
+    });
+    await expect(pending).resolves.toEqual({});
   });
 
   test("sendRuntime correlates the v2 runtime reply and yields its data", async () => {

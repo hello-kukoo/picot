@@ -34,6 +34,7 @@ pub struct WorkspaceRow {
     pub display_name: Option<String>,
     pub pinned: bool,
     pub last_opened_at: Option<i64>,
+    pub session_bucket: Option<String>,
 }
 
 /// A registry row removed by automatic prune because its directory vanished.
@@ -221,10 +222,11 @@ impl MetadataStore {
                 "Picot metadata schema {current} is newer than supported schema {SCHEMA_VERSION}"
             ));
         }
-        // v3+ needs no public migration. Corp v4–v6 databases keep their
-        // version: Corp tables are owned by Corp builds, which finish their
-        // own staircase; this build reads only the v1–v3 tables it uses.
+        // Corp v4–v6 databases keep their version: Corp tables are owned by
+        // Corp builds. Public-owned workspace columns remain additive and must
+        // exist at every accepted schema level.
         if current >= WRITTEN_SCHEMA_VERSION {
+            self.ensure_workspace_session_bucket_column()?;
             return Ok(());
         }
 
@@ -277,10 +279,11 @@ impl MetadataStore {
                 }
                 names
             };
-        let additions: [(&str, &str); 3] = [
+        let additions: [(&str, &str); 4] = [
             ("display_name", "TEXT"),
             ("pinned", "INTEGER NOT NULL DEFAULT 0"),
             ("last_opened_at", "INTEGER"),
+            ("session_bucket", "TEXT"),
         ];
         for (column, declaration) in additions {
             if !existing_columns
@@ -305,6 +308,30 @@ impl MetadataStore {
         transaction
             .commit()
             .map_err(|error| format!("Cannot commit Picot metadata migration: {error}"))
+    }
+
+    fn ensure_workspace_session_bucket_column(&self) -> Result<(), String> {
+        let mut statement = self
+            .connection
+            .prepare("PRAGMA table_info(workspaces)")
+            .map_err(|error| format!("Cannot inspect Picot workspaces schema: {error}"))?;
+        let columns = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|error| format!("Cannot inspect Picot workspaces schema: {error}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Cannot inspect Picot workspaces schema: {error}"))?;
+        if columns
+            .iter()
+            .any(|column| column.eq_ignore_ascii_case("session_bucket"))
+        {
+            return Ok(());
+        }
+        self.connection
+            .execute("ALTER TABLE workspaces ADD COLUMN session_bucket TEXT", [])
+            .map_err(|error| {
+                format!("Cannot extend Picot workspaces schema (session_bucket): {error}")
+            })?;
+        Ok(())
     }
 
     #[cfg(unix)]
@@ -369,7 +396,7 @@ impl MetadataStore {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT workspace_id, canonical_path, display_name, pinned, last_opened_at
+                "SELECT workspace_id, canonical_path, display_name, pinned, last_opened_at, session_bucket
                  FROM workspaces
                  ORDER BY pinned DESC, last_opened_at DESC",
             )
@@ -382,6 +409,7 @@ impl MetadataStore {
                     display_name: row.get(2)?,
                     pinned: row.get::<_, i64>(3)? != 0,
                     last_opened_at: row.get(4)?,
+                    session_bucket: row.get(5)?,
                 })
             })
             .map_err(|error| format!("Cannot list Picot workspaces: {error}"))?;
@@ -422,11 +450,12 @@ impl MetadataStore {
         let display_name = canonical
             .file_name()
             .map(|name| name.to_string_lossy().to_string());
+        let session_bucket = Self::session_bucket_name_for_root(&canonical);
         self.connection
             .execute(
-                "INSERT INTO workspaces (workspace_id, canonical_path, display_name)
-                 VALUES (?1, ?2, ?3)",
-                params![id, canonical_text.as_str(), display_name],
+                "INSERT INTO workspaces (workspace_id, canonical_path, display_name, session_bucket)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![id, canonical_text.as_str(), display_name, session_bucket],
             )
             .map_err(|error| AddWorkspaceError::Db(format!("Cannot store workspace: {error}")))?;
         let row = self
@@ -436,6 +465,45 @@ impl MetadataStore {
                 AddWorkspaceError::Db("Stored workspace row immediately vanished".to_string())
             })?;
         Ok((row, true))
+    }
+
+    pub fn session_bucket_name_for_root(root: &Path) -> Option<String> {
+        let text = root.to_string_lossy();
+        let stripped = text.strip_prefix(['/', '\\']).unwrap_or(&text);
+        let encoded: String = stripped
+            .chars()
+            .map(|character| match character {
+                '/' | '\\' | ':' => '-',
+                _ => character,
+            })
+            .collect();
+        let bucket = format!("--{encoded}--");
+        Self::is_valid_session_bucket_name(&bucket).then_some(bucket)
+    }
+
+    pub fn is_valid_session_bucket_name(name: &str) -> bool {
+        name.starts_with("--")
+            && name.ends_with("--")
+            && name.len() > 4
+            && !name.contains(['/', '\\', '\0', ':'])
+    }
+
+    /// Store a host-discovered historical Pi bucket after registration.
+    pub fn set_workspace_session_bucket(
+        &mut self,
+        workspace_id: &str,
+        session_bucket: &str,
+    ) -> Result<(), String> {
+        if !Self::is_valid_session_bucket_name(session_bucket) {
+            return Err("invalid_session_bucket".to_string());
+        }
+        self.connection
+            .execute(
+                "UPDATE workspaces SET session_bucket = ?2 WHERE workspace_id = ?1",
+                params![workspace_id, session_bucket],
+            )
+            .map_err(|error| format!("Cannot update Picot workspace session bucket: {error}"))?;
+        Ok(())
     }
 
     /// Remove a registry row. Returns whether a row was deleted. Sessions and
@@ -493,7 +561,7 @@ impl MetadataStore {
     fn workspace_row_by_id(&self, workspace_id: &str) -> Result<Option<WorkspaceRow>, String> {
         self.connection
             .query_row(
-                "SELECT workspace_id, canonical_path, display_name, pinned, last_opened_at
+                "SELECT workspace_id, canonical_path, display_name, pinned, last_opened_at, session_bucket
                  FROM workspaces WHERE workspace_id = ?1",
                 [workspace_id],
                 |row| {
@@ -503,6 +571,7 @@ impl MetadataStore {
                         display_name: row.get(2)?,
                         pinned: row.get::<_, i64>(3)? != 0,
                         last_opened_at: row.get(4)?,
+                        session_bucket: row.get(5)?,
                     })
                 },
             )
@@ -513,7 +582,7 @@ impl MetadataStore {
     fn workspace_row_by_path(&self, canonical_path: &str) -> Result<Option<WorkspaceRow>, String> {
         self.connection
             .query_row(
-                "SELECT workspace_id, canonical_path, display_name, pinned, last_opened_at
+                "SELECT workspace_id, canonical_path, display_name, pinned, last_opened_at, session_bucket
                  FROM workspaces WHERE canonical_path = ?1",
                 [canonical_path],
                 |row| {
@@ -523,6 +592,7 @@ impl MetadataStore {
                         display_name: row.get(2)?,
                         pinned: row.get::<_, i64>(3)? != 0,
                         last_opened_at: row.get(4)?,
+                        session_bucket: row.get(5)?,
                     })
                 },
             )
@@ -854,6 +924,7 @@ mod tests {
             "display_name",
             "pinned",
             "last_opened_at",
+            "session_bucket",
         ] {
             assert!(
                 columns.iter().any(|column| column == expected),
@@ -939,7 +1010,7 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(profiles, 1, "unknown v2 table survived");
-        assert_eq!(workspace_columns(&reopened).len(), 6);
+        assert_eq!(workspace_columns(&reopened).len(), 7);
     }
 
     #[test]

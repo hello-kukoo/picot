@@ -81,14 +81,14 @@ describe("ConfigGateway", () => {
     await expect(promise).resolves.toEqual({ ok: true, data: { cancelled: false } });
   });
 
-  it("consumes a config response carried by a background runtime frame", async () => {
+  it("consumes a matching-target response even when it arrives from a background subscription", async () => {
     const { requests, gateway } = createHarness();
     const promise = gateway.call("generate_session_title");
     const id = idFromRequest(requests[0]);
 
     const consumed = consumeConfigResponseFrame(gateway, {
       type: "runtime_event",
-      target: { workspaceId: "w", sessionId: "background-s", instanceId: "background-i" },
+      target: { workspaceId: "w", sessionId: "s", instanceId: "i" },
       event: {
         type: "extension_ui_request",
         method: "notify",
@@ -97,6 +97,52 @@ describe("ConfigGateway", () => {
     });
 
     expect(consumed).toBe(true);
+    await expect(promise).resolves.toEqual({ ok: true, data: { title: "Done" } });
+  });
+
+  it("never resolves a pending request from a different runtime target", async () => {
+    const { requests, gateway } = createHarness();
+    const promise = gateway.call("generate_session_title");
+    const id = idFromRequest(requests[0]);
+    let settled = false;
+    void promise.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+
+    // A notify carrying our id but emitted by another runtime is a routing
+    // anomaly: it must be swallowed (never rendered as chat) without
+    // resolving the pending caller bound to the original target.
+    const consumed = consumeConfigResponseFrame(gateway, {
+      type: "runtime_event",
+      target: { workspaceId: "w", sessionId: "background-s", instanceId: "background-i" },
+      event: {
+        type: "extension_ui_request",
+        method: "notify",
+        message: JSON.stringify({ __picotConfig: id, ok: true, data: { title: "Stale" } }),
+      },
+    });
+
+    expect(consumed).toBe(true);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    // The reply from the target the request was actually sent to resolves.
+    const consumedMatching = consumeConfigResponseFrame(gateway, {
+      type: "runtime_event",
+      target: { workspaceId: "w", sessionId: "s", instanceId: "i" },
+      event: {
+        type: "extension_ui_request",
+        method: "notify",
+        message: JSON.stringify({ __picotConfig: id, ok: true, data: { title: "Done" } }),
+      },
+    });
+    expect(consumedMatching).toBe(true);
     await expect(promise).resolves.toEqual({ ok: true, data: { title: "Done" } });
   });
 

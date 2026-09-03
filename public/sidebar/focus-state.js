@@ -26,24 +26,36 @@ export function clearFocusParam(url) {
   return result;
 }
 
-function findActiveProject(projects, activeSessionFile) {
-  if (!Array.isArray(projects) || !activeSessionFile) return null;
-  return (
-    projects.find(
+function findActiveProject(projects, activeSessionFile, runtimeWorkspaceId) {
+  if (!Array.isArray(projects)) return null;
+  if (activeSessionFile) {
+    const sessionProject = projects.find(
       (project) =>
         Array.isArray(project?.sessions) &&
         project.sessions.some((session) => session?.filePath === activeSessionFile),
+    );
+    if (sessionProject) return sessionProject;
+  }
+  if (!runtimeWorkspaceId) return null;
+  return (
+    projects.find(
+      (project) =>
+        project?.registryId === runtimeWorkspaceId || project?.workspaceId === runtimeWorkspaceId,
     ) || null
   );
 }
 
-// Resolves the boot/update focus decision. pending while the active session or
-// its project is still unknown (so a freshly created session with no .jsonl yet
-// does not falsely exit focus); matched only when the resolved active workspace
-// equals the requested id; mismatched otherwise (including no request at all).
-export function resolveFocusState({ requestedId, projects, activeSessionFile }) {
+// Resolves the boot/update focus decision. A fresh runtime has a verified
+// workspace route before Pi writes its first JSONL, so runtimeWorkspaceId keeps
+// Focus active during that short pre-persistence interval.
+export function resolveFocusState({
+  requestedId,
+  projects,
+  activeSessionFile,
+  runtimeWorkspaceId,
+}) {
   if (!requestedId) return { state: "mismatched", project: null };
-  const project = findActiveProject(projects, activeSessionFile);
+  const project = findActiveProject(projects, activeSessionFile, runtimeWorkspaceId);
   if (!project) return { state: "pending", project: null };
   return workspaceFocusId(project) === requestedId
     ? { state: "matched", project }

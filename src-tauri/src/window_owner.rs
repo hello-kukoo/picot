@@ -75,6 +75,7 @@ struct OwnerRecord {
 
 struct PendingNavigation {
     origin: String,
+    target_session_id: Option<String>,
     #[allow(dead_code)]
     target_port: u16,
     #[allow(dead_code)]
@@ -82,6 +83,9 @@ struct PendingNavigation {
     transition_generation: u64,
     expires_at: Instant,
     consumed: bool,
+    /// Set only when this transition SPAWNED its runtime. Cancel may stop
+    /// that instance; a reused live runtime must survive cancellation.
+    created_instance: Option<String>,
 }
 
 struct WorkspaceTransition {
@@ -192,22 +196,28 @@ impl WindowOwnerRegistry {
         origin: String,
         ttl: Duration,
     ) -> Result<u64, String> {
+        let target_session_id = origin
+            .split_once("/sessions/")
+            .and_then(|(_, session_id)| session_id.trim_end_matches('/').split('/').next())
+            .filter(|session_id| !session_id.is_empty())
+            .map(str::to_owned);
         let origin = normalize_origin(&origin)
             .ok_or_else(|| "navigation origin must be an http loopback Pi origin".to_string())?;
         let mut state = self.inner.lock().expect("owner registry lock poisoned");
-        let transition_gen = state
+        let owner_record = state
             .owners
             .get(owner)
-            .ok_or_else(|| "unknown owner".to_string())?
-            .transition
-            .as_ref()
-            .map(|t| t.generation);
-        let generation = match transition_gen {
-            Some(g) => g,
-            None => {
-                state.next_generation += 1;
-                state.next_generation
-            }
+            .ok_or_else(|| "unknown owner".to_string())?;
+        let generation = if canonical_cwd == owner_record.canonical_cwd {
+            // Session navigation within one workspace only changes the WebView
+            // origin. Keep every runtime in the workspace authorized under the
+            // same generation so an active background turn keeps its events.
+            owner_record.workspace_generation
+        } else if let Some(transition) = owner_record.transition.as_ref() {
+            transition.generation
+        } else {
+            state.next_generation += 1;
+            state.next_generation
         };
         let record = state
             .owners
@@ -215,11 +225,13 @@ impl WindowOwnerRegistry {
             .ok_or_else(|| "unknown owner".to_string())?;
         record.pending = Some(PendingNavigation {
             origin,
+            target_session_id,
             target_port: port,
             target_cwd: canonical_cwd,
             transition_generation: generation,
             expires_at: Instant::now() + ttl,
             consumed: false,
+            created_instance: None,
         });
         Ok(generation)
     }
@@ -419,6 +431,16 @@ impl WindowOwnerRegistry {
             .and_then(|r| r.pending.as_ref().map(|p| p.origin.clone()))
     }
 
+    /// The pending navigation permit's session ID. It is preserved separately
+    /// because origin normalization intentionally removes route path segments.
+    pub fn pending_target_session_id(&self, owner: &OwnerId) -> Option<String> {
+        let state = self.inner.lock().expect("owner registry lock poisoned");
+        state
+            .owners
+            .get(owner)
+            .and_then(|record| record.pending.as_ref()?.target_session_id.clone())
+    }
+
     /// The pending navigation permit's target port, if one is prepared.
     #[allow(dead_code)] // legacy port routing API: removed with the D10 deletion cycle
     pub fn pending_target_port(&self, owner: &OwnerId) -> Option<u16> {
@@ -436,6 +458,35 @@ impl WindowOwnerRegistry {
             .owners
             .get(owner)
             .and_then(|r| r.pending.as_ref().map(|p| p.target_cwd.clone()))
+    }
+
+    /// The runtime instance this pending transition spawned, if any. A reused
+    /// live runtime never records one, so cancel cannot stop it.
+    pub fn pending_created_instance(&self, owner: &OwnerId) -> Option<String> {
+        let state = self.inner.lock().expect("owner registry lock poisoned");
+        state
+            .owners
+            .get(owner)
+            .and_then(|record| record.pending.as_ref()?.created_instance.clone())
+    }
+
+    /// Stamp the pending record with the runtime instance the transition
+    /// spawned. Ignored when the pending record was replaced (generation
+    /// mismatch) or already consumed.
+    pub fn record_pending_created_instance(
+        &self,
+        owner: &OwnerId,
+        transition_generation: u64,
+        instance_id: &str,
+    ) {
+        let mut state = self.inner.lock().expect("owner registry lock poisoned");
+        if let Some(record) = state.owners.get_mut(owner) {
+            if let Some(pending) = record.pending.as_mut() {
+                if pending.transition_generation == transition_generation {
+                    pending.created_instance = Some(instance_id.to_string());
+                }
+            }
+        }
     }
 
     /// Resolve the owner bound to a window label (used by the close lifecycle).
@@ -754,7 +805,7 @@ mod tests {
                 Duration::from_secs(5),
             )
             .expect("prepare");
-        assert!(gen > 0);
+        assert_eq!(gen, 0);
         assert!(reg.authorize_navigation(&owner, &url("http://127.0.0.1:3002/x")));
         // A pending destination is a one-shot bearer permit.
         assert!(!reg.authorize_navigation(&owner, &url("http://127.0.0.1:3002/again")));
@@ -892,6 +943,88 @@ mod tests {
         let (cwd, port) = reg.current_workspace(&owner).unwrap();
         assert_eq!(cwd, PathBuf::from("/ws-b"));
         assert_eq!(port, 3002);
+    }
+
+    #[test]
+    fn same_workspace_navigation_preserves_runtime_generation() {
+        let reg = WindowOwnerRegistry::default();
+        let (owner, _) = new_owner(&reg, "same-workspace", 3001);
+        let generation = reg
+            .prepare_navigation(
+                &owner,
+                3002,
+                PathBuf::from("/workspace"),
+                "http://127.0.0.1:3002".to_string(),
+                Duration::from_secs(5),
+            )
+            .unwrap();
+
+        assert_eq!(generation, 0);
+        reg.commit_workspace_transition_with_workspace(
+            &owner,
+            generation,
+            "http://127.0.0.1:3002".to_string(),
+            Some("wid-1".to_string()),
+            TemporaryKind::DefaultStartup,
+        )
+        .unwrap();
+        assert_eq!(reg.current_workspace_generation(&owner), Some(0));
+    }
+
+    #[test]
+    fn pending_target_session_id_is_derived_from_prepared_origin() {
+        let reg = WindowOwnerRegistry::default();
+        let (owner, _) = new_owner(&reg, "w1", 3001);
+        reg.prepare_navigation(
+            &owner,
+            0,
+            PathBuf::from("/workspace"),
+            "http://127.0.0.1:3002/workspaces/wid/sessions/new-session".to_string(),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+
+        assert_eq!(
+            reg.pending_target_session_id(&owner).as_deref(),
+            Some("new-session")
+        );
+    }
+
+    #[test]
+    fn created_instance_record_survives_until_generation_mismatch() {
+        let reg = WindowOwnerRegistry::default();
+        let (owner, _) = new_owner(&reg, "w1", 3001);
+        let generation = reg
+            .prepare_navigation(
+                &owner,
+                0,
+                PathBuf::from("/workspace"),
+                "http://127.0.0.1:3002/workspaces/wid/sessions/new-session".to_string(),
+                Duration::from_secs(5),
+            )
+            .unwrap();
+
+        // A reused prepare never records a created instance.
+        assert_eq!(reg.pending_created_instance(&owner), None);
+
+        reg.record_pending_created_instance(&owner, generation, "instance-new");
+        assert_eq!(
+            reg.pending_created_instance(&owner).as_deref(),
+            Some("instance-new")
+        );
+
+        // A stale generation (a newer transition replaced the pending record)
+        // must not stamp the newer record.
+        reg.prepare_navigation(
+            &owner,
+            0,
+            PathBuf::from("/workspace"),
+            "http://127.0.0.1:3002/workspaces/wid/sessions/next-session".to_string(),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        reg.record_pending_created_instance(&owner, generation + 100, "instance-stale");
+        assert_eq!(reg.pending_created_instance(&owner), None);
     }
 
     #[test]

@@ -591,6 +591,59 @@ fn resolve_static_dir(
         .unwrap_or_else(|| PathBuf::from("public"))
 }
 
+fn should_stop_owner_runtimes_on_transition(
+    current_workspace: Option<&std::path::Path>,
+    pending_workspace: Option<&std::path::Path>,
+) -> bool {
+    current_workspace
+        .zip(pending_workspace)
+        .is_none_or(|(current, pending)| current != pending)
+}
+
+/// True only when this pending transition spawned the runtime itself.
+/// Cancel may stop exactly that instance; a runtime the prepare path merely
+/// reused (it may own an active turn in another window) must survive cancel.
+fn cancel_should_stop_target(created_instance: Option<&str>, target: &RuntimeTarget) -> bool {
+    created_instance.is_some_and(|instance| instance == target.instance_id)
+}
+
+fn find_existing_runtime_for_prepare(
+    runtimes: &NativePiManager,
+    workspace_id: &str,
+    owner_id: &str,
+    persisted_session_id: Option<&str>,
+    force_new_session: bool,
+) -> Option<RuntimeTarget> {
+    if force_new_session {
+        return None;
+    }
+    runtimes.running_targets().into_iter().find(|target| {
+        target.workspace_id == workspace_id
+            && target.owner_id.as_deref() == Some(owner_id)
+            && persisted_session_id.is_none_or(|session_id| target.session_id == session_id)
+    })
+}
+
+fn persisted_session_id_for_workspace(
+    session_path: &std::path::Path,
+    workspace_cwd: &std::path::Path,
+) -> Result<String, String> {
+    let canonical_session = fs::canonicalize(session_path)
+        .map_err(|_| "Selected session is unavailable".to_string())?;
+    let header = host_data::parse_session_header(&canonical_session)
+        .ok_or_else(|| "Selected session has no valid header".to_string())?;
+    let session_cwd = header
+        .cwd
+        .as_deref()
+        .ok_or_else(|| "Selected session has no workspace".to_string())?;
+    let canonical_session_cwd = fs::canonicalize(session_cwd)
+        .map_err(|_| "Selected session workspace is unavailable".to_string())?;
+    if canonical_session_cwd != workspace_cwd {
+        return Err("Selected session is outside the target workspace".to_string());
+    }
+    Ok(header.id)
+}
+
 fn find_static_dir(app: &tauri::App) -> PathBuf {
     resolve_static_dir(
         app.path().resource_dir().ok(),
@@ -605,8 +658,11 @@ fn find_static_dir(app: &tauri::App) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        image_mime_from_path, navigate_tree_message, registered_native_startup_workspace,
-        resolve_static_dir, side_chat_startup_rpc_commands, touch_registered_workspace,
+        cancel_should_stop_target, default_native_startup_workspace,
+        find_existing_runtime_for_prepare, image_mime_from_path, navigate_tree_message,
+        persisted_session_id_for_workspace, resolve_static_dir,
+        should_stop_owner_runtimes_on_transition, side_chat_startup_rpc_commands,
+        touch_registered_workspace,
     };
     use crate::metadata_store::{MetadataStore, SharedMetadataStore};
     use serde_json::json;
@@ -638,17 +694,126 @@ mod tests {
         )
     }
 
-    #[test]
-    fn native_startup_selects_registered_workspace_and_never_temporary_root() {
-        let (metadata, temp) = shared_test_metadata("native-startup");
-        let project = temp.join("project");
-        fs::create_dir_all(&project).unwrap();
-        let row = metadata.lock().unwrap().add_workspace(&project).unwrap().0;
+    #[tokio::test]
+    async fn prepare_reuses_live_runtime_for_matching_persisted_session() {
+        let manager = crate::native_pi_manager::NativePiManager::new(8);
+        let target = crate::runtime_coordinator::RuntimeTarget::with_owner(
+            "workspace-a",
+            "saved",
+            "instance-a",
+            "owner-a",
+            0,
+        );
+        manager.register_in_memory(target.clone()).unwrap();
 
-        let selected = registered_native_startup_workspace(&metadata).unwrap();
+        assert_eq!(
+            find_existing_runtime_for_prepare(
+                &manager,
+                "workspace-a",
+                "owner-a",
+                Some("saved"),
+                false,
+            ),
+            Some(target),
+        );
+        assert!(find_existing_runtime_for_prepare(
+            &manager,
+            "workspace-a",
+            "owner-a",
+            Some("saved"),
+            true,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn persisted_session_target_uses_verified_header_id() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let session = temp.path().join("2026-09-03T12-00-00-000Z_saved.jsonl");
+        fs::create_dir_all(&workspace).unwrap();
+        let canonical = workspace.canonicalize().unwrap();
+        fs::write(
+            &session,
+            format!(
+                "{{\"type\":\"session\",\"id\":\"saved\",\"cwd\":{}}}\n{{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":\"hello\"}}}}\n",
+                serde_json::to_string(&canonical.to_string_lossy()).unwrap(),
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            persisted_session_id_for_workspace(&session, &canonical).unwrap(),
+            "saved",
+        );
+    }
+
+    #[test]
+    fn same_workspace_session_transition_keeps_prior_runtime_alive() {
+        let workspace = PathBuf::from("/workspace");
+        assert!(!should_stop_owner_runtimes_on_transition(
+            Some(workspace.as_path()),
+            Some(workspace.as_path()),
+        ));
+        assert!(should_stop_owner_runtimes_on_transition(
+            Some(workspace.as_path()),
+            Some(PathBuf::from("/other-workspace").as_path()),
+        ));
+    }
+
+    #[test]
+    fn cancel_stops_only_the_instance_its_transition_created() {
+        let created = crate::runtime_coordinator::RuntimeTarget::with_owner(
+            "workspace-a",
+            "session-new",
+            "instance-new",
+            "owner-a",
+            3,
+        );
+        // A transition that spawned its own runtime may stop exactly that one.
+        assert!(cancel_should_stop_target(Some("instance-new"), &created));
+        // A different live runtime (sibling session) is never cancel's target.
+        assert!(!cancel_should_stop_target(
+            Some("instance-new"),
+            &crate::runtime_coordinator::RuntimeTarget::with_owner(
+                "workspace-a",
+                "session-live",
+                "instance-live",
+                "owner-a",
+                1,
+            ),
+        ));
+        // A REUSED prepare records no created instance: cancel must not stop
+        // the reused runtime, even when session ids match the pending record.
+        let reused = crate::runtime_coordinator::RuntimeTarget::with_owner(
+            "workspace-b",
+            "session-live",
+            "instance-live",
+            "owner-a",
+            1,
+        );
+        assert!(!cancel_should_stop_target(None, &reused));
+    }
+
+    #[test]
+    fn native_cold_start_always_selects_default_workspace() {
+        let (metadata, temp) = shared_test_metadata("native-startup");
+        let default = temp.join(".pi/tmp");
+        let project = temp.join("project");
+        fs::create_dir_all(&default).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        let default_row = metadata.lock().unwrap().add_workspace(&default).unwrap().0;
+        let project_row = metadata.lock().unwrap().add_workspace(&project).unwrap().0;
+        metadata
+            .lock()
+            .unwrap()
+            .set_workspace_pinned(&project_row.workspace_id, true)
+            .unwrap();
+
+        let selected = default_native_startup_workspace(&metadata, &default).unwrap();
         assert_eq!(
             selected,
-            Some((row.workspace_id, project.canonicalize().unwrap()))
+            (default_row.workspace_id, default.canonicalize().unwrap())
         );
     }
 
@@ -852,15 +1017,21 @@ fn extract_session_cwd(session_path: &PathBuf) -> Option<String> {
     None
 }
 
-/// Read registered native workspace state once at launch. Storage, schema,
-/// authorization, JSON, and value failures fail startup rather than inventing
-/// an unregistered workspace.
-fn ensure_default_workspace(metadata: &SharedMetadataStore) -> Result<(), String> {
-    let path = dirs::home_dir()
-        .ok_or_else(|| "Cannot resolve home directory".to_string())?
-        .join(".pi")
-        .join("tmp");
-    std::fs::create_dir_all(&path).map_err(|error| {
+/// Native cold starts always run a fresh main chat in this workspace. Other
+/// registered rows belong to sidebar history only and never choose startup.
+fn default_workspace_path() -> Result<PathBuf, String> {
+    dirs::home_dir()
+        .map(|home| home.join(".pi/tmp"))
+        .ok_or_else(|| "Cannot resolve home directory".to_string())
+}
+
+/// Ensure the fixed cold-start workspace exists in the registry, returning
+/// its row rather than deriving startup choice from registry sort order.
+fn ensure_default_workspace(
+    metadata: &SharedMetadataStore,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    std::fs::create_dir_all(path).map_err(|error| {
         format!(
             "Cannot create default workspace {}: {error}",
             path.display()
@@ -869,7 +1040,7 @@ fn ensure_default_workspace(metadata: &SharedMetadataStore) -> Result<(), String
     metadata
         .lock()
         .map_err(|_| "Metadata store lock poisoned".to_string())?
-        .add_workspace(&path)
+        .add_workspace(path)
         .map_err(|error| {
             format!(
                 "Cannot register default workspace {}: {error}",
@@ -879,17 +1050,22 @@ fn ensure_default_workspace(metadata: &SharedMetadataStore) -> Result<(), String
     Ok(())
 }
 
-fn registered_native_startup_workspace(
+fn default_native_startup_workspace(
     metadata: &SharedMetadataStore,
-) -> Result<Option<(String, PathBuf)>, String> {
-    let mut store = metadata
+    default_path: &std::path::Path,
+) -> Result<(String, PathBuf), String> {
+    let canonical = default_path.canonicalize().map_err(|error| {
+        format!(
+            "Cannot resolve default workspace {}: {error}",
+            default_path.display()
+        )
+    })?;
+    let workspace_id = metadata
         .lock()
-        .map_err(|_| "Metadata store lock poisoned".to_string())?;
-    let (rows, _) = store.list_workspaces_and_prune()?;
-    Ok(rows
-        .into_iter()
-        .next()
-        .map(|row| (row.workspace_id, PathBuf::from(row.canonical_path))))
+        .map_err(|_| "Metadata store lock poisoned".to_string())?
+        .workspace_id_for_canonical_root(&canonical)
+        .map_err(|error| error.to_string())?;
+    Ok((workspace_id, canonical))
 }
 
 fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(), String> {
@@ -899,11 +1075,10 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
         .map_err(|error| format!("Cannot resolve Picot app data directory: {error}"))?
         .join("picot.sqlite3");
     let shared_metadata = Arc::new(Mutex::new(MetadataStore::open(&metadata_path)?));
-    ensure_default_workspace(&shared_metadata)?;
-    let Some((workspace_id, cwd_path)) = registered_native_startup_workspace(&shared_metadata)?
-    else {
-        return Err("Native startup requires a registered workspace".into());
-    };
+    let default_path = default_workspace_path()?;
+    ensure_default_workspace(&shared_metadata, &default_path)?;
+    let (workspace_id, cwd_path) =
+        default_native_startup_workspace(&shared_metadata, &default_path)?;
     let cwd = cwd_path.to_string_lossy().to_string();
     let session_path: Option<String> = None;
     let session_id = format!("native-session-{}", uuid::Uuid::new_v4().simple());
@@ -2433,6 +2608,15 @@ fn install_control_handler(
                         let canonical_target = fs::canonicalize(&target_cwd)
                             .map_err(|e| format!("Invalid targetCwd: {e}"))?;
                         let session_path = arg_str("sessionPath");
+                        let persisted_session_id = session_path
+                            .as_deref()
+                            .map(|path| {
+                                persisted_session_id_for_workspace(
+                                    std::path::Path::new(path),
+                                    &canonical_target,
+                                )
+                            })
+                            .transpose()?;
                         let force_new_session = arg_bool("forceNewSession").unwrap_or(false);
                         let workspace_id = metadata
                             .lock()
@@ -2445,20 +2629,17 @@ fn install_control_handler(
                             .ok_or("owner has no workspace")?;
                         let same_cwd = canonical_target == current_cwd;
 
-                        // A specific session file (or an explicit force-new)
-                        // always gets its own runtime: reusing the live one
-                        // would drop the requested session, and the commit
-                        // sweep below would stop that reused runtime as an
-                        // old-generation target — the navigation would land
-                        // on a dead session (`runtime_not_found`).
-                        let existing = if session_path.is_some() || force_new_session {
-                            None
-                        } else {
-                            runtimes.running_targets().into_iter().find(|t| {
-                                t.workspace_id == workspace_id
-                                    && t.owner_id.as_deref() == Some(owner.as_str())
-                            })
-                        };
+                        // A persisted session owns a stable header ID. Reuse
+                        // its exact live runtime when present; spawning another
+                        // target with that ID violates coordinator uniqueness.
+                        // Explicit new-session requests always get a new runtime.
+                        let existing = find_existing_runtime_for_prepare(
+                            &runtimes,
+                            &workspace_id,
+                            owner.as_str(),
+                            persisted_session_id.as_deref(),
+                            force_new_session,
+                        );
 
                         // Registry transition FIRST: the commit sweep stops
                         // every runtime with `generation < transition`, so the
@@ -2508,7 +2689,9 @@ fn install_control_handler(
                             }
                             None => {
                                 let session_id =
-                                    format!("session-{}", uuid::Uuid::new_v4().simple());
+                                    persisted_session_id.clone().unwrap_or_else(|| {
+                                        format!("session-{}", uuid::Uuid::new_v4().simple())
+                                    });
                                 let target_url = transition_url(&session_id);
                                 let generation = if same_cwd {
                                     owner_registry.prepare_navigation(
@@ -2546,6 +2729,13 @@ fn install_control_handler(
                                     generation,
                                 );
                                 runtimes.spawn(new_target.clone(), launch)?;
+                                // Cancel may only stop what this transition
+                                // created; a reused runtime stays anonymous.
+                                owner_registry.record_pending_created_instance(
+                                    &owner,
+                                    generation,
+                                    &new_target.instance_id,
+                                );
                                 (new_target, generation)
                             }
                         };
@@ -2570,22 +2760,25 @@ fn install_control_handler(
                             .as_u64()
                             .ok_or("transitionGeneration is required")?;
                         owner_registry.validate_workspace_transition_generation(&owner, gen)?;
-                        // Stop native old-generation runtimes through owner-bound
-                        // authority before committing new workspace identity.
-                        if let Some(native) = app.try_state::<NativePiManagerState>() {
-                            native.stop_for_owner_transition(owner.as_str(), gen);
-                        }
-                        // M4: export grants die with the old generation.
-                        if let Some(host) = app.try_state::<host_server::HostServer>() {
-                            host.revoke_session_exports(owner.as_str());
-                        }
-                        // Safety net: generation-checked cleanup of any old-workspace
-                        // side chats the frontend did not settle before committing.
-                        let is_cross_workspace = owner_registry
-                            .current_workspace(&owner)
-                            .zip(owner_registry.pending_target_cwd(&owner))
-                            .is_none_or(|((current_cwd, _), target_cwd)| current_cwd != target_cwd);
-                        if is_cross_workspace {
+                        // A same-workspace session select moves this WebView to a
+                        // fresh runtime without invalidating the prior one: it may
+                        // have an active turn. Cross-workspace transitions revoke
+                        // the prior generation and stop its owner-bound runtimes.
+                        let should_stop_prior_runtimes = should_stop_owner_runtimes_on_transition(
+                            owner_registry
+                                .current_workspace(&owner)
+                                .as_ref()
+                                .map(|(cwd, _)| cwd.as_path()),
+                            owner_registry.pending_target_cwd(&owner).as_deref(),
+                        );
+                        if should_stop_prior_runtimes {
+                            if let Some(native) = app.try_state::<NativePiManagerState>() {
+                                native.stop_for_owner_transition(owner.as_str(), gen);
+                            }
+                            // M4: export grants die with the old generation.
+                            if let Some(host) = app.try_state::<host_server::HostServer>() {
+                                host.revoke_session_exports(owner.as_str());
+                            }
                             let stray =
                                 ephemeral_registry.side_chat_cleanup_for_transition(&owner, gen);
                             for lease in stray {
@@ -2633,18 +2826,28 @@ fn install_control_handler(
                             .as_u64()
                             .ok_or("transitionGeneration is required")?;
                         owner_registry.validate_workspace_transition_generation(&owner, gen)?;
-                        // Stop the native runtime spawned by prepare (identified
-                        // through the pending target workspace, owner-bound).
-                        if let Some(target_cwd) = owner_registry.pending_target_cwd(&owner) {
+                        // Cancel only the runtime created by this prepared
+                        // navigation. A reused prepare records no created
+                        // instance, so cancelling navigation cannot interrupt
+                        // a live session that merely got adopted.
+                        if let (Some(created_instance), Some(target_cwd), Some(session_id)) = (
+                            owner_registry.pending_created_instance(&owner),
+                            owner_registry.pending_target_cwd(&owner),
+                            owner_registry.pending_target_session_id(&owner),
+                        ) {
                             if let Some(workspace_id) = metadata.lock().ok().and_then(|store| {
                                 store.workspace_id_for_canonical_root(&target_cwd).ok()
                             }) {
-                                for target in runtimes.running_targets() {
-                                    if target.workspace_id == workspace_id
-                                        && target.owner_id.as_deref() == Some(owner.as_str())
-                                    {
-                                        let _ = runtimes.stop(&target);
-                                    }
+                                if let Some(target) = runtimes
+                                    .target_for_session(&workspace_id, &session_id)
+                                    .filter(|target| {
+                                        target.owner_id.as_deref() == Some(owner.as_str())
+                                    })
+                                    .filter(|target| {
+                                        cancel_should_stop_target(Some(&created_instance), target)
+                                    })
+                                {
+                                    let _ = runtimes.stop(&target);
                                 }
                             }
                         }

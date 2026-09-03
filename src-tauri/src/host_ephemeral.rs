@@ -576,8 +576,13 @@ impl EphemeralHub {
             return Err("ephemeral instance is not owned by this client".into());
         }
         if let Some(generation) = generation {
-            if entry.target.workspace_generation != generation {
-                return Err("stale ephemeral generation".into());
+            // The token contract is the registry record's generation — the
+            // same value descriptor.generation carries to the frontend. The
+            // target's workspace_generation is a different counter (workspace
+            // transitions) and legitimately diverges from it.
+            match self.registry.generation_of(owner, instance_id) {
+                Some(record_generation) if record_generation == generation => {}
+                _ => return Err("stale ephemeral generation".into()),
             }
         }
         Ok(entry)
@@ -700,6 +705,15 @@ impl EphemeralHub {
         if event.target.owner_id.is_none() {
             return;
         }
+        // A crashed runtime is dead: release its registry slot (quota), hub
+        // target, and render state immediately, then rebroadcast a clean
+        // bootstrap. Deferring cleanup to window close would leave the
+        // side-chat quota or the single quick-chat slot permanently occupied
+        // by a zombie descriptor.
+        if event.event.get("type").and_then(Value::as_str) == Some("runtime_crashed") {
+            self.crash_cleanup(&entry.target);
+            return;
+        }
         let sequence = {
             let mut states = match self.states.lock() {
                 Ok(states) => states,
@@ -710,9 +724,17 @@ impl EphemeralHub {
                 .or_insert_with(EphemeralRenderState::new);
             state.apply_event(&event.event)
         };
-        let generation = event.target.workspace_generation;
         if let Some(owner_ref) = event.target.owner_id.as_deref() {
             let owner = crate::window_owner::OwnerId::from_string(owner_ref.to_string());
+            // Stamp with the registry token the frontend filters on — not the
+            // target's workspace generation, which diverges from it on every
+            // ephemeral instance after the first in a workspace.
+            let Some(generation) = self
+                .registry
+                .generation_of(&owner, &event.target.instance_id)
+            else {
+                return;
+            };
             self.host_events.send_owner_event(
                 &owner,
                 json!({
@@ -748,6 +770,51 @@ impl EphemeralHub {
             .lock()
             .ok()
             .and_then(|targets| targets.get(instance_id).cloned())
+    }
+
+    /// Release every hub- and registry-side resource for a dead instance:
+    /// the registry record (quota), temp directory, target routing entry,
+    /// render state, and a rebroadcast bootstrap without the zombie.
+    fn crash_cleanup(&self, dead: &crate::runtime_coordinator::RuntimeTarget) {
+        let Some(owner_str) = dead.owner_id.as_deref() else {
+            return;
+        };
+        let owner = OwnerId::from_string(owner_str.to_string());
+        if let Some(generation) = self.registry.generation_of(&owner, &dead.instance_id) {
+            if let Ok(Some(lease)) =
+                self.registry
+                    .begin_close(&owner, &dead.instance_id, generation)
+            {
+                if let Some((path, token)) = lease.temporary_directory.as_ref() {
+                    let _ = crate::temp_resources::cleanup_quick_chat_dir(
+                        &crate::temp_resources::canonical_temp_root(),
+                        path,
+                        token,
+                    );
+                }
+                self.registry.finish_cleanup(&lease);
+            }
+        }
+        let _ = self.take_target(&dead.instance_id);
+        if let Ok(mut states) = self.states.lock() {
+            states.remove(&dead.instance_id);
+        }
+        self.publish_bootstrap(&owner, dead.workspace_generation);
+    }
+
+    /// Test-only: install a hub target/render-state pair without spawning a
+    /// real runtime, so WS-level tests can stage arbitrary ephemeral instances.
+    #[cfg(test)]
+    pub fn install_test_target(&self, target: crate::runtime_coordinator::RuntimeTarget) {
+        let instance_id = target.instance_id.clone();
+        self.targets
+            .lock()
+            .expect("ephemeral target lock poisoned")
+            .insert(instance_id.clone(), RuntimeTargetEntry { target });
+        self.states
+            .lock()
+            .expect("ephemeral state lock poisoned")
+            .insert(instance_id, EphemeralRenderState::new());
     }
 
     fn take_target(&self, instance_id: &str) -> Result<RuntimeTargetEntry, String> {
@@ -974,5 +1041,189 @@ mod admission_tests {
             .deliver_snapshot(&owner, "inst-missing", 2, Some("req-9"))
             .unwrap_err();
         assert!(error.contains("unknown ephemeral instance"), "{error}");
+    }
+}
+
+/// The ephemeral generation token has exactly one source of truth: the
+/// registry record (the value `descriptor.generation` carries to the
+/// frontend). Workspace owner-registry generations legitimately diverge from
+/// it — the second ephemeral instance in one workspace allocates registry
+/// generation 2 while the workspace generation stays put. Admission and
+/// event stamping must both speak the registry token, or the second instance
+/// is rejected as stale and its events are dropped by the frontend filter.
+#[cfg(test)]
+mod generation_token_tests {
+    use super::*;
+    use crate::ephemeral_registry::OwnedProcess;
+    use crate::host_control::HostEventSink;
+    use crate::runtime_coordinator::RuntimeTarget;
+
+    /// Registry-backed hub whose target deliberately carries a workspace
+    /// generation that diverges from the registry token.
+    fn hub_with_record(
+        owner_str: &str,
+        workspace_generation: u64,
+    ) -> (
+        EphemeralHub,
+        OwnerId,
+        String,
+        tokio::sync::broadcast::Receiver<crate::host_control::OwnerEvent>,
+    ) {
+        let registry = Arc::new(EphemeralRegistry::default());
+        let owner = OwnerId::from_string(owner_str.into());
+        let reservation = registry
+            .reserve_create(&owner, EphemeralKind::SideChat)
+            .expect("reserve side chat");
+        registry
+            .commit_ready(
+                &reservation,
+                OwnedProcess {
+                    port: 0,
+                    pid: 4242,
+                    child_identity: 4242,
+                    canonical_cwd: PathBuf::new(),
+                    transition_generation: 0,
+                    temporary_directory: None,
+                },
+            )
+            .expect("commit ready");
+        let instance_id = reservation.instance_id.clone();
+        let registry_generation = reservation.generation;
+        assert_ne!(
+            registry_generation, workspace_generation,
+            "fixture must exercise divergent counters"
+        );
+        let (sender, receiver) = tokio::sync::broadcast::channel(8);
+        let hub = EphemeralHub::new(
+            registry.clone(),
+            HostEventSink::new(sender),
+            std::env::temp_dir(),
+        );
+        let target = RuntimeTarget::with_owner(
+            "workspace-a",
+            format!("ephemeral-{instance_id}"),
+            instance_id.clone(),
+            owner_str,
+            workspace_generation,
+        );
+        hub.targets
+            .lock()
+            .unwrap()
+            .insert(instance_id.clone(), RuntimeTargetEntry { target });
+        hub.states
+            .lock()
+            .unwrap()
+            .insert(instance_id.clone(), EphemeralRenderState::new());
+        (hub, owner, instance_id, receiver)
+    }
+
+    #[tokio::test]
+    async fn admission_accepts_registry_generation_and_rejects_workspace_generation() {
+        let (hub, owner, instance_id, _receiver) = hub_with_record("owner-a", 5);
+        let runtimes = NativePiManager::new(8);
+        // descriptor.generation (registry token = 1) must pass admission.
+        // Downstream runtime failures ride ephemeral_event frames, so the
+        // transport result itself is Ok — the stale check would have been the
+        // only Err path here.
+        hub.forward_command(
+            &runtimes,
+            &owner,
+            &instance_id,
+            1,
+            json!({ "type": "get_state" }),
+            "req-1",
+        )
+        .await
+        .expect("registry token must pass admission");
+        // The workspace generation value is not the ephemeral token.
+        let error = hub
+            .forward_command(
+                &runtimes,
+                &owner,
+                &instance_id,
+                5,
+                json!({ "type": "get_state" }),
+                "req-2",
+            )
+            .await
+            .unwrap_err();
+        assert!(error.contains("stale ephemeral generation"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn ephemeral_events_stamp_the_registry_generation_token() {
+        let (hub, owner, instance_id, mut receiver) = hub_with_record("owner-a", 5);
+        let descriptor_generation = hub
+            .registry
+            .descriptors(&owner)
+            .into_iter()
+            .find(|descriptor| descriptor.instance_id == instance_id)
+            .map(|descriptor| descriptor.generation)
+            .expect("descriptor for instance");
+        let event = crate::native_pi_manager::NativeRuntimeEvent {
+            target: RuntimeTarget::with_owner(
+                "workspace-a",
+                format!("ephemeral-{instance_id}"),
+                instance_id.clone(),
+                "owner-a",
+                5,
+            ),
+            sequence: 1,
+            event: json!({
+                "type": "message_start",
+                "message": { "role": "user", "content": "hi" }
+            }),
+        };
+        hub.observe_runtime_event(&event);
+        let frame = receiver.try_recv().expect("ephemeral_event frame").value;
+        assert_eq!(frame["type"], "ephemeral_event");
+        assert_eq!(frame["instanceId"], instance_id.as_str());
+        // The frontend filters frames by descriptor.generation; the stamp
+        // must equal the registry token, not the workspace generation.
+        assert_eq!(
+            frame["generation"].as_u64(),
+            Some(descriptor_generation),
+            "frame must carry the registry token the frontend filters on"
+        );
+        assert_eq!(frame["generation"].as_u64(), Some(1));
+    }
+
+    /// A crashed ephemeral runtime must release its registry record (quota),
+    /// hub target, and render state, then rebroadcast a clean bootstrap —
+    /// otherwise a dead instance permanently occupies the side-chat quota or
+    /// the single quick-chat slot until the window closes.
+    #[tokio::test]
+    async fn runtime_crashed_event_releases_the_ephemeral_slot() {
+        let (hub, owner, instance_id, mut receiver) = hub_with_record("owner-a", 5);
+        let event = crate::native_pi_manager::NativeRuntimeEvent {
+            target: RuntimeTarget::with_owner(
+                "workspace-a",
+                format!("ephemeral-{instance_id}"),
+                instance_id.clone(),
+                "owner-a",
+                5,
+            ),
+            sequence: 2,
+            event: json!({ "type": "runtime_crashed", "reason": "runtime_crashed" }),
+        };
+        hub.observe_runtime_event(&event);
+
+        // Quota released: no descriptor survives for the owner.
+        assert!(hub.registry.descriptors(&owner).is_empty());
+        // Hub tracking cleared: the instance is no longer addressable.
+        assert!(hub.target_of(&instance_id).is_none());
+        // A side-chat slot is free again: a new reservation succeeds.
+        hub.registry
+            .reserve_create(&owner, EphemeralKind::SideChat)
+            .expect("quota must be free after crash cleanup");
+        // Bootstrap rebroadcast reports the clean state.
+        let mut bootstrap_seen = false;
+        while let Ok(frame) = receiver.try_recv() {
+            if frame.value["type"] == "owner_bootstrap" {
+                bootstrap_seen = true;
+                assert_eq!(frame.value["instances"].as_array().map(Vec::len), Some(0));
+            }
+        }
+        assert!(bootstrap_seen, "crash cleanup must rebroadcast bootstrap");
     }
 }

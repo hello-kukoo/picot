@@ -64,6 +64,7 @@ async function makeSidebar({
   transportResponses = {},
   fetchRoutes = {},
   isCurrentWorkspace,
+  onWorkspaceFocus,
 } = {}) {
   const transport = makeRegistryTransport(rows, {
     ...transportResponses,
@@ -79,6 +80,7 @@ async function makeSidebar({
     transport,
     onSessionNotice: (message) => notices.push(message),
     isCurrentWorkspace: isCurrentWorkspace ?? (() => false),
+    onWorkspaceFocus,
   });
   // House pattern: initI18n reads dictionaries through this same stub, so
   // serve the keys this suite asserts on before any API route.
@@ -94,6 +96,7 @@ async function makeSidebar({
             emptyRegistryTitle: "No projects yet",
             emptyRegistryHint: "Add a project to see its sessions here.",
             alreadyRegistered: "This project is already in the list.",
+            newSession: "New chat",
             removeFromList: "Remove from list",
             removedFromList: "Removed from the list; directory and session files were kept.",
             removedFromListStillRunning:
@@ -296,6 +299,36 @@ describe("keyed row reuse", () => {
   });
   afterEach(() => {
     globalThis.fetch = previousFetch;
+  });
+
+  test("shows the Focus button as soon as a session becomes active", async () => {
+    const { sidebar } = await makeSidebar({
+      rows: REGISTRY_ROWS,
+      fetchRoutes: {
+        instances: [],
+        workspaceSessions: (url) =>
+          url.searchParams.get("path") === "/work/alpha"
+            ? { sessions: [{ filePath: "/sessions/a.jsonl", name: "A" }] }
+            : { sessions: [] },
+      },
+      onWorkspaceFocus: vi.fn(),
+    });
+    await sidebar.loadSessions();
+    const alpha = sidebar.projects.find((project) => project.path === "/work/alpha");
+    sidebar.setWorkspaceExpanded(alpha, true);
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-file-path="/sessions/a.jsonl"]')).not.toBeNull();
+    });
+
+    expect(
+      document.querySelector('[data-workspace-id="ws:uuid-1"] .workspace-focus-btn'),
+    ).toBeNull();
+
+    sidebar.setActive("/sessions/a.jsonl");
+
+    expect(
+      document.querySelector('[data-workspace-id="ws:uuid-1"] .workspace-focus-btn'),
+    ).not.toBeNull();
   });
 
   test("unchanged rows keep their DOM node across refresh renders", async () => {
@@ -591,6 +624,42 @@ describe("registry cache invalidation wiring", () => {
     expect(
       workspaceSessionsCalls().filter(([url]) => String(url).includes("alpha")).length,
     ).toBeGreaterThanOrEqual(2);
+  });
+
+  test("shows a read-only provisional new-chat row until its session file is scanned", async () => {
+    const { sidebar } = await makeRegistrySidebar();
+    await sidebar.loadSessions();
+    const alpha = sidebar.projects.find((project) => project.workspaceId === "ws:uuid-1");
+    await sidebar.setWorkspaceExpanded(alpha, true);
+    await settleFetches();
+
+    sidebar.setProvisionalSession({ workspaceId: "uuid-1", sessionId: "native-session-new" });
+
+    expect(alpha.sessions[0]).toMatchObject({
+      filePath: "native-session-new",
+      provisional: true,
+    });
+    expect(document.querySelector(".session-item.active .session-title")?.textContent).toBe(
+      "New chat",
+    );
+    expect(document.querySelector(".session-item.active .session-delete-btn")).toBeNull();
+    expect(document.querySelector(".session-item.active .session-rename-btn")).toBeNull();
+  });
+
+  test("coalesced refresh preserves in-flight session-list generation", async () => {
+    const { sidebar } = await makeRegistrySidebar();
+    await sidebar.loadSessions();
+    const alpha = sidebar.projects.find((project) => project.workspaceId === "ws:uuid-1");
+    await sidebar.setWorkspaceExpanded(alpha, true);
+    await settleFetches();
+
+    const first = sidebar.refresh();
+    const generation = sidebar._registrySessionLoadGeneration;
+    const second = sidebar.refresh();
+
+    expect(second).toBe(first);
+    expect(sidebar._registrySessionLoadGeneration).toBe(generation);
+    await first;
   });
 
   test("scoped refresh refetches an expanded cached row", async () => {

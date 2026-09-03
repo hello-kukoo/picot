@@ -376,6 +376,20 @@ impl EphemeralRegistry {
         records.iter().map(|r| r.descriptor()).collect()
     }
 
+    /// The ephemeral generation token for one instance — the same value its
+    /// descriptor carries to the frontend. Distinct from workspace
+    /// generations, which only govern workspace-transition revocation.
+    pub fn generation_of(&self, owner: &OwnerId, instance_id: &str) -> Option<u64> {
+        let state = self.inner.lock().expect("ephemeral registry lock poisoned");
+        let partition = state.get(owner)?;
+        partition
+            .side
+            .iter()
+            .chain(partition.quick.iter())
+            .find(|record| record.instance_id == instance_id)
+            .map(|record| record.generation)
+    }
+
     /// Mark the exact record for a naturally exited child as closing and return
     /// its cleanup lease. A stale port or pid cannot affect a newer record.
     pub fn process_exit_cleanup(
