@@ -20,7 +20,8 @@
     "openInApp": "在 {app} 中打开",
     "sideChat": "侧边聊天",
     "quickChat": "快速聊天",
-    "newSideChat": "打开侧边聊天"
+    "newSideChat": "打开侧边聊天",
+    "showMobileQR": "显示移动端二维码"
   },
   "infoPanel": {
     "title": "信息",
@@ -895,7 +896,8 @@
     "model": "模型",
     "compact": "压缩",
     "compactTitle": "上下文已超过 80% — 压缩以节省令牌",
-    "toggleContextControls": "切换上下文控制"
+    "toggleContextControls": "切换上下文控制",
+    "qrUnavailable": "二维码不可用"
   },
   "browse": {
     "openExternalPrompt": "在新标签页打开此链接："
@@ -971,5 +973,14 @@
         }
       }
     }
+  },
+  "lanQr": {
+    "modalAriaLabel": "移动端二维码",
+    "title": "在手机上打开",
+    "closeAriaLabel": "关闭",
+    "generating": "正在生成二维码…",
+    "qrAlt": "用于手机访问的二维码",
+    "hint": "用手机扫描以在同一网络中打开 Picot",
+    "openLink": "打开链接"
   }
 }

@@ -20,7 +20,8 @@
     "openInApp": "Open in {app}",
     "sideChat": "Side Chat",
     "quickChat": "Quick Chat",
-    "newSideChat": "Open Side Chat"
+    "newSideChat": "Open Side Chat",
+    "showMobileQR": "Show mobile QR code"
   },
   "infoPanel": {
     "title": "Info",
@@ -895,7 +896,8 @@
     "model": "model",
     "compact": "Compact",
     "compactTitle": "Context is over 80% — compact to save tokens",
-    "toggleContextControls": "Toggle context controls"
+    "toggleContextControls": "Toggle context controls",
+    "qrUnavailable": "QR code unavailable"
   },
   "browse": {
     "openExternalPrompt": "Open this link in a new tab:"
@@ -971,5 +973,14 @@
         }
       }
     }
+  },
+  "lanQr": {
+    "modalAriaLabel": "Mobile QR code",
+    "title": "Open on Mobile",
+    "closeAriaLabel": "Close",
+    "generating": "Generating QR code…",
+    "qrAlt": "QR code for mobile access",
+    "hint": "Scan with your phone to open Picot on the same network",
+    "openLink": "Open Link"
   }
 }

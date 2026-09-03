@@ -20,7 +20,8 @@
     "openInApp": "{app}で開く",
     "sideChat": "サイドチャット",
     "quickChat": "クイックチャット",
-    "newSideChat": "新しいサイドチャット"
+    "newSideChat": "新しいサイドチャット",
+    "showMobileQR": "モバイルQRコードを表示"
   },
   "infoPanel": {
     "title": "情報",
@@ -895,7 +896,8 @@
     "model": "モデル",
     "compact": "コンパクト",
     "compactTitle": "コンテキストが80%を超えています — トークンを節約するためコンパクトにしてください",
-    "toggleContextControls": "コンテキストコントロールを切り替え"
+    "toggleContextControls": "コンテキストコントロールを切り替え",
+    "qrUnavailable": "QRコードが利用できません"
   },
   "browse": {
     "openExternalPrompt": "このリンクを新しいタブで開きますか："
@@ -971,5 +973,14 @@
         }
       }
     }
+  },
+  "lanQr": {
+    "modalAriaLabel": "モバイルQRコード",
+    "title": "モバイルで開く",
+    "closeAriaLabel": "閉じる",
+    "generating": "QRコードを生成中…",
+    "qrAlt": "モバイルアクセス用QRコード",
+    "hint": "スマートフォンでスキャンして同じネットワーク上でPicotを開く",
+    "openLink": "リンクを開く"
   }
 }

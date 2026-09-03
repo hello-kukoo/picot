@@ -1249,6 +1249,57 @@ impl NativePiManager {
     /// Stop old owner-bound runtimes and revoke all old-generation ephemeral
     /// leases. Caller must pass generation from WindowOwnerRegistry; workspace
     /// IDs alone are not an authorization boundary during navigation.
+    /// Re-stamp one runtime's workspace generation (owner-bound). Used by
+    /// workspace transitions that REUSE a live runtime: the commit sweep
+    /// stops every runtime with `generation < transition`, so the reused
+    /// target must carry the post-transition generation to survive it.
+    pub fn rebind_owner_generation(
+        &self,
+        owner_id: &str,
+        session_id: &str,
+        generation: u64,
+    ) -> bool {
+        // Read the live identity first (runtimes map and coordinator are in
+        // sync here; validate below must see the pre-rebind generation).
+        let current = {
+            let Ok(runtimes) = self.inner.runtimes.lock() else {
+                return false;
+            };
+            let Some(found) = runtimes.values().find(|runtime| {
+                let Ok(target) = runtime.target.lock() else {
+                    return false;
+                };
+                target.session_id == session_id && target.owner_id.as_deref() == Some(owner_id)
+            }) else {
+                return false;
+            };
+            let Ok(target) = found.target.lock() else {
+                return false;
+            };
+            target.clone()
+        };
+        // Coordinator record first (identity-validated), then mirror into the
+        // runtimes map — same dual bookkeeping as bind_session_id.
+        let formal = {
+            let Ok(mut coordinator) = self.inner.coordinator.lock() else {
+                return false;
+            };
+            match coordinator.rebind_generation(&current, generation) {
+                Ok(formal) => formal,
+                Err(_) => return false,
+            }
+        };
+        let Ok(mut runtimes) = self.inner.runtimes.lock() else {
+            return false;
+        };
+        if let Some(runtime) = runtimes.get_mut(&current.instance_id) {
+            if let Ok(mut target) = runtime.target.lock() {
+                *target = formal.clone();
+            }
+        }
+        true
+    }
+
     pub fn stop_for_owner_transition(&self, owner_id: &str, transition_generation: u64) {
         let targets = self
             .inner
@@ -2217,6 +2268,62 @@ mod tests {
         manager.stop_for_owner_transition("owner-a", 3);
         assert!(registry.descriptors(&owner).is_empty());
         assert!(manager.snapshot(&target).is_err());
+    }
+
+    #[tokio::test]
+    async fn rebind_owner_generation_keeps_runtime_through_transition_sweep() {
+        let manager = NativePiManager::in_memory(8);
+        let registry = std::sync::Arc::new(crate::ephemeral_registry::EphemeralRegistry::default());
+        manager.set_ephemeral_registry(std::sync::Arc::clone(&registry));
+        let owner = crate::window_owner::OwnerId::from_string("owner-gen".into());
+        let target = manager
+            .spawn_ephemeral(
+                "workspace-a",
+                "session-gen",
+                cat_ephemeral_spec(NativeRuntimeType::SideChat, Some("secret")),
+                &owner,
+                crate::ephemeral_registry::EphemeralKind::SideChat,
+                1,
+            )
+            .unwrap();
+        assert_eq!(target.workspace_generation, 1);
+
+        // A transition to generation 3 sweeps everything below it; rebinding
+        // the runtime to 3 first must keep it alive through the sweep. The
+        // rebound identity (generation 3) is what callers must use from now
+        // on — stale pre-rebind targets fail identity validation.
+        assert!(manager.rebind_owner_generation("owner-gen", "session-gen", 3));
+        manager.stop_for_owner_transition("owner-gen", 3);
+        let rebound = manager
+            .target_for_session_id("session-gen")
+            .expect("rebound runtime survives the sweep");
+        assert_eq!(rebound.workspace_generation, 3);
+        assert!(
+            manager.snapshot(&rebound).is_ok(),
+            "rebound runtime is snapshot-able"
+        );
+
+        // A later transition (generation 5) still sweeps the rebound runtime.
+        manager.stop_for_owner_transition("owner-gen", 5);
+        assert!(
+            manager.target_for_session_id("session-gen").is_none(),
+            "stale runtime is swept later"
+        );
+
+        // Unknown session ids never rebind anything.
+        assert!(!manager.rebind_owner_generation("owner-gen", "session-missing", 9));
+        // Cross-owner rebind attempts are rejected.
+        manager
+            .spawn_ephemeral(
+                "workspace-a",
+                "session-other",
+                cat_ephemeral_spec(NativeRuntimeType::SideChat, Some("secret")),
+                &owner,
+                crate::ephemeral_registry::EphemeralKind::SideChat,
+                1,
+            )
+            .unwrap();
+        assert!(!manager.rebind_owner_generation("owner-b", "session-other", 4));
     }
 
     #[tokio::test]

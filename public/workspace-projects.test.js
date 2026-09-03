@@ -115,6 +115,30 @@ describe("live instance session rendering", () => {
     expect(row.sessions.map((s) => s.isRunning)).toEqual([true]);
   });
 
+  test("registry remerge carries over counts and cached sessions", () => {
+    const rows = [
+      {
+        workspaceId: "uuid-keep",
+        canonicalPath: "/work/keep",
+        displayName: null,
+        pinned: false,
+        lastOpenedAt: 0,
+      },
+    ];
+    const first = mergeRegistryWorkspaces(rows, [], []).projects[0];
+    first.sessionCount = 7;
+    first.dirName = "--work-keep--";
+    first.sessions = [{ filePath: "/s/a.jsonl", name: "A" }];
+
+    // The sidebar's refresh button reloads registry rows; a merge that drops
+    // previous state resets every badge to 0 and the one-shot warmup never
+    // restores them. The remerge must carry counts and cached history over.
+    const remerged = mergeRegistryWorkspaces(rows, [], [first]).projects[0];
+    expect(remerged.sessionCount).toBe(7);
+    expect(remerged.dirName).toBe("--work-keep--");
+    expect(remerged.sessions.map((s) => s.filePath)).toEqual(["/s/a.jsonl"]);
+  });
+
   test("instances without a session file are skipped and existing sessions are not duplicated", () => {
     const bare = { port: 1, pid: 2, cwd: "/work/bare", startedAt: "" };
     const { projects } = mergeRegistryWorkspaces([], [bare, INSTANCE], []);

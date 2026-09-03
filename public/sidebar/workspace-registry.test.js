@@ -28,7 +28,9 @@ function makeRegistryTransport(rows, responses = {}) {
     runtimeInstances: vi.fn(async () => ({ instances: responses.instances ?? [] })),
     setWorkspacePinned: vi.fn(async () => ({})),
     workspaceSessions: vi.fn(async (workspaceId, options = {}) => {
-      const row = rows.find((item) => `ws:${item.workspaceId}` === workspaceId);
+      // The sidebar sends the raw DB uuid (registryId) — the host resolves
+      // rows by that id; the `ws:` prefix is display-only identity.
+      const row = rows.find((item) => item.workspaceId === workspaceId);
       const query = new URLSearchParams({ path: row?.canonicalPath || workspaceId });
       if (options.countOnly) query.set("countOnly", "1");
       const response = await globalThis.fetch(`/api/workspace-sessions?${query}`);
@@ -591,7 +593,7 @@ describe("registry cache invalidation wiring", () => {
     ).toBeGreaterThanOrEqual(2);
   });
 
-  test("refreshWorkspaceSessions refetches an expanded cached row and awaits the result", async () => {
+  test("scoped refresh refetches an expanded cached row", async () => {
     const { sidebar } = await makeRegistrySidebar();
     await sidebar.loadSessions();
     await sidebar.setWorkspaceExpanded(
@@ -600,7 +602,7 @@ describe("registry cache invalidation wiring", () => {
     );
     await settleFetches();
 
-    await sidebar.refreshWorkspaceSessions("/work/alpha");
+    await sidebar.refresh({ workspacePath: "/work/alpha" });
 
     const alpha = sidebar.projects.find((project) => project.workspaceId === "ws:uuid-1");
     expect(alpha.sessions.map((session) => session.name)).toEqual(["A", "B"]);
@@ -609,7 +611,7 @@ describe("registry cache invalidation wiring", () => {
     );
   });
 
-  test("refreshWorkspaceSessions on a collapsed row drops the cache without fetching", async () => {
+  test("scoped refresh on a collapsed row drops the cache without fetching", async () => {
     const { sidebar } = await makeRegistrySidebar();
     await sidebar.loadSessions();
     const beta = sidebar.projects.find((project) => project.workspaceId === "ws:uuid-2");
@@ -618,7 +620,7 @@ describe("registry cache invalidation wiring", () => {
     await sidebar.setWorkspaceExpanded(beta, false);
     expect(sidebar.workspaceSessionsCache.has("/work/beta")).toBe(true);
 
-    await sidebar.refreshWorkspaceSessions("/work/beta");
+    await sidebar.refresh({ workspacePath: "/work/beta" });
 
     expect(sidebar.workspaceSessionsCache.has("/work/beta")).toBe(false);
     expect(workspaceSessionsCalls().filter(([url]) => String(url).includes("beta"))).toHaveLength(
@@ -626,7 +628,7 @@ describe("registry cache invalidation wiring", () => {
     );
   });
 
-  test("refreshAllWorkspaces refetches expanded rows and leaves collapsed caches in place", async () => {
+  test("refresh refetches expanded rows and leaves collapsed caches in place", async () => {
     const { sidebar } = await makeRegistrySidebar();
     await sidebar.loadSessions();
     const alpha = sidebar.projects.find((project) => project.workspaceId === "ws:uuid-1");
@@ -638,7 +640,7 @@ describe("registry cache invalidation wiring", () => {
     await settleFetches();
     await sidebar.setWorkspaceExpanded(beta, false);
 
-    await sidebar.refreshAllWorkspaces();
+    await sidebar.refresh();
     await settleFetches();
 
     expect(workspaceSessionsCalls().filter(([url]) => String(url).includes("alpha"))).toHaveLength(
@@ -652,44 +654,43 @@ describe("registry cache invalidation wiring", () => {
   });
 });
 
-describe("full warmup", () => {
-  let previousFetch;
-  beforeEach(() => {
-    previousFetch = globalThis.fetch;
-  });
-  afterEach(() => {
-    globalThis.fetch = previousFetch;
-    vi.useRealTimers();
-  });
-
-  test("details are warmed for every registry row, not just the first few", async () => {
+describe("startup loading", () => {
+  test("warms readdir-only counts and never scans full session lists", async () => {
     vi.useFakeTimers();
-    const rows = Array.from({ length: 6 }, (_, i) => ({
-      workspaceId: `uuid-${i}`,
-      canonicalPath: `/work/w${i}`,
-      displayName: `w${i}`,
-      pinned: false,
-      lastOpenedAt: null,
-    }));
-    const { sidebar } = await makeSidebar({ rows, fetchRoutes: { instances: [] } });
-    await sidebar.loadSessions({ quiet: true });
+    try {
+      const rows = Array.from({ length: 6 }, (_, i) => ({
+        workspaceId: `uuid-${i}`,
+        canonicalPath: `/work/w${i}`,
+        displayName: `w${i}`,
+        pinned: false,
+        lastOpenedAt: null,
+      }));
+      const { sidebar, transport } = await makeSidebar({
+        rows,
+        fetchRoutes: {
+          instances: [],
+          workspaceSessions: () => ({ sessionCount: 5, sessions: [] }),
+        },
+      });
+      await sidebar.loadSessions({ quiet: true });
 
-    const detailCallsFor = () =>
-      globalThis.fetch.mock.calls.filter(([url]) =>
-        String(url).startsWith("/api/workspace-sessions"),
-      );
+      // jsdom lacks requestIdleCallback; the warmup rides the 800ms fallback.
+      await vi.advanceTimersByTimeAsync(900);
 
-    // Advance past the idle fallback timer and drain the serial warm chain.
-    await vi.advanceTimersByTimeAsync(900);
-
-    const calls = detailCallsFor();
-    expect(calls.length).toBeGreaterThanOrEqual(rows.length);
-    for (const row of rows) {
-      expect(
-        calls.some(([url]) =>
-          String(url).includes(`path=${encodeURIComponent(row.canonicalPath)}`),
-        ),
-      ).toBe(true);
+      // Count only this sidebar's own transport: other suites' pending
+      // warmup timers must not leak into the assertion.
+      const calls = transport.workspaceSessions.mock.calls;
+      expect(calls).toHaveLength(rows.length);
+      for (const [, options] of calls) {
+        expect(options?.countOnly).toBe(true);
+      }
+      for (const project of sidebar.projects) {
+        expect(project.sessionCount).toBe(5);
+        // Full history stays lazy: no workspace preloaded its session list.
+        expect(project.sessions).toEqual([]);
+      }
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

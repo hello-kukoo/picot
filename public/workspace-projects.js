@@ -120,6 +120,11 @@ export function mergeRegistryWorkspaces(
     liveByPath.set(key, list);
   }
 
+  const previousByPath = new Map(
+    (Array.isArray(previousProjects) ? previousProjects : [])
+      .filter((project) => project.source === "registry")
+      .map((project) => [workspacePathKey(project.path), project]),
+  );
   for (const row of Array.isArray(registryRows) ? registryRows : []) {
     // The Rust layer serializes with rename_all = "camelCase"; no snake_case
     // fallback exists on the wire.
@@ -133,6 +138,26 @@ export function mergeRegistryWorkspaces(
       Number.isFinite(lastOpenedMs) ? lastOpenedMs : 0,
       latestActivity([], instances),
     );
+    // Registry reloads must not wipe what this page already knows: counts
+    // and cached session lists survive a refresh (the sidebar's "refresh"
+    // button reloads rows server-side; without carry-over every badge would
+    // flash to 0 and the one-shot warmup would never restore them).
+    const previousRow = previousByPath.get(key);
+    // Carry over cached sessions deduped by filePath: a previous page state
+    // may already hold duplicate rows for the same file, and the remerge
+    // contract collapses them instead of propagating both.
+    const carriedSessions = [];
+    const carriedSeen = new Set();
+    for (const session of Array.isArray(previousRow?.sessions) ? previousRow.sessions : []) {
+      const key = session?.filePath;
+      if (!key) {
+        carriedSessions.push(session);
+        continue;
+      }
+      if (carriedSeen.has(key)) continue;
+      carriedSeen.add(key);
+      carriedSessions.push(session);
+    }
     byKey.set(key, {
       // Registry identity is the DB UUID; stable across machines/renames.
       workspaceId: `ws:${row.workspaceId}`,
@@ -140,8 +165,10 @@ export function mergeRegistryWorkspaces(
       pinned: Boolean(row.pinned),
       path,
       folderName: row.displayName || folderName(path),
-      dirName: null,
-      sessions: [],
+      dirName: previousRow?.dirName ?? null,
+      sessions: carriedSessions,
+      sessionCount:
+        typeof previousRow?.sessionCount === "number" ? previousRow.sessionCount : undefined,
       runningInstances: instances,
       isProvisional: false,
       source: "registry",

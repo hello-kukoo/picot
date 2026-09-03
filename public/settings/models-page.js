@@ -55,6 +55,7 @@ function providerIcon(provider, className = "provider-logo") {
 
 export function setupModelsPage({
   configGateway,
+  oauthGateway,
   onModelConfigurationChanged,
   clearSettingsSaveMessage = clearSettingsSaveMessageGlobal,
   setSettingsSaveButtonSaving = setSettingsSaveButtonSavingGlobal,
@@ -62,6 +63,12 @@ export function setupModelsPage({
   showSettingsSaveSuccess = showSettingsSaveSuccessGlobal,
 }) {
   const call = (op, params, options) => configGateway.call(op, params, options);
+  // OAuth flows ride the same /picot-config channel but resolve with the
+  // v3 command shape ({ success, data?, error? }) instead of { ok, data }.
+  const oauthCall = (op, params, options) =>
+    oauthGateway
+      ? oauthGateway.command({ type: op, ...params }, options)
+      : Promise.resolve({ success: false, error: "OAuth transport unavailable" });
   const apiKeysContainer = document.getElementById("settings-api-keys");
   const providerExpansionState = new Map();
   let catalogProviders = [];
@@ -943,8 +950,10 @@ export function setupModelsPage({
       t("settings.models.oauth.logoutConfirm", { provider: p.displayName || p.provider }),
     );
     if (!ok) return;
-    const resp = await call("logout_oauth_login", { provider: "openai-codex" }).catch(() => null);
-    if (resp?.ok) {
+    // The bridge op is `oauth_logout`; the retired host control name
+    // (`logout_oauth_login`) no longer exists on the config plane.
+    const resp = await oauthCall("oauth_logout", { provider: "openai-codex" }).catch(() => null);
+    if (resp?.success) {
       await onModelConfigurationChanged?.();
       await loadApiKeysPanel();
       // Re-query the capability surface so the card flips back to the sign-in
@@ -1401,42 +1410,26 @@ export function setupModelsPage({
    * authentication panel. Never infers OAuth from the API-key catalog.
    */
   /**
-   * OAuth commands share authenticated HostServer v2 transport. No feature page
-   * opens a second socket or sends an unscoped command frame.
+   * OAuth commands share the /picot-config prompt channel: __picotOauth
+   * event frames stream over the active session's runtime subscription and
+   * are consumed by the oauth gateway before chat rendering (M3).
    */
   function createOAuthWsChannel() {
-    const transport = configGateway?.transport;
-    if (!transport) {
+    if (!oauthGateway) {
       return {
         command: async () => ({ success: false, error: "OAuth transport unavailable" }),
         subscribe: () => () => {},
         close: () => {},
       };
     }
-
-    async function command(cmd) {
-      try {
-        let data;
-        if (cmd?.type === "start_oauth_login") {
-          data = await transport.startOauthLogin({
-            provider: cmd.provider,
-            method: cmd.method,
-          });
-        } else if (cmd?.type === "cancel_oauth_login") {
-          data = await transport.cancelOauthLogin({ operationId: cmd.operationId });
-        } else {
-          return { success: false, error: "Unsupported OAuth command" };
-        }
-        return { success: true, data: data ?? {} };
-      } catch (error) {
-        return { success: false, error: error?.message || String(error) };
-      }
-    }
-
+    let unsubscribe = () => {};
     return {
-      command,
-      subscribe: (listener) => transport.subscribeOauthEvents(listener),
-      close: () => {},
+      command: (cmd) => oauthGateway.command(cmd),
+      subscribe: (listener) => {
+        unsubscribe = oauthGateway.subscribe(listener);
+        return unsubscribe;
+      },
+      close: () => unsubscribe(),
     };
   }
 
@@ -1480,8 +1473,9 @@ export function setupModelsPage({
 
   async function loadOAuthCapability() {
     try {
-      const resp = await call("get_oauth_login_capabilities");
-      const providers = resp?.ok && Array.isArray(resp.data?.providers) ? resp.data.providers : [];
+      const resp = await oauthCall("get_oauth_login_capabilities");
+      const providers =
+        resp?.success && Array.isArray(resp.data?.providers) ? resp.data.providers : [];
       codexOAuthCapability = providers.find((p) => p.providerId === "openai-codex") ?? null;
     } catch {
       codexOAuthCapability = null;

@@ -85,8 +85,8 @@ export function setupMobileAccess({
       transport.mobileAccessInfo().catch(() => null),
       transport
         .getPreference(PREF_KEY)
-        .then((r) => r?.value === true)
-        .catch(() => false),
+        .then((r) => r?.value == null || r.value === true)
+        .catch(() => true),
     ]);
     const enabled = Boolean(info?.enabled);
     setToggleVisual(prefValue);

@@ -1,189 +1,92 @@
-// ABOUTME: ConfigGateway for settings surfaces over the host control plane (v2).
-// ABOUTME: Maps file and OAuth operations to host controls and names gaps loudly.
+// Client for the Picot Configuration data plane.
+//
+// pi's native RPC command set is fixed and cannot be extended, so Configuration
+// operations (model catalog, API keys, agent-config / models.json files) are
+// served by the `picot-config` command registered in the picot-bridge
+// extension. We invoke it by sending a native RPC `prompt` of the form
+// `/picot-config <json>` — extension commands execute immediately without
+// hitting the LLM or session history. The handler returns its result through
+// `ctx.ui.notify(JSON)`, which arrives here as a `notify` extension-UI event.
+// We correlate requests and responses by a per-call id.
+//
+// `consumeNotify(request)` must be called for every incoming `notify` event; it
+// returns true when the notification was a config response (and should NOT be
+// rendered as a chat message), false otherwise.
 
-const HEALTH_CHECK_TIMEOUT_MS = 120_000;
+import { randomId } from "../utils/random-id.js";
 
-// JSON settings files are host-owned and go through `settings_get`/`settings_put`,
-// which keep Pi's proper-lockfile protocol, the atomic replace, and the
-// backup + restart notice for model config. Maps are used because `Object.hasOwn`
-// is newer than the WebKit baseline this WebView targets.
-const JSON_READ_OPS = new Map([
-  ["read_models_config", "models.json"],
-  ["read_agent_config", "settings.json"],
-]);
+const DEFAULT_TIMEOUT_MS = 30_000;
 
-const JSON_WRITE_OPS = new Map([
-  ["write_models_config", "models.json"],
-  ["write_agent_config", "settings.json"],
-]);
-
-// Markdown instruction files are plain text: `agent_text_file_*` preserves the
-// exact bytes the editor showed instead of re-serializing them.
-const TEXT_READ_OPS = new Map([
-  ["read_agents_md", "AGENTS.md"],
-  ["read_append_system_md", "APPEND_SYSTEM.md"],
-]);
-
-const TEXT_WRITE_OPS = new Map([
-  ["write_agents_md", "AGENTS.md"],
-  ["write_append_system_md", "APPEND_SYSTEM.md"],
-]);
-
-// These were retired with /api/rpc and are now native host controls: the
-// gateway routes them over the same v2 transport as every other surface.
-const HOST_CONTROL_OPS = new Map([
-  ["list_model_catalog", (transport) => transport.listModelCatalog()],
-  ["set_api_key", (transport, params) => transport.setApiKey(params.provider, params.apiKey)],
-  ["remove_api_key", (transport, params) => transport.removeApiKey(params.provider)],
-  [
-    "check_model_health",
-    (transport, params) => transport.checkModelHealth(params.provider, params.modelId || ""),
-  ],
-  [
-    "set_model_visibility",
-    (transport, params) =>
-      transport.setModelVisibility(params.provider, params.modelId, params.visible !== false),
-  ],
-]);
-
-function withTimeout(promise, ms, label) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms),
-    ),
-  ]);
-}
-
-function unavailable(operation) {
-  return {
-    ok: false,
-    error: `${operation} has no native runtime implementation (retired with /api/rpc)`,
-  };
+export function consumeConfigResponseFrame(gateway, frame) {
+  return Boolean(
+    frame?.type === "runtime_event" &&
+      frame.event?.type === "extension_ui_request" &&
+      gateway.consumeNotify(frame.event),
+  );
 }
 
 export class ConfigGateway {
-  constructor({ transport = null } = {}) {
-    // Injected rather than imported: the gateway must stay usable (and testable)
-    // without owning transport construction order.
-    this.transport = transport;
+  #runtime;
+  #getTarget;
+  #pending = new Map();
+  #waitUntilReady;
+
+  constructor({ runtime, getTarget, waitUntilReady = null }) {
+    this.#runtime = runtime;
+    this.#getTarget = getTarget;
+    this.#waitUntilReady = waitUntilReady;
   }
 
-  async call(operation, params = {}, options = {}) {
-    const timeoutMs = options.timeoutMs ?? HEALTH_CHECK_TIMEOUT_MS;
-    try {
-      const jsonReadFile = JSON_READ_OPS.get(operation);
-      if (jsonReadFile) {
-        return await this._readJson(operation, jsonReadFile, timeoutMs);
-      }
-      const jsonWriteFile = JSON_WRITE_OPS.get(operation);
-      if (jsonWriteFile) {
-        return await this._writeJson(operation, jsonWriteFile, params, timeoutMs);
-      }
-      const textReadFile = TEXT_READ_OPS.get(operation);
-      if (textReadFile) {
-        return await this._readText(operation, textReadFile, timeoutMs);
-      }
-      const textWriteFile = TEXT_WRITE_OPS.get(operation);
-      if (textWriteFile) {
-        return await this._writeText(operation, textWriteFile, params, timeoutMs);
-      }
-      if (operation === "open_external") {
-        if (!this.transport?.openExternal) return unavailable(operation);
-        await withTimeout(this.transport.openExternal(params.url), timeoutMs, operation);
-        return { ok: true };
-      }
-      if (operation === "get_oauth_login_capabilities") {
-        if (!this.transport?.getOauthLoginCapabilities) return unavailable(operation);
-        const data = await withTimeout(
-          this.transport.getOauthLoginCapabilities(),
-          timeoutMs,
-          operation,
-        );
-        return { ok: true, data: data ?? {} };
-      }
-      if (operation === "logout_oauth_login") {
-        if (!this.transport?.logoutOauthLogin) return unavailable(operation);
-        await withTimeout(this.transport.logoutOauthLogin(params), timeoutMs, operation);
-        return { ok: true };
-      }
-      const hostControl = HOST_CONTROL_OPS.get(operation);
-      if (hostControl) {
-        if (!this.transport) return unavailable(operation);
-        const data = await withTimeout(hostControl(this.transport, params), timeoutMs, operation);
-        return { ok: true, data: data ?? {} };
-      }
-      throw new Error(`Unknown operation: ${operation}`);
-    } catch (error) {
-      return { ok: false, error: error?.message || String(error) };
+  // Invoke a configuration operation. Resolves with the handler payload
+  // `{ ok: boolean, data?, error? }`. Rejects only on transport/timeout errors.
+  call(op, params = {}, options = {}) {
+    if (this.#waitUntilReady) {
+      return this.#waitUntilReady().then(() => this.#send(op, params, options));
     }
+    return this.#send(op, params, options);
   }
 
-  async _readJson(operation, name, timeoutMs) {
-    if (!this.transport?.settingsGet) return unavailable(operation);
-    try {
-      const data = await withTimeout(
-        this.transport.settingsGet(name, "global"),
-        timeoutMs,
-        operation,
-      );
-      return {
-        ok: true,
-        data: {
-          path: data?.path ?? "",
-          content: JSON.stringify(data?.value ?? {}, null, 2),
-          exists: true,
-        },
-      };
-    } catch (error) {
-      if (error?.code === "config_not_found") {
-        return { ok: true, data: { path: "", content: "", exists: false } };
-      }
-      throw error;
-    }
+  #send(op, params, { timeoutMs = DEFAULT_TIMEOUT_MS, target: targetOverride }) {
+    const target = targetOverride ?? this.#getTarget();
+    if (!target) return Promise.reject(new Error("No active session for configuration request"));
+    const id = `cfg-${randomId()}`;
+    const message = `/picot-config ${JSON.stringify({ id, op, params })}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#pending.delete(id);
+        reject(new Error(`Configuration request "${op}" timed out`));
+      }, timeoutMs);
+      this.#pending.set(id, { resolve, reject, timer });
+      this.#runtime
+        .request({ type: "prompt", message }, target, { idempotencyKey: id })
+        .catch((error) => {
+          const pending = this.#pending.get(id);
+          if (!pending) return;
+          clearTimeout(pending.timer);
+          this.#pending.delete(id);
+          reject(error);
+        });
+    });
   }
 
-  async _writeJson(operation, name, params, timeoutMs) {
-    if (!this.transport?.settingsPut) return unavailable(operation);
-    let value;
+  // Returns true if the notification was a config response (consumed).
+  consumeNotify(request) {
+    const message = request?.message;
+    if (typeof message !== "string" || !message.includes("__picotConfig")) return false;
+    let payload;
     try {
-      value = JSON.parse(params.content ?? "{}");
+      payload = JSON.parse(message);
     } catch {
-      return { ok: false, error: "Config must be valid JSON" };
+      return false;
     }
-    await withTimeout(this.transport.settingsPut(name, value, "global"), timeoutMs, operation);
-    return { ok: true };
-  }
-
-  async _readText(operation, name, timeoutMs) {
-    if (!this.transport?.agentTextFileGet) return unavailable(operation);
-    try {
-      const data = await withTimeout(
-        this.transport.agentTextFileGet(name, "global"),
-        timeoutMs,
-        operation,
-      );
-      return {
-        ok: true,
-        data: { path: data?.path ?? "", content: data?.content ?? "", exists: true },
-      };
-    } catch (error) {
-      // An absent file is a valid empty editor, not a failure: Pi creates these
-      // on demand and most installs have no APPEND_SYSTEM.md at all.
-      if (error?.code === "config_not_found") {
-        return { ok: true, data: { path: "", content: "", exists: false } };
-      }
-      throw error;
-    }
-  }
-
-  async _writeText(operation, name, params, timeoutMs) {
-    if (!this.transport?.agentTextFilePut) return unavailable(operation);
-    await withTimeout(
-      this.transport.agentTextFilePut(name, params.content ?? "", "global"),
-      timeoutMs,
-      operation,
-    );
-    return { ok: true };
+    const id = payload?.__picotConfig;
+    if (typeof id !== "string") return false;
+    const pending = this.#pending.get(id);
+    if (!pending) return true; // ours, but already settled/timed out — still swallow it
+    clearTimeout(pending.timer);
+    this.#pending.delete(id);
+    const { __picotConfig, ...result } = payload;
+    pending.resolve(result);
+    return true;
   }
 }

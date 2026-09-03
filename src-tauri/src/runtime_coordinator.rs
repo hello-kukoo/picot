@@ -13,6 +13,10 @@ pub struct RuntimeTarget {
     /// Host-derived owner binding. None is retained only for legacy/unit
     /// fixtures; native production admission requires Some.
     pub owner_id: Option<String>,
+    /// Wire targets from the browser echo the bootstrap object; partial
+    /// triples (pre-bootstrap pages) still deserialize with generation 0 and
+    /// are rejected later by authorize_target, which re-reads the registry.
+    #[serde(default)]
     pub workspace_generation: u64,
 }
 
@@ -370,6 +374,20 @@ impl RuntimeCoordinator {
         Ok(record.target.clone())
     }
 
+    /// Re-stamp one registered runtime's workspace generation (workspace
+    /// transitions that reuse a live runtime; the commit sweep stops every
+    /// runtime with an older generation, so the reused target must move up).
+    pub fn rebind_generation(
+        &mut self,
+        target: &RuntimeTarget,
+        generation: u64,
+    ) -> Result<RuntimeTarget, CoordinatorError> {
+        self.validate(target)?;
+        let record = self.instances.get_mut(&target.instance_id).unwrap();
+        record.target.workspace_generation = generation;
+        Ok(record.target.clone())
+    }
+
     pub fn unregister(&mut self, target: &RuntimeTarget) -> Result<(), CoordinatorError> {
         self.validate(target)?;
         self.instances.remove(&target.instance_id);
@@ -407,6 +425,21 @@ mod tests {
 
     fn target(instance: &str) -> RuntimeTarget {
         RuntimeTarget::new("workspace-a", "session-a", instance)
+    }
+
+    #[test]
+    fn wire_target_without_generation_deserializes_to_zero() {
+        // Browser frames echo the bootstrap target; a partial pre-bootstrap
+        // triple must deserialize instead of failing with a misleading
+        // "Runtime target is invalid". Admission still rejects it later.
+        let parsed: RuntimeTarget = serde_json::from_value(json!({
+            "workspaceId": "workspace-a",
+            "sessionId": "session-a",
+            "instanceId": "instance-a"
+        }))
+        .unwrap();
+        assert_eq!(parsed.workspace_generation, 0);
+        assert!(parsed.owner_id.is_none());
     }
 
     #[test]

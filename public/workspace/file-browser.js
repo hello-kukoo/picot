@@ -6,6 +6,14 @@ import { createFileTypeIcon } from "../file-type-icons.js";
 import { onLocaleChange, t } from "../i18n.js";
 import { displayLocalPath, normalizeLocalPath, parentLocalPath } from "./path-utils.js";
 
+function joinLocalPath(base, relative) {
+  const normalizedBase = normalizeLocalPath(base);
+  const normalizedRelative = normalizeLocalPath(relative);
+  if (!normalizedBase) return normalizedRelative;
+  if (!normalizedRelative) return normalizedBase;
+  return `${normalizedBase.replace(/\/$/, "")}/${normalizedRelative.replace(/^\//, "")}`;
+}
+
 function formatSize(bytes) {
   if (bytes == null) return "";
   if (bytes < 1024) return `${bytes}B`;
@@ -74,15 +82,30 @@ export class FileBrowser {
         return;
       }
 
+      // Native list_files responses use relativePath/kind entries and omit an
+      // absolute directory path. The app adapter normally normalizes this
+      // shape, but accepting it here keeps FileBrowser safe for direct native
+      // consumers and prevents `items.length` from turning a valid response
+      // into the generic failure state.
+      const responsePath = data?.path || dirPath || this.workspaceRoot;
+      const items = Array.isArray(data?.items)
+        ? data.items
+        : Array.isArray(data?.entries)
+          ? data.entries.map((entry) => ({
+              name: entry.name,
+              path: joinLocalPath(this.workspaceRoot, entry.relativePath),
+              isDirectory: entry.kind === "directory",
+            }))
+          : [];
       const normalizedRoot = normalizeLocalPath(this.workspaceRoot);
       const normalizedRequest = typeof dirPath === "string" ? normalizeLocalPath(dirPath) : "";
       if (!dirPath || (normalizedRoot && normalizedRequest === normalizedRoot)) {
-        this.workspaceRoot = data.path;
+        this.workspaceRoot = responsePath;
       }
-      this.currentPath = data.path;
-      this.pathEl.textContent = displayLocalPath(data.path);
-      this.pathEl.title = data.path;
-      this.render(data.items);
+      this.currentPath = responsePath;
+      this.pathEl.textContent = displayLocalPath(responsePath);
+      this.pathEl.title = responsePath;
+      this.render(items);
     } catch (error) {
       if (sequence !== this.loadSequence) return;
       this.showFileStatus("failed", error instanceof Error ? error.message : String(error));

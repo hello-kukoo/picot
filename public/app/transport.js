@@ -302,46 +302,6 @@ export class WsTransport {
     return this._control("settings_put", { name, value, scope });
   }
 
-  // ── Model configuration (Settings → Models; host-owned files) ──
-
-  listModelCatalog() {
-    return this._control("list_model_catalog", {});
-  }
-
-  setApiKey(provider, apiKey) {
-    return this._control("set_api_key", { provider, apiKey });
-  }
-
-  removeApiKey(provider) {
-    return this._control("remove_api_key", { provider });
-  }
-
-  setModelVisibility(provider, modelId, visible) {
-    return this._control("set_model_visibility", { provider, modelId, visible });
-  }
-
-  checkModelHealth(provider, modelId = "") {
-    return this._control("check_model_health", { provider, modelId });
-  }
-
-  // ── Skills inventory (Settings → Skills; host-owned discovery) ──
-
-  listSkillInventory(scope) {
-    return this._control("list_skill_inventory", { scope });
-  }
-
-  listPackageSkillInventory(scope) {
-    return this._control("list_package_skill_inventory", { scope });
-  }
-
-  setSkillEnabled(scope, target, enabled) {
-    return this._control("set_skill_enabled", { scope, target, enabled });
-  }
-
-  setDefaultThinkingLevel(level) {
-    return this._control("set_default_thinking_level", { level });
-  }
-
   // D4 mobile entry: LAN reachability + pairing-token minting. The mint is
   // desktop-only on the host side and refuses while the host is loopback-only.
   mobileAccessInfo() {
@@ -350,30 +310,6 @@ export class WsTransport {
 
   mobilePairingCreate() {
     return this._control("mobile_pairing_create", {});
-  }
-
-  // Pi owns credential storage; OAuth control frames share canonical host WS.
-  getOauthLoginCapabilities() {
-    return this._control("get_oauth_login_capabilities", {});
-  }
-
-  startOauthLogin(params = {}) {
-    return this._control("start_oauth_login", params);
-  }
-
-  cancelOauthLogin(params = {}) {
-    return this._control("cancel_oauth_login", params);
-  }
-
-  logoutOauthLogin(params = {}) {
-    return this._control("logout_oauth_login", params);
-  }
-
-  subscribeOauthEvents(listener) {
-    if (!this.wsClient || typeof listener !== "function") return () => {};
-    const handler = (event) => listener(event.detail);
-    this.wsClient.addEventListener("oauthEvent", handler);
-    return () => this.wsClient.removeEventListener("oauthEvent", handler);
   }
 
   loadSessionUiProfile(expectedSessionId) {
@@ -479,9 +415,5 @@ export function createTransport({ wsClient, env = globalThis.window || globalThi
 
 export function initTransport(opts) {
   singleton = createTransport(opts);
-  return singleton;
-}
-
-export function getTransport() {
   return singleton;
 }

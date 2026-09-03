@@ -674,8 +674,8 @@ mod tests {
             .unwrap();
         assert!(touched.last_opened_at.is_some());
 
-        // Unregistered cwd (e.g. default ~/.pi/tmp or ephemeral dirs): no
-        // touch, and crucially no phantom registry row.
+        // Unregistered cwd (e.g. ephemeral dirs): no touch, and crucially no
+        // phantom registry row.
         let ghost = temp.join("ghost");
         fs::create_dir_all(&ghost).unwrap();
         assert!(!touch_registered_workspace(
@@ -855,6 +855,30 @@ fn extract_session_cwd(session_path: &PathBuf) -> Option<String> {
 /// Read registered native workspace state once at launch. Storage, schema,
 /// authorization, JSON, and value failures fail startup rather than inventing
 /// an unregistered workspace.
+fn ensure_default_workspace(metadata: &SharedMetadataStore) -> Result<(), String> {
+    let path = dirs::home_dir()
+        .ok_or_else(|| "Cannot resolve home directory".to_string())?
+        .join(".pi")
+        .join("tmp");
+    std::fs::create_dir_all(&path).map_err(|error| {
+        format!(
+            "Cannot create default workspace {}: {error}",
+            path.display()
+        )
+    })?;
+    metadata
+        .lock()
+        .map_err(|_| "Metadata store lock poisoned".to_string())?
+        .add_workspace(&path)
+        .map_err(|error| {
+            format!(
+                "Cannot register default workspace {}: {error}",
+                path.display()
+            )
+        })?;
+    Ok(())
+}
+
 fn registered_native_startup_workspace(
     metadata: &SharedMetadataStore,
 ) -> Result<Option<(String, PathBuf)>, String> {
@@ -875,6 +899,7 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
         .map_err(|error| format!("Cannot resolve Picot app data directory: {error}"))?
         .join("picot.sqlite3");
     let shared_metadata = Arc::new(Mutex::new(MetadataStore::open(&metadata_path)?));
+    ensure_default_workspace(&shared_metadata)?;
     let Some((workspace_id, cwd_path)) = registered_native_startup_workspace(&shared_metadata)?
     else {
         return Err("Native startup requires a registered workspace".into());
@@ -916,6 +941,7 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
         Arc::clone(&shared_metadata),
     ))?;
     host.runtime_started()?;
+    host.set_terminal_manager(terminal_manager.clone());
     let owner_registry = Arc::new(WindowOwnerRegistry::default());
     let (owner, capability) = owner_registry.create_owner_with_workspace(
         format!("native-workspace-{workspace_id}"),
@@ -1949,47 +1975,6 @@ fn install_control_handler(
                             .map(|cache| cache.load().unwrap_or(json!({ "models": [] })))
                             .unwrap_or(json!({ "models": [] })))
                     }
-                    "list_model_catalog" => {
-                        let agent_root = pi_launch::resolve_pi_agent_root()?;
-                        Ok(host_models::list_model_catalog(&agent_root))
-                    }
-                    "set_api_key" => {
-                        let agent_root = pi_launch::resolve_pi_agent_root()?;
-                        let provider = arg_str("provider").ok_or("provider is required")?;
-                        let api_key = arg_str("apiKey").ok_or("apiKey is required")?;
-                        host_models::set_api_key(&agent_root, &provider, &api_key)?;
-                        Ok(json!({ "provider": provider }))
-                    }
-                    "remove_api_key" => {
-                        let agent_root = pi_launch::resolve_pi_agent_root()?;
-                        let provider = arg_str("provider").ok_or("provider is required")?;
-                        host_models::remove_api_key(&agent_root, &provider)?;
-                        Ok(json!({ "provider": provider }))
-                    }
-                    "set_model_visibility" => {
-                        let agent_root = pi_launch::resolve_pi_agent_root()?;
-                        let provider = arg_str("provider").ok_or("provider is required")?;
-                        let model_id = arg_str("modelId").ok_or("modelId is required")?;
-                        let visible = arg_bool("visible").unwrap_or(true);
-                        host_models::set_model_visibility(
-                            &agent_root,
-                            &provider,
-                            &model_id,
-                            visible,
-                        )?;
-                        Ok(json!({ "provider": provider, "modelId": model_id, "visible": visible }))
-                    }
-                    "check_model_health" => {
-                        let agent_root = pi_launch::resolve_pi_agent_root()?;
-                        let provider = arg_str("provider").ok_or("provider is required")?;
-                        let model_id = arg_str("modelId").unwrap_or_default();
-                        host_models::check_model_health(
-                            &agent_root,
-                            &static_dir,
-                            &provider,
-                            &model_id,
-                        )
-                    }
                     "list_skill_inventory" => {
                         require_native_owner(&ctx)?;
                         let owner = ctx.owner_id.as_ref().ok_or("native owner required")?;
@@ -2448,21 +2433,106 @@ fn install_control_handler(
                         let canonical_target = fs::canonicalize(&target_cwd)
                             .map_err(|e| format!("Invalid targetCwd: {e}"))?;
                         let session_path = arg_str("sessionPath");
+                        let force_new_session = arg_bool("forceNewSession").unwrap_or(false);
                         let workspace_id = metadata
                             .lock()
                             .map_err(|_| "metadata store unavailable".to_string())?
                             .workspace_id_for_canonical_root(&canonical_target)
                             .map_err(|_| "workspace is not registered".to_string())?;
-                        // Reuse the owner's running runtime for the target
-                        // workspace, else spawn a windowless native runtime.
-                        let target = match runtimes.running_targets().into_iter().find(|t| {
-                            t.workspace_id == workspace_id
-                                && t.owner_id.as_deref() == Some(owner.as_str())
-                        }) {
-                            Some(existing) => existing,
+                        let current_cwd = owner_registry
+                            .current_workspace(&owner)
+                            .map(|(cwd, _)| cwd)
+                            .ok_or("owner has no workspace")?;
+                        let same_cwd = canonical_target == current_cwd;
+
+                        // A specific session file (or an explicit force-new)
+                        // always gets its own runtime: reusing the live one
+                        // would drop the requested session, and the commit
+                        // sweep below would stop that reused runtime as an
+                        // old-generation target — the navigation would land
+                        // on a dead session (`runtime_not_found`).
+                        let existing = if session_path.is_some() || force_new_session {
+                            None
+                        } else {
+                            runtimes.running_targets().into_iter().find(|t| {
+                                t.workspace_id == workspace_id
+                                    && t.owner_id.as_deref() == Some(owner.as_str())
+                            })
+                        };
+
+                        // Registry transition FIRST: the commit sweep stops
+                        // every runtime with `generation < transition`, so the
+                        // surviving runtime must carry the post-transition
+                        // generation — spawn with it, or re-stamp a reused one.
+                        let transition_url = |session_id: &str| {
+                            format!(
+                                "{}/workspaces/{}/sessions/{}",
+                                host_origin, workspace_id, session_id
+                            )
+                        };
+                        let (target, transition_generation) = match existing {
+                            Some(existing) => {
+                                let target_url = format!(
+                                    "{}/workspaces/{}/sessions/{}",
+                                    host_origin, existing.workspace_id, existing.session_id
+                                );
+                                let generation = if same_cwd {
+                                    owner_registry.prepare_navigation(
+                                        &owner,
+                                        0,
+                                        canonical_target.clone(),
+                                        target_url.clone(),
+                                        std::time::Duration::from_secs(30),
+                                    )?
+                                } else {
+                                    let gen = owner_registry.begin_workspace_transition(
+                                        &owner,
+                                        canonical_target.clone(),
+                                        0,
+                                    )?;
+                                    owner_registry.prepare_navigation(
+                                        &owner,
+                                        0,
+                                        canonical_target.clone(),
+                                        target_url.clone(),
+                                        std::time::Duration::from_secs(30),
+                                    )?;
+                                    gen
+                                };
+                                runtimes.rebind_owner_generation(
+                                    owner.as_str(),
+                                    &existing.session_id,
+                                    generation,
+                                );
+                                (existing, generation)
+                            }
                             None => {
                                 let session_id =
                                     format!("session-{}", uuid::Uuid::new_v4().simple());
+                                let target_url = transition_url(&session_id);
+                                let generation = if same_cwd {
+                                    owner_registry.prepare_navigation(
+                                        &owner,
+                                        0,
+                                        canonical_target.clone(),
+                                        target_url.clone(),
+                                        std::time::Duration::from_secs(30),
+                                    )?
+                                } else {
+                                    let gen = owner_registry.begin_workspace_transition(
+                                        &owner,
+                                        canonical_target.clone(),
+                                        0,
+                                    )?;
+                                    owner_registry.prepare_navigation(
+                                        &owner,
+                                        0,
+                                        canonical_target.clone(),
+                                        target_url.clone(),
+                                        std::time::Duration::from_secs(30),
+                                    )?;
+                                    gen
+                                };
                                 let launch = pi_launch::native_launch_spec(
                                     &static_dir,
                                     &canonical_target.to_string_lossy(),
@@ -2473,50 +2543,20 @@ fn install_control_handler(
                                     session_id,
                                     format!("instance-{}", uuid::Uuid::new_v4().simple()),
                                     owner.as_str(),
-                                    0,
+                                    generation,
                                 );
                                 runtimes.spawn(new_target.clone(), launch)?;
-                                new_target
+                                (new_target, generation)
                             }
                         };
-                        let current_cwd = owner_registry
-                            .current_workspace(&owner)
-                            .map(|(cwd, _)| cwd)
-                            .ok_or("owner has no workspace")?;
-                        let same_cwd = canonical_target == current_cwd;
-                        // Native windows all share the HostServer origin; the
-                        // target URL is a workspace path on the same origin.
-                        let target_url = format!(
-                            "{}/workspaces/{}/sessions/{}",
-                            host_origin, target.workspace_id, target.session_id
-                        );
-                        let transition_generation = if same_cwd {
-                            owner_registry.prepare_navigation(
-                                &owner,
-                                0,
-                                canonical_target.clone(),
-                                target_url.clone(),
-                                std::time::Duration::from_secs(30),
-                            )?
-                        } else {
-                            let gen = owner_registry.begin_workspace_transition(
-                                &owner,
-                                canonical_target.clone(),
-                                0,
-                            )?;
-                            owner_registry.prepare_navigation(
-                                &owner,
-                                0,
-                                canonical_target.clone(),
-                                target_url.clone(),
-                                std::time::Duration::from_secs(30),
-                            )?;
-                            gen
-                        };
+
                         Ok(serde_json::json!({
                             "classification": if same_cwd { "same" } else { "cross" },
                             "transitionGeneration": transition_generation,
-                            "targetOrigin": target_url,
+                            "targetOrigin": format!(
+                                "{}/workspaces/{}/sessions/{}",
+                                host_origin, target.workspace_id, target.session_id
+                            ),
                             "targetWorkspaceId": target.workspace_id,
                             "targetSessionId": target.session_id,
                             "settleRequired": !same_cwd,

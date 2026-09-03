@@ -312,6 +312,15 @@
                 </dl>
               </section>
             </span>
+            <button
+              class="icon-btn lan-qr-btn hidden"
+              id="lan-qr-btn"
+              type="button"
+              title="Show mobile QR code"
+              aria-label="Show mobile QR code"
+              data-i18n-title="nav.showMobileQR"
+              data-i18n-aria-label="nav.showMobileQR"
+            ></button>
             <div class="status">
               <span class="status-indicator" id="status-indicator"></span>
               <span
@@ -1504,13 +1513,13 @@
             <h3 data-i18n="settings.usage">Usage</h3>
           </div>
           <div class="settings-usage-embed">
-            <iframe
-              src="/cost.html"
+            <cost-dashboard
+              id="settings-cost-dashboard"
               data-i18n-title="settings.costDashboard"
               title="Cost Dashboard"
               class="settings-usage-iframe"
-              scrolling="yes"
-            ></iframe>
+              defer-load
+            ></cost-dashboard>
           </div>
         </div>
 
@@ -1837,6 +1846,50 @@
          as a side effect before any terminal module reads it. No CDN, no import map. -->
     <script type="module" src="vendor/xterm.js"></script>
     <script type="module" src="vendor/qrcode.js"></script>
+
+    <!-- Mobile LAN QR modal (native pairing: token minted on open) -->
+    <div
+      class="lan-qr-modal hidden"
+      id="lan-qr-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Mobile QR code"
+      data-i18n-aria-label="lanQr.modalAriaLabel"
+    >
+      <div class="lan-qr-modal-backdrop" id="lan-qr-modal-backdrop"></div>
+      <div class="lan-qr-modal-content">
+        <div class="lan-qr-modal-header">
+          <span class="lan-qr-modal-title" data-i18n="lanQr.title">Open on Mobile</span>
+          <button
+            type="button"
+            class="lan-qr-modal-close icon-btn"
+            id="lan-qr-modal-close"
+            aria-label="Close"
+            data-i18n-aria-label="lanQr.closeAriaLabel"
+          ></button>
+        </div>
+        <div class="lan-qr-modal-body">
+          <div class="lan-qr-loading" id="lan-qr-loading" data-i18n="lanQr.generating">
+            Generating QR code…
+          </div>
+          <canvas
+            class="lan-qr-image hidden"
+            id="lan-qr-canvas"
+            role="img"
+            aria-label="QR code for mobile access"
+            data-i18n-aria-label="lanQr.qrAlt"
+          ></canvas>
+          <div class="lan-qr-hint" data-i18n="lanQr.hint">
+            Scan with your phone to open Picot on the same network
+          </div>
+          <button class="lan-qr-open-link hidden" id="lan-qr-open-link" type="button">
+            <span data-i18n="lanQr.openLink">Open Link</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script src="vendor/chart.js"></script>
     <script type="module" src="bootstrap-entry.js"></script>
 
     <!-- Global Session Search -->

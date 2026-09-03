@@ -1,5 +1,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { handlePicotConfig } from "./picot-config";
 import projectTrust from "./project-trust";
+
+type ConfigRequest = {
+  id?: string;
+  op?: string;
+  params?: Record<string, unknown>;
+};
 
 export const PICOT_BRIDGE_CAPABILITIES = Object.freeze({
   protocolVersion: 1,
@@ -38,7 +45,12 @@ export default function picotBridge(pi: ExtensionAPI) {
   pi.registerCommand("picot-navigate-tree", {
     description: "Navigate the Pi session tree using a JSON argument",
     handler: async (rawArguments, ctx) => {
-      const args = JSON.parse(rawArguments) as NavigateArguments;
+      let args: NavigateArguments;
+      try {
+        args = JSON.parse(rawArguments) as NavigateArguments;
+      } catch {
+        return;
+      }
       if (!args.targetId || typeof args.targetId !== "string") {
         throw new Error("picot.navigateTree requires targetId");
       }
@@ -48,6 +60,45 @@ export default function picotBridge(pi: ExtensionAPI) {
         replaceInstructions: args.replaceInstructions,
         label: args.label,
       });
+    },
+  });
+
+  // Configuration data plane. Invoked by the WebView via a native RPC prompt
+  // (`/picot-config <json>`); extension commands run immediately without
+  // hitting the LLM or session history. The result is streamed back through
+  // `ctx.ui.notify(JSON)` and correlated by request id on the frontend
+  // (see public/settings/config-gateway.js).
+  pi.registerCommand("picot-config", {
+    description: "Picot Settings data plane over the live Pi model registry",
+    handler: async (rawArguments: string, ctx) => {
+      let request: ConfigRequest;
+      try {
+        request = JSON.parse(rawArguments) as ConfigRequest;
+      } catch {
+        return;
+      }
+      const id = typeof request.id === "string" ? request.id : "";
+      if (!id) return;
+      const respond = (payload: Record<string, unknown>) => {
+        ctx.ui.notify(JSON.stringify({ __picotConfig: id, ...payload }), "info");
+      };
+      // OAuth login events stream over the same config channel: each frame
+      // carries the initiating request id so only the requesting window's
+      // active session consumes them.
+      const oauthNotify = (event: unknown) => {
+        ctx.ui.notify(JSON.stringify({ __picotOauth: id, event }), "info");
+      };
+      const op = typeof request.op === "string" ? request.op : "";
+      const params = request.params && typeof request.params === "object" ? request.params : {};
+      try {
+        const result = await handlePicotConfig(op, params, { ...ctx, oauthNotify });
+        // SAFETY: handlePicotConfig returns PicotConfigResult ({ ok, data?,
+        // error? }) — a plain JSON-serializable record by construction; the
+        // cast only widens the discriminated union to its record shape.
+        respond(result as unknown as Record<string, unknown>);
+      } catch (error) {
+        respond({ ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
     },
   });
 }

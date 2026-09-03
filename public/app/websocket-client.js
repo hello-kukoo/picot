@@ -219,11 +219,7 @@ export class WebSocketClient extends EventTarget {
         type: "runtime_request",
         protocolVersion: 2,
         requestId,
-        target: {
-          workspaceId: this.workspaceId,
-          sessionId: this.sessionId,
-          instanceId: this._instanceId(),
-        },
+        target: this._wireTarget(),
         command: data,
         idempotencyKey: `ui-${requestId}`,
       };
@@ -262,6 +258,17 @@ export class WebSocketClient extends EventTarget {
     const target = await response.json();
     this.setRoutingContext(target);
     return target;
+  }
+
+  // Wire frames carry only the routing triple. Owner binding and workspace
+  // generation never cross the wire — the host derives them from the live
+  // runtime and the owner registry on every admission.
+  _wireTarget() {
+    return {
+      workspaceId: this.workspaceId,
+      sessionId: this.sessionId,
+      instanceId: this._instanceId(),
+    };
   }
 
   requestSnapshot() {
@@ -400,11 +407,7 @@ export class WebSocketClient extends EventTarget {
         type: "runtime_request",
         protocolVersion: 2,
         requestId,
-        target: {
-          workspaceId: this.workspaceId,
-          sessionId: this.sessionId,
-          instanceId: this._instanceId(),
-        },
+        target: this._wireTarget(),
         command,
         idempotencyKey: `ui-${requestId}`,
       }),
@@ -469,11 +472,7 @@ export class WebSocketClient extends EventTarget {
         type: "runtime_subscribe",
         protocolVersion: 2,
         requestId: `sub-${++this.requestCounter}`,
-        target: {
-          workspaceId: this.workspaceId,
-          sessionId: this.sessionId,
-          instanceId: this._instanceId(),
-        },
+        target: this._wireTarget(),
       }),
     );
   }
@@ -486,11 +485,7 @@ export class WebSocketClient extends EventTarget {
         type: "runtime_snapshot_request",
         protocolVersion: 2,
         requestId: `snapshot-${++this.requestCounter}`,
-        target: {
-          workspaceId: this.workspaceId,
-          sessionId: this.sessionId,
-          instanceId: this._instanceId(),
-        },
+        target: this._wireTarget(),
       }),
     );
   }
@@ -517,11 +512,7 @@ export class WebSocketClient extends EventTarget {
         type: "runtime_snapshot_request",
         protocolVersion: 2,
         requestId: `snapshot-gap-${++this.requestCounter}`,
-        target: {
-          workspaceId: this.workspaceId,
-          sessionId: this.sessionId,
-          instanceId: this._instanceId(),
-        },
+        target: this._wireTarget(),
       }),
     );
   }
@@ -632,6 +623,12 @@ export class WebSocketClient extends EventTarget {
         this._pendingConnect = false;
         this.dispatchEvent(new CustomEvent("connected"));
       }
+      return;
+    }
+
+    // Ack for the raw runtime_subscribe frame sent in hello_ack; nothing is
+    // pending on it, but it must be recognized so it never logs as unknown.
+    if (message.type === "runtime_subscribed") {
       return;
     }
 

@@ -30,15 +30,17 @@ describe("settings page split", () => {
     expect(appJs).not.toContain('selectSettingsTab("auth")');
   });
 
-  test("keeps LAN access out of the Settings surface after the QR removal", () => {
-    const dom = new JSDOM(html);
+  test("mobile QR surfaces run on native pairing, never the retired route", () => {
+    const dom = new JSDOM(html, { url: "http://localhost:3001/" });
     const { document } = dom.window;
 
-    // Original contract: never print a raw LAN URL in Settings. The QR modal was
-    // a dead control (its host route answers 410), so both are now absent.
+    // Original contract: never print a raw LAN URL in Settings.
     expect(Boolean(document.querySelector("#setting-lan-url-value"))).toBe(false);
-    expect(document.querySelector("#lan-qr-btn")).toBeNull();
-    expect(document.querySelector("#lan-qr-modal")).toBeNull();
+    // The toolbar QR button + modal are restored (Dr. Lin: only Telegram was
+    // meant to go). They mint a native pairing token on open; the retired
+    // /api/lan-qr dataUrl route stays dead.
+    expect(document.querySelector("#lan-qr-btn")).not.toBeNull();
+    expect(document.querySelector("#lan-qr-modal")).not.toBeNull();
     expect(appJs).not.toContain("/api/lan-qr");
   });
 });

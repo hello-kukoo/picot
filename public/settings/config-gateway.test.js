@@ -1,266 +1,147 @@
-// ABOUTME: Verifies the ConfigGateway host-control mapping and error/timeout shape.
-// ABOUTME: Locks per-file targets so a settings save can never write the wrong file.
+import { describe, expect, it, vi } from "vitest";
+import { ConfigGateway, consumeConfigResponseFrame } from "./config-gateway.js";
 
-import { afterEach, describe, expect, test, vi } from "vitest";
-import { ConfigGateway } from "./config-gateway.js";
-
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
-
-function fakeTransport() {
-  return {
-    settingsGet: vi.fn(async () => ({ value: {}, path: "" })),
-    settingsPut: vi.fn(async () => ({ saved: true })),
-    agentTextFileGet: vi.fn(async () => ({ content: "", path: "" })),
-    agentTextFilePut: vi.fn(async () => ({ saved: true })),
-    openExternal: vi.fn(async () => ({})),
-    getOauthLoginCapabilities: vi.fn(async () => ({ providers: [] })),
-    logoutOauthLogin: vi.fn(async () => ({})),
-    listModelCatalog: vi.fn(async () => ({ providers: [] })),
-    setApiKey: vi.fn(async () => ({ provider: "anthropic" })),
-    removeApiKey: vi.fn(async () => ({ provider: "anthropic" })),
-    setModelVisibility: vi.fn(async () => ({ visible: true })),
-    checkModelHealth: vi.fn(async () => ({ results: [] })),
+function createHarness() {
+  const requests = [];
+  const runtime = {
+    request: vi.fn((command, target, options) => {
+      requests.push({ command, target, options });
+      return Promise.resolve({ acceptance: "accepted" });
+    }),
   };
+  const target = { workspaceId: "w", sessionId: "s", instanceId: "i" };
+  const gateway = new ConfigGateway({ runtime, getTarget: () => target });
+  return { requests, runtime, gateway };
+}
+
+function idFromRequest(request) {
+  const message = request.command.message;
+  return JSON.parse(message.slice("/picot-config ".length)).id;
 }
 
 describe("ConfigGateway", () => {
-  test("routes model catalog to the native host control", async () => {
-    const transport = fakeTransport();
-
-    await expect(new ConfigGateway({ transport }).call("list_model_catalog")).resolves.toEqual({
-      ok: true,
-      data: { providers: [] },
+  it("waits for the active runtime target before sending startup configuration reads", async () => {
+    let markReady;
+    const ready = new Promise((resolve) => {
+      markReady = resolve;
     });
-    expect(transport.listModelCatalog).toHaveBeenCalledTimes(1);
-    // The catalog must not be papered over with a request to any other host op.
-    expect(transport.settingsGet).not.toHaveBeenCalled();
-    expect(transport.agentTextFileGet).not.toHaveBeenCalled();
-    expect(transport.getOauthLoginCapabilities).not.toHaveBeenCalled();
+    const waitUntilReady = () => ready;
+    const runtime = { request: vi.fn().mockResolvedValue({ acceptance: "accepted" }) };
+    const target = { workspaceId: "w", sessionId: "s", instanceId: "i" };
+    const gateway = new ConfigGateway({ runtime, getTarget: () => target, waitUntilReady });
+
+    void gateway.call("get_default_thinking_level");
+    void gateway.call("get_default_auto_compaction");
+    await Promise.resolve();
+    expect(runtime.request).not.toHaveBeenCalled();
+
+    markReady();
+    await vi.waitFor(() => expect(runtime.request).toHaveBeenCalledTimes(2));
   });
 
-  test("routes api-key mutations to the native host controls", async () => {
-    const transport = fakeTransport();
+  it("invokes /picot-config with an idempotency key and resolves on the matching notify", async () => {
+    const { requests, gateway } = createHarness();
+    const promise = gateway.call("list_model_catalog", { foo: 1 });
+    expect(requests).toHaveLength(1);
+    const { command, options } = requests[0];
+    expect(command.type).toBe("prompt");
+    expect(command.message.startsWith("/picot-config ")).toBe(true);
+    const payload = JSON.parse(command.message.slice("/picot-config ".length));
+    expect(payload).toMatchObject({ op: "list_model_catalog", params: { foo: 1 } });
+    expect(options.idempotencyKey).toBe(payload.id);
 
-    await expect(
-      new ConfigGateway({ transport }).call("set_api_key", {
-        provider: "anthropic",
-        apiKey: "sk-test",
-      }),
-    ).resolves.toEqual({ ok: true, data: { provider: "anthropic" } });
-    expect(transport.setApiKey).toHaveBeenCalledWith("anthropic", "sk-test");
-
-    await expect(
-      new ConfigGateway({ transport }).call("remove_api_key", { provider: "anthropic" }),
-    ).resolves.toEqual({ ok: true, data: { provider: "anthropic" } });
-    expect(transport.removeApiKey).toHaveBeenCalledWith("anthropic");
-  });
-
-  test("routes visibility and health checks to the native host controls", async () => {
-    const transport = fakeTransport();
-
-    await expect(
-      new ConfigGateway({ transport }).call("set_model_visibility", {
-        provider: "anthropic",
-        modelId: "claude",
-        visible: false,
-      }),
-    ).resolves.toEqual({ ok: true, data: { visible: true } });
-    expect(transport.setModelVisibility).toHaveBeenCalledWith("anthropic", "claude", false);
-
-    await expect(
-      new ConfigGateway({ transport }).call("check_model_health", {
-        provider: "anthropic",
-      }),
-    ).resolves.toEqual({ ok: true, data: { results: [] } });
-    expect(transport.checkModelHealth).toHaveBeenCalledWith("anthropic", "");
-  });
-
-  test("writes models.json through the JSON control that keeps the host backup", async () => {
-    const transport = fakeTransport();
-
-    await expect(
-      new ConfigGateway({ transport }).call("write_models_config", {
-        content: '{"providers":{}}',
-      }),
-    ).resolves.toEqual({ ok: true });
-    expect(transport.settingsPut).toHaveBeenCalledWith("models.json", { providers: {} }, "global");
-    expect(transport.agentTextFilePut).not.toHaveBeenCalled();
-  });
-
-  test("writes agent config to settings.json, never to an agent instruction file", async () => {
-    const transport = fakeTransport();
-
-    await expect(
-      new ConfigGateway({ transport }).call("write_agent_config", {
-        content: '{"theme":"dark"}',
-      }),
-    ).resolves.toEqual({ ok: true });
-    expect(transport.settingsPut).toHaveBeenCalledWith(
-      "settings.json",
-      { theme: "dark" },
-      "global",
-    );
-  });
-
-  test("rejects malformed JSON before it reaches the host", async () => {
-    const transport = fakeTransport();
-
-    await expect(
-      new ConfigGateway({ transport }).call("write_models_config", { content: "{oops" }),
-    ).resolves.toEqual({ ok: false, error: "Config must be valid JSON" });
-    expect(transport.settingsPut).not.toHaveBeenCalled();
-  });
-
-  test("reads AGENTS.md as text through the host text-file control", async () => {
-    const transport = fakeTransport();
-    transport.agentTextFileGet.mockResolvedValueOnce({
-      content: "# Global rules",
-      path: "/home/.pi/agent/AGENTS.md",
+    const consumed = gateway.consumeNotify({
+      message: JSON.stringify({ __picotConfig: payload.id, ok: true, data: { providers: [] } }),
     });
-
-    await expect(new ConfigGateway({ transport }).call("read_agents_md")).resolves.toEqual({
-      ok: true,
-      data: { path: "/home/.pi/agent/AGENTS.md", content: "# Global rules", exists: true },
-    });
-    expect(transport.agentTextFileGet).toHaveBeenCalledWith("AGENTS.md", "global");
+    expect(consumed).toBe(true);
+    await expect(promise).resolves.toEqual({ ok: true, data: { providers: [] } });
   });
 
-  test("writes APPEND_SYSTEM.md to its own file, never AGENTS.md", async () => {
-    const transport = fakeTransport();
-
-    await expect(
-      new ConfigGateway({ transport }).call("write_append_system_md", {
-        content: "Be terse.",
+  it("sends navigate_tree through the bridge command contract", async () => {
+    const { requests, gateway } = createHarness();
+    const promise = gateway.call("navigate_tree", {
+      targetId: "leaf-9",
+      summarize: false,
+      label: "Resume branch",
+    });
+    const { command, options } = requests[0];
+    const payload = JSON.parse(command.message.slice("/picot-config ".length));
+    expect(payload).toMatchObject({
+      op: "navigate_tree",
+      params: { targetId: "leaf-9", summarize: false, label: "Resume branch" },
+    });
+    expect(options.idempotencyKey).toBe(payload.id);
+    gateway.consumeNotify({
+      message: JSON.stringify({
+        __picotConfig: payload.id,
+        ok: true,
+        data: { cancelled: false },
       }),
-    ).resolves.toEqual({ ok: true });
-    expect(transport.agentTextFilePut).toHaveBeenCalledWith(
-      "APPEND_SYSTEM.md",
-      "Be terse.",
-      "global",
-    );
+    });
+    await expect(promise).resolves.toEqual({ ok: true, data: { cancelled: false } });
   });
 
-  test("re-serializes JSON config for the editor", async () => {
-    const transport = fakeTransport();
-    transport.settingsGet.mockResolvedValueOnce({
-      value: { providers: { x: 1 } },
-      path: "/home/.pi/agent/models.json",
-    });
+  it("consumes a config response carried by a background runtime frame", async () => {
+    const { requests, gateway } = createHarness();
+    const promise = gateway.call("generate_session_title");
+    const id = idFromRequest(requests[0]);
 
-    await expect(new ConfigGateway({ transport }).call("read_models_config")).resolves.toEqual({
-      ok: true,
-      data: {
-        path: "/home/.pi/agent/models.json",
-        content: '{\n  "providers": {\n    "x": 1\n  }\n}',
-        exists: true,
+    const consumed = consumeConfigResponseFrame(gateway, {
+      type: "runtime_event",
+      target: { workspaceId: "w", sessionId: "background-s", instanceId: "background-i" },
+      event: {
+        type: "extension_ui_request",
+        method: "notify",
+        message: JSON.stringify({ __picotConfig: id, ok: true, data: { title: "Done" } }),
       },
     });
+
+    expect(consumed).toBe(true);
+    await expect(promise).resolves.toEqual({ ok: true, data: { title: "Done" } });
   });
 
-  test("treats an absent file as an empty editor rather than a failure", async () => {
-    for (const [operation, transport] of [
-      ["read_append_system_md", fakeTransport()],
-      ["read_models_config", fakeTransport()],
-    ]) {
-      const missing = new Error("Config file unavailable");
-      missing.code = "config_not_found";
-      if (operation === "read_append_system_md") missing.code = "config_not_found";
-      if (transport.agentTextFileGet.mock)
-        transport.agentTextFileGet.mockRejectedValueOnce(missing);
-      if (transport.settingsGet.mock) transport.settingsGet.mockRejectedValueOnce(missing);
+  it("ignores notifications that are not config responses", () => {
+    const { gateway } = createHarness();
+    expect(gateway.consumeNotify({ message: "hello world" })).toBe(false);
+    expect(gateway.consumeNotify({ message: undefined })).toBe(false);
+    expect(gateway.consumeNotify({ message: '{"__picotConfig":123}' })).toBe(false);
+  });
 
-      await expect(new ConfigGateway({ transport }).call(operation)).resolves.toEqual({
-        ok: true,
-        data: { path: "", content: "", exists: false },
-      });
+  it("swallows config responses even after the caller settled", async () => {
+    const { requests, gateway } = createHarness();
+    const promise = gateway.call("read_agent_config");
+    const id = idFromRequest(requests[0]);
+    gateway.consumeNotify({ message: JSON.stringify({ __picotConfig: id, ok: true }) });
+    await promise;
+    // A duplicate/late notify for the same id is still recognized as ours.
+    expect(
+      gateway.consumeNotify({ message: JSON.stringify({ __picotConfig: id, ok: true }) }),
+    ).toBe(true);
+  });
+
+  it("rejects when the runtime request fails", async () => {
+    const target = { workspaceId: "w", sessionId: "s", instanceId: "i" };
+    const runtime = { request: vi.fn(() => Promise.reject(new Error("runtime down"))) };
+    const gateway = new ConfigGateway({ runtime, getTarget: () => target });
+    await expect(gateway.call("list_model_catalog")).rejects.toThrow("runtime down");
+  });
+
+  it("times out when no response arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      const { gateway } = createHarness();
+      const promise = gateway.call("generate_session_title", {}, { timeoutMs: 1000 });
+      const assertion = expect(promise).rejects.toThrow("timed out");
+      await vi.advanceTimersByTimeAsync(1000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
     }
   });
 
-  test("maps host errors without throwing", async () => {
-    const transport = fakeTransport();
-    transport.agentTextFilePut.mockRejectedValueOnce(new Error("registry unavailable"));
-
-    await expect(
-      new ConfigGateway({ transport }).call("write_agents_md", { content: "x" }),
-    ).resolves.toEqual({ ok: false, error: "registry unavailable" });
-  });
-
-  test("returns a controlled timeout error", async () => {
-    const transport = fakeTransport();
-    transport.settingsGet.mockReturnValueOnce(new Promise(() => {}));
-
-    await expect(
-      new ConfigGateway({ transport }).call("read_agent_config", {}, { timeoutMs: 1 }),
-    ).resolves.toMatchObject({ ok: false, error: expect.stringContaining("timed out") });
-  });
-
-  test("opens an external URL through the host control", async () => {
-    const transport = fakeTransport();
-
-    await expect(
-      new ConfigGateway({ transport }).call("open_external", {
-        url: "https://example.test/device",
-      }),
-    ).resolves.toEqual({ ok: true });
-    expect(transport.openExternal).toHaveBeenCalledWith("https://example.test/device");
-  });
-});
-
-test("maps OAuth login capabilities through the host control", async () => {
-  const transport = fakeTransport();
-  transport.getOauthLoginCapabilities.mockResolvedValueOnce({
-    providers: [{ providerId: "openai-codex", deviceCode: true, configured: false }],
-  });
-
-  await expect(
-    new ConfigGateway({ transport }).call("get_oauth_login_capabilities"),
-  ).resolves.toEqual({
-    ok: true,
-    data: { providers: [{ providerId: "openai-codex", deviceCode: true, configured: false }] },
-  });
-});
-
-test("maps OAuth capabilities failure to ok:false", async () => {
-  const transport = fakeTransport();
-  transport.getOauthLoginCapabilities.mockRejectedValueOnce(new Error("unavailable"));
-
-  await expect(
-    new ConfigGateway({ transport }).call("get_oauth_login_capabilities"),
-  ).resolves.toEqual({ ok: false, error: "unavailable" });
-});
-
-test("maps OAuth logout through the host control with the provider param", async () => {
-  const transport = fakeTransport();
-
-  await expect(
-    new ConfigGateway({ transport }).call("logout_oauth_login", { provider: "openai-codex" }),
-  ).resolves.toEqual({ ok: true });
-  expect(transport.logoutOauthLogin).toHaveBeenCalledWith({ provider: "openai-codex" });
-});
-
-test("reports every operation as unavailable when no transport is wired", async () => {
-  const gateway = new ConfigGateway();
-
-  await expect(gateway.call("read_models_config")).resolves.toEqual({
-    ok: false,
-    error: expect.stringContaining("no native runtime implementation"),
-  });
-  await expect(gateway.call("read_agents_md")).resolves.toEqual({
-    ok: false,
-    error: expect.stringContaining("no native runtime implementation"),
-  });
-  await expect(gateway.call("open_external", { url: "https://example.test" })).resolves.toEqual({
-    ok: false,
-    error: expect.stringContaining("no native runtime implementation"),
-  });
-});
-
-test("still throws on an unknown operation", async () => {
-  await expect(new ConfigGateway({ transport: fakeTransport() }).call("nope")).resolves.toEqual({
-    ok: false,
-    error: "Unknown operation: nope",
+  it("rejects when there is no active session target", async () => {
+    const runtime = { request: vi.fn() };
+    const gateway = new ConfigGateway({ runtime, getTarget: () => null });
+    await expect(gateway.call("list_model_catalog")).rejects.toThrow("No active session");
   });
 });

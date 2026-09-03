@@ -12,7 +12,7 @@ function read(relativePath) {
 }
 
 test("cost dashboard loads Chart.js from the same-origin vendor bundle", () => {
-  const html = read("public/cost.html");
+  const html = read("public/index.html");
   expect(html).toContain('<script src="vendor/chart.js"></script>');
   expect(html).not.toMatch(/cdn\.jsdelivr\.net/);
   expect(html).not.toMatch(/<script[^>]+src=["']https?:\/\//);

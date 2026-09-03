@@ -9,6 +9,8 @@ import { setupModelsPage } from "./models-page.js";
 describe("models provider editor", () => {
   let dom;
   let call;
+  let oauthCommand;
+  let oauthGateway;
 
   beforeEach(() => {
     dom = new JSDOM(`
@@ -47,14 +49,6 @@ describe("models provider editor", () => {
         };
       }
       if (operation === "write_models_config") return { ok: true };
-      if (operation === "get_oauth_login_capabilities") {
-        return {
-          ok: true,
-          data: {
-            providers: [{ providerId: "openai-codex", deviceCode: true, configured: false }],
-          },
-        };
-      }
       if (operation === "list_model_catalog") {
         return {
           ok: true,
@@ -96,6 +90,20 @@ describe("models provider editor", () => {
       }
       throw new Error(`Unexpected operation: ${operation}`);
     });
+    // OAuth capability/login/logout now ride the oauth gateway's v3 command
+    // shape ({ success, data }) over /picot-config, not the { ok, data } call.
+    oauthCommand = vi.fn(async (frame) => {
+      if (frame?.type === "get_oauth_login_capabilities") {
+        return {
+          success: true,
+          data: {
+            providers: [{ providerId: "openai-codex", deviceCode: true, configured: false }],
+          },
+        };
+      }
+      throw new Error(`Unexpected OAuth command: ${frame?.type}`);
+    });
+    oauthGateway = { command: oauthCommand, subscribe: () => () => {} };
   });
 
   afterEach(() => {
@@ -107,7 +115,7 @@ describe("models provider editor", () => {
   });
 
   test("activation loads both the provider catalog and models.json", async () => {
-    const page = setupModelsPage({ configGateway: { call } });
+    const page = setupModelsPage({ configGateway: { call }, oauthGateway });
     await page.activate();
 
     expect(call.mock.calls.map(([operation]) => operation)).toContain("list_model_catalog");
@@ -138,7 +146,7 @@ describe("models provider editor", () => {
       }
       return call(operation);
     });
-    const page = setupModelsPage({ configGateway: { call: partialCall } });
+    const page = setupModelsPage({ configGateway: { call: partialCall }, oauthGateway });
     await page.loadApiKeysPanel();
 
     const toggle = document.querySelector(".api-model-select-all-toggle");
@@ -148,7 +156,7 @@ describe("models provider editor", () => {
   });
 
   test("switches providers without removing siblings from models.json", async () => {
-    const page = setupModelsPage({ configGateway: { call } });
+    const page = setupModelsPage({ configGateway: { call }, oauthGateway });
     await page.loadInlineModelsEditor();
 
     const providerButtons = document.querySelectorAll(".models-provider-item");
@@ -168,10 +176,10 @@ describe("models provider editor", () => {
   });
 
   test("renders the Codex OAuth entry only when capability reports it", async () => {
-    const page = setupModelsPage({ configGateway: { call } });
+    const page = setupModelsPage({ configGateway: { call }, oauthGateway });
     await page.activate();
 
-    expect(call.mock.calls.map(([operation]) => operation)).toContain(
+    expect(oauthCommand.mock.calls.map(([frame]) => frame?.type)).toContain(
       "get_oauth_login_capabilities",
     );
     const oauthItem = document.querySelector(".models-oauth-provider-item");
@@ -186,27 +194,25 @@ describe("models provider editor", () => {
   });
 
   test("hides the Codex OAuth entry when capability is absent", async () => {
-    const noCapabilityCall = vi.fn(async (operation) => {
-      if (operation === "get_oauth_login_capabilities") {
-        return { ok: true, data: { providers: [] } };
-      }
-      return call(operation);
+    const noCapabilityOauth = vi.fn(async () => ({
+      success: true,
+      data: { providers: [] },
+    }));
+    const noCapabilityCall = vi.fn(async (operation) => call(operation));
+    const page = setupModelsPage({
+      configGateway: { call: noCapabilityCall },
+      oauthGateway: { command: noCapabilityOauth },
     });
-    const page = setupModelsPage({ configGateway: { call: noCapabilityCall } });
     await page.activate();
     expect(document.querySelector(".models-oauth-provider-item")).toBeNull();
   });
 
   test("keeps configured Codex models visible alongside connected OAuth state", async () => {
+    const configuredOauth = vi.fn(async () => ({
+      success: true,
+      data: { providers: [{ providerId: "openai-codex", deviceCode: true, configured: true }] },
+    }));
     const configuredCall = vi.fn(async (operation) => {
-      if (operation === "get_oauth_login_capabilities") {
-        return {
-          ok: true,
-          data: {
-            providers: [{ providerId: "openai-codex", deviceCode: true, configured: true }],
-          },
-        };
-      }
       if (operation === "list_model_catalog") {
         return {
           ok: true,
@@ -234,7 +240,10 @@ describe("models provider editor", () => {
       }
       return call(operation);
     });
-    const page = setupModelsPage({ configGateway: { call: configuredCall } });
+    const page = setupModelsPage({
+      configGateway: { call: configuredCall },
+      oauthGateway: { command: configuredOauth },
+    });
     await page.activate();
 
     // Configured Codex keeps its model list and the connected badge; the
@@ -251,11 +260,11 @@ describe("models provider editor", () => {
 
   test("logout of configured Codex calls Pi logout and flips back to sign-in", async () => {
     let capabilityCalls = 0;
-    const logoutCall = vi.fn(async (operation) => {
-      if (operation === "get_oauth_login_capabilities") {
+    const logoutOauth = vi.fn(async (frame) => {
+      if (frame?.type === "get_oauth_login_capabilities") {
         capabilityCalls += 1;
         return {
-          ok: true,
+          success: true,
           data: {
             providers: [
               { providerId: "openai-codex", deviceCode: true, configured: capabilityCalls === 1 },
@@ -263,6 +272,10 @@ describe("models provider editor", () => {
           },
         };
       }
+      if (frame?.type === "oauth_logout") return { success: true };
+      throw new Error(`Unexpected OAuth command: ${frame?.type}`);
+    });
+    const logoutCall = vi.fn(async (operation) => {
       if (operation === "list_model_catalog") {
         return {
           ok: true,
@@ -288,20 +301,21 @@ describe("models provider editor", () => {
           },
         };
       }
-      if (operation === "logout_oauth_login") return { ok: true };
       return call(operation);
     });
-    const page = setupModelsPage({ configGateway: { call: logoutCall } });
+    const page = setupModelsPage({
+      configGateway: { call: logoutCall },
+      oauthGateway: { command: logoutOauth },
+    });
     await page.activate();
 
     const logoutBtn = document.querySelector(".api-key-row-oauth-action");
     expect(logoutBtn).not.toBeNull();
     logoutBtn.click();
     expect(confirm).toHaveBeenCalled();
+    // Logout rides the oauth gateway's v3 command surface (`oauth_logout`).
     await vi.waitFor(() =>
-      expect(logoutCall.mock.calls.some(([operation]) => operation === "logout_oauth_login")).toBe(
-        true,
-      ),
+      expect(logoutOauth.mock.calls.some(([frame]) => frame?.type === "oauth_logout")).toBe(true),
     );
     // Capability re-query reports unconfigured; the OAuth sign-in entry returns.
     await vi.waitFor(() =>
@@ -311,15 +325,11 @@ describe("models provider editor", () => {
 
   test("after a successful login the card flips to the configured Codex row", async () => {
     let loggedIn = false;
+    const loginOauth = vi.fn(async () => ({
+      success: true,
+      data: { providers: [{ providerId: "openai-codex", deviceCode: true, configured: loggedIn }] },
+    }));
     const loginCall = vi.fn(async (operation) => {
-      if (operation === "get_oauth_login_capabilities") {
-        return {
-          ok: true,
-          data: {
-            providers: [{ providerId: "openai-codex", deviceCode: true, configured: loggedIn }],
-          },
-        };
-      }
       if (operation === "list_model_catalog") {
         return {
           ok: true,
@@ -347,7 +357,10 @@ describe("models provider editor", () => {
       }
       return call(operation);
     });
-    const page = setupModelsPage({ configGateway: { call: loginCall } });
+    const page = setupModelsPage({
+      configGateway: { call: loginCall },
+      oauthGateway: { command: loginOauth },
+    });
     await page.activate();
 
     // Initially unconfigured: select the sidebar entry, then the sign-in card
@@ -374,7 +387,7 @@ describe("models provider editor", () => {
   });
 
   test("splits API-key providers and custom providers into separate panels", async () => {
-    const page = setupModelsPage({ configGateway: { call } });
+    const page = setupModelsPage({ configGateway: { call }, oauthGateway });
     await page.loadInlineModelsEditor();
     await page.loadApiKeysPanel();
 
@@ -397,7 +410,7 @@ describe("models provider editor", () => {
   });
 
   test("switches the selected auth provider in the master-detail panel", async () => {
-    const page = setupModelsPage({ configGateway: { call } });
+    const page = setupModelsPage({ configGateway: { call }, oauthGateway });
     await page.loadApiKeysPanel();
 
     const sidebarItems = [
@@ -432,7 +445,7 @@ describe("models provider editor", () => {
       if (operation === "read_models_config") return pendingModelsConfig;
       return call(operation);
     });
-    const page = setupModelsPage({ configGateway: { call: delayedCall } });
+    const page = setupModelsPage({ configGateway: { call: delayedCall }, oauthGateway });
     const modelsLoad = page.loadInlineModelsEditor();
 
     await page.loadApiKeysPanel();
@@ -454,6 +467,7 @@ describe("models provider editor", () => {
     const onModelConfigurationChanged = vi.fn();
     const page = setupModelsPage({
       configGateway: { call },
+      oauthGateway,
       onModelConfigurationChanged,
     });
     await page.loadInlineModelsEditor();
@@ -475,7 +489,7 @@ describe("models provider editor", () => {
   });
 
   test("does not overwrite an existing provider when adding a custom provider", async () => {
-    const page = setupModelsPage({ configGateway: { call } });
+    const page = setupModelsPage({ configGateway: { call }, oauthGateway });
     await page.loadInlineModelsEditor();
 
     document.querySelector(".models-provider-add").click();
@@ -494,7 +508,7 @@ describe("models provider editor", () => {
   });
 
   test("inserts the example at the caret without clearing existing content", async () => {
-    const page = setupModelsPage({ configGateway: { call } });
+    const page = setupModelsPage({ configGateway: { call }, oauthGateway });
     await page.loadInlineModelsEditor();
 
     const textarea = document.getElementById("inline-models-textarea");
@@ -512,6 +526,7 @@ describe("models provider editor", () => {
     const onModelConfigurationChanged = vi.fn();
     const page = setupModelsPage({
       configGateway: { call },
+      oauthGateway,
       onModelConfigurationChanged,
     });
     await page.loadInlineModelsEditor();

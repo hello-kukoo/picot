@@ -152,6 +152,10 @@ spawn → Starting → Ready → Working ↔ Idle → Stopped
 | `telemetry.rs` | D10 匿名遥测 schema（Stage 0 接线） |
 | `process_tree.rs` | 进程树管理（Unix pgid / Windows Job Object） |
 
+## Settings 数据面（/picot-config 桥）
+
+Settings → Models/Configuration 的 catalog、API key、models.json、OAuth 操作不再走静态 `host_models` 读盘路径，而是通过 `extensions/picot-bridge.ts` 注册的 `/picot-config` 命令在 Pi 进程内执行：WebView 以 `runtime_request(prompt)` 发起，结果经 `ctx.ui.notify` 的 `__picotConfig` 帧按 request id 回关（`public/settings/config-gateway.js`）。模型 catalog 与认证状态读 Pi live `modelRegistry`，因此 shell 环境变量凭证（如 `ANTHROPIC_API_KEY`）能正确显示。Codex OAuth 走同一通道：login/logout 以 `oauth_logout`/`start_oauth_login` op 触发，事件以 `__picotOauth` 帧流式返回，前端在 runtimeEvent 分发前按 M3 互斥优先消费（`public/settings/oauth-gateway.js`）。Settings 的 skills inventory/mutation、默认 thinking level 也走 bridge。host 侧旧的静态 catalog、OAuth、skills inventory 路由已删除；`host_models.rs` 仅保留 ModelCache 与 settings.json IO。
+
 ## 兼容路由（P8 删除候选）
 
 `/api/*` compatibility routes maintain existing shell behavior on host origin. Each route uses owner capability authorization. Runtime traffic must use `/v2/*` and `/v2/ws`; retained HTTP routes are explicit compatibility or retirement responses, never Pi-origin forwarding.

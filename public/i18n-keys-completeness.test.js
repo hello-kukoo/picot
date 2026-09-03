@@ -104,7 +104,7 @@ describe("locale key parity", () => {
 // ── HTML key references ───────────────────────────────────────────────
 
 describe("HTML data-i18n key references", () => {
-  const htmlFiles = ["index.html", "cost.html"];
+  const htmlFiles = ["index.html"];
 
   for (const file of htmlFiles) {
     it(`${file} references only keys that exist in en.json`, () => {
@@ -161,7 +161,6 @@ describe("JS t() literal key references", () => {
     "packages/install-status.js",
     "workspace/actions.js",
     "session/onboarding.js",
-    "cost.js",
     "cost/dashboard.js",
     "cost/infobar.js",
     "sidebar-workspace-group.js",

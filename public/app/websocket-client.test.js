@@ -359,6 +359,36 @@ describe("WebSocketClient broker routing", () => {
     expect(syncs[0].target.instanceId).toBe("secondary");
   });
 
+  test("frames carry the routing triple with the bootstrap instance", async () => {
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
+    // Canonical page: bootstrap supplies the authoritative routing identity.
+    client.canonicalRoute = true;
+    client.workspaceId = "ws-uuid-1";
+    client.sessionId = "session-a";
+    await client.loadCanonicalTarget(async () => ({
+      ok: true,
+      json: async () => ({
+        workspaceId: "ws-uuid-1",
+        sessionId: "session-a",
+        instanceId: "instance-1",
+        ownerId: "owner-1",
+        workspaceGeneration: 3,
+      }),
+    }));
+
+    const sent = [];
+    client.ws = { readyState: WebSocket.OPEN, send: (m) => sent.push(JSON.parse(m)) };
+    client.send({ type: "get_state" });
+
+    // Wire frames carry only the routing triple; owner/generation stay
+    // host-side (host derives them from the live runtime on admission).
+    expect(sent[0].target).toEqual({
+      workspaceId: "ws-uuid-1",
+      sessionId: "session-a",
+      instanceId: "instance-1",
+    });
+  });
+
   test("send returns the requestId for runtime requests", () => {
     const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
     client.ws = { readyState: WebSocket.OPEN, send: () => {} };

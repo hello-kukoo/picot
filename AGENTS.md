@@ -14,6 +14,9 @@ live in [`ARCHITECTURE.md`](ARCHITECTURE.md).
   and the temporary-chat architecture section.
 - Before changing a browser/server adapter, popup/overlay, or shared-state
   rerender behavior, read and apply [`docs/engineering-lessons.md`](docs/engineering-lessons.md).
+- Before fixing any native runtime bug, you MUST inspect the corresponding
+  implementation in the local upstream checkout at `~/tmp/PI/picot/` and use it
+  as the reference implementation before changing this repository.
 - Update `ARCHITECTURE.md` when an implementation materially changes its
   architecture, invariants, lifecycle, security boundary, or validation
   contract. Changes to LAN access, cross-platform paths, or static serving also

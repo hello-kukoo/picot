@@ -87,6 +87,12 @@ export class SessionSidebar {
     // by local session mutations and refreshed per workspace on demand.
     this.workspaceSessionsCache = new Map();
     this._registryBusyRows = new Set();
+    this._registryCountBusyRows = new Set();
+    this._registryWarmupScheduled = false;
+    this._registrySessionLoadGeneration = 0;
+    this._refreshPromise = null;
+    this._refreshRegistryAvailable = null;
+    this._refreshScopeKey = null;
     // Keyed-DOM row caches so routine refreshes reuse unchanged nodes
     // (hover/scroll/overlays survive) instead of rebuilding the whole tree.
     this._projectRowCache = new Map();
@@ -215,7 +221,7 @@ export class SessionSidebar {
         project.sessions.some((session) => session?.filePath === filePath),
     );
     if (owner?.source === "registry") this.invalidateWorkspaceSessions(owner.path);
-    await this.loadSessions();
+    await this.refresh();
     return true;
   }
 
@@ -408,11 +414,14 @@ export class SessionSidebar {
         project.source === "registry" &&
         this.isWorkspaceExpanded(project) &&
         !this._registryBusyRows.has(project.workspaceId) &&
+        !this._registryCountBusyRows.has(project.workspaceId) &&
         !this.workspaceSessionsCache.has(workspacePathKey(project.path))
       ) {
         void this.ensureWorkspaceSessions(project);
       }
     }
+    // Counts are one-shot per page; re-running after every registry refresh
+    // caused an N+1 burst and made the sidebar appear to refresh forever.
     this.scheduleRegistryWarmup();
     return this.projects;
   }
@@ -423,19 +432,16 @@ export class SessionSidebar {
    * and busy-row contention are ignored.
    */
   scheduleRegistryWarmup() {
-    // Every registered workspace gets warmed: counts first (readdir-only),
-    // then full details row-by-row (serial, so server IO stays bounded).
-    // Cached rows and busy rows are skipped naturally by the helpers.
+    if (this._registryWarmupScheduled) return;
+    this._registryWarmupScheduled = true;
+    // One-shot per page: readdir-only counts so every row shows its real
+    // badge immediately. Full session lists stay lazy — they load when the
+    // workspace expands (setWorkspaceExpanded), never at startup.
     const warm = async () => {
       const registryRows = this.projects.filter((project) => project.source === "registry");
       await Promise.all(
         registryRows.map((project) => this.ensureWorkspaceSessions(project, { countOnly: true })),
       );
-      for (const project of registryRows) {
-        if (this._registryBusyRows.has(project.workspaceId)) continue;
-        if (this.workspaceSessionsCache.has(workspacePathKey(project.path))) continue;
-        await this.ensureWorkspaceSessions(project);
-      }
     };
     if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
       window.requestIdleCallback(() => warm());
@@ -450,26 +456,32 @@ export class SessionSidebar {
    */
   async ensureWorkspaceSessions(project, { force = false, countOnly = false } = {}) {
     if (project?.source !== "registry") return;
+    const loadGeneration = this._registrySessionLoadGeneration;
     const cacheKey = workspacePathKey(project.path);
     if (!cacheKey) return;
+    // Host-bound identity is the raw DB uuid (registryId). The merged display
+    // id carries a `ws:` prefix for UI identity; sending it to the host makes
+    // workspace_root fail with workspace_not_found and the row stays empty.
+    const hostWorkspaceId = project.registryId || project.workspaceId;
     // Count mode: readdir-only header badge refresh; full mode: lazy history.
     if (countOnly) {
       if (project.sessionCount !== undefined && !force) return;
-      if (this._registryBusyRows.has(project.workspaceId)) return;
-      this._registryBusyRows.add(project.workspaceId);
+      if (this._registryCountBusyRows.has(project.workspaceId)) return;
+      this._registryCountBusyRows.add(project.workspaceId);
       try {
         if (typeof this.transport?.workspaceSessions !== "function") {
           throw new Error("Host workspace sessions unavailable");
         }
-        const data = await this.transport.workspaceSessions(project.workspaceId, {
+        const data = await this.transport.workspaceSessions(hostWorkspaceId, {
           countOnly: true,
         });
+        if (loadGeneration !== this._registrySessionLoadGeneration) return;
         project.sessionCount = Number(data?.sessionCount) || 0;
         this.render();
       } catch (error) {
         console.error("[Sidebar] workspace count refresh failed:", error);
       } finally {
-        this._registryBusyRows.delete(project.workspaceId);
+        this._registryCountBusyRows.delete(project.workspaceId);
       }
       return;
     }
@@ -484,7 +496,8 @@ export class SessionSidebar {
       if (typeof this.transport?.workspaceSessions !== "function") {
         throw new Error("Host workspace sessions unavailable");
       }
-      const data = await this.transport.workspaceSessions(project.workspaceId);
+      const data = await this.transport.workspaceSessions(hostWorkspaceId);
+      if (loadGeneration !== this._registrySessionLoadGeneration) return;
       const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
       this.workspaceSessionsCache.set(cacheKey, sessions);
       project.dirName = data?.dirName ?? null;
@@ -511,36 +524,61 @@ export class SessionSidebar {
   }
 
   /**
-   * Invalidate one workspace's cache and refetch it immediately when its row
-   * is expanded, so callers that need the fresh list (new-session refresh)
-   * observe the update without racing the lazy reload. Collapsed rows only
-   * drop their cache; the next expansion fetches fresh data (SPEC §8.1).
+   * Single sidebar data-refresh entry. Startup, the refresh button,
+   * registry-change broadcasts, sidebar mutations, and new-session
+   * persistence all use this path. It reloads registry rows, invalidates
+   * expanded-row caches, preserves keyed row/fold state, and re-warms counts.
+   * Selecting an existing session is not a data refresh: it only changes the
+   * active row and loads chat history in the main surface.
    */
-  async refreshWorkspaceSessions(path) {
-    this.invalidateWorkspaceSessions(path);
-    const key = workspacePathKey(path);
-    if (!key) return;
-    const project = this.projects.find(
-      (candidate) => candidate.source === "registry" && workspacePathKey(candidate.path) === key,
-    );
-    if (project && this.isWorkspaceExpanded(project)) {
-      await this.ensureWorkspaceSessions(project);
-    }
-  }
-
-  /**
-   * Global refresh entry: registry rows reload and every expanded row's
-   * session cache is dropped so the reload refetches exactly those rows.
-   * Collapsed rows keep their cache — expansion serves it instantly, and a
-   * row's own session mutations invalidate their own entry (SPEC §8.1).
-   */
-  async refreshAllWorkspaces() {
+  refresh({ workspacePath = null } = {}) {
+    this._registrySessionLoadGeneration += 1;
+    this._registryBusyRows.clear();
+    this._registryCountBusyRows.clear();
+    const targetKey = workspacePathKey(workspacePath);
     for (const project of this.projects) {
-      if (project.source === "registry" && this.isWorkspaceExpanded(project)) {
+      if (
+        project.source === "registry" &&
+        this.isWorkspaceExpanded(project) &&
+        (!targetKey || workspacePathKey(project.path) === targetKey)
+      ) {
         this.workspaceSessionsCache.delete(workspacePathKey(project.path));
       }
     }
-    return this.loadSessions();
+    // A newly persisted session can belong to a collapsed row. Invalidate its
+    // cache too; the next expansion must not serve the pre-persistence list.
+    if (targetKey) this.invalidateWorkspaceSessions(workspacePath);
+    this._registryWarmupScheduled = false;
+    const registryAvailable = this.isRegistryAvailable();
+    if (
+      this._refreshPromise &&
+      this._refreshRegistryAvailable === registryAvailable &&
+      this._refreshScopeKey === targetKey
+    ) {
+      return this._refreshPromise;
+    }
+    const refreshPromise = this.loadSessions()
+      .then(async (projects) => {
+        const targets = (projects || []).filter(
+          (project) =>
+            project.source === "registry" &&
+            this.isWorkspaceExpanded(project) &&
+            (!targetKey || workspacePathKey(project.path) === targetKey),
+        );
+        await Promise.all(targets.map((project) => this.ensureWorkspaceSessions(project)));
+        return projects;
+      })
+      .finally(() => {
+        if (this._refreshPromise === refreshPromise) {
+          this._refreshPromise = null;
+          this._refreshRegistryAvailable = null;
+          this._refreshScopeKey = null;
+        }
+      });
+    this._refreshPromise = refreshPromise;
+    this._refreshRegistryAvailable = registryAvailable;
+    this._refreshScopeKey = targetKey;
+    return refreshPromise;
   }
 
   async fetchLiveInstances() {
@@ -922,7 +960,7 @@ export class SessionSidebar {
       console.error("[Sidebar] workspace pin failed:", error);
       return;
     }
-    await this.loadSessions({ quiet: true });
+    await this.refresh();
   }
 
   /** Remove a registry row only; directories and session files untouched. */
@@ -945,7 +983,7 @@ export class SessionSidebar {
     } catch (error) {
       console.error("[Sidebar] remove from list failed:", error);
     } finally {
-      await this.loadSessions({ quiet: true });
+      await this.refresh();
     }
     if (!removed) return;
     // After the reload a still-running window keeps a temporary live row;
@@ -984,7 +1022,7 @@ export class SessionSidebar {
     if (!added) {
       this.onSessionNotice?.(t("sidebar.alreadyRegistered"));
     }
-    await this.loadSessions({ quiet: true });
+    await this.refresh();
     if (added && result?.workspace?.workspaceId) {
       const project = this.projects.find(
         (candidate) =>
@@ -1044,7 +1082,7 @@ export class SessionSidebar {
     // Batch deletes must invalidate this workspace's cache or the reload
     // below would restore the deleted sessions from it (ghost entries).
     this.invalidateWorkspaceSessions(workspace?.path);
-    await this.loadSessions();
+    await this.refresh();
   }
 
   closeContextMenu() {
@@ -1177,7 +1215,7 @@ export class SessionSidebar {
           }
         });
         restore();
-        await this.loadSessions({ quiet: true });
+        await this.refresh();
       } catch (error) {
         submitting = false;
         input.disabled = false;
@@ -1400,7 +1438,10 @@ export class SessionSidebar {
             workspaceId,
             folderName,
             workspacePath,
-            sessionCount: pinned.sessions.length,
+            // Pinned and Projects sections render the same workspace object;
+            // use host's authoritative count in both places. The array may be
+            // a lazy cache and can lag one session behind the registry count.
+            sessionCount: workspace?.sessionCount ?? pinned.sessions.length,
             expanded: this.isWorkspaceExpanded(expansionWorkspace),
             onToggle: (expanded) => this.setWorkspaceExpanded(expansionWorkspace, expanded),
             onNewChat: !pinned.unavailable && workspace ? () => this.onNewChat(workspace) : null,

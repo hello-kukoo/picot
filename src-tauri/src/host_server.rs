@@ -57,7 +57,7 @@ fn mobile_lan_access_enabled(metadata: &crate::metadata_store::SharedMetadataSto
         .and_then(|store| store.pref_get("mobile.lanAccessEnabled").ok())
         .flatten()
         .and_then(|value| value.as_bool())
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 /// Best-effort primary LAN URL for the running host, discovered with a
@@ -135,6 +135,7 @@ struct HostState {
     git_service: Mutex<Option<Arc<GitService>>>,
     host_events: HostEventSink,
     ephemeral_hub: Mutex<Option<crate::host_ephemeral::SharedEphemeralHub>>,
+    terminal_manager: Mutex<Option<Arc<crate::terminal_manager::TerminalManager>>>,
     oauth: Mutex<crate::oauth_manager::OAuthManager>,
     /// P4-d: one-shot TTL'd export tokens backing `session_export`.
     session_exports: crate::host_data::SessionExportRegistry,
@@ -181,14 +182,29 @@ impl HostServer {
         auth: Arc<Mutex<RemoteAuth>>,
         metadata: SharedMetadataStore,
     ) -> Result<Self, String> {
+        let session_root = dirs::home_dir().map(|home| home.join(".pi/agent/sessions"));
+        Self::start_with_session_root(static_dir, runtimes, auth, metadata, session_root).await
+    }
+
+    /// Same as [`Self::start`] with an explicit session root. Production
+    /// resolves `~/.pi/agent/sessions`; tests inject a hermetic directory so
+    /// the whole data plane (routing, auth, scan, parse) is provable without
+    /// touching real session history.
+    pub async fn start_with_session_root(
+        static_dir: PathBuf,
+        runtimes: NativePiManager,
+        auth: Arc<Mutex<RemoteAuth>>,
+        metadata: SharedMetadataStore,
+        session_root: Option<PathBuf>,
+    ) -> Result<Self, String> {
         // D4/LAN policy: loopback by default; LAN interfaces only when the user
         // explicitly enabled mobile access. Reading the preference here means
         // the Settings toggle and the bind decision observe one value, and a
         // flip takes effect on the next host start.
         let lan_access = mobile_lan_access_enabled(&metadata);
         let mut data = HostDataPlane::new(metadata);
-        if let Some(home) = dirs::home_dir() {
-            data = data.with_session_root(home.join(".pi/agent/sessions"));
+        if let Some(session_root) = session_root {
+            data = data.with_session_root(session_root);
         }
         let (host_event_tx, _) = tokio::sync::broadcast::channel(256);
         let host_events = HostEventSink::new(host_event_tx);
@@ -205,6 +221,7 @@ impl HostServer {
             git_service: Mutex::new(None),
             host_events: host_events.clone(),
             ephemeral_hub: Mutex::new(None),
+            terminal_manager: Mutex::new(None),
             oauth: Mutex::new(crate::oauth_manager::OAuthManager::default()),
             session_exports: crate::host_data::SessionExportRegistry::new(
                 8,
@@ -415,6 +432,14 @@ impl HostServer {
     pub fn set_ephemeral_hub(&self, hub: crate::host_ephemeral::SharedEphemeralHub) {
         if let Ok(mut slot) = self.state.ephemeral_hub.lock() {
             *slot = Some(hub);
+        }
+    }
+
+    /// Install the terminal manager so the WebSocket loop can route
+    /// `terminal_command` frames (PTY lifecycle, input, and checkpoints).
+    pub fn set_terminal_manager(&self, manager: Arc<crate::terminal_manager::TerminalManager>) {
+        if let Ok(mut slot) = self.state.terminal_manager.lock() {
+            *slot = Some(manager);
         }
     }
 
@@ -1531,6 +1556,67 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                     }
                     continue;
                 }
+                // Terminal PTY lifecycle: owner-scoped `terminal_command`
+                // envelopes carry their payload inline; the manager answers
+                // synchronously (terminal_listed/created/...) and streams
+                // output later through the owner event channel.
+                if frame.get("type").and_then(Value::as_str) == Some("terminal_command") {
+                    let manager = state
+                        .terminal_manager
+                        .lock()
+                        .ok()
+                        .and_then(|slot| slot.clone());
+                    let outcome = match (manager, client_context.as_ref()) {
+                        (Some(manager), Some(context))
+                            if context.kind == crate::host_router::ClientKind::Desktop =>
+                        {
+                            let Some(owner) = context.owner_id.as_ref() else {
+                                break;
+                            };
+                            let root = state
+                                .owner_registry
+                                .lock()
+                                .ok()
+                                .and_then(|registry| registry.clone())
+                                .and_then(|registry| {
+                                    registry
+                                        .current_workspace(owner)
+                                        .map(|(root, _)| root)
+                                });
+                            match root {
+                                Some(root) => {
+                                    let payload =
+                                        frame.get("payload").cloned().unwrap_or(Value::Null);
+                                    manager.dispatch(owner, &root, &payload)
+                                }
+                                None => Err(
+                                    "terminal commands require a registered workspace".to_string(),
+                                ),
+                            }
+                        }
+                        _ => Err("terminal transport requires a desktop owner".to_string()),
+                    };
+                    let outgoing = match outcome {
+                        Ok(mut value) => {
+                            if let Some(object) = value.as_object_mut() {
+                                object.insert(
+                                    "requestId".into(),
+                                    Value::String(request_id.clone().unwrap_or_default()),
+                                );
+                            }
+                            value
+                        }
+                        Err(error) => json!({
+                            "type": "terminal_command_failed",
+                            "requestId": request_id,
+                            "error": error,
+                        }),
+                    };
+                    if !send_checked(&mut socket, outgoing, PayloadKind::Response).await {
+                        break;
+                    }
+                    continue;
+                }
                 let routed = state
                     .router
                     .lock()
@@ -1672,11 +1758,15 @@ fn runtime_event_frame(event: crate::native_pi_manager::NativeRuntimeEvent) -> V
 }
 
 fn runtime_target_is_live(state: &HostState, target: &RuntimeTarget) -> bool {
+    // Wire targets carry only the routing triple; the live entry is the
+    // authority. Matching the triple against the resolved runtime is enough —
+    // owner/generation equality is authorize_target's job, host-side.
     state
         .runtimes
         .target_for_session_id(&target.session_id)
-        .as_ref()
-        == Some(target)
+        .is_some_and(|live| {
+            live.workspace_id == target.workspace_id && live.instance_id == target.instance_id
+        })
 }
 
 fn current_registered_context(state: &HostState, context: &HostClientContext) -> bool {
@@ -1701,15 +1791,18 @@ fn current_registered_context(state: &HostState, context: &HostClientContext) ->
     )
 }
 
-fn dialog_response_allowed(context: Option<&HostClientContext>, target: &RuntimeTarget) -> bool {
+fn dialog_response_allowed(context: Option<&HostClientContext>, live_owner: Option<&str>) -> bool {
     let Some(context) = context else { return false };
     let Some(owner) = context.owner_id.as_ref() else {
         return false;
     };
-    context.kind == crate::host_router::ClientKind::Desktop
-        && target.owner_id.as_deref() == Some(owner.as_str())
+    context.kind == crate::host_router::ClientKind::Desktop && live_owner == Some(owner.as_str())
 }
 
+/// Wire frames carry only the routing triple (workspace/session/instance).
+/// Owner binding and workspace generation never cross the wire: admission
+/// derives them from the live runtime entry and the owner registry, so a
+/// browser cannot claim ownership by echoing fields it was never told.
 fn authorize_target(
     state: &HostState,
     context: Option<&HostClientContext>,
@@ -1721,9 +1814,16 @@ fn authorize_target(
     let Some(owner) = context.owner_id.as_ref() else {
         return false;
     };
-    if context.kind != crate::host_router::ClientKind::Desktop
-        || target.owner_id.as_deref() != Some(owner.as_str())
-    {
+    if context.kind != crate::host_router::ClientKind::Desktop {
+        return false;
+    }
+    let Some(live) = state.runtimes.target_for_session_id(&target.session_id) else {
+        return false;
+    };
+    if live.workspace_id != target.workspace_id || live.instance_id != target.instance_id {
+        return false;
+    }
+    if live.owner_id.as_deref() != Some(owner.as_str()) {
         return false;
     }
     // Re-read registry authority for every admission. Handshake context is only
@@ -1740,7 +1840,7 @@ fn authorize_target(
             wid,
             generation,
             ..
-        }) if wid == target.workspace_id && generation == target.workspace_generation
+        }) if wid == live.workspace_id && generation == live.workspace_generation
     )
 }
 
@@ -1847,6 +1947,31 @@ async fn dispatch(
             if !authorize_target(state, context, &requested_target)
                 || !runtime_target_is_live(state, &requested_target)
             {
+                // Admission diagnostics: the wire triple plus what the host
+                // resolved it to, so a rejected frame is attributable without
+                // guessing which check failed.
+                let resolved = state
+                    .runtimes
+                    .target_for_session_id(&requested_target.session_id);
+                log::warn!(
+                    "[runtime-admission] rejected: session={} workspace={} instance={} authenticated_owner={} live={}",
+                    requested_target.session_id,
+                    requested_target.workspace_id,
+                    requested_target.instance_id,
+                    context
+                        .and_then(|ctx| ctx.owner_id.as_ref())
+                        .map(|owner| owner.as_str())
+                        .unwrap_or("<none>"),
+                    resolved
+                        .map(|target| format!(
+                            "session={} workspace={} instance={} owner={}",
+                            target.session_id,
+                            target.workspace_id,
+                            target.instance_id,
+                            target.owner_id.as_deref().unwrap_or("<none>")
+                        ))
+                        .unwrap_or_else(|| "<none>".to_string())
+                );
                 return Err((
                     "unauthorized_target",
                     "Runtime target is not authorized".into(),
@@ -1943,7 +2068,13 @@ async fn dispatch(
                 .ok_or(("invalid_command", "Runtime command is required".into()))?;
             let scope = operation_scope(context, &target.session_id)?;
             if command.get("type").and_then(Value::as_str) == Some("extension_ui_response") {
-                if !dialog_response_allowed(context, &target) {
+                // Ownership is resolved from the live runtime host-side; the
+                // wire target carries no owner fields to compare against.
+                let live_owner = state
+                    .runtimes
+                    .target_for_session_id(&target.session_id)
+                    .and_then(|live| live.owner_id);
+                if !dialog_response_allowed(context, live_owner.as_deref()) {
                     return Err((
                         "dialog_response_forbidden",
                         "Only the current workspace owner may answer this dialog".into(),
@@ -2242,70 +2373,6 @@ async fn dispatch(
                 return Ok(
                     json!({ "type": "host_response", "requestId": request_id, "operation": operation, "response": response }),
                 );
-            }
-            if matches!(
-                operation.as_str(),
-                "get_oauth_login_capabilities"
-                    | "start_oauth_login"
-                    | "cancel_oauth_login"
-                    | "get_oauth_login_status"
-                    | "logout_oauth_login"
-            ) {
-                let mut oauth = state
-                    .oauth
-                    .lock()
-                    .map_err(|_| ("oauth_unavailable", "OAuth manager unavailable".to_owned()))?;
-                let args = frame.get("args").cloned().unwrap_or_else(|| json!({}));
-                let generation = oauth.generation();
-                // The v2 OAuth surface is fail-closed until the CP7 Pi
-                // device-code bridge lands: capabilities must not advertise a
-                // provider whose login cannot complete, and start/logout must
-                // fail loudly instead of fabricating a pending operation or a
-                // completed logout. Cancel/status stay real host-side state.
-                let response = match operation.as_str() {
-                    "get_oauth_login_capabilities" => json!({ "providers": [] }),
-                    "start_oauth_login" => {
-                        return Err((
-                            "oauth_pi_bridge_unavailable",
-                            "OAuth login requires the Pi device-code bridge (CP7); no operation was created".to_owned(),
-                        ));
-                    }
-                    "cancel_oauth_login" => {
-                        let operation_id = args
-                            .get("operationId")
-                            .and_then(Value::as_str)
-                            .ok_or(("invalid_operation", "operationId is required".to_owned()))?;
-                        let status = oauth
-                            .cancel(owner.as_str(), generation, operation_id)
-                            .map_err(|error| (error.code(), "OAuth cancel rejected".to_owned()))?;
-                        json!({ "operationId": operation_id, "status": format!("{status:?}").to_ascii_lowercase() })
-                    }
-                    "get_oauth_login_status" => {
-                        let operation_id = args
-                            .get("operationId")
-                            .and_then(Value::as_str)
-                            .ok_or(("invalid_operation", "operationId is required".to_owned()))?;
-                        let status = oauth
-                            .status(owner.as_str(), generation, operation_id)
-                            .map_err(|error| {
-                                (error.code(), "OAuth status unavailable".to_owned())
-                            })?;
-                        json!({ "operationId": operation_id, "status": format!("{status:?}").to_ascii_lowercase() })
-                    }
-                    "logout_oauth_login" => {
-                        return Err((
-                            "oauth_pi_bridge_unavailable",
-                            "OAuth logout requires the Pi device-code bridge (CP7); credentials were not revoked".to_owned(),
-                        ));
-                    }
-                    _ => unreachable!(),
-                };
-                return Ok(json!({
-                    "type": "host_response",
-                    "requestId": request_id,
-                    "operation": operation,
-                    "response": response,
-                }));
             }
             let handler = state
                 .control_handler
@@ -2781,7 +2848,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oauth_host_controls_fail_closed_until_pi_bridge_lands() {
+    async fn oauth_host_controls_retired_with_pi_config_bridge() {
         use tokio_tungstenite::tungstenite::Message;
 
         let nonce = SystemTime::now()
@@ -2845,9 +2912,25 @@ mod tests {
             .unwrap();
         let response: Value =
             serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
-        assert_eq!(response["type"], "host_response");
-        assert_eq!(response["response"]["providers"], json!([]));
-        for operation in ["start_oauth_login", "logout_oauth_login"] {
+        // OAuth operations moved to the Pi `/picot-config` bridge. The host
+        // surface must not fabricate responses (empty capabilities, a fake
+        // cancel state) nor the retired `oauth_pi_bridge_unavailable` code:
+        // every retired op falls through to the control handler, which this
+        // harness leaves uninstalled (`control_unavailable`).
+        assert_eq!(
+            response["type"], "error",
+            "get_oauth_login_capabilities must not fabricate a host_response: {response}"
+        );
+        assert_ne!(
+            response["error"]["code"], "oauth_pi_bridge_unavailable",
+            "the CP7 fail-closed stub is retired: {response}"
+        );
+        for operation in [
+            "start_oauth_login",
+            "cancel_oauth_login",
+            "get_oauth_login_status",
+            "logout_oauth_login",
+        ] {
             socket
                 .send(Message::Text(request(operation)))
                 .await
@@ -2857,27 +2940,244 @@ mod tests {
                     .unwrap();
             assert_eq!(
                 error["type"], "error",
-                "{operation} must fail closed: {error}"
+                "{operation} is retired from the host surface: {error}"
             );
-            assert_eq!(error["error"]["code"], "oauth_pi_bridge_unavailable");
+            assert_ne!(error["error"]["code"], "oauth_pi_bridge_unavailable");
         }
+        let _ = socket.close(None).await;
+        host.stop();
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    /// Shared harness: temp workspace + host on a random loopback port with
+    /// a desktop capability registered. Returns the connected socket and the
+    /// workspace id bound to the owner.
+    use std::path::PathBuf;
+
+    struct DesktopHarness {
+        socket: tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        workspace_id: String,
+    }
+
+    async fn desktop_harness(
+        label: &str,
+        session_root: Option<PathBuf>,
+    ) -> (HostServer, DesktopHarness, PathBuf) {
+        use tokio_tungstenite::tungstenite::Message;
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-{label}-{nonce}"));
+        let workspace = temp.join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        let public = temp.join("public");
+        fs::create_dir_all(&public).unwrap();
+        fs::write(public.join("index.html"), "Picot").unwrap();
+        let metadata = Arc::new(Mutex::new(
+            MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
+        ));
+        // Data-plane operations resolve workspaces through the metadata
+        // registry (like production startup); register the row and reuse its
+        // id for the owner binding so both authorities agree.
+        let workspace_row = metadata
+            .lock()
+            .unwrap()
+            .add_workspace(&workspace)
+            .unwrap()
+            .0;
+        let workspace_id = workspace_row.workspace_id;
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
+        let registry = Arc::new(crate::window_owner::WindowOwnerRegistry::default());
+        let host = HostServer::start_with_session_root(
+            public,
+            NativePiManager::new(8),
+            auth,
+            metadata,
+            session_root,
+        )
+        .await
+        .expect("host server starts");
+        let (_owner, capability) = registry
+            .create_owner_with_workspace(
+                format!("{label}-window"),
+                workspace.clone(),
+                0,
+                host.origin().into(),
+                Some(workspace_id.clone()),
+                crate::window_owner::TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        host.set_owner_registry(registry);
+        host.runtime_started().expect("generation advances");
+        let (mut socket, _) = tokio_tungstenite::connect_async(
+            host.origin().replacen("http://", "ws://", 1) + "/v2/ws",
+        )
+        .await
+        .unwrap();
         socket
             .send(Message::Text(
                 json!({
-                    "type": "host_request", "requestId": "oauth-cancel-unknown",
-                    "operation": "cancel_oauth_login",
-                    "args": { "operationId": "ghost" }
+                    "type": "hello", "protocolVersion": 2, "clientType": "desktop",
+                    "clientId": format!("{label}-client"), "desktopCapability": capability
                 })
                 .to_string(),
             ))
             .await
             .unwrap();
-        let error: Value =
+        let ack: Value =
             serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
-        assert_eq!(error["error"]["code"], "oauth_operation_not_found");
-        let _ = socket.close(None).await;
+        assert_eq!(ack["type"], "hello_ack");
+        (
+            host,
+            DesktopHarness {
+                socket,
+                workspace_id,
+            },
+            temp,
+        )
+    }
+
+    #[tokio::test]
+    async fn terminal_commands_route_over_v2_to_the_manager() {
+        use tokio_tungstenite::tungstenite::Message;
+        let (host, mut harness, temp) = desktop_harness("terminal", None).await;
+        let manager = Arc::new(crate::terminal_manager::TerminalManager::new(
+            crate::terminal_registry::TerminalRegistry::new(4),
+            crate::terminal_state_store::TerminalStateStore::new(temp.join("terminal-state")),
+        ));
+        host.set_terminal_manager(manager);
+        let terminal = |payload: Value, request_id: &str| {
+            json!({
+                "type": "terminal_command", "requestId": request_id,
+                "workspaceGeneration": 1, "payload": payload
+            })
+            .to_string()
+        };
+        harness
+            .socket
+            .send(Message::Text(terminal(
+                json!({ "type": "terminal_list" }),
+                "term-1",
+            )))
+            .await
+            .unwrap();
+        let listed: Value = serde_json::from_str(
+            harness
+                .socket
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .to_text()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(listed["type"], "terminal_listed", "{listed}");
+        assert_eq!(listed["requestId"], "term-1");
+
+        harness
+            .socket
+            .send(Message::Text(terminal(
+                json!({ "type": "terminal_nonsense" }),
+                "term-2",
+            )))
+            .await
+            .unwrap();
+        let failed: Value = serde_json::from_str(
+            harness
+                .socket
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .to_text()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(failed["type"], "terminal_command_failed", "{failed}");
+        assert_eq!(failed["requestId"], "term-2");
+        let _ = harness.socket.close(None).await;
         host.stop();
         let _ = fs::remove_dir_all(temp);
+    }
+
+    #[tokio::test]
+    async fn workspace_sessions_data_plane_returns_scanned_entries() {
+        use tokio_tungstenite::tungstenite::Message;
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let outer = std::env::temp_dir().join(format!("picot-sessions-{nonce}"));
+        let session_root = outer.join("sessions");
+        fs::create_dir_all(&session_root).unwrap();
+
+        // The harness registers its own workspace in the metadata registry;
+        // the fixture bucket must encode THAT root (the scan resolves the
+        // workspace row, not any directory the test happens to own).
+        let (host, mut harness, temp) =
+            desktop_harness("sessions", Some(session_root.clone())).await;
+        let canonical = fs::canonicalize(temp.join("workspace")).unwrap();
+        // Pi's encoded project dir name: `--` + path without leading slash
+        // with separators folded to `-` + trailing `--`.
+        let encoded = format!(
+            "--{}--",
+            canonical
+                .to_string_lossy()
+                .trim_start_matches('/')
+                .replace(['/', '\\', ':'], "-")
+        );
+        let bucket = session_root.join(&encoded);
+        fs::create_dir_all(&bucket).unwrap();
+        fs::write(
+            bucket.join("2026-09-01T00-00-00-000Z_sess-1.jsonl"),
+            format!(
+                "{{\"type\":\"session\",\"id\":\"sess-1\",\"timestamp\":\"2026-09-01T00:00:00Z\",\"cwd\":\"{cwd}\"}}\n\
+                 {{\"type\":\"session_info\",\"name\":\"History probe\"}}\n\
+                 {{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":\"hello history\"}}}}\n",
+                cwd = canonical.to_string_lossy()
+            ),
+        )
+        .unwrap();
+
+        harness
+            .socket
+            .send(Message::Text(
+                json!({
+                    "type": "data_request", "protocolVersion": 2, "requestId": "data-1",
+                    "operation": "workspace_sessions",
+                    "workspaceId": harness.workspace_id
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let response: Value = serde_json::from_str(
+            harness
+                .socket
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .to_text()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(response["type"], "data_response", "{response}");
+        assert_eq!(response["operation"], "workspace_sessions");
+        let sessions = response["sessions"].as_array().expect("sessions array");
+        assert_eq!(sessions.len(), 1, "{response}");
+        assert_eq!(sessions[0]["id"], "sess-1");
+        assert_eq!(sessions[0]["name"], "History probe");
+        assert_eq!(sessions[0]["firstMessage"], "hello history");
+        assert_eq!(response["sessionCount"], 1);
+        let _ = harness.socket.close(None).await;
+        host.stop();
+        let _ = fs::remove_dir_all(temp);
+        let _ = fs::remove_dir_all(outer);
     }
 
     #[tokio::test]
@@ -3449,7 +3749,6 @@ mod tests {
 
     #[test]
     fn dialog_response_policy_requires_owner_desktop_class() {
-        let target = RuntimeTarget::with_owner("workspace", "session", "instance", "owner", 3);
         let owner = crate::window_owner::OwnerId::from_string("owner".into());
         let desktop = HostClientContext::desktop(
             "desktop",
@@ -3460,14 +3759,19 @@ mod tests {
                 generation: 3,
             },
         );
-        assert!(dialog_response_allowed(Some(&desktop), &target));
+        assert!(dialog_response_allowed(Some(&desktop), Some("owner")));
         assert!(!dialog_response_allowed(
             Some(&HostClientContext::remote("remote")),
-            &target
+            Some("owner")
         ));
         assert!(!dialog_response_allowed(
             Some(&HostClientContext::public("browser")),
-            &target
+            Some("owner")
+        ));
+        assert!(!dialog_response_allowed(Some(&desktop), None));
+        assert!(!dialog_response_allowed(
+            Some(&desktop),
+            Some("other-owner")
         ));
         let other = HostClientContext::desktop(
             "other",
@@ -3478,7 +3782,7 @@ mod tests {
                 generation: 3,
             },
         );
-        assert!(!dialog_response_allowed(Some(&other), &target));
+        assert!(!dialog_response_allowed(Some(&other), Some("owner")));
     }
 
     #[test]
@@ -4120,6 +4424,11 @@ mod tests {
         let metadata = Arc::new(Mutex::new(
             MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
         ));
+        metadata
+            .lock()
+            .unwrap()
+            .pref_set("mobile.lanAccessEnabled", &json!(false))
+            .unwrap();
         let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
         let registry = Arc::new(crate::window_owner::WindowOwnerRegistry::default());
         let host = HostServer::start(public, NativePiManager::new(8), auth, Arc::clone(&metadata))

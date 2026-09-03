@@ -20,7 +20,8 @@
     "openInApp": "Abrir en {app}",
     "sideChat": "Chat lateral",
     "quickChat": "Chat rápido",
-    "newSideChat": "Nuevo chat lateral"
+    "newSideChat": "Nuevo chat lateral",
+    "showMobileQR": "Mostrar código QR móvil"
   },
   "infoPanel": {
     "title": "Información",
@@ -895,7 +896,8 @@
     "model": "modelo",
     "compact": "Compactar",
     "compactTitle": "El contexto supera el 80% — compacta para ahorrar tokens",
-    "toggleContextControls": "Alternar controles de contexto"
+    "toggleContextControls": "Alternar controles de contexto",
+    "qrUnavailable": "Código QR no disponible"
   },
   "browse": {
     "openExternalPrompt": "Abrir este enlace en una nueva pestaña:"
@@ -971,5 +973,14 @@
         }
       }
     }
+  },
+  "lanQr": {
+    "modalAriaLabel": "Código QR móvil",
+    "title": "Abrir en móvil",
+    "closeAriaLabel": "Cerrar",
+    "generating": "Generando código QR…",
+    "qrAlt": "Código QR para acceso móvil",
+    "hint": "Escanea con tu teléfono para abrir Picot en la misma red",
+    "openLink": "Abrir enlace"
   }
 }
