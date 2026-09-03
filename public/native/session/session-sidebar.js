@@ -347,9 +347,7 @@ export class SessionSidebar {
       .map((id) => byId.get(id))
       .filter(
         (session) =>
-          session &&
-          !this.isArchived(session.id) &&
-          !isSuperAgentProjectPath(session.projectPath),
+          session && !this.isArchived(session.id) && !isSuperAgentProjectPath(session.projectPath),
       );
     const validIds = resolved.map((session) => session.id);
     if (JSON.stringify(validIds) !== JSON.stringify(this.recent)) {
@@ -1134,8 +1132,24 @@ export class SessionSidebar {
                 container.appendChild(unpin);
                 return;
               }
-              for (const session of pinned.sessions) {
+              const project = {
+                path: ws?.path || workspaceId,
+                name: ws?.folderName || workspaceId,
+              };
+              const visibleCount = this.#projectVisibleCount(project, pinned.sessions.length);
+              const visible = this.searchQuery
+                ? pinned.sessions
+                : pinned.sessions.slice(0, visibleCount);
+              for (const session of visible) {
                 container.appendChild(this.#buildItem(session));
+              }
+              if (!this.searchQuery) {
+                const toggle = this.#buildToggleRow(
+                  project,
+                  visible.length,
+                  pinned.sessions.length,
+                );
+                if (toggle) container.appendChild(toggle);
               }
             },
           });
