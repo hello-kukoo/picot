@@ -3030,7 +3030,8 @@ body {
   font-size: var(--font-size-sm);
 }
 
-.settings-language-select {
+.settings-language-select,
+.settings-terminal-theme-select {
   width: min(220px, 48%);
 }
 
@@ -8422,6 +8423,7 @@ body.file-preview-resizing {
   height: 16px;
 }
 .terminal-panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   border-top: 1px solid var(--border);
@@ -8598,6 +8600,59 @@ body.file-preview-resizing {
 
 .terminal-start-error {
   color: var(--danger, #e54);
+}
+
+/* Terminal find bar — floats below the tab bar over the active terminal. */
+.terminal-search {
+  position: absolute;
+  top: 40px; /* 36px tab bar + 1px border + 3px breathing room */
+  right: var(--space-2);
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--bg-solid);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+}
+.terminal-search.hidden {
+  display: none;
+}
+.terminal-search-input {
+  width: 180px;
+  padding: var(--space-1);
+  background: var(--bg-input, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  outline: none;
+}
+.terminal-search-input:focus {
+  border-color: var(--accent);
+}
+.terminal-search-btn {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+.terminal-search-btn:hover {
+  background: var(--bg-glass-hover);
+  color: var(--text-primary);
+}
+.terminal-search-btn svg {
+  display: block;
 }
 
 /* ═══════════════════════════════════════════════════════

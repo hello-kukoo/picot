@@ -1006,6 +1006,50 @@
               <div class="theme-grid" id="theme-grid"></div>
             </div>
             <div class="settings-section">
+              <div class="settings-section-title" data-i18n="settings.terminal.title">
+                Terminal
+              </div>
+              <div class="settings-row" id="setting-terminal-theme">
+                <span class="settings-label settings-label-stack">
+                  <span
+                    class="settings-label-main"
+                    data-i18n="settings.terminal.theme"
+                    >Terminal theme</span
+                  >
+                  <span
+                    class="settings-label-sub"
+                    data-i18n="settings.terminal.themeDescription"
+                    >Follow the Picot theme, or force light or dark.</span
+                  >
+                </span>
+                <select
+                  class="ui-select settings-terminal-theme-select"
+                  id="settings-terminal-theme-select"
+                  aria-label="Terminal theme"
+                  data-i18n-aria-label="settings.terminal.theme"
+                ></select>
+              </div>
+              <div class="settings-row" id="setting-terminal-webgl">
+                <span class="settings-label settings-label-stack">
+                  <span
+                    class="settings-label-main"
+                    data-i18n="settings.terminal.webgl"
+                    >WebGL renderer</span
+                  >
+                  <span
+                    class="settings-label-sub"
+                    data-i18n="settings.terminal.webglDescription"
+                    >GPU-accelerated terminal rendering. Falls back to the DOM
+                    renderer when unavailable.</span
+                  >
+                </span>
+                <button
+                  class="settings-toggle"
+                  id="toggle-terminal-webgl"
+                ></button>
+              </div>
+            </div>
+            <div class="settings-section">
               <div class="settings-row" id="setting-language">
                 <span class="settings-label settings-label-stack">
                   <span

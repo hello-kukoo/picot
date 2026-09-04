@@ -1,7 +1,34 @@
 // ABOUTME: Display-only terminal UI preferences (font size, scrollback). Host
 // ABOUTME: state stays authoritative; no process-sensitive key is ever persisted.
 
-const ALLOWED_KEYS = new Set(["fontSize", "bellStyle", "scrollbackLimit", "smoothScroll"]);
+const ALLOWED_KEYS = new Set([
+  "fontSize",
+  "bellStyle",
+  "scrollbackLimit",
+  "smoothScroll",
+  "webglRenderer",
+  "themeMode",
+]);
+
+/** Terminal color scheme modes: follow the Picot theme, or force one. */
+export const TERMINAL_THEME_MODES = ["system", "light", "dark"];
+export const DEFAULT_TERMINAL_THEME_MODE = "dark";
+
+/** Unknown/stale values fall back to the default (dark). */
+export function normalizeThemeMode(value) {
+  return TERMINAL_THEME_MODES.includes(value) ? value : DEFAULT_TERMINAL_THEME_MODE;
+}
+
+/**
+ * WebGL renderer is opt-in per platform: default ON on macOS/Linux, OFF on
+ * Windows until GPU driver coverage is validated. `userAgent` is injectable
+ * for tests.
+ */
+export function defaultWebglRenderer(
+  userAgent = typeof navigator !== "undefined" ? navigator.userAgent : "",
+) {
+  return !/Windows/i.test(userAgent);
+}
 
 /**
  * TerminalPreferences remembers display-only UI choices. It rejects and omits

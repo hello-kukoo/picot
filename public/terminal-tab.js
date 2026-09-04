@@ -3,9 +3,11 @@
 // ABOUTME: puts terminal bytes or OSC titles into HTML (textContent only, elsewhere).
 
 /**
- * TerminalTab wraps one xterm.js Terminal + Fit/Serialize addons behind an
- * injectable factory so jsdom tests assert Picot behavior, not xterm internals.
- * Production passes `globalThis.PicotXterm` factories.
+ * TerminalTab wraps one xterm.js Terminal + Fit/Serialize/Search/Unicode11/
+ * Webgl addons behind injectable factories so jsdom tests assert Picot
+ * behavior, not xterm internals. Production passes `globalThis.PicotXterm`
+ * factories. The Webgl factory is optional and opt-in (see
+ * terminal-preferences.js): any WebGL failure falls back to the DOM renderer.
  */
 import { loadTerminalFont } from "./terminal-font.js";
 
@@ -17,6 +19,10 @@ export class TerminalTab {
     terminalFactory,
     fitAddonFactory,
     serializeAddonFactory,
+    searchAddonFactory = null,
+    unicode11AddonFactory = null,
+    webglAddonFactory = null,
+    initialTheme = null,
     sendInput,
     sendResize,
     fontFamily,
@@ -37,13 +43,38 @@ export class TerminalTab {
     this.terminal = terminalFactory();
     this.fitAddon = fitAddonFactory();
     this.serializeAddon = serializeAddonFactory();
+    this.searchAddon = null;
+    this.webglAddon = null;
     this.terminal.loadAddon(this.fitAddon);
     this.terminal.loadAddon(this.serializeAddon);
+    if (unicode11AddonFactory) {
+      try {
+        const unicode11 = unicode11AddonFactory();
+        this.terminal.loadAddon(unicode11);
+        // Unicode 11 is the modern width standard (emoji/CJK correctness);
+        // registering the addon provides the "11" version provider.
+        this.terminal.unicode.activeVersion = "11";
+      } catch {
+        // Fall back to the xterm default width provider.
+      }
+    }
+    if (searchAddonFactory) {
+      try {
+        this.searchAddon = searchAddonFactory();
+        this.terminal.loadAddon(this.searchAddon);
+      } catch {
+        this.searchAddon = null;
+      }
+    }
     if (container) {
       this.terminal.open(container);
     }
+    if (webglAddonFactory) {
+      this._loadWebgl(webglAddonFactory);
+    }
     if (this.terminal.options) {
-      this.terminal.options.theme = picotThemeToXterm();
+      this.terminal.options.theme = initialTheme || picotThemeToXterm();
+      this._applyElementBackground(this.terminal.options.theme);
     }
 
     this._dataDisposable = this.terminal.onData((data) => {
@@ -70,6 +101,61 @@ export class TerminalTab {
       this.fitAddon.fit();
     } catch {
       // Container not measurable yet (hidden/collapsed); caller refits on activation.
+    }
+  }
+
+  /**
+   * Activate the WebGL renderer. Must run after open(): the renderer needs a
+   * laid-out container. Any failure (no GPU, blocked context, driver quirk)
+   * leaves the default DOM renderer active, so this can never break the tab.
+   */
+  _loadWebgl(factory) {
+    try {
+      const addon = factory();
+      this.terminal.loadAddon(addon);
+      this.webglAddon = addon;
+      // GPU context loss (driver reset, GPU switch) must fall back to the DOM
+      // renderer instead of leaving a frozen canvas behind.
+      addon.onContextLoss?.(() => {
+        try {
+          addon.dispose();
+        } catch {
+          // Already gone.
+        }
+        this.webglAddon = null;
+      });
+    } catch {
+      this.webglAddon = null;
+    }
+  }
+
+  /** Search the scrollback forward. Returns whether a match was found. */
+  findNext(term) {
+    if (this.destroyed || !this.searchAddon) return false;
+    try {
+      return Boolean(this.searchAddon.findNext(term));
+    } catch {
+      return false;
+    }
+  }
+
+  /** Search the scrollback backward. Returns whether a match was found. */
+  findPrevious(term) {
+    if (this.destroyed || !this.searchAddon) return false;
+    try {
+      return Boolean(this.searchAddon.findPrevious(term));
+    } catch {
+      return false;
+    }
+  }
+
+  /** Clear the active search highlight without disposing the addon. */
+  clearSearch() {
+    if (this.destroyed || !this.searchAddon) return;
+    try {
+      this.searchAddon.clearActiveDecoration();
+    } catch {
+      // Best-effort: nothing to clear.
     }
   }
 
@@ -116,6 +202,7 @@ export class TerminalTab {
   setTheme(theme) {
     if (!this.destroyed && this.terminal?.options) {
       this.terminal.options.theme = theme;
+      this._applyElementBackground(theme);
       // xterm 6 should redraw on theme change, but force a refresh in case the
       // renderer does not pick up the new background immediately.
       try {
@@ -124,6 +211,44 @@ export class TerminalTab {
         // refresh is best-effort across xterm versions
       }
     }
+  }
+
+  /**
+   * Forced light/dark terminal themes must not be overpainted by the panel
+   * CSS (`.terminal-body .xterm { background: var(--bg-solid) }`), so the
+   * resolved background is mirrored onto the xterm element inline.
+   */
+  _applyElementBackground(theme) {
+    const el = this.terminal?.element;
+    if (el?.style && theme?.background) {
+      el.style.backgroundColor = theme.background;
+    }
+  }
+
+  /**
+   * Upgrade a DOM-rendered tab to WebGL at runtime (settings toggle).
+   * Returns whether the upgrade succeeded; on failure the DOM renderer stays.
+   */
+  enableWebgl(factory) {
+    if (this.destroyed || this.webglAddon || typeof factory !== "function") {
+      return false;
+    }
+    this._loadWebgl(factory);
+    return this.webglAddon !== null;
+  }
+
+  /** Drop the WebGL renderer and return to the DOM renderer. */
+  disableWebgl() {
+    if (this.destroyed || !this.webglAddon) {
+      return false;
+    }
+    try {
+      this.webglAddon.dispose();
+    } catch {
+      // Already gone.
+    }
+    this.webglAddon = null;
+    return true;
   }
 
   /** Destroy listeners, addons, and the terminal. Idempotent. */
@@ -140,6 +265,12 @@ export class TerminalTab {
     this._resizeDisposable?.dispose?.();
     this._dataDisposable = null;
     this._resizeDisposable = null;
+    try {
+      this.webglAddon?.dispose?.();
+    } catch {
+      // Already gone.
+    }
+    this.webglAddon = null;
     try {
       this.terminal?.dispose?.();
     } catch {
@@ -235,4 +366,37 @@ export function picotThemeToXterm() {
     selection: get("--bg-glass-active") || "rgba(255,255,255,0.2)",
     ...ansi,
   };
+}
+
+// Canonical chrome for forced modes: picked from Picot's own dark/light theme
+// surfaces (night --bg-solid #212121, clean --bg-solid #ffffff) so a forced
+// terminal stays readable regardless of the active Picot theme.
+const FORCED_DARK_CHROME = {
+  background: "#212121",
+  foreground: "rgba(255, 255, 255, 0.88)",
+  cursor: "rgba(255, 255, 255, 0.88)",
+  cursorAccent: "#212121",
+  selection: "rgba(255, 255, 255, 0.2)",
+};
+const FORCED_LIGHT_CHROME = {
+  background: "#ffffff",
+  foreground: "rgba(0, 0, 0, 0.88)",
+  cursor: "rgba(0, 0, 0, 0.88)",
+  cursorAccent: "#ffffff",
+  selection: "rgba(0, 0, 0, 0.2)",
+};
+
+/**
+ * Resolve the xterm theme for a terminal themeMode preference: "system"
+ * follows the active Picot theme; "light"/"dark" force a canonical palette.
+ * Unknown modes fall back to the system behavior.
+ */
+export function resolveTerminalTheme(mode) {
+  if (mode === "dark") {
+    return { ...FORCED_DARK_CHROME, ...ANSI_DARK };
+  }
+  if (mode === "light") {
+    return { ...FORCED_LIGHT_CHROME, ...ANSI_LIGHT };
+  }
+  return picotThemeToXterm();
 }

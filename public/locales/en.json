@@ -456,7 +456,11 @@
     "ariaTabList": "Terminal tabs",
     "ariaResizer": "Terminal panel resizer",
     "enlarge": "Enlarge panel",
-    "restore": "Restore panel"
+    "restore": "Restore panel",
+    "searchPlaceholder": "Find in terminal",
+    "searchPrevious": "Previous match",
+    "searchNext": "Next match",
+    "searchClose": "Close find bar"
   },
   "sidebar": {
     "loadingSessions": "Loading sessions...",
@@ -828,6 +832,16 @@
       "pairAction": "Generate token",
       "pairHint": "Open the address on the phone, then enter the token within 5 minutes.",
       "restartHint": "Restart Picot to apply."
+    },
+    "terminal": {
+      "title": "Terminal",
+      "theme": "Terminal theme",
+      "themeDescription": "Follow the Picot theme, or force light or dark.",
+      "themeSystem": "Follow Picot theme",
+      "themeLight": "Light",
+      "themeDark": "Dark",
+      "webgl": "WebGL renderer",
+      "webglDescription": "GPU-accelerated terminal rendering. Falls back to the DOM renderer when unavailable."
     }
   },
   "cost": {

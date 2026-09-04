@@ -94,10 +94,16 @@ import {
   TERMINAL_FONT_STACK,
 } from "./terminal-font.js";
 import { formatTerminalStartError, TerminalPanel } from "./terminal-panel.js";
-import { TerminalPreferences } from "./terminal-preferences.js";
+import {
+  defaultWebglRenderer,
+  normalizeThemeMode,
+  TERMINAL_THEME_MODES,
+  TerminalPreferences,
+} from "./terminal-preferences.js";
+import { TerminalSearch } from "./terminal-search.js";
 import {
   encodeBase64 as encodeTerminalBase64,
-  picotThemeToXterm,
+  resolveTerminalTheme,
   TerminalTab,
 } from "./terminal-tab.js";
 import { applyTheme, getCurrentTheme, themes } from "./themes.js";
@@ -1125,6 +1131,16 @@ windowCloseCoordinator.registerParticipant("quick", quickChatDialog);
 // on native capability, so LAN/mobile clients render no terminal surface.
 const terminalPreferences = new TerminalPreferences();
 const savedTerminalPreferences = terminalPreferences.load();
+// WebGL renderer is opt-in: absent preference falls back to the platform
+// default (ON on macOS/Linux, OFF on Windows — see defaultWebglRenderer).
+// Mutable: the Settings > General toggle updates these live.
+let webglRendererEnabled =
+  typeof savedTerminalPreferences.webglRenderer === "boolean"
+    ? savedTerminalPreferences.webglRenderer
+    : defaultWebglRenderer();
+// Terminal color scheme: "system" follows the Picot theme; "light"/"dark"
+// force canonical palettes. Default dark (TerminalPreferences contract).
+let terminalThemeMode = normalizeThemeMode(savedTerminalPreferences.themeMode);
 const terminalFontSize = Number.isFinite(savedTerminalPreferences.fontSize)
   ? Math.min(32, Math.max(10, savedTerminalPreferences.fontSize))
   : DEFAULT_TERMINAL_FONT_SIZE;
@@ -1158,6 +1174,10 @@ const terminalClient = new TerminalClient({
         }),
       fitAddonFactory: () => new globalThis.PicotXterm.FitAddon(),
       serializeAddonFactory: () => new globalThis.PicotXterm.SerializeAddon(),
+      searchAddonFactory: () => new globalThis.PicotXterm.SearchAddon(),
+      unicode11AddonFactory: () => new globalThis.PicotXterm.Unicode11Addon(),
+      webglAddonFactory: webglRendererEnabled ? () => new globalThis.PicotXterm.WebglAddon() : null,
+      initialTheme: resolveTerminalTheme(terminalThemeMode),
       sendInput: (id, gen, b64) =>
         terminalClient.command({
           type: "terminal_input",
@@ -1245,6 +1265,12 @@ const terminalPanel = new TerminalPanel({
     },
   },
 });
+// Find bar for the terminal panel. Mounted lazily together with the panel
+// (mountTerminalPanelIfNative) and opened via Cmd/Ctrl+F from the global
+// keydown handler when the terminal has focus.
+const terminalSearch = new TerminalSearch({
+  getActiveTab: () => terminalClient.tabs.get(terminalPanel.activeTerminalId)?.tab ?? null,
+});
 // The panel is mounted only after the broker confirms native capability:
 // `transport.capabilities.native` is false before the WS handshake completes,
 // so mounting at module top would skip it on the desktop. The event listeners
@@ -1263,6 +1289,7 @@ function mountTerminalPanelIfNative() {
   }
   terminalPanel.native = true;
   terminalPanel.mount({ toggleContainer: toolbarEl, panelContainer: workspaceEl });
+  terminalSearch.mount(terminalPanel.root);
   if (fileSidebarToggle && terminalPanel.toggleEl) {
     toolbarEl.insertBefore(terminalPanel.toggleEl, fileSidebarToggle);
   }
@@ -3972,6 +3999,20 @@ document.addEventListener("keydown", (e) => {
     messageInput.focus();
   }
 
+  // Cmd/Ctrl+F — Terminal find bar, only when the terminal panel is expanded
+  // and focus is already inside it; otherwise the browser's native find stays.
+  if (
+    (e.key === "f" || e.key === "F") &&
+    (e.metaKey || e.ctrlKey) &&
+    !e.shiftKey &&
+    !e.altKey &&
+    terminalPanel.isExpanded() &&
+    terminalPanel.root?.contains(document.activeElement)
+  ) {
+    e.preventDefault();
+    terminalSearch.open();
+  }
+
   // Cmd+N (macOS) / Ctrl+N (Windows/Linux) — Start a new chat session in
   // the current workspace. Mirrors the header "+ New Session" button.
   // We intentionally do NOT gate on isInInput() so the shortcut works
@@ -5439,6 +5480,8 @@ const settingsNavItems = Array.from(document.querySelectorAll(".settings-nav-ite
 const settingsTabs = Array.from(document.querySelectorAll(".settings-tab"));
 const themeGrid = document.getElementById("theme-grid");
 const languageSelect = document.getElementById("settings-language-select");
+const terminalThemeSelect = document.getElementById("settings-terminal-theme-select");
+const toggleTerminalWebgl = document.getElementById("toggle-terminal-webgl");
 
 const toggleAutoCompact = document.getElementById("toggle-auto-compact");
 const thinkingEffortSteps = document.getElementById("thinking-effort-steps");
@@ -5650,8 +5693,9 @@ function buildThemeGrid() {
         value: id,
         apply: () => applyTheme(id, { origin: { x: event.clientX, y: event.clientY } }),
       });
-      // Re-apply the Picot theme to every live xterm instance.
-      const xtermTheme = picotThemeToXterm();
+      // Re-apply the terminal theme to every live xterm instance, honoring
+      // the themeMode preference (forced light/dark ignore the Picot theme).
+      const xtermTheme = resolveTerminalTheme(terminalThemeMode);
       for (const entry of terminalClient.tabs.values()) {
         entry.tab?.setTheme?.(xtermTheme);
       }
@@ -5704,7 +5748,66 @@ async function handleLanguageSelectChange() {
 
 languageSelect?.addEventListener("change", handleLanguageSelectChange);
 
+// ── Terminal preferences (Settings → General) ───────────────────────────
+// Display-only localStorage prefs; no process-sensitive value is persisted
+// (TerminalPreferences rejects unknown keys). Changes apply live to every
+// open xterm tab; the WebGL toggle upgrades/downgrades renderers in place.
+function persistTerminalPreferences(patch) {
+  terminalPreferences.save({ ...terminalPreferences.load(), ...patch });
+}
+
+function applyTerminalThemeToAllTabs() {
+  const theme = resolveTerminalTheme(terminalThemeMode);
+  for (const entry of terminalClient.tabs.values()) {
+    entry.tab?.setTheme?.(theme);
+  }
+}
+
+function buildTerminalThemeSelector() {
+  if (!terminalThemeSelect) return;
+  terminalThemeSelect.replaceChildren();
+  const labels = {
+    system: t("settings.terminal.themeSystem"),
+    light: t("settings.terminal.themeLight"),
+    dark: t("settings.terminal.themeDark"),
+  };
+  for (const mode of TERMINAL_THEME_MODES) {
+    const option = document.createElement("option");
+    option.value = mode;
+    option.textContent = labels[mode] || mode;
+    option.selected = terminalThemeMode === mode;
+    terminalThemeSelect.append(option);
+  }
+}
+
+function handleTerminalThemeChange() {
+  terminalThemeMode = normalizeThemeMode(terminalThemeSelect.value);
+  persistTerminalPreferences({ themeMode: terminalThemeMode });
+  applyTerminalThemeToAllTabs();
+}
+
+function syncTerminalWebglToggle() {
+  toggleTerminalWebgl?.classList.toggle("on", webglRendererEnabled);
+}
+
+function handleTerminalWebglToggle() {
+  webglRendererEnabled = !webglRendererEnabled;
+  persistTerminalPreferences({ webglRenderer: webglRendererEnabled });
+  syncTerminalWebglToggle();
+  for (const entry of terminalClient.tabs.values()) {
+    if (webglRendererEnabled) {
+      entry.tab?.enableWebgl?.(() => new globalThis.PicotXterm.WebglAddon());
+    } else {
+      entry.tab?.disableWebgl?.();
+    }
+  }
+}
+
+terminalThemeSelect?.addEventListener("change", handleTerminalThemeChange);
+toggleTerminalWebgl?.addEventListener("click", handleTerminalWebglToggle);
+
 onLocaleChange(buildLanguageSelector);
+onLocaleChange(buildTerminalThemeSelector);
 
 onLocaleChange(() => {
   updateThinkingBtn();
@@ -5713,6 +5816,7 @@ onLocaleChange(() => {
   updateTokenUsage();
   refreshGitBranch();
   repaintContextViz();
+  terminalSearch.applyLocale();
 });
 
 function normalizeSettingsTabKey(tabKey) {
@@ -5755,6 +5859,8 @@ async function openSettings(tabKey = "general", options = {}) {
   selectSettingsTab(targetTabKey);
   buildThemeGrid();
   buildLanguageSelector();
+  buildTerminalThemeSelector();
+  syncTerminalWebglToggle();
   if (piVersionValue) {
     piVersionValue.textContent = piVersionCache || t("status.loading");
   }

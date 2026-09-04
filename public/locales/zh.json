@@ -456,7 +456,11 @@
     "ariaTabList": "终端标签列表",
     "ariaResizer": "终端面板调整器",
     "enlarge": "放大面板",
-    "restore": "恢复面板"
+    "restore": "恢复面板",
+    "searchPlaceholder": "在终端中查找",
+    "searchPrevious": "上一个匹配",
+    "searchNext": "下一个匹配",
+    "searchClose": "关闭查找栏"
   },
   "sidebar": {
     "loadingSessions": "正在加载会话...",
@@ -828,6 +832,16 @@
       "pairAction": "生成令牌",
       "pairHint": "在手机上打开该地址，并在 5 分钟内输入令牌。",
       "restartHint": "重启 Picot 后生效。"
+    },
+    "terminal": {
+      "title": "终端",
+      "theme": "终端主题",
+      "themeDescription": "跟随 Picot 主题，或强制浅色 / 深色。",
+      "themeSystem": "跟随 Picot 主题",
+      "themeLight": "浅色",
+      "themeDark": "深色",
+      "webgl": "WebGL 渲染器",
+      "webglDescription": "GPU 加速的终端渲染；不可用时自动回退到 DOM 渲染器。"
     }
   },
   "cost": {
