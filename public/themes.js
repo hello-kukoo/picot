@@ -2,14 +2,10 @@
  * Theme system — four themes: two light, two dark
  *
  * Storage note: the active theme is persisted in a cookie (not
- * localStorage). Picot spawns one pi process per workspace, each on
- * its own port, and every workspace window is loaded from
- * `http://localhost:<port>`. localStorage is partitioned per origin, so
- * `localhost:3001` and `localhost:3002` would each see a different
- * `pi-studio-theme` value — meaning any new project window would forget
- * the user's theme and fall back to the OS default (usually dark). Cookies
- * on `localhost` are shared across ports, so a single cookie is visible
- * to every workspace window.
+ * localStorage) as the synchronous render cache that bootstrap reads
+ * before the async preference reconciliation applies the DB-backed
+ * value. Every window loads from the single HostServer origin, so one
+ * cookie is visible to all of them.
  */
 
 export const themes = {

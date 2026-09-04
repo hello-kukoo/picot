@@ -11,6 +11,7 @@ tags: [build, local, tauri, cross-compile]
 执行 `scripts/build.sh` 在本地 macOS 上构造 Picot 产物，供内部 QA 使用。
 
 **职责边界（重要）：**
+
 - **本 skill 负责**：本地构造 macOS DMG（arm64 / x86_64 / universal）/ Windows exe+zip
 - **本 skill 不做**：修改版本号、生成 CHANGELOG、git commit / tag / push、发布到 GitHub Release
 - **公开发布仍由 `scripts/release.sh` + GitHub Actions (`.github/workflows/release.yml`) 完成**
@@ -51,9 +52,10 @@ tags: [build, local, tauri, cross-compile]
 ```
 
 `scripts/build.sh` 内部自动完成：
+
 - `bun install --frozen-lockfile`
 - `bun run fetch:pi` (下载/校验内嵌 pi 二进制)
-- `bun run build:extensions` (编译 `extensions/embedded-server.ts` → `dist/embedded-server.mjs`)
+- `bun run build:extensions` (编译 `extensions/picot-bridge.ts`、`extensions/pi-chat-src/extension-entry.ts` → `dist/*.mjs`)
 - `rustup target add <target>` (universal 会同时 add 两个 arch)
 - `tauri build` 配合对应 `--target` / `--bundles` / `--no-bundle`
 - Windows 路径额外做 `zip` 打包
@@ -64,6 +66,7 @@ tags: [build, local, tauri, cross-compile]
 按 `platform` 展示产物路径与大小：
 
 **mac-arm / mac-intel / mac-universal:**
+
 - DMG (in repo root): `./Picot_<version>_<arch>.dmg`（`<arch>` 为 `aarch64` / `x86_64` / `universal`）
 - DMG (in target/): `src-tauri/target/<triple>/release/bundle/dmg/Picot_*.dmg`
 - 内含: `Picot.app` (Tauri bundling 时已把 `.app` 一起打入 DMG，bundle/macos/ 目录在 build 完成后会被清空)
@@ -72,6 +75,7 @@ tags: [build, local, tauri, cross-compile]
 - **Gatekeeper**: 首次启动会被拦截，**右键打开**绕过
 
 **windows:**
+
 - Zip (in repo root): `./Picot_<version>_windows_x64.zip`
 - 内容: `Picot.exe` + 任何随附 DLL + embedded pi tree + extensions
 - **签名**: 无 (MinGW 交叉编译不签名)

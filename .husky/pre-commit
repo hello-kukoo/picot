@@ -14,8 +14,8 @@
 #
 # Type-checking (tsgo / tsc) is intentionally excluded: it is whole-project and
 # belongs in `bun run check` / CI, not the per-commit gate. Likewise the
-# embedded-server.ts TypeScript build (`bun run build:extensions`) is a
-# release-only artifact and not gated here.
+# extension builds (`bun run build:extensions`) are release-only artifacts and
+# not gated here.
 
 # Resolve the local biome binary so the hook also works when run directly
 # (husky already prepends node_modules/.bin to PATH for normal commits).

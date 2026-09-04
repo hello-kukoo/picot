@@ -155,7 +155,7 @@ jobs:
           - [ ] Run \`bun run fetch:pi\` locally and confirm it downloads successfully
           - [ ] Run \`./src-tauri/resources/pi/pi --version\` shows \`${NEW}\`
           - [ ] Smoke test: \`bun run dev\` opens Pi Studio, sessions work
-          - [ ] If breaking changes in release notes, update embedded-server or frontend accordingly
+          - [ ] If breaking changes in release notes, update the bridge extensions or frontend accordingly
 
           ---
           *This PR was opened automatically by the [check pi updates](${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}) workflow.*

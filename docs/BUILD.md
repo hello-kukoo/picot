@@ -6,7 +6,7 @@ This guide covers **local-only** builds for internal QA. There are two
 independent build paths in this project — keep them separate:
 
 | Path | Purpose | Triggers | Output |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **Local** (this doc) | Internal QA, fast iteration, test before release | `./scripts/build.sh <platform>` on your macOS box | DMG / exe+zip, ad-hoc signed |
 | **Public release** | Signed installer, auto-updater artifacts, GitHub release | Push a `v*` tag → `scripts/release.sh` → GitHub Actions | Signed installers + `latest.json` |
 
@@ -78,6 +78,7 @@ Cross-compile a bare `.exe` + zip from a macOS host using MinGW:
 compiled `extensions/`. Unzip and run `Picot.exe` directly.
 
 **Limitations** (deliberate — matches palangent's local-build tradeoff):
+
 - **No MSI installer** — MSI requires building on actual Windows
   (NSIS/MSI bundlers depend on Windows host tools). Testers get a bare
   `.exe` + zip; they unzip and run.
@@ -91,7 +92,7 @@ compiled `extensions/`. Unzip and run `Picot.exe` directly.
 1. Verifies `bun` / `cargo` / `rustup` (and `x86_64-w64-mingw32-gcc` for Windows)
 2. `bun install --frozen-lockfile`
 3. `bun run fetch:pi` (downloads/verifies embedded `pi` binary)
-4. `bun run build:extensions` (compiles `extensions/embedded-server.ts`)
+4. `bun run build:extensions` (compiles the bridge extensions to `dist/*.mjs`)
 5. `rustup target add <target>` (idempotent)
 6. `tauri build` with the right target / bundler flags
 7. Windows: `zip` the release-dir contents
@@ -135,6 +136,7 @@ brew install mingw-w64
 `scripts/build.sh` adds `node_modules/.bin` to `PATH` automatically. If
 you invoke `tauri` directly in a fresh shell, either use `bunx tauri …`
 or run from `bun run` (which adds `.bin` to PATH automatically).
+
 ### DMG is empty / `.app` not found
 
 Tauri's macOS bundler cleans `bundle/macos/` after creating the DMG.
