@@ -67,6 +67,13 @@ class FakeWebSocket extends EventTarget {
   // Test toggle: when true the fake host never answers snapshot requests,
   // simulating a runtime that is still spawning.
   static suppressSnapshot = false;
+  // Test fixture: disk transcript served for read_session_messages requests.
+  static diskMessages = null;
+  // Test fixture: tree served for read_session_tree requests.
+  static treeData = null;
+  // Test fixture: payload for runtime get_entries requests. "fail" forces
+  // the fallback to the disk data plane.
+  static getEntriesData = null;
 
   constructor() {
     super();
@@ -136,7 +143,67 @@ class FakeWebSocket extends EventTarget {
       }
       return;
     }
+    if (frame.type === "runtime_request" && frame.command?.type === "prompt") {
+      const msg = String(frame.command?.message || "");
+      if (msg.includes("/picot-config")) {
+        this.reply({
+          type: "runtime_response",
+          requestId: frame.requestId,
+          ok: true,
+          response: { success: true },
+        });
+        // The bridge answers asynchronously via a __picotConfig notify event
+        // (extension ctx.ui.notify), consumed by the config gateway.
+        const parsed = JSON.parse(msg.replace("/picot-config ", ""));
+        queueMicrotask(() => {
+          this.onmessage?.({
+            data: JSON.stringify({
+              type: "runtime_event",
+              target: BOOTSTRAP_TARGET,
+              sequence: 9000 + this.sent.length,
+              event: {
+                type: "extension_ui_request",
+                method: "notify",
+                message: JSON.stringify({ __picotConfig: parsed.id, ok: true, data: {} }),
+              },
+            }),
+          });
+        });
+        return;
+      }
+    }
+    if (frame.type === "runtime_request" && frame.command?.type === "get_entries") {
+      const fail = FakeWebSocket.getEntriesData === "fail";
+      this.reply({
+        type: "runtime_response",
+        requestId: frame.requestId,
+        ok: true,
+        response: {
+          success: !fail,
+          data: fail ? null : (FakeWebSocket.getEntriesData ?? { entries: [], leafId: null }),
+        },
+      });
+      return;
+    }
     if (frame.type === "data_request") {
+      if (frame.operation === "read_session_messages" && FakeWebSocket.diskMessages) {
+        this.reply({
+          type: "data_response",
+          requestId: frame.requestId,
+          ok: true,
+          messages: FakeWebSocket.diskMessages,
+        });
+        return;
+      }
+      if (frame.operation === "read_session_tree" && FakeWebSocket.treeData) {
+        this.reply({
+          type: "data_response",
+          requestId: frame.requestId,
+          ok: true,
+          tree: FakeWebSocket.treeData,
+        });
+        return;
+      }
       if (frame.operation === "workspace_info") {
         this.reply({
           type: "data_response",
@@ -259,6 +326,442 @@ test("canonical page renders history from the runtime snapshot", async () => {
       (frame) => frame.workspaceId === undefined || frame.workspaceId === "ws-uuid-1",
     ),
   ).toBe(true);
+});
+
+test("a foreground snapshot re-fetches the authoritative tree instead of poisoning it", async () => {
+  await import("./app.js?info-tree-sync");
+  const socket = FakeWebSocket.instances.at(-1);
+
+  // Open the Info panel: the first snapshot arrived while the panel was
+  // hidden, so opening immediately fetches pi's live tree.
+  document.getElementById("file-sidebar-info-tab").click();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const treeRequests = () =>
+    socket.sent.filter(
+      (frame) => frame.type === "data_request" && frame.operation === "read_session_tree",
+    );
+  const afterOpen = treeRequests().length;
+  expect(afterOpen).toBeGreaterThanOrEqual(1);
+
+  // A second foreground snapshot arrives while the panel is open. Snapshot
+  // messages carry no entry ids (verified against pi 0.84.2: get_messages
+  // returns {role, content, timestamp}), so absorbing them as a clean sync
+  // would poison the cache into an unbuildable tree.
+  socket.onmessage({
+    data: JSON.stringify({
+      type: "runtime_snapshot",
+      target: BOOTSTRAP_TARGET,
+      sequence: 2,
+      state: {
+        pi: {},
+        messages: [{ role: "user", content: [{ type: "text", text: "x" }] }],
+        stats: {},
+      },
+    }),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  // The tree is re-fetched from the session FILE via the data plane, never
+  // absorbed from the runtime snapshot's id-less messages.
+  expect(treeRequests().length).toBe(afterOpen + 1);
+});
+
+test("disk upgrade re-renders the transcript with entry-id anchors", async () => {
+  // Disk holds one MORE message than the snapshot: the transcript must
+  // upgrade to the disk render — the upgrade carries stable entry ids,
+  // which is what makes Info-panel click-to-locate (and fork/edit) work.
+  FakeWebSocket.diskMessages = [
+    { role: "user", entryId: "d1", content: [{ type: "text", text: "disk question" }] },
+    {
+      role: "assistant",
+      entryId: "d2",
+      content: [{ type: "text", text: "disk answer" }],
+    },
+    {
+      role: "assistant",
+      entryId: "d3",
+      content: [{ type: "text", text: "disk final word" }],
+    },
+  ];
+  try {
+    await import("./app.js?disk-upgrade");
+    const socket = FakeWebSocket.instances.at(-1);
+
+    // The snapshot rendered its (id-less in production) messages; the app
+    // then asks the host data plane for the id-bearing disk transcript.
+    const upgradeRequest = await vi.waitFor(() => {
+      const frame = socket.sent.find(
+        (frame) => frame.type === "data_request" && frame.operation === "read_session_messages",
+      );
+      expect(frame).toBeTruthy();
+      return frame;
+    });
+    expect(upgradeRequest.workspaceId).toBe("ws-uuid-1");
+    expect(upgradeRequest.sessionId).toBe("session-a");
+
+    await vi.waitFor(() => {
+      expect(document.getElementById("messages").textContent).toContain("disk final word");
+    });
+    // The upgrade REPLACES the snapshot render (caller-owned clear), never
+    // appends after it: snapshot-only content must be gone, or the tail's
+    // last messages appear duplicated at the top of the transcript.
+    expect(document.getElementById("messages").textContent).not.toContain("hello from snapshot");
+    const anchors = document.querySelectorAll("#messages [data-entry-id]");
+    // d2 and d3 are consecutive assistants in one turn: the renderer keeps
+    // only the final answer (d3) as a row — user d1 + final d3 are anchored.
+    const anchorIds = [...anchors].map((el) => el.dataset.entryId);
+    expect(anchorIds).toContain("d1");
+    expect(anchorIds).toContain("d3");
+    expect(anchorIds).not.toContain("d2");
+  } finally {
+    FakeWebSocket.diskMessages = null;
+  }
+});
+
+test("a disk read that merely TIES the snapshot still upgrades for entry-id anchors", async () => {
+  // A settled session's file count EQUALS the snapshot count; upgrading only
+  // on a strictly longer disk read would leave the common case anchorless
+  // and Info-panel click-to-locate dead. On a tie the id-bearing disk render
+  // wins (upstream renders disk first for exactly this reason).
+  FakeWebSocket.diskMessages = [
+    { role: "user", entryId: "t1", content: [{ type: "text", text: "tie disk question" }] },
+    {
+      role: "assistant",
+      entryId: "t2",
+      content: [{ type: "text", text: "tie disk answer" }],
+    },
+  ];
+  try {
+    await import("./app.js?disk-tie");
+    await vi.waitFor(() => {
+      expect(document.getElementById("messages").textContent).toContain("tie disk answer");
+    });
+    const anchors = document.querySelectorAll("#messages [data-entry-id]");
+    expect([...anchors].some((el) => el.dataset.entryId === "t1")).toBe(true);
+  } finally {
+    FakeWebSocket.diskMessages = null;
+  }
+});
+
+test("message_end refreshes the open Info panel from pi's live tree", async () => {
+  // Upstream contract: a persisted user or final assistant message triggers a
+  // full tree refresh of the OPEN panel from pi's live get_entries snapshot —
+  // no incremental append machinery, no staleness windows.
+  await import("./app.js?boundary-refresh");
+  const socket = FakeWebSocket.instances.at(-1);
+  document.getElementById("file-sidebar-info-tab").click();
+  const treeRequests = () =>
+    socket.sent.filter(
+      (frame) => frame.type === "data_request" && frame.operation === "read_session_tree",
+    );
+  await vi.waitFor(() => expect(treeRequests().length).toBeGreaterThanOrEqual(1));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  socket.sent.length = 0;
+  expect(treeRequests().length).toBe(0);
+
+  socket.onmessage({
+    data: JSON.stringify({
+      type: "runtime_event",
+      target: BOOTSTRAP_TARGET,
+      sequence: 9,
+      event: {
+        type: "message_end",
+        entryId: "e2",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "turn answer" }],
+          stopReason: "stop",
+        },
+      },
+    }),
+  });
+  await vi.waitFor(() => expect(treeRequests().length).toBe(1));
+});
+
+test("pi's live tree is the panel's primary source", async () => {
+  // Upstream contract: prefer pi's live get_entries — the full tree WITH the
+  // authoritative active leaf (Resume/Edit flip the panel immediately). The
+  // session-file read is not consulted while the runtime serves.
+  FakeWebSocket.getEntriesData = {
+    entries: [
+      {
+        type: "message",
+        id: "e1",
+        parentId: null,
+        message: { role: "user", content: [{ type: "text", text: "live seed question" }] },
+      },
+    ],
+    leafId: "e1",
+  };
+  try {
+    await import("./app.js?tree-primary");
+    document.getElementById("file-sidebar-info-tab").click();
+    await vi.waitFor(() => {
+      expect(document.getElementById("info-panel")?.textContent).toContain("live seed question");
+    });
+    const socket = FakeWebSocket.instances.at(-1);
+    expect(
+      socket.sent.some(
+        (frame) => frame.type === "data_request" && frame.operation === "read_session_tree",
+      ),
+    ).toBe(false);
+  } finally {
+    FakeWebSocket.getEntriesData = null;
+    FakeWebSocket.treeData = null;
+  }
+});
+
+test("a runtime with no live tree falls back to the session file", async () => {
+  // Runtime get_entries fails (or returns empty): the host data plane reads
+  // the session file and serves the tree.
+  FakeWebSocket.getEntriesData = "fail";
+  FakeWebSocket.treeData = {
+    entries: [
+      {
+        type: "message",
+        id: "f1",
+        parentId: null,
+        message: { role: "user", content: [{ type: "text", text: "file only question" }] },
+      },
+    ],
+    leafId: "f1",
+  };
+  try {
+    await import("./app.js?tree-file-fallback");
+    document.getElementById("file-sidebar-info-tab").click();
+    await vi.waitFor(() => {
+      expect(document.getElementById("info-panel")?.textContent).toContain("file only question");
+    });
+    const socket = FakeWebSocket.instances.at(-1);
+    expect(
+      socket.sent.some(
+        (frame) => frame.type === "data_request" && frame.operation === "read_session_tree",
+      ),
+    ).toBe(true);
+  } finally {
+    FakeWebSocket.getEntriesData = null;
+    FakeWebSocket.treeData = null;
+  }
+});
+
+test("disk history is fetched once at startup, not re-fetched per sync", async () => {
+  FakeWebSocket.diskMessages = [
+    { role: "user", entryId: "f1", content: [{ type: "text", text: "fetch once question" }] },
+    {
+      role: "assistant",
+      entryId: "f2",
+      content: [{ type: "text", text: "fetch once answer" }],
+    },
+  ];
+  try {
+    await import("./app.js?disk-once");
+    const socket = FakeWebSocket.instances.at(-1);
+    const diskRequests = () =>
+      socket.sent.filter(
+        (frame) => frame.type === "data_request" && frame.operation === "read_session_messages",
+      );
+    await vi.waitFor(() => expect(diskRequests().length).toBe(1));
+    // A later mirror sync for the same session must NOT re-fetch the disk
+    // history: upstream captures it once per switch and chooses between the
+    // two sources at render time.
+    socket.onmessage({
+      data: JSON.stringify({
+        type: "runtime_snapshot",
+        target: BOOTSTRAP_TARGET,
+        sequence: 3,
+        state: {
+          pi: {},
+          messages: [{ role: "user", content: [{ type: "text", text: "y" }] }],
+          stats: {},
+        },
+      }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(diskRequests().length).toBe(1);
+  } finally {
+    FakeWebSocket.diskMessages = null;
+  }
+});
+
+test("tree navigation (edit/resume) goes through the config bridge and re-anchors the transcript", async () => {
+  // Native migration overwrote the Resume/Edit path with a native RPC pi
+  // does not have ("Unknown command: navigate_tree"). Upstream calls the
+  // /picot-config bridge. After navigating, pi's active branch is the
+  // authority but the file's last-message tip chain still points at the OLD
+  // branch — the transcript must re-anchor from pi's live entries (flat,
+  // id-bearing, pi-owned leafId), not the stale disk chain.
+  FakeWebSocket.getEntriesData = {
+    entries: [
+      {
+        type: "message",
+        id: "r1",
+        parentId: null,
+        message: { role: "user", content: [{ type: "text", text: "resumed branch question" }] },
+      },
+      {
+        type: "message",
+        id: "r2",
+        parentId: "r1",
+        message: { role: "assistant", content: [{ type: "text", text: "resumed branch answer" }] },
+      },
+      {
+        type: "message",
+        id: "old1",
+        parentId: "r1",
+        message: { role: "assistant", content: [{ type: "text", text: "old branch tail" }] },
+      },
+    ],
+    leafId: "r2",
+  };
+  try {
+    await import("./app.js?navigate-bridge");
+    const socket = FakeWebSocket.instances.at(-1);
+    const nativeNav = () =>
+      socket.sent.filter(
+        (frame) => frame.type === "runtime_request" && frame.command?.type === "navigate_tree",
+      );
+    const bridgeNav = () =>
+      socket.sent.filter(
+        (frame) =>
+          frame.type === "runtime_request" &&
+          frame.command?.type === "prompt" &&
+          String(frame.command?.message || "").includes('"op":"navigate_tree"'),
+      );
+    expect(bridgeNav()).toHaveLength(0);
+
+    document
+      .getElementById("messages")
+      .dispatchEvent(
+        new CustomEvent("messageedit", { detail: { entryId: "r1", text: "edit me" } }),
+      );
+
+    await vi.waitFor(() => expect(bridgeNav()).toHaveLength(1));
+    expect(nativeNav()).toHaveLength(0);
+    // Transcript re-anchored from pi's live entries: the resumed branch
+    // renders with anchors; the old-branch sibling does not.
+    await vi.waitFor(() => {
+      expect(document.getElementById("messages").textContent).toContain("resumed branch answer");
+    });
+    expect(document.getElementById("messages").textContent).not.toContain("old branch tail");
+    const anchors = document.querySelectorAll("#messages [data-entry-id]");
+    expect([...anchors].some((el) => el.dataset.entryId === "r1")).toBe(true);
+  } finally {
+    FakeWebSocket.getEntriesData = null;
+  }
+});
+
+test("a compacted session's summary-inflated snapshot never displaces the anchored disk render", async () => {
+  // pi's get_messages synthesizes compactionSummary messages, so a compacted
+  // session's snapshot can count MORE entries than the file's message chain
+  // while containing less content. The count heuristic would then pick the
+  // id-less snapshot on every sync and wipe the transcript anchors. The
+  // session file is the history source of truth (Dr. Lin's contract): matching
+  // disk history wins unconditionally.
+  FakeWebSocket.diskMessages = [
+    { role: "user", entryId: "c1", content: [{ type: "text", text: "compacted turn question" }] },
+    {
+      role: "assistant",
+      entryId: "c2",
+      content: [{ type: "text", text: "compacted turn answer" }],
+    },
+  ];
+  try {
+    await import("./app.js?compaction-count");
+    const socket = FakeWebSocket.instances.at(-1);
+    // A post-disk mirror sync whose snapshot is "longer" (summary inflation):
+    // 3 entries vs the disk chain's 2.
+    await vi.waitFor(() =>
+      expect(
+        socket.sent.some(
+          (f) => f.type === "data_request" && f.operation === "read_session_messages",
+        ),
+      ).toBe(true),
+    );
+    await vi.waitFor(() => {
+      expect(document.getElementById("messages").textContent).toContain("compacted turn answer");
+    });
+    socket.onmessage({
+      data: JSON.stringify({
+        type: "runtime_snapshot",
+        target: BOOTSTRAP_TARGET,
+        sequence: 4,
+        state: {
+          pi: { sessionFile: "/pi/sessions/session-a.jsonl" },
+          messages: [
+            { role: "compactionSummary", content: [{ type: "text", text: "summary blob" }] },
+            { role: "user", content: [{ type: "text", text: "compacted turn question" }] },
+            { role: "assistant", content: [{ type: "text", text: "compacted turn answer" }] },
+          ],
+          stats: {},
+        },
+      }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    // The disk render survives: anchors intact, snapshot-only content absent.
+    expect(document.getElementById("messages").textContent).toContain("compacted turn answer");
+    expect(document.getElementById("messages").textContent).not.toContain("summary blob");
+    expect(
+      [...document.querySelectorAll("#messages [data-entry-id]")].some(
+        (el) => el.dataset.entryId === "c1",
+      ),
+    ).toBe(true);
+  } finally {
+    FakeWebSocket.diskMessages = null;
+  }
+});
+
+test("tree navigation flips the Info panel's active branch to pi's live leaf", async () => {
+  // After a Resume, pi's active leaf is the resumed branch — but the session
+  // file still ends with the abandoned branch's messages, so read_session_tree's
+  // file-tip leaf keeps pointing at the OLD branch. The panel must follow pi's
+  // live leaf (get_entries), not the file tip.
+  const u1 = {
+    type: "message",
+    id: "u1",
+    parentId: null,
+    message: { role: "user", content: [{ type: "text", text: "root question" }] },
+  };
+  const b1 = {
+    type: "message",
+    id: "b1",
+    parentId: "u1",
+    message: { role: "assistant", content: [{ type: "text", text: "resumed branch answer" }] },
+  };
+  const a1 = {
+    type: "message",
+    id: "a1",
+    parentId: "u1",
+    message: { role: "assistant", content: [{ type: "text", text: "abandoned branch answer" }] },
+  };
+  // File order: the abandoned branch's message is LAST (appended later), so
+  // the file-tip leaf is a1.
+  FakeWebSocket.treeData = { entries: [u1, b1, a1], leafId: "a1" };
+  // Before navigation pi's live leaf agrees with the file tip; after the
+  // bridge navigate it becomes b1.
+  FakeWebSocket.getEntriesData = { entries: [u1, b1, a1], leafId: "a1" };
+  try {
+    await import("./app.js?panel-leaf-flip");
+    document.getElementById("file-sidebar-info-tab").click();
+    await vi.waitFor(() => {
+      const current = document.querySelector("#info-panel .info-panel-row.current-leaf");
+      expect(current?.dataset.entryId).toBe("a1"); // live leaf before navigation
+    });
+
+    // pi navigated to b1: its live leaf flips.
+    FakeWebSocket.getEntriesData = { entries: [u1, b1, a1], leafId: "b1" };
+    document
+      .getElementById("messages")
+      .dispatchEvent(new CustomEvent("messageedit", { detail: { entryId: "u1", text: "edit" } }));
+
+    await vi.waitFor(() => {
+      const current = document.querySelector("#info-panel .info-panel-row.current-leaf");
+      expect(current?.dataset.entryId).toBe("b1"); // pi's live leaf after navigation
+    });
+    const current = document.querySelector("#info-panel .info-panel-row.current-leaf");
+    expect(current?.dataset.entryId).not.toBe("a1");
+  } finally {
+    FakeWebSocket.treeData = null;
+    FakeWebSocket.getEntriesData = null;
+  }
 });
 
 test("/picot-config reads wait for a foreground snapshot before dispatching", async () => {

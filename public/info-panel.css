@@ -171,6 +171,14 @@
   background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
+/* A live selection suppresses the session-position marker's background —
+   two simultaneous accent tints read as two selections. The selected
+   current-leaf row keeps its (stronger) selected highlight. Deliberate
+   deviation from upstream's identical double highlight (Dr. Lin's UX call). */
+.info-panel-tree-scroll.has-selection .info-panel-row.current-leaf:not(.selected) {
+  background: transparent;
+}
+
 .info-panel-row.selected {
   background: color-mix(in srgb, var(--accent) 24%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 64%, transparent);

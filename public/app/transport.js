@@ -69,14 +69,7 @@ export class WsTransport {
     return this.wsClient.sendRuntime({ type: "fork", entryId });
   }
 
-  navigateTree(entryId, { summarize = false } = {}) {
-    return this.wsClient.sendRuntime({
-      type: "navigate_tree",
-      entryId,
-      summarize,
-    });
-  }
-
+  // ── Native-only ops (need an OS host; reject when capabilities.native=false) ─
   // ── Versions / packages ────────────────────────────────────────────────────
 
   getPiVersion() {

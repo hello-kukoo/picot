@@ -77,32 +77,6 @@ describe("WsTransport", () => {
     expect(ws.sendRuntime).toHaveBeenCalledWith({ type: "fork", entryId: "entry-123" });
   });
 
-  test("navigateTree sends a canonical runtime request without a port", async () => {
-    const ws = fakeWsClient();
-    const transport = new WsTransport(ws, {});
-
-    await transport.navigateTree("leaf-9", { summarize: false });
-
-    expect(ws.sendRuntime).toHaveBeenCalledWith({
-      type: "navigate_tree",
-      entryId: "leaf-9",
-      summarize: false,
-    });
-  });
-
-  test("navigateTree defaults summarize to false", async () => {
-    const ws = fakeWsClient();
-    const transport = new WsTransport(ws, {});
-
-    await transport.navigateTree("leaf-9");
-
-    expect(ws.sendRuntime).toHaveBeenCalledWith({
-      type: "navigate_tree",
-      entryId: "leaf-9",
-      summarize: false,
-    });
-  });
-
   test("session UI profile methods use native host control commands", async () => {
     const ws = fakeWsClient();
     const transport = new WsTransport(ws, {});

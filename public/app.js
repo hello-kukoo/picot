@@ -557,6 +557,12 @@ setupLanQr({
 // the socket. Browser URL state never supplies instance or owner identity.
 if (wsClient.canonicalRoute) {
   await wsClient.loadCanonicalTarget();
+  // Upstream initial load: fetch the disk history in parallel with the
+  // runtime — the file read does not wait for Pi to start.
+  const canonicalTarget = wsClient.getRuntimeTarget();
+  if (canonicalTarget?.workspaceId && canonicalTarget?.sessionId) {
+    void fetchDiskHistory(canonicalTarget);
+  }
 }
 // `?mobile=1` is a browser client even if it reaches the desktop broker, so it
 // must not use native workspace/window controls.
@@ -813,7 +819,9 @@ let pendingPostSyncComposer = null;
 // Set when a live Info-tree append failed (no cache / unknown parent /
 // recalibration due); agent_end then falls back to a full get_session_tree
 // sync instead of one per turn unconditionally.
-let infoTreeDirty = false;
+// Sequence token for in-flight tree refreshes: stale responses are dropped
+// (upstream's infoTreeSeq pattern).
+let infoTreeSeq = 0;
 let lastRenderedWelcomeWorkspacePath = null;
 let foregroundWorkspacePath = "";
 function logSessionRoute(label, details = {}) {
@@ -966,6 +974,9 @@ const gitPanel = new GitPanel({
   container: gitPanelElement,
   fileList,
   client: gitClient,
+  // The toolbar branch pill renders from the latest status snapshot; the
+  // panel's onStatus hook fires on every setSnapshot.
+  onStatus: () => refreshGitBranch(),
   openDiff: (entry) => filePreviewPanel.openDiff?.(entry),
   onDiffRequest: (requestId, descriptor) => {
     latestGitDiffRequest = requestId;
@@ -1385,6 +1396,9 @@ wsClient.addEventListener("ownerBootstrap", async (event) => {
   if (typeof event.detail?.workspaceGeneration === "number") {
     terminalClient.setWorkspaceGeneration(event.detail.workspaceGeneration);
     gitClient.setWorkspaceGeneration(event.detail.workspaceGeneration);
+    // The generation is now known: (re)probe status unconditionally. Covers
+    // both a panel-open click whose probe was swallowed pre-bootstrap and a
+    // mirror sync that outran owner_bootstrap on a hidden panel.
     // Clear stale diff/AI/commit state so late responses from the previous
     // workspace cannot leak into the new one.
     latestGitDiffRequest = null;
@@ -1397,7 +1411,7 @@ wsClient.addEventListener("ownerBootstrap", async (event) => {
     gitPanel.historyPanel?.clearSession();
     gitPanel.notGitRepo = false;
     gitPanel.gitUnavailable = false;
-    if (!gitPanelElement.classList.contains("hidden")) void gitPanel.refresh();
+    void gitPanel.refresh();
     if (terminalPanel.toggleEl) terminalClient.requestList();
   }
   try {
@@ -1508,6 +1522,9 @@ wsClient.addEventListener("gitCommandFailed", (event) => {
   // Surface the real reason instead — but only for the current status probe,
   // never for stale or concurrent non-status failures.
   if (gitPanel.isStatusFailure(event.detail?.requestId)) {
+    // Either failure proves the workspace has no readable branch: the stale
+    // pill from a previous workspace must not survive the probe.
+    updateGitBranchIndicator("");
     const error = typeof event.detail?.error === "string" ? event.detail.error : "";
     if (error === "git_not_found") {
       gitPanel.setGitUnavailable(true);
@@ -1583,7 +1600,7 @@ fileSidebarRefresh?.addEventListener("click", () => void fileBrowser.refresh());
 fileSidebarToggleHidden?.addEventListener("click", () => {
   void fileBrowser.setShowHidden(!fileBrowser.showHidden);
 });
-infoPanelRefresh?.addEventListener("click", () => void refreshInfoTree({ force: true }));
+infoPanelRefresh?.addEventListener("click", () => void refreshInfoTree());
 gitPanelRefresh?.addEventListener("click", () => void gitPanel.refresh());
 
 fileSidebarToggle.addEventListener("click", () => {
@@ -1856,35 +1873,114 @@ function wsRequest(command, timeoutMs = 15000) {
   return wsClient.sendRuntime(command, { timeoutMs });
 }
 
-/** Authoritative light tree refresh (entries + leafId only, no chat re-render). */
-async function refreshInfoTree({ force = false } = {}) {
+/** Authoritative light tree refresh (entries + leafId only, no chat re-render).
+ * Upstream contract: prefer pi's live get_entries — the full tree WITH pi's
+ * authoritative active leaf, so Resume/Edit flip the panel's active branch
+ * immediately (the file's tip-derived leaf still points at the abandoned
+ * branch until a new message lands). The host data plane reading the session
+ * file is the fallback when the runtime cannot serve. Both sources return
+ * the complete tree (verified against pi 0.84.2: get_entries ≈ full file). */
+async function refreshInfoTree() {
   if (!infoPanel || !infoPanelEl || infoPanelEl.classList.contains("hidden")) return;
   if (wsClient.ws?.readyState !== 1) return;
-  if (!force && !infoTreeDirty && infoPanel.entries) {
-    // Cache is clean (hidden-tab mirror_sync skipped the rebuild; live
-    // appends kept it current): re-render locally, no round trip. A local
-    // re-render is not a sync — the staleness clock keeps running.
-    infoPanel.rerenderTree();
-    return;
-  }
-  // Snapshot the cache generation: an entry appended while this request is
-  // in flight was persisted after the server read the tree — applying the
-  // response would drop that row and chain the next append off a stale
-  // leaf. Detect the race, discard the stale response, stay dirty.
-  const generation = infoPanel.generation;
+  const target = wsClient.getRuntimeTarget();
+  if (!target?.workspaceId || !target?.sessionId) return;
+  const seq = ++infoTreeSeq;
   try {
-    const data = await wsRequest({ type: "get_tree" });
-    if (infoPanel.generation !== generation) {
-      infoTreeDirty = true;
+    const data = await wsRequest({ type: "get_entries" });
+    if (seq !== infoTreeSeq) return;
+    // An empty result is not a tree (fresh spawn, wrong-instance routing):
+    // fall through to the file instead of wiping the panel.
+    if (Array.isArray(data?.entries) && data.entries.length > 0) {
+      console.info("[InfoPanel] tree source: runtime", { entries: data.entries.length });
+      sessionDebug.tree = {
+        source: "runtime",
+        entries: data.entries.length,
+        session: target.sessionId,
+        at: Date.now(),
+      };
+      infoPanel.updateTree({ entries: data.entries, leafId: data.leafId ?? null });
       return;
     }
-    // Pi's get_tree returns { tree, leafId }.
-    infoPanel.updateTree({ entries: data?.tree ?? data?.entries, leafId: data?.leafId });
-    infoTreeDirty = false;
-  } catch (err) {
-    // Non-fatal: the tree retries on the next session_tree event / sync.
-    console.warn("[InfoPanel] tree refresh failed:", err);
+    throw new Error("Runtime get_entries returned no entries");
+  } catch (runtimeError) {
+    try {
+      const response = await wsClient.sendData("read_session_tree", {
+        workspaceId: target.workspaceId,
+        sessionId: target.sessionId,
+      });
+      if (seq !== infoTreeSeq) return;
+      const entries = response?.tree?.entries;
+      if (Array.isArray(entries) && entries.length > 0) {
+        console.info("[InfoPanel] tree source: session-file", { entries: entries.length });
+        sessionDebug.tree = {
+          source: "session-file",
+          entries: entries.length,
+          session: target.sessionId,
+          at: Date.now(),
+        };
+        infoPanel.updateTree({
+          entries,
+          leafId: response?.tree?.leafId ?? null,
+        });
+        return;
+      }
+      throw new Error("read_session_tree returned no entries");
+    } catch (fileError) {
+      // A session with neither a live tree nor a file (brand-new chat) has
+      // no tree anywhere: an empty panel, not a warning per sync.
+      if (
+        String(runtimeError?.message || runtimeError).includes("not found") ||
+        String(fileError?.message || fileError).includes("not found")
+      ) {
+        infoPanel.updateTree({ entries: [], leafId: null });
+        return;
+      }
+      console.warn("[InfoPanel] tree refresh failed:", runtimeError, fileError);
+    }
   }
+}
+
+/** After an explicit tree navigation (Resume / Edit), pi's active branch is
+ * the authority — but the session file's last-message tip chain still points
+ * at the OLD branch until a new message lands, so the disk fallback would
+ * resurrect it. Re-anchor from pi's live flat entries: walk the new leaf's
+ * ancestor path, rebuild the transcript source WITH entry ids (locate keeps
+ * working), and let the snapshot render's tie-break keep this render. */
+async function reanchorAfterTreeNavigation() {
+  const target = wsClient.getRuntimeTarget();
+  if (!target?.workspaceId || !target?.sessionId) return;
+  diskHistory = null;
+  try {
+    const live = await wsRequest({ type: "get_entries" });
+    const entries = Array.isArray(live?.entries) ? live.entries : [];
+    const leafId = typeof live?.leafId === "string" ? live.leafId : null;
+    if (entries.length > 0 && leafId) {
+      const byId = new Map(entries.filter((e) => typeof e?.id === "string").map((e) => [e.id, e]));
+      const activeIds = new Set();
+      let cursor = byId.get(leafId);
+      while (cursor && !activeIds.has(cursor.id)) {
+        activeIds.add(cursor.id);
+        cursor = typeof cursor.parentId === "string" ? byId.get(cursor.parentId) : undefined;
+      }
+      const pathEntries = entries.filter((e) => activeIds.has(e?.id));
+      diskHistory = {
+        sessionId: target.sessionId,
+        messages: pathEntries
+          .filter((e) => e.type === "message" && e.message)
+          .map((e) => ({ ...e.message, entryId: e.id })),
+      };
+      renderTranscriptEntries(pathEntries, { leafId });
+      // The panel's active path must follow pi's live leaf: read_session_tree
+      // derives its leaf from the file tip, which still points at the
+      // abandoned branch until a new message lands on the resumed one.
+      infoPanel?.updateTree({ entries, leafId });
+    }
+  } catch (_error) {
+    // Live entries unavailable (e.g. temporary runtime): the plain snapshot
+    // below still renders the correct branch, just without anchors.
+  }
+  wsClient.requestSnapshot();
 }
 
 /** Resume an inactive branch: explicit Pi-native leaf switch, never a scroll. */
@@ -1898,15 +1994,18 @@ async function handleResumeBranch(entryId) {
     return;
   }
   try {
-    await transport.navigateTree(entryId);
-    // Pi emits session_tree; the event handler re-syncs chat + tree. Per the
-    // design, resuming clears the composer (the old branch's draft belongs
-    // to the old branch). The clear is programmatic (no input event), so
-    // persist it or the pending session_tree snapshot's draft restore would
+    // Upstream contract: tree navigation rides the /picot-config bridge
+    // (extension → pi ctx.navigateTree). A native `navigate_tree` RPC does
+    // not exist in pi 0.84.2.
+    await bridgeData("navigate_tree", { targetId: entryId, summarize: false });
+    // Per the design, resuming clears the composer (the old branch's draft
+    // belongs to the old branch). The clear is programmatic (no input
+    // event), so persist it or the next snapshot's draft restore would
     // resurrect the stale draft.
     messageInput.value = "";
     messageInput.style.height = "auto";
     persistComposerDraft();
+    await reanchorAfterTreeNavigation();
   } catch (err) {
     messageRenderer.renderError(t("errors.treeNavigateFailed", { error: err }));
   }
@@ -2293,20 +2392,20 @@ messagesContainer.addEventListener("messageedit", async (e) => {
   const btn = e.target.closest(".message-edit-btn");
   if (btn) btn.disabled = true;
   try {
-    // Dispatches /picot-navigate-tree → pi ctx.navigateTree(userEntry):
+    // Dispatches /picot-config navigate_tree → pi ctx.navigateTree(userEntry):
     // leaf = the user entry's parent, editorText = the original prompt. The
-    // resulting session_tree event re-syncs chat + tree; the old branch's
-    // descendants become the Info tree's inactive branch.
-    await transport.navigateTree(entryId);
+    // old branch's descendants become the Info tree's inactive branch.
+    await bridgeData("navigate_tree", { targetId: entryId, summarize: false });
     if (typeof text === "string") {
       messageInput.value = text;
       messageInput.style.height = "auto";
       messageInput.focus();
       // Programmatic .value assignment fires no input event, so persist the
-      // prefill now: the pending session_tree snapshot's restoreSessionUiState
-      // reloads this session's saved draft and would otherwise wipe it.
+      // prefill now: the pending snapshot's restoreSessionUiState reloads
+      // this session's saved draft and would otherwise wipe it.
       persistComposerDraft();
     }
+    await reanchorAfterTreeNavigation();
   } catch (err) {
     messageRenderer.renderError(t("errors.treeNavigateFailed", { error: err }));
     if (btn) btn.disabled = false;
@@ -2472,10 +2571,6 @@ function handleRPCEvent(event) {
       if (pendingNewSessionRefresh) {
         scheduleNewSessionSidebarRefresh(event);
       }
-      // Turn boundary: live appends already grew the tree incrementally; only
-      // a full get_session_tree sync runs when an append failed (dirty) —
-      // skips the ~MB-per-turn payload on long sessions.
-      void refreshInfoTree();
       break;
     case "agent_settled":
       handleAgentSettled();
@@ -2929,24 +3024,11 @@ function handleMessageEnd(message, eventSessionFile = null, entryId = null) {
     const untagged = messagesContainer.querySelector(".message.user:not([data-entry-id])");
     if (untagged) untagged.dataset.entryId = entryId;
   }
-  // Live-turn incremental Info-tree update: rebuild the entry from the
-  // enriched entryId and append into the panel's cached snapshot. toolResult
-  // entries append too — they stay invisible but keep the parent chain intact
-  // for the next assistant entry. Append failures (no cache, unknown parent,
-  // recalibration due) set the dirty flag; agent_end's full refresh covers
-  // them.
-  if (
-    entryId &&
-    (message?.role === "user" || message?.role === "assistant" || message?.role === "toolResult")
-  ) {
-    const appended = infoPanel?.appendLiveEntry({
-      type: "message",
-      id: entryId,
-      parentId: infoPanel?.leafId,
-      timestamp: new Date().toISOString(),
-      message,
-    });
-    if (appended === false) infoTreeDirty = true;
+  // Live-turn Info-tree update (upstream contract): a persisted user or final
+  // assistant message refreshes the OPEN panel from pi's live tree;
+  // toolResult activity does not trigger a refresh.
+  if (message?.role === "user" || message?.role === "assistant") {
+    void refreshInfoTree();
   }
   if (message?.role === "assistant" && message?.stopReason === "error") {
     const provider = message?.provider ? String(message.provider) : "unknown";
@@ -4605,6 +4687,10 @@ async function handleSessionSelectImpl(session, project) {
       updateMirrorInputState();
       wsClient.subscribeRuntimeTarget(target);
       wsClient.requestRuntimeSnapshot(target);
+      // Upstream switch hydration: fetch the session file in parallel with
+      // the snapshot; whichever lands first paints, and the snapshot render
+      // then chooses between the two sources.
+      void fetchDiskHistory(target);
     } catch (error) {
       console.error("[Session route] runtime transition failed:", error);
       messageRenderer.renderError(t("errors.failedToSwitchSession", { error }));
@@ -4842,15 +4928,23 @@ function handleMirrorSync(data) {
     // the file-tree diff below deliberately skips. The generation-guarded
     // git_status / git_command_failed result drives the Git tab's visibility
     // and the toolbar branch pill (refreshGitBranch reads the snapshot).
-    lastGitProbePath = syncWorkspacePath;
     gitPanel.snapshot = null;
     gitPanel.notGitRepo = false;
     gitPanel.gitUnavailable = false;
+    // The old workspace's branch must not survive the switch: the probe that
+    // follows either re-shows the pill with the new branch or clears it.
+    updateGitBranchIndicator("");
     gitPanel.selected = new Set();
     gitPanel.commitMessage = "";
     gitPanel.pendingConfirmationToken = null;
     gitPanel.historyPanel?.clearSession();
-    void gitPanel.refresh();
+    // Mark the path probed only when the probe actually left the client:
+    // refresh() returns null while the workspace generation is still unknown
+    // (owner_bootstrap has not arrived), and swallowing the marker here would
+    // permanently hide the branch pill for a git workspace.
+    void gitPanel.refresh().then((probeId) => {
+      if (probeId) lastGitProbePath = syncWorkspacePath;
+    });
     void syncGitEntryForWorkspace(data.workspaceId);
   }
   if (syncWorkspacePath && syncWorkspacePath !== fileBrowserWorkspacePath) {
@@ -4917,29 +5011,52 @@ function handleMirrorSync(data) {
     return;
   }
 
-  if (data.entries && data.entries.length > 0) {
-    console.info("[SESSION-LOAD] hydrate message source: snapshot", {
-      entries: data.entries.length,
+  const snapshotEntries = data.entries || [];
+  // Dr. Lin's contract: the session file is the history source of truth.
+  // Matching disk history wins UNCONDITIONALLY — the count heuristic it
+  // replaces let a compacted session's snapshot (inflated with synthesized
+  // compactionSummary messages) displace the anchored disk render on every
+  // sync. Live growth after load streams via message events, not syncs; the
+  // snapshot serves only when no disk history exists (brand-new session).
+  const diskMatches = diskHistory && diskHistory.sessionId === authoritativeSessionId;
+  const useDisk = Boolean(diskMatches) && diskHistory.messages.length > 0;
+  if (useDisk) {
+    console.info("[SESSION-LOAD] hydrate message source: disk-fallback", {
+      entries: diskHistory.messages.length,
     });
-    renderSessionHistory(data.entries, { searchQuery: sidebar.searchQuery, leafId: data.leafId });
-  } else if (receivedSessionFile) {
-    // A snapshot with zero entries for a session that HAS history on disk
-    // (runtime still rehydrating) must not collapse to Welcome — fall back
-    // to the persisted transcript, mirroring upstream's hydration choice.
-    void hydrateDiskHistoryFallback(receivedSessionFile);
+    sessionDebug.hydrate = {
+      source: "disk-fallback",
+      snapshot: snapshotEntries.length,
+      disk: diskHistory.messages.length,
+      session: authoritativeSessionId,
+      at: Date.now(),
+    };
+    renderSessionHistory(diskHistoryEntries(diskHistory.messages), {
+      searchQuery: sidebar.searchQuery,
+    });
+  } else if (snapshotEntries.length > 0) {
+    console.info("[SESSION-LOAD] hydrate message source: snapshot", {
+      entries: snapshotEntries.length,
+    });
+    sessionDebug.hydrate = {
+      source: "snapshot",
+      snapshot: snapshotEntries.length,
+      disk: diskMatches ? diskHistory.messages.length : null,
+      session: authoritativeSessionId,
+      at: Date.now(),
+    };
+    renderSessionHistory(snapshotEntries, {
+      searchQuery: sidebar.searchQuery,
+      leafId: data.leafId,
+    });
   } else {
     renderWorkspaceWelcome();
   }
-  // The Info tree consumes the same authoritative snapshot (entries + active
-  // leaf) the transcript just rendered from. While the Info tab is hidden,
-  // skip the model+DOM rebuild: mark dirty instead, and the tab switch's
-  // refreshInfoTree pulls a fresh full snapshot (never a stale cache).
-  if (infoPanel && infoPanelEl && !infoPanelEl.classList.contains("hidden")) {
-    infoPanel.updateTree({ entries: data.entries || [], leafId: data.leafId ?? null });
-    infoTreeDirty = false;
-  } else {
-    infoTreeDirty = true;
-  }
+
+  // Snapshot messages carry no entry ids — they cannot build the session
+  // tree. Re-fetch the authoritative tree; refreshInfoTree no-ops while the
+  // Info tab is hidden and the tab-open click re-fetches.
+  void refreshInfoTree();
 
   updateTokenUsage();
   // Hydrate the aggregate from the authoritative server totals now that
@@ -4947,37 +5064,88 @@ function handleMirrorSync(data) {
   void hydrateHeaderSessionStats();
 }
 
-/** Disk fallback when a snapshot carries zero entries but the session has
- * history persisted on disk. Mirrors upstream's chooseHydrationMessages:
- * never show Welcome for a session whose transcript exists server-side. */
-async function hydrateDiskHistoryFallback(sessionFile) {
-  const row = sidebar.projects
-    .flatMap((project) => project.sessions || [])
-    .find((session) => session.filePath === sessionFile);
-  if (!row?.id) {
-    renderWorkspaceWelcome();
-    return;
-  }
+// Session-load diagnostic: one-glance state for field debugging. Each
+// decision overwrites its slot; read via JSON.stringify(window.__picotSessionDebug).
+const sessionDebug = {
+  hydrate: null, // { source, snapshot, disk, session, at }
+  diskFetch: null, // { status, messages, session, at }
+  tree: null, // { source, entries, session, at }
+};
+globalThis.__picotSessionDebug = sessionDebug;
+
+// Upstream switch hydration state: the disk history captured once per
+// startup/switch. The snapshot render compares against it instead of
+// re-fetching (upstream's diskHistoryFallback).
+let diskHistory = null; // { sessionId: string, messages: Array } | null
+
+/** Map the data plane's disk messages (entryId-bearing) to session-file
+ * entry shape for renderSessionHistory. */
+function diskHistoryEntries(messages) {
+  return messages.map((message) => ({
+    id: typeof message?.entryId === "string" ? message.entryId : null,
+    parentId: null,
+    type: "message",
+    message,
+  }));
+}
+
+/** renderSessionHistory appends; the CALLER owns clearing. Every standalone
+ * transcript re-render funnels through this so the pre-render reset sequence
+ * is written exactly once — a path that skips it duplicates the previous
+ * render's tail at the top of the transcript. */
+function renderTranscriptEntries(entries, { leafId = null } = {}) {
+  compactCoordinator.reset();
+  clearConversationRenderers();
+  lastInputTokens = 0;
+  resetHeaderStatusBar();
+  renderSessionHistory(entries, { searchQuery: sidebar.searchQuery, leafId });
+}
+
+/** Upstream switch hydration: read the session file in parallel with the
+ * runtime (the file read does not wait for Pi to start), render it when it
+ * lands, and keep it as the per-session source the snapshot render chooses
+ * against. Best-effort: a session whose file does not exist yet (brand-new
+ * chat) keeps the snapshot as the only source. */
+async function fetchDiskHistory(target) {
   try {
-    const data = await transport.sessionHistory(row.id, row.filePath);
-    const entries = Array.isArray(data?.entries) ? data.entries : [];
-    // The user may have switched sessions while the fetch was in flight;
-    // only render if this session is still the active view.
-    if (
-      entries.length === 0 ||
-      mirrorActiveSessionFile !== sessionFile ||
-      sidebar.activeSessionFile !== sessionFile
-    ) {
-      renderWorkspaceWelcome();
+    const data = await wsClient.sendData("read_session_messages", {
+      workspaceId: target.workspaceId,
+      sessionId: target.sessionId,
+    });
+    const messages = Array.isArray(data?.messages) ? data.messages : [];
+    if (messages.length === 0) {
+      sessionDebug.diskFetch = {
+        status: "empty",
+        messages: 0,
+        session: target.sessionId,
+        at: Date.now(),
+      };
       return;
     }
-    console.info("[SESSION-LOAD] hydrate message source: disk-fallback", {
-      entries: entries.length,
+    diskHistory = { sessionId: target.sessionId, messages };
+    // The user may have switched sessions while the fetch was in flight.
+    const current = wsClient.getRuntimeTarget();
+    if (current?.sessionId !== target.sessionId) {
+      sessionDebug.diskFetch = {
+        status: "stale-skipped",
+        messages: messages.length,
+        session: target.sessionId,
+        at: Date.now(),
+      };
+      return;
+    }
+    console.info("[SESSION-LOAD] hydrate message source: disk", {
+      entries: messages.length,
     });
-    renderSessionHistory(entries, { searchQuery: sidebar.searchQuery });
+    renderTranscriptEntries(diskHistoryEntries(messages));
   } catch (error) {
-    console.warn("[SESSION-LOAD] disk fallback failed:", error);
-    renderWorkspaceWelcome();
+    // Best-effort: brand-new sessions have no file; the snapshot serves.
+    sessionDebug.diskFetch = {
+      status: `failed: ${error?.message || error}`,
+      session: target?.sessionId,
+      at: Date.now(),
+    };
+    console.warn("[SESSION-LOAD] disk history failed:", error);
   }
 }
 

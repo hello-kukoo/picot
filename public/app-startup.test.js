@@ -252,6 +252,60 @@ test("retries Git status when workspace generation arrives after opening Git", a
   });
 });
 
+test("updates the git branch pill when a git_status frame arrives", async () => {
+  await import("./app.js?git-pill-status");
+  const socket = FakeWebSocket.instances.at(-1);
+  socket.readyState = FakeWebSocket.OPEN;
+
+  socket.onmessage({ data: JSON.stringify({ type: "hello_ack", protocolVersion: 2 }) });
+  socket.onmessage({
+    data: JSON.stringify({ type: "owner_bootstrap", workspaceGeneration: 7, instances: [] }),
+  });
+  socket.onmessage({
+    data: JSON.stringify({
+      type: "git_status",
+      requestId: "git-1",
+      workspaceGeneration: 7,
+      snapshot: { snapshotId: "snap-1", branch: "main", entries: [] },
+    }),
+  });
+
+  const pill = document.getElementById("git-branch-indicator");
+  expect(pill.classList.contains("hidden")).toBe(false);
+  expect(pill.textContent).toContain("main");
+});
+
+test("re-probes git status when the generation arrives after a mirror sync", async () => {
+  await import("./app.js?git-probe-retry");
+  const socket = FakeWebSocket.instances.at(-1);
+  socket.readyState = FakeWebSocket.OPEN;
+  socket.onmessage({ data: JSON.stringify({ type: "hello_ack", protocolVersion: 2 }) });
+
+  // Foreground snapshot for a git workspace BEFORE owner_bootstrap: the
+  // probe must be swallowed (generation unknown) but re-armed, not
+  // permanently marked as probed.
+  socket.onmessage({
+    data: JSON.stringify({
+      type: "runtime_snapshot",
+      target: { workspaceId: "workspace:/work/repo", sessionId: "session-1", instanceId: "i-1" },
+      sequence: 1,
+      state: { pi: { sessionFile: "/s/1.jsonl" }, messages: [], stats: {} },
+    }),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const probesBefore = socket.sent.filter((frame) => frame.operation === "git_status");
+  expect(probesBefore).toHaveLength(0);
+
+  socket.onmessage({
+    data: JSON.stringify({ type: "owner_bootstrap", workspaceGeneration: 7, instances: [] }),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  const probes = socket.sent.filter((frame) => frame.operation === "git_status");
+  expect(probes.length).toBeGreaterThanOrEqual(1);
+  expect(probes.at(-1)).toMatchObject({ workspaceGeneration: 7, args: {} });
+});
+
 test("surfaces terminal start failures and refreshes the terminal list", async () => {
   await import("./app.js?terminal-start-failure");
   const socket = FakeWebSocket.instances.at(-1);

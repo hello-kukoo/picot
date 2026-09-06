@@ -33,11 +33,6 @@ const WORKSPACE_APP_ORDER = ["vscode", "zed", "terminal"];
 // Live appends keep the panel's cache current turn to turn, but entries can
 // be persisted without a message_end enrichment (compaction summaries,
 // enrichment failures). Calibrate by age: once the cache has gone this long
-// without an authoritative full snapshot, the next append requests a full
-// sync. Age-based (not append-count-based) because local re-renders and
-// per-turn refreshes reset no counter.
-const FULL_SYNC_MAX_AGE_MS = 10 * 60_000;
-
 export class InfoPanel {
   /**
    * @param {{
@@ -59,18 +54,11 @@ export class InfoPanel {
     this.workspacePath = "";
     this.expandedBranches = new Set();
     this.tree = null;
-    // Authoritative Pi entries + leafId cache. Full snapshots (mirror_sync /
-    // get_session_tree / tab re-entry) replace it; live turns append into it
-    // so per-turn refreshes skip the full-tree round trip (~1 MB/turn on long
-    // sessions). A full sync recalibrates eventually anyway.
+    // Authoritative Pi entries + leafId cache. Full snapshots (pi's live
+    // get_entries / the disk data plane) replace it wholesale; every refresh
+    // re-fetches — there is no incremental append.
     this.entries = null;
     this.leafId = null;
-    // Epoch ms of the last authoritative full snapshot (updateTree). Drives
-    // age-based recalibration in appendLiveEntry.
-    this._lastFullSyncAt = 0;
-    // Monotonic counter bumped on every cache mutation (successful live
-    // append). Lets an in-flight full sync detect that it raced an append.
-    this._generation = 0;
     this.selectedEntryId = null;
     this._pendingSelectedScroll = false;
     this._copiedTimer = null;
@@ -228,17 +216,6 @@ export class InfoPanel {
   updateTree({ entries, leafId } = {}) {
     this.entries = Array.isArray(entries) ? entries : [];
     this.leafId = leafId ?? null;
-    // A full snapshot genuinely recalibrates the staleness clock.
-    this._lastFullSyncAt = Date.now();
-    this._rebuildTree();
-  }
-
-  /**
-   * Re-render from the cached snapshot WITHOUT recalibrating the staleness
-   * clock — a local re-render is not a fresh sync, and stamping
-   * `_lastFullSyncAt` here would defeat age-based recalibration.
-   */
-  rerenderTree() {
     this._rebuildTree();
   }
 
@@ -263,35 +240,6 @@ export class InfoPanel {
       this._pendingSelectedScroll = false;
       this.scrollToSelectedEntry();
     }
-  }
-
-  /** Cache generation — bumped once per successful live append. */
-  get generation() {
-    return this._generation;
-  }
-
-  /**
-   * Live-turn incremental update. Appends the just-persisted entry to the
-   * cached authoritative snapshot and advances the leaf, avoiding a full
-   * get_session_tree round trip per agent turn. Best-effort: any mismatch
-   * (no cached snapshot, duplicate id, unknown parent, or a cache older than
-   * FULL_SYNC_MAX_AGE_MS) returns false so the caller falls back to a full
-   * sync. The returned-false entry is still pushed to the cache — the
-   * caller's full sync replaces the cache wholesale anyway.
-   */
-  appendLiveEntry(entry) {
-    if (!this.entries || !entry || typeof entry.id !== "string") return false;
-    if (this.entries.some((e) => e?.id === entry.id)) return false;
-    const parentKnown =
-      entry.parentId == null || this.entries.some((e) => e?.id === entry.parentId);
-    if (!parentKnown) return false;
-    this.entries.push(entry);
-    this.leafId = entry.id;
-    this._generation += 1;
-    if (Date.now() - this._lastFullSyncAt > FULL_SYNC_MAX_AGE_MS) return false; // stale cache: periodic recalibration
-    this.tree = buildSessionTree({ entries: this.entries, leafId: this.leafId });
-    this._renderTree();
-    return true;
   }
 
   _renderTree() {
@@ -438,6 +386,10 @@ export class InfoPanel {
     for (const row of rows) {
       row.classList.toggle("selected", row.dataset.entryId === this.selectedEntryId);
     }
+    // A live selection suppresses the current-leaf marker's background: two
+    // simultaneous accent tints read as two selections. The selected
+    // current-leaf row keeps its (stronger) selected highlight via :not().
+    this.treeScroll?.classList.toggle("has-selection", this.selectedEntryId != null);
   }
 
   scrollToSelectedEntry() {
@@ -460,11 +412,34 @@ export class InfoPanel {
     this.selectEntry(entryId);
     // Attribute-safe escape (Pi entry ids are generated hex, but stay robust
     // for any id without depending on CSS.escape availability).
-    const safeId = escapeAttribute(entryId);
-    const target = [...document.querySelectorAll(`[data-entry-id="${safeId}"]`)].find(
-      (candidate) => !this.panel.contains(candidate),
-    );
-    if (!target) return;
+    const findAnchor = (id) => {
+      const safeId = escapeAttribute(id);
+      return [...document.querySelectorAll(`[data-entry-id="${safeId}"]`)].find(
+        (candidate) => !this.panel.contains(candidate),
+      );
+    };
+    let target = findAnchor(entryId);
+    if (!target) {
+      // Folded rows — error-retry assistants on the active path — have no
+      // anchor of their own (the transcript anchors one row per turn).
+      // Spec (2026-08-21-info-panel-design.md 交互表): a row without an exact
+      // message anchor still “滚动主聊天” via its nearest rendered ancestor
+      // — the turn that contains it. Inactive-branch rows never reach here:
+      // per the same spec they carry no click-to-scroll at all.
+      let parentId = this.entries?.find((e) => e?.id === entryId)?.parentId ?? null;
+      while (parentId && !target) {
+        target = findAnchor(parentId);
+        if (!target) {
+          parentId = this.entries?.find((e) => e?.id === parentId)?.parentId ?? null;
+        }
+      }
+    }
+    // Diagnostic: distinguishes "no anchor anywhere in transcript" from
+    // "found but scroll failed" in one console paste.
+    if (!target) {
+      console.warn("[InfoPanel] no transcript anchor for entry", entryId);
+      return;
+    }
     target.scrollIntoView({ behavior: "smooth", block: "center" });
     target.classList.add("info-panel-flash");
     target.addEventListener("animationend", () => target.classList.remove("info-panel-flash"), {

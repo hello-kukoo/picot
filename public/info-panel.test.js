@@ -229,6 +229,53 @@ describe("InfoPanel session history", () => {
     expect(info.panel.querySelector(".info-panel-resume").disabled).toBe(false);
   });
 
+  test("clicking a folded row locates its nearest anchored ancestor", () => {
+    // Error-retry assistants and inactive-branch entries render as Info rows
+    // but the transcript folds them into turn groups without individual
+    // anchors. Clicking such a row must locate the turn that contains it
+    // (nearest ancestor with a transcript anchor), never silently no-op.
+    const scrollIntoView = vi.fn();
+    const anchor = document.createElement("div");
+    anchor.dataset.entryId = "turn-user";
+    anchor.scrollIntoView = scrollIntoView;
+    document.body.append(anchor);
+    try {
+      const info = makePanel().info;
+      info.updateTree({
+        entries: [
+          {
+            type: "message",
+            id: "turn-user",
+            parentId: null,
+            message: { role: "user", content: [{ type: "text", text: "q" }] },
+          },
+          {
+            type: "message",
+            id: "retry-1",
+            parentId: "turn-user",
+            message: { role: "assistant", content: [], stopReason: "error" },
+          },
+          {
+            type: "message",
+            id: "retry-2",
+            parentId: "retry-1",
+            message: { role: "assistant", content: [], stopReason: "error" },
+          },
+        ],
+        leafId: "retry-2",
+      });
+      const row = [...info.panel.querySelectorAll(".info-panel-row")].find(
+        (r) => r.dataset.entryId === "retry-1",
+      );
+      expect(row).not.toBeNull();
+      row.click();
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+      expect(anchor.classList.contains("info-panel-flash")).toBe(true);
+    } finally {
+      anchor.remove();
+    }
+  });
+
   test("clicking an active node selects the Info row and scrolls the anchored message", () => {
     const scrollIntoView = vi.fn();
     const target = document.createElement("div");
@@ -269,137 +316,6 @@ describe("InfoPanel session history", () => {
     });
     info.updateTree({ entries: [], leafId: null });
     expect(info.panel.querySelector(".info-panel-tree-empty").textContent).toBe("No messages yet");
-  });
-
-  test("appendLiveEntry grows the cached tree without a full snapshot", () => {
-    const info = new InfoPanel({
-      panel: document.createElement("aside"),
-      actions: { apps: [], copyWorkspacePath: async () => "", openWorkspaceInApp: async () => {} },
-      t,
-      onNavigateLeaf: () => {},
-      isStreaming: () => false,
-    });
-    info.updateTree({ entries, leafId: "jwtA" }); // cache seeded
-    const before = info.entries.length;
-
-    const ok = info.appendLiveEntry({
-      type: "message",
-      id: "live1",
-      parentId: "jwtA",
-      message: { role: "user", content: "Next live turn" },
-    });
-    expect(ok).toBe(true);
-    expect(info.entries.length).toBe(before + 1);
-    expect(info.leafId).toBe("live1");
-    const row = info.panel.querySelector(".info-panel-row.current-leaf");
-    expect(row.dataset.entryId).toBe("live1");
-  });
-
-  test("appendLiveEntry falls back to false for unknown parents / duplicates / no cache", () => {
-    const info = new InfoPanel({
-      panel: document.createElement("aside"),
-      actions: { apps: [], copyWorkspacePath: async () => "", openWorkspaceInApp: async () => {} },
-      t,
-      onNavigateLeaf: () => {},
-      isStreaming: () => false,
-    });
-    expect(
-      info.appendLiveEntry({ type: "message", id: "x", message: { role: "user", content: "" } }),
-    ).toBe(false); // no cached snapshot
-
-    info.updateTree({ entries, leafId: "jwtA" });
-    expect(
-      info.appendLiveEntry({
-        type: "message",
-        id: "y",
-        parentId: "ghost",
-        message: { role: "user", content: "" },
-      }),
-    ).toBe(false); // parent not in snapshot (stale chain)
-    expect(
-      info.appendLiveEntry({ type: "message", id: "jwtA", message: { role: "user", content: "" } }),
-    ).toBe(false); // duplicate id
-  });
-
-  test("appendLiveEntry requests recalibration when the cache snapshot is stale", () => {
-    const info = makePanel().info;
-    // Copy: updateTree keeps the array by reference and appends mutate it;
-    // the module-level `entries` must stay pristine for other tests.
-    info.updateTree({ entries: entries.slice(), leafId: "jwtA" });
-    const append = (id, parentId) =>
-      info.appendLiveEntry({
-        type: "message",
-        id,
-        parentId,
-        message: { role: "user", content: `t${id}` },
-      });
-
-    // Fresh cache: appends succeed and keep the local cache authoritative.
-    expect(append("n1", "jwtA")).toBe(true);
-    expect(append("n2", "n1")).toBe(true);
-
-    // Cache older than FULL_SYNC_MAX_AGE_MS (10 min): the next append still
-    // pushes into the cache but returns false — the caller syncs fully,
-    // replacing the cache wholesale and recalibrating the clock.
-    const realNow = Date.now;
-    const t0 = realNow.call(Date);
-    Date.now = () => t0 + 10 * 60_000 + 1;
-    try {
-      expect(append("n3", "n2")).toBe(false);
-    } finally {
-      Date.now = realNow;
-    }
-    // A real full snapshot recalibrates.
-    info.updateTree({ entries: entries.slice(), leafId: "jwtA" });
-    expect(append("n4", "jwtA")).toBe(true);
-  });
-
-  test("rerenderTree re-renders without recalibrating the staleness clock", () => {
-    const info = makePanel().info;
-    info.updateTree({ entries: entries.slice(), leafId: "jwtA" });
-    // Age the cache past the threshold, then re-render locally (the clean-cache
-    // refresh path in app.js).
-    const realNow = Date.now;
-    const t0 = realNow.call(Date);
-    Date.now = () => t0 + 10 * 60_000 + 1;
-    try {
-      info.rerenderTree();
-      expect(info.panel.querySelector(".info-panel-row.current-leaf").dataset.entryId).toBe("jwtA");
-      // The re-render must NOT have reset the clock — the next append still
-      // requests a full recalibration.
-      expect(
-        info.appendLiveEntry({
-          type: "message",
-          id: "late1",
-          parentId: "jwtA",
-          message: { role: "user", content: "" },
-        }),
-      ).toBe(false);
-    } finally {
-      Date.now = realNow;
-    }
-  });
-
-  test("appendLiveEntry bumps the cache generation (in-flight sync race guard)", () => {
-    const info = makePanel().info;
-    info.updateTree({ entries: entries.slice(), leafId: "jwtA" });
-    const before = info.generation;
-    const okGen = info.appendLiveEntry({
-      type: "message",
-      id: "gen1",
-      parentId: "jwtA",
-      message: { role: "user", content: "" },
-    });
-    expect(okGen).toBe(true);
-    expect(info.generation).toBe(before + 1);
-    // A failed append (duplicate) does not bump it.
-    info.appendLiveEntry({
-      type: "message",
-      id: "gen1",
-      parentId: "jwtA",
-      message: { role: "user", content: "" },
-    });
-    expect(info.generation).toBe(before + 1);
   });
 
   test("history heading leaves refresh control to shared sidebar toolbar", () => {
@@ -522,11 +438,33 @@ describe("InfoPanel selection", () => {
     expect(rowEl(panel, "jwt").classList.contains("selected")).toBe(false);
   });
 
+  test("a live selection suppresses the current-leaf highlight until cleared", () => {
+    // Two simultaneous accent backgrounds (current-leaf 16% + selected 24%)
+    // read as two highlights; the session-position marker yields while the
+    // user's selection is live. Deliberate deviation from upstream's
+    // identical-CSS double highlight (Dr. Lin's UX call).
+    const { info, panel } = makeSelectionPanel();
+    info.updateTree({ entries, leafId: "jwtA" });
+    const treeScroll = panel.querySelector(".info-panel-tree-scroll");
+    expect(rowEl(panel, "jwtA").classList.contains("current-leaf")).toBe(true);
+    expect(treeScroll.classList.contains("has-selection")).toBe(false);
+
+    info.selectEntry("u1");
+    expect(treeScroll.classList.contains("has-selection")).toBe(true);
+
+    // Selecting the current leaf itself keeps its (selected) highlight.
+    info.selectEntry("jwtA");
+    expect(treeScroll.classList.contains("has-selection")).toBe(true);
+
+    info.selectEntry(null);
+    expect(treeScroll.classList.contains("has-selection")).toBe(false);
+  });
+
   test("clicking an inactive row changes nothing", () => {
     const { info, panel } = makeSelectionPanel();
     info.updateTree({ entries, leafId: "jwtA" });
     info.expandedBranches.add("cookie");
-    info.rerenderTree();
+    info.updateTree({ entries, leafId: "jwtA" });
 
     const inactive = rowEl(panel, "cookie");
     expect(inactive).not.toBeNull();
@@ -580,7 +518,7 @@ describe("InfoPanel selection", () => {
       expect(info._pendingSelectedScroll).toBe(true);
 
       info.expandedBranches.add("cookie");
-      info.rerenderTree(); // rebuild consumes the latch now that the row exists
+      info.updateTree({ entries, leafId: "jwtA" }); // rebuild consumes the latch now that the row exists
       expect(scrollIntoView).toHaveBeenCalledTimes(1);
       expect(rowEl(panel, "cookie").classList.contains("selected")).toBe(true);
     });
