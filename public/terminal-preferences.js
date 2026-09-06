@@ -1,14 +1,38 @@
 // ABOUTME: Display-only terminal UI preferences (font size, scrollback). Host
 // ABOUTME: state stays authoritative; no process-sensitive key is ever persisted.
 
+import { DEFAULT_TERMINAL_FONT_SIZE } from "./terminal-font.js";
+
 const ALLOWED_KEYS = new Set([
   "fontSize",
-  "bellStyle",
   "scrollbackLimit",
-  "smoothScroll",
+  "smoothScrollDuration",
   "webglRenderer",
   "themeMode",
 ]);
+
+export const DEFAULT_FONT_SIZE = DEFAULT_TERMINAL_FONT_SIZE;
+export const DEFAULT_SCROLLBACK_LIMIT = 1000;
+export const DEFAULT_SMOOTH_SCROLL_DURATION = 0;
+
+function clampNumber(value, fallback, min, max) {
+  if (value === "" || value === null || value === undefined) return fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.round(Math.min(max, Math.max(min, number)));
+}
+
+export function normalizeFontSize(value) {
+  return clampNumber(value, DEFAULT_FONT_SIZE, 10, 32);
+}
+
+export function normalizeScrollbackLimit(value) {
+  return clampNumber(value, DEFAULT_SCROLLBACK_LIMIT, 100, 50000);
+}
+
+export function normalizeSmoothScrollDuration(value) {
+  return clampNumber(value, DEFAULT_SMOOTH_SCROLL_DURATION, 0, 1000);
+}
 
 /** Terminal color scheme modes: follow the Picot theme, or force one. */
 export const TERMINAL_THEME_MODES = ["system", "light", "dark"];

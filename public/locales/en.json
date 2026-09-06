@@ -841,7 +841,13 @@
       "themeLight": "Light",
       "themeDark": "Dark",
       "webgl": "WebGL renderer",
-      "webglDescription": "GPU-accelerated terminal rendering. Falls back to the DOM renderer when unavailable."
+      "webglDescription": "GPU-accelerated terminal rendering. Falls back to the DOM renderer when unavailable.",
+      "fontSize": "Font size",
+      "fontSizeDescription": "Terminal text size in pixels.",
+      "scrollback": "Scrollback",
+      "scrollbackDescription": "Number of terminal history lines to retain.",
+      "smoothScroll": "Smooth scroll duration",
+      "smoothScrollDescription": "Animation duration in milliseconds; 0 disables it."
     }
   },
   "cost": {

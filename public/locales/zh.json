@@ -841,7 +841,13 @@
       "themeLight": "浅色",
       "themeDark": "深色",
       "webgl": "WebGL 渲染器",
-      "webglDescription": "GPU 加速的终端渲染；不可用时自动回退到 DOM 渲染器。"
+      "webglDescription": "GPU 加速的终端渲染；不可用时自动回退到 DOM 渲染器。",
+      "fontSize": "字体大小",
+      "fontSizeDescription": "终端文字大小（像素）。",
+      "scrollback": "滚动缓冲",
+      "scrollbackDescription": "保留的终端历史行数。",
+      "smoothScroll": "平滑滚动时长",
+      "smoothScrollDescription": "滚动动画时长（毫秒）；0 表示关闭。"
     }
   },
   "cost": {

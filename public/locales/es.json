@@ -841,7 +841,13 @@
       "themeLight": "Claro",
       "themeDark": "Oscuro",
       "webgl": "Renderizador WebGL",
-      "webglDescription": "Renderizado del terminal acelerado por GPU. Recurre al renderizador DOM cuando no está disponible."
+      "webglDescription": "Renderizado del terminal acelerado por GPU. Recurre al renderizador DOM cuando no está disponible.",
+      "fontSize": "Tamaño de fuente",
+      "fontSizeDescription": "Tamaño del texto del terminal en píxeles.",
+      "scrollback": "Historial",
+      "scrollbackDescription": "Número de líneas del historial del terminal que se conservan.",
+      "smoothScroll": "Duración del desplazamiento suave",
+      "smoothScrollDescription": "Duración de la animación en milisegundos; 0 la desactiva."
     }
   },
   "cost": {

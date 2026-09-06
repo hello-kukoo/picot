@@ -141,6 +141,47 @@ test("ack tracks the last applied sequence", () => {
   tab.destroy();
 });
 
+test("applies display preferences to the live terminal and refits font changes", () => {
+  const fit = vi.fn();
+  const { tab, term } = makeTab({ fitAddonFactory: () => ({ fit }) });
+  term.options = { fontSize: 15, scrollback: 1000, smoothScrollDuration: 0 };
+  tab.applyPreferences({
+    fontSize: 18,
+    scrollback: 5000,
+    smoothScrollDuration: 120,
+  });
+
+  expect(term.options).toMatchObject({
+    fontSize: 18,
+    scrollback: 5000,
+    smoothScrollDuration: 120,
+  });
+  expect(fit).toHaveBeenCalledTimes(1);
+  tab.destroy();
+});
+
+test("does not refit when only non-font preferences change", () => {
+  const fit = vi.fn();
+  const { tab, term } = makeTab({ fitAddonFactory: () => ({ fit }) });
+  term.options = { fontSize: 15, scrollback: 1000, smoothScrollDuration: 0 };
+  tab.applyPreferences({ scrollback: 5000, smoothScrollDuration: 120 });
+
+  expect(term.options.scrollback).toBe(5000);
+  expect(term.options.smoothScrollDuration).toBe(120);
+  expect(fit).not.toHaveBeenCalled();
+  tab.destroy();
+});
+
+test("ignores unknown preferences and destroyed tabs", () => {
+  const { tab, term } = makeTab();
+  term.options = { fontSize: 15 };
+  tab.applyPreferences({ unknown: "ignored" });
+  expect(term.options).toEqual({ fontSize: 15 });
+  tab.destroy();
+  expect(() => tab.applyPreferences({ fontSize: 20 })).not.toThrow();
+  expect(term.options.fontSize).toBe(15);
+});
+
 test("serializes checkpoints and refreshes after a theme change", () => {
   const serialize = vi.fn(() => "checkpoint");
   const { tab, term } = makeTab({ serializeAddonFactory: () => ({ serialize }) });

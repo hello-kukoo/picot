@@ -1029,6 +1029,81 @@
                   data-i18n-aria-label="settings.terminal.theme"
                 ></select>
               </div>
+              <div class="settings-row" id="setting-terminal-font-size">
+                <span class="settings-label settings-label-stack">
+                  <span
+                    class="settings-label-main"
+                    data-i18n="settings.terminal.fontSize"
+                    >Font size</span
+                  >
+                  <span
+                    class="settings-label-sub"
+                    data-i18n="settings.terminal.fontSizeDescription"
+                    >Terminal text size in pixels.</span
+                  >
+                </span>
+                <input
+                  class="settings-terminal-number"
+                  id="settings-terminal-font-size-input"
+                  type="number"
+                  min="10"
+                  max="32"
+                  step="1"
+                  inputmode="numeric"
+                  aria-label="Font size"
+                  data-i18n-aria-label="settings.terminal.fontSize"
+                />
+              </div>
+              <div class="settings-row" id="setting-terminal-scrollback">
+                <span class="settings-label settings-label-stack">
+                  <span
+                    class="settings-label-main"
+                    data-i18n="settings.terminal.scrollback"
+                    >Scrollback</span
+                  >
+                  <span
+                    class="settings-label-sub"
+                    data-i18n="settings.terminal.scrollbackDescription"
+                    >Number of terminal history lines to retain.</span
+                  >
+                </span>
+                <input
+                  class="settings-terminal-number"
+                  id="settings-terminal-scrollback-input"
+                  type="number"
+                  min="100"
+                  max="50000"
+                  step="100"
+                  inputmode="numeric"
+                  aria-label="Scrollback lines"
+                  data-i18n-aria-label="settings.terminal.scrollback"
+                />
+              </div>
+              <div class="settings-row" id="setting-terminal-smooth-scroll">
+                <span class="settings-label settings-label-stack">
+                  <span
+                    class="settings-label-main"
+                    data-i18n="settings.terminal.smoothScroll"
+                    >Smooth scroll duration</span
+                  >
+                  <span
+                    class="settings-label-sub"
+                    data-i18n="settings.terminal.smoothScrollDescription"
+                    >Animation duration in milliseconds; 0 disables it.</span
+                  >
+                </span>
+                <input
+                  class="settings-terminal-number"
+                  id="settings-terminal-smooth-scroll-input"
+                  type="number"
+                  min="0"
+                  max="1000"
+                  step="10"
+                  inputmode="numeric"
+                  aria-label="Smooth scroll duration"
+                  data-i18n-aria-label="settings.terminal.smoothScroll"
+                />
+              </div>
               <div class="settings-row" id="setting-terminal-webgl">
                 <span class="settings-label settings-label-stack">
                   <span

@@ -190,6 +190,40 @@ export class TerminalTab {
     this.lastAppliedSequence = sequence;
   }
 
+  /**
+   * Apply display-only xterm options without recreating the live terminal.
+   * `fontSize` triggers a fit; scrollback and smooth scrolling take effect
+   * through xterm's mutable option surface.
+   */
+  applyPreferences(prefs = {}) {
+    if (this.destroyed || !this.terminal?.options) {
+      return false;
+    }
+    let changed = false;
+    let refit = false;
+    const options = this.terminal.options;
+    if (Number.isFinite(prefs.fontSize) && options.fontSize !== prefs.fontSize) {
+      options.fontSize = prefs.fontSize;
+      changed = true;
+      refit = true;
+    }
+    if (Number.isFinite(prefs.scrollback) && options.scrollback !== prefs.scrollback) {
+      options.scrollback = prefs.scrollback;
+      changed = true;
+    }
+    if (
+      Number.isFinite(prefs.smoothScrollDuration) &&
+      options.smoothScrollDuration !== prefs.smoothScrollDuration
+    ) {
+      options.smoothScrollDuration = prefs.smoothScrollDuration;
+      changed = true;
+    }
+    if (refit) {
+      this._fit();
+    }
+    return changed;
+  }
+
   /** Serialize the screen plus up to `scrollback` lines for a checkpoint. */
   serializeForCheckpoint(scrollback = 2000) {
     return this.serializeAddon.serialize({ scrollback });

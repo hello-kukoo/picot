@@ -841,7 +841,13 @@
       "themeLight": "ライト",
       "themeDark": "ダーク",
       "webgl": "WebGL レンダラー",
-      "webglDescription": "GPU 加速されたターミナル描画。利用できない場合は DOM レンダラーにフォールバックします。"
+      "webglDescription": "GPU 加速されたターミナル描画。利用できない場合は DOM レンダラーにフォールバックします。",
+      "fontSize": "フォントサイズ",
+      "fontSizeDescription": "ターミナル文字のサイズ（ピクセル）。",
+      "scrollback": "スクロールバック",
+      "scrollbackDescription": "保持するターミナル履歴の行数。",
+      "smoothScroll": "スムーズスクロール時間",
+      "smoothScrollDescription": "アニメーション時間（ミリ秒）。0 で無効になります。"
     }
   },
   "cost": {

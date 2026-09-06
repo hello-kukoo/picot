@@ -87,15 +87,16 @@ import { setupSidebarSearchControl } from "./sidebar/search-control.js";
 import { WorkspaceFocusSidebar } from "./sidebar/workspace-focus-sidebar.js";
 import { createSidebarResizer } from "./sidebar-resizer.js";
 import { TerminalClient } from "./terminal-client.js";
-import {
-  DEFAULT_TERMINAL_FONT_SIZE,
-  loadTerminalFont,
-  TERMINAL_FONT_FAMILY,
-  TERMINAL_FONT_STACK,
-} from "./terminal-font.js";
+import { loadTerminalFont, TERMINAL_FONT_FAMILY, TERMINAL_FONT_STACK } from "./terminal-font.js";
 import { formatTerminalStartError, TerminalPanel } from "./terminal-panel.js";
 import {
+  DEFAULT_FONT_SIZE,
+  DEFAULT_SCROLLBACK_LIMIT,
+  DEFAULT_SMOOTH_SCROLL_DURATION,
   defaultWebglRenderer,
+  normalizeFontSize,
+  normalizeScrollbackLimit,
+  normalizeSmoothScrollDuration,
   normalizeThemeMode,
   TERMINAL_THEME_MODES,
   TerminalPreferences,
@@ -1152,9 +1153,13 @@ let webglRendererEnabled =
 // Terminal color scheme: "system" follows the Picot theme; "light"/"dark"
 // force canonical palettes. Default dark (TerminalPreferences contract).
 let terminalThemeMode = normalizeThemeMode(savedTerminalPreferences.themeMode);
-const terminalFontSize = Number.isFinite(savedTerminalPreferences.fontSize)
-  ? Math.min(32, Math.max(10, savedTerminalPreferences.fontSize))
-  : DEFAULT_TERMINAL_FONT_SIZE;
+let terminalFontSize = normalizeFontSize(savedTerminalPreferences.fontSize ?? DEFAULT_FONT_SIZE);
+let terminalScrollbackLimit = normalizeScrollbackLimit(
+  savedTerminalPreferences.scrollbackLimit ?? DEFAULT_SCROLLBACK_LIMIT,
+);
+let terminalSmoothScrollDuration = normalizeSmoothScrollDuration(
+  savedTerminalPreferences.smoothScrollDuration ?? DEFAULT_SMOOTH_SCROLL_DURATION,
+);
 const terminalClient = new TerminalClient({
   send: (envelope) => {
     if (wsClient.ws && wsClient.ws.readyState === WebSocket.OPEN) {
@@ -1175,6 +1180,8 @@ const terminalClient = new TerminalClient({
           fontFamily: TERMINAL_FONT_STACK,
           fontSize: terminalFontSize,
           fontWeight: 400,
+          scrollback: terminalScrollbackLimit,
+          smoothScrollDuration: terminalSmoothScrollDuration,
         }),
       fontFamily: TERMINAL_FONT_FAMILY,
       fontSize: terminalFontSize,
@@ -5649,6 +5656,9 @@ const settingsTabs = Array.from(document.querySelectorAll(".settings-tab"));
 const themeGrid = document.getElementById("theme-grid");
 const languageSelect = document.getElementById("settings-language-select");
 const terminalThemeSelect = document.getElementById("settings-terminal-theme-select");
+const terminalFontSizeInput = document.getElementById("settings-terminal-font-size-input");
+const terminalScrollbackInput = document.getElementById("settings-terminal-scrollback-input");
+const terminalSmoothScrollInput = document.getElementById("settings-terminal-smooth-scroll-input");
 const toggleTerminalWebgl = document.getElementById("toggle-terminal-webgl");
 
 const toggleAutoCompact = document.getElementById("toggle-auto-compact");
@@ -5931,6 +5941,12 @@ function applyTerminalThemeToAllTabs() {
   }
 }
 
+function applyTerminalPreferencesToAllTabs(prefs) {
+  for (const entry of terminalClient.tabs.values()) {
+    entry.tab?.applyPreferences?.(prefs);
+  }
+}
+
 function buildTerminalThemeSelector() {
   if (!terminalThemeSelect) return;
   terminalThemeSelect.replaceChildren();
@@ -5954,6 +5970,37 @@ function handleTerminalThemeChange() {
   applyTerminalThemeToAllTabs();
 }
 
+function handleTerminalFontSizeChange() {
+  terminalFontSize = normalizeFontSize(terminalFontSizeInput.value);
+  terminalFontSizeInput.value = String(terminalFontSize);
+  persistTerminalPreferences({ fontSize: terminalFontSize });
+  applyTerminalPreferencesToAllTabs({ fontSize: terminalFontSize });
+}
+
+function handleTerminalScrollbackChange() {
+  terminalScrollbackLimit = normalizeScrollbackLimit(terminalScrollbackInput.value);
+  terminalScrollbackInput.value = String(terminalScrollbackLimit);
+  persistTerminalPreferences({ scrollbackLimit: terminalScrollbackLimit });
+  applyTerminalPreferencesToAllTabs({ scrollback: terminalScrollbackLimit });
+}
+
+function handleTerminalSmoothScrollChange() {
+  terminalSmoothScrollDuration = normalizeSmoothScrollDuration(terminalSmoothScrollInput.value);
+  terminalSmoothScrollInput.value = String(terminalSmoothScrollDuration);
+  persistTerminalPreferences({ smoothScrollDuration: terminalSmoothScrollDuration });
+  applyTerminalPreferencesToAllTabs({
+    smoothScrollDuration: terminalSmoothScrollDuration,
+  });
+}
+
+function syncTerminalDisplaySettings() {
+  if (terminalFontSizeInput) terminalFontSizeInput.value = String(terminalFontSize);
+  if (terminalScrollbackInput) terminalScrollbackInput.value = String(terminalScrollbackLimit);
+  if (terminalSmoothScrollInput) {
+    terminalSmoothScrollInput.value = String(terminalSmoothScrollDuration);
+  }
+}
+
 function syncTerminalWebglToggle() {
   toggleTerminalWebgl?.classList.toggle("on", webglRendererEnabled);
 }
@@ -5972,6 +6019,9 @@ function handleTerminalWebglToggle() {
 }
 
 terminalThemeSelect?.addEventListener("change", handleTerminalThemeChange);
+terminalFontSizeInput?.addEventListener("change", handleTerminalFontSizeChange);
+terminalScrollbackInput?.addEventListener("change", handleTerminalScrollbackChange);
+terminalSmoothScrollInput?.addEventListener("change", handleTerminalSmoothScrollChange);
 toggleTerminalWebgl?.addEventListener("click", handleTerminalWebglToggle);
 
 onLocaleChange(buildLanguageSelector);
@@ -6028,6 +6078,7 @@ async function openSettings(tabKey = "general", options = {}) {
   buildThemeGrid();
   buildLanguageSelector();
   buildTerminalThemeSelector();
+  syncTerminalDisplaySettings();
   syncTerminalWebglToggle();
   if (piVersionValue) {
     piVersionValue.textContent = piVersionCache || t("status.loading");

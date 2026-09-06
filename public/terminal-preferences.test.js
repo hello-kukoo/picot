@@ -2,8 +2,14 @@
 // ABOUTME: every process-sensitive key is rejected from the serialized payload.
 import { expect, test } from "vitest";
 import {
+  DEFAULT_FONT_SIZE,
+  DEFAULT_SCROLLBACK_LIMIT,
+  DEFAULT_SMOOTH_SCROLL_DURATION,
   DEFAULT_TERMINAL_THEME_MODE,
   defaultWebglRenderer,
+  normalizeFontSize,
+  normalizeScrollbackLimit,
+  normalizeSmoothScrollDuration,
   normalizeThemeMode,
   TerminalPreferences,
 } from "./terminal-preferences.js";
@@ -65,8 +71,30 @@ test("serialized payload has no runtime or secret fields", () => {
 test("load round-trips allowed preferences", () => {
   const storage = memStorage();
   const prefs = new TerminalPreferences(storage);
-  prefs.save({ fontSize: 16, scrollbackLimit: 2000 });
-  expect(prefs.load()).toEqual({ fontSize: 16, scrollbackLimit: 2000 });
+  prefs.save({
+    fontSize: 16,
+    scrollbackLimit: 2000,
+    smoothScrollDuration: 120,
+  });
+  expect(prefs.load()).toEqual({
+    fontSize: 16,
+    scrollbackLimit: 2000,
+    smoothScrollDuration: 120,
+  });
+});
+
+test("normalizes terminal display preferences to safe ranges", () => {
+  expect(normalizeFontSize(10)).toBe(10);
+  expect(normalizeFontSize(40)).toBe(32);
+  expect(normalizeFontSize("bad")).toBe(DEFAULT_FONT_SIZE);
+  expect(normalizeFontSize("")).toBe(DEFAULT_FONT_SIZE);
+  expect(normalizeScrollbackLimit(50)).toBe(100);
+  expect(normalizeScrollbackLimit(60000)).toBe(50000);
+  expect(normalizeScrollbackLimit(undefined)).toBe(DEFAULT_SCROLLBACK_LIMIT);
+  expect(normalizeSmoothScrollDuration(-1)).toBe(0);
+  expect(normalizeSmoothScrollDuration(2500)).toBe(1000);
+  expect(normalizeSmoothScrollDuration(undefined)).toBe(DEFAULT_SMOOTH_SCROLL_DURATION);
+  expect(normalizeSmoothScrollDuration("")).toBe(DEFAULT_SMOOTH_SCROLL_DURATION);
 });
 
 test("load tolerates corrupt storage", () => {
