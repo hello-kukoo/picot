@@ -17,6 +17,9 @@ live in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 - Before fixing any native runtime bug, you MUST inspect the corresponding
   implementation in the local upstream checkout at `~/tmp/PI/picot/` and use it
   as the reference implementation before changing this repository.
+  1. native bug 的第一问永远是「upstream 的这条数据流怎么走」，不是「这个函数它怎么写」；
+  2. 若 upstream 里找不到对应的流程/守卫/参数——这本身就是答案：说明 v3 迁移时发明了它，先怀疑发明；
+  3. 任何修复若引入「upstream 没有的东西」（新上限、新开关、解除限制），视为走偏信号，停下重新对齐。
 - Update `ARCHITECTURE.md` when an implementation materially changes its
   architecture, invariants, lifecycle, security boundary, or validation
   contract. Changes to LAN access, cross-platform paths, or static serving also

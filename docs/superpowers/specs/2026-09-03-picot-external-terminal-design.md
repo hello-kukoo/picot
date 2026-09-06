@@ -6,6 +6,11 @@ Draft. Path 2 (self-rendered launcher) chosen by Dr. Lin on 2026-09-03.
 Awaiting MVP scope, PATH carryover rules, signing identity, OS priority,
 and repo location before implementation begins.
 
+**Update 2026-09-04: Path 1 has shipped.** The embedded xterm.js was
+augmented (WebGL / search / unicode11 addons, Settings → General terminal
+preferences) as a stopgap; Path 2 remains the chosen design for the
+standalone launcher.
+
 ## Context
 
 Picot today embeds an xterm.js terminal panel (`public/terminal-*.js`,
@@ -42,7 +47,14 @@ mutually-exclusive paths and records the chosen path.
 
 ## Two paths
 
-### Path 1 — Augment the embedded xterm.js (held in reserve)
+### Path 1 — Augment the embedded xterm.js (shipped 2026-09-04)
+
+> **Shipped.** Implemented ahead of Path 2 as a stopgap. The concrete steps
+> below are the original draft; two details changed in implementation:
+> vendoring is the esbuild ESM pipeline (`scripts/build-frontend.js`
+> regenerates `public/vendor/xterm.js` — no manual UMD copies), and the
+> addons are wired in `public/terminal-tab.js` (`terminal-client.js` is
+> protocol-only). Search opens via Cmd/Ctrl+F from a find bar in the panel.
 
 **Idea.** The "external terminal" feeling Dr. Lin wants can come from making
 the embedded xterm.js better first: WebGL renderer, search addon, unicode11,
@@ -73,6 +85,14 @@ drivers occasionally regress WebGL — fallback is the existing DOM renderer.
 Make WebGL opt-in behind a preference in `terminal-preferences.js`, default
 ON on macOS / Linux, default OFF on Windows until validated.
 
+**Vendor bundle rebuild check (before every merge).** Any PR touching
+terminal dependencies or `terminal-vendor-entry.js` must run
+`bun run build:extensions && node scripts/build-frontend.js` and then the
+vendor contract test (`bun run vitest run public/terminal-tab.test.js`) so
+`public/vendor/xterm.js` is proven consistent with the entry. `public/vendor/`
+is gitignored, so a clean idempotent rebuild + green contract test is the
+no-drift evidence; never hand-edit the bundle.
+
 ---
 
 ### Path 2 — Standalone launcher app, self-rendered (chosen)
@@ -89,14 +109,14 @@ back after Path 2 shipped. The launcher must own its rendering.
 
 **Tech stack (validated 2026-09-03):**
 
-| Layer | Crate | Version | License | Why |
-| --- | --- | --- | --- | --- |
-| GUI framework | `egui` | 0.36 | MIT/Apache-2.0 | immediate mode, native backend via `egui-wgpu`, "works out-of-the-box on Mac and Windows" |
-| Native entry | `eframe` | 0.36 | MIT/Apache-2.0 | wraps winit + wgpu, single binary |
-| Font shaping | `cosmic-text` | 0.19 | MIT | pure Rust, DirectWrite on Windows / CoreText on macOS / fontconfig on Linux |
-| VT parser + grid | `alacritty_terminal` | 0.26 | Apache-2.0 | upstream `crates.io`, no fork needed; same library tty7 uses |
-| PTY | `portable-pty` | 0.9 | MIT | already in Picot's tree, ConPTY on Windows |
-| CLI parsing | `clap` | 4 | MIT/Apache-2.0 | derive macros |
+| Layer            | Crate                | Version | License        | Why                                                                                       |
+| ---------------- | -------------------- | ------- | -------------- | ----------------------------------------------------------------------------------------- |
+| GUI framework    | `egui`               | 0.36    | MIT/Apache-2.0 | immediate mode, native backend via `egui-wgpu`, "works out-of-the-box on Mac and Windows" |
+| Native entry     | `eframe`             | 0.36    | MIT/Apache-2.0 | wraps winit + wgpu, single binary                                                         |
+| Font shaping     | `cosmic-text`        | 0.19    | MIT            | pure Rust, DirectWrite on Windows / CoreText on macOS / fontconfig on Linux               |
+| VT parser + grid | `alacritty_terminal` | 0.26    | Apache-2.0     | upstream `crates.io`, no fork needed; same library tty7 uses                              |
+| PTY              | `portable-pty`       | 0.9     | MIT            | already in Picot's tree, ConPTY on Windows                                                |
+| CLI parsing      | `clap`               | 4       | MIT/Apache-2.0 | derive macros                                                                             |
 
 No Zig toolchain. No Tauri. No xterm.js. Single native binary.
 
@@ -134,6 +154,7 @@ No Zig toolchain. No Tauri. No xterm.js. Single native binary.
 
    Opens a native window titled `--title`, then runs `--shell` (or `--exec`
    if provided) in `--cwd`.
+
 5. Picot host: new Rust module `src-tauri/src/external_terminal.rs` that
    `std::process::Command`-spawns the binary with `PATH` carried over from
    the host. Surface from the broker as
@@ -153,11 +174,11 @@ No Zig toolchain. No Tauri. No xterm.js. Single native binary.
 **Costs.**
 
 - Code: ~1500 lines new in `picot-launcher/` (Rust only). ~200 lines touched
-   in Picot (broker wiring, sidebar context menu).
+  in Picot (broker wiring, sidebar context menu).
 - Time: ~3–4 weeks including cross-platform CI and signing/notarization
-   plumbing for a second binary.
+  plumbing for a second binary.
 - Build: new GitHub Actions matrix entry for the launcher on three OSes;
-   new release artifact.
+  new release artifact.
 
 **Risks.**
 
