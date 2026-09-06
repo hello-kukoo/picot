@@ -4,6 +4,12 @@
 
 Implemented on 2026-09-04. Approved by Dr. Lin on 2026-09-04.
 
+> 2026-09-04 update: the `fontSize` contract below (number 10–32, stored in
+> per-origin localStorage, General page) is superseded by
+> `2026-09-04-appearance-settings-page-design.md` — terminal font size is now
+> a five-level global preference on the Appearance page. Scrollback and
+> smooth scroll contracts are unchanged.
+
 ## Scope
 
 Add three display-only terminal settings to Settings → General → Terminal:
