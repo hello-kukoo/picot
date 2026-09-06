@@ -8,6 +8,10 @@
 export const PREFERENCE_KEYS = Object.freeze({
   theme: "ui.theme",
   locale: "ui.locale",
+  chatFontSize: "ui.chatFontSize",
+  previewFontSize: "ui.previewFontSize",
+  previewTheme: "ui.previewTheme",
+  terminalFontSize: "ui.terminalFontSize",
 });
 
 /**

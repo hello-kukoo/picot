@@ -76,7 +76,15 @@ describe("settings page split", () => {
     const tabs = [...document.querySelectorAll(".settings-nav-item")].map(
       (item) => item.dataset.settingsTab,
     );
-    expect(tabs).toEqual(["general", "models", "skills", "extensions", "configuration", "usage"]);
+    expect(tabs).toEqual([
+      "general",
+      "appearance",
+      "models",
+      "skills",
+      "extensions",
+      "configuration",
+      "usage",
+    ]);
 
     // The Super Agent / Agent Inbox surface was removed with its runtime scope:
     // a disabled placeholder tab is still a dead control, so it must be gone.

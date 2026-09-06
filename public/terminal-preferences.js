@@ -1,17 +1,15 @@
-// ABOUTME: Display-only terminal UI preferences (font size, scrollback). Host
-// ABOUTME: state stays authoritative; no process-sensitive key is ever persisted.
-
-import { DEFAULT_TERMINAL_FONT_SIZE } from "./terminal-font.js";
+// ABOUTME: Display-only terminal UI preferences (scrollback, smooth scroll,
+// ABOUTME: WebGL, theme mode). Font size moved to the global appearance
+// ABOUTME: preferences (see appearance-preferences.js). Host state stays
+// ABOUTME: authoritative; no process-sensitive key is ever persisted.
 
 const ALLOWED_KEYS = new Set([
-  "fontSize",
   "scrollbackLimit",
   "smoothScrollDuration",
   "webglRenderer",
   "themeMode",
 ]);
 
-export const DEFAULT_FONT_SIZE = DEFAULT_TERMINAL_FONT_SIZE;
 export const DEFAULT_SCROLLBACK_LIMIT = 1000;
 export const DEFAULT_SMOOTH_SCROLL_DURATION = 0;
 
@@ -20,10 +18,6 @@ function clampNumber(value, fallback, min, max) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Math.round(Math.min(max, Math.max(min, number)));
-}
-
-export function normalizeFontSize(value) {
-  return clampNumber(value, DEFAULT_FONT_SIZE, 10, 32);
 }
 
 export function normalizeScrollbackLimit(value) {

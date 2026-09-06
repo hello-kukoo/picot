@@ -1,16 +1,21 @@
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"];
 
 /**
- * Reflect the current thinking level on the Faster↔Smarter segmented slider:
- * highlight the matching dot and slide the pill thumb over it.
+ * Reflect the current level on a segmented slider: highlight the matching dot
+ * and slide the pill thumb over it. Generic across 5-dot controls — thinking
+ * effort (THINKING_LEVELS) and the Appearance font-size sliders pass their
+ * own `levels`; `nameFor` renders the current-level label (default: raw key).
  */
-export function renderThinkingEffort(level, { thinkingSteps, thinkingMarker, thinkingName }) {
-  const normalized = THINKING_LEVELS.includes(level) ? level : "off";
+export function renderThinkingEffort(
+  level,
+  { thinkingSteps, thinkingMarker, thinkingName, levels = THINKING_LEVELS, nameFor },
+) {
+  const normalized = levels.includes(level) ? level : levels[0];
   const dots = thinkingSteps
     ? Array.from(thinkingSteps.querySelectorAll(".thinking-effort-dot"))
     : [];
-  const count = dots.length || THINKING_LEVELS.length;
-  let activeIdx = THINKING_LEVELS.indexOf(normalized);
+  const count = dots.length || levels.length;
+  let activeIdx = levels.indexOf(normalized);
   if (activeIdx < 0) activeIdx = 0;
 
   dots.forEach((dot, idx) => {
@@ -25,7 +30,7 @@ export function renderThinkingEffort(level, { thinkingSteps, thinkingMarker, thi
     thinkingMarker.style.left = `calc(${activeIdx * segment}% + 3px)`;
   }
 
-  if (thinkingName) thinkingName.textContent = normalized;
+  if (thinkingName) thinkingName.textContent = nameFor ? nameFor(normalized) : normalized;
 }
 
 export function setupSettingsToggles({

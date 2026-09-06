@@ -11,6 +11,20 @@ import { initTransport } from "./app/transport.js";
 import { createAppUpdater } from "./app/updater.js";
 import { setupVoiceInput } from "./app/voice-input.js";
 import { resolveWebSocketUrl, WebSocketClient } from "./app/websocket-client.js";
+import {
+  applyAppearanceToDom,
+  DEFAULT_FONT_SIZE_LEVEL,
+  FONT_SIZE_LEVELS,
+  loadAppearanceCookie,
+  migrateLegacyTerminalFontSize,
+  normalizeFontLevel,
+  normalizePreviewThemeMode,
+  PREVIEW_THEME_MODES,
+  resolvePreviewTheme,
+  saveAppearanceCookie,
+  TERMINAL_FONT_SIZE_PX,
+} from "./appearance-preferences.js";
+import { setEditorHighlightTheme } from "./code-editor.js";
 import { createCompactCoordinator } from "./compact-coordinator.js";
 import { setupComposerCommandMenu } from "./composer-command-menu.js";
 import { setupComposerImageAttachments } from "./composer-image-attachments.js";
@@ -90,11 +104,9 @@ import { TerminalClient } from "./terminal-client.js";
 import { loadTerminalFont, TERMINAL_FONT_FAMILY, TERMINAL_FONT_STACK } from "./terminal-font.js";
 import { formatTerminalStartError, TerminalPanel } from "./terminal-panel.js";
 import {
-  DEFAULT_FONT_SIZE,
   DEFAULT_SCROLLBACK_LIMIT,
   DEFAULT_SMOOTH_SCROLL_DURATION,
   defaultWebglRenderer,
-  normalizeFontSize,
   normalizeScrollbackLimit,
   normalizeSmoothScrollDuration,
   normalizeThemeMode,
@@ -1143,6 +1155,29 @@ windowCloseCoordinator.registerParticipant("quick", quickChatDialog);
 // on native capability, so LAN/mobile clients render no terminal surface.
 const terminalPreferences = new TerminalPreferences();
 const savedTerminalPreferences = terminalPreferences.load();
+
+// ── Appearance preferences (Settings → Appearance) ─────────────────────
+// The cookie cache is read synchronously at bootstrap for first paint; here
+// we lift any legacy per-origin terminal fontSize (px) once, then keep all
+// four settings on the cookie + DB dual-track like ui.theme.
+const appearanceBeforeMigration = loadAppearanceCookie();
+const legacyTerminalFontLevel = migrateLegacyTerminalFontSize(
+  typeof localStorage !== "undefined" ? localStorage : null,
+);
+if (
+  legacyTerminalFontLevel &&
+  appearanceBeforeMigration.terminalFontSize === DEFAULT_FONT_SIZE_LEVEL
+) {
+  saveAppearanceCookie({ terminalFontSize: legacyTerminalFontLevel });
+}
+const savedAppearance = loadAppearanceCookie();
+let chatFontSizeLevel = savedAppearance.chatFontSize;
+let previewFontSizeLevel = savedAppearance.previewFontSize;
+let previewThemeMode = savedAppearance.previewTheme;
+let terminalFontSizeLevel = savedAppearance.terminalFontSize;
+// The inline bootstrap already set the CSS variables pre-paint; re-apply here
+// so the CodeMirror highlight palette matches before any editor is created.
+applyAppearanceDom();
 // WebGL renderer is opt-in: absent preference falls back to the platform
 // default (ON on macOS/Linux, OFF on Windows — see defaultWebglRenderer).
 // Mutable: the Settings > General toggle updates these live.
@@ -1153,7 +1188,7 @@ let webglRendererEnabled =
 // Terminal color scheme: "system" follows the Picot theme; "light"/"dark"
 // force canonical palettes. Default dark (TerminalPreferences contract).
 let terminalThemeMode = normalizeThemeMode(savedTerminalPreferences.themeMode);
-let terminalFontSize = normalizeFontSize(savedTerminalPreferences.fontSize ?? DEFAULT_FONT_SIZE);
+let terminalFontSize = TERMINAL_FONT_SIZE_PX[terminalFontSizeLevel];
 let terminalScrollbackLimit = normalizeScrollbackLimit(
   savedTerminalPreferences.scrollbackLimit ?? DEFAULT_SCROLLBACK_LIMIT,
 );
@@ -5655,8 +5690,28 @@ const settingsNavItems = Array.from(document.querySelectorAll(".settings-nav-ite
 const settingsTabs = Array.from(document.querySelectorAll(".settings-tab"));
 const themeGrid = document.getElementById("theme-grid");
 const languageSelect = document.getElementById("settings-language-select");
+const previewThemeSelect = document.getElementById("settings-preview-theme-select");
 const terminalThemeSelect = document.getElementById("settings-terminal-theme-select");
-const terminalFontSizeInput = document.getElementById("settings-terminal-font-size-input");
+// Three font-size sliders (chat / preview / terminal) share the thinking-effort
+// segmented-control markup; each is a radiogroup with a sliding thumb.
+const fontSizeControls = [
+  { prefix: "settings-chat-font-size", get: () => chatFontSizeLevel, set: setChatFontSizeLevel },
+  {
+    prefix: "settings-preview-font-size",
+    get: () => previewFontSizeLevel,
+    set: setPreviewFontSizeLevel,
+  },
+  {
+    prefix: "settings-terminal-font-size",
+    get: () => terminalFontSizeLevel,
+    set: setTerminalFontSizeLevel,
+  },
+].map((control) => ({
+  ...control,
+  steps: document.getElementById(`${control.prefix}-steps`),
+  marker: document.getElementById(`${control.prefix}-marker`),
+  name: document.getElementById(`${control.prefix}-name`),
+}));
 const terminalScrollbackInput = document.getElementById("settings-terminal-scrollback-input");
 const terminalSmoothScrollInput = document.getElementById("settings-terminal-smooth-scroll-input");
 const toggleTerminalWebgl = document.getElementById("toggle-terminal-webgl");
@@ -5841,6 +5896,26 @@ async function reconcilePreferencesOnce() {
         readCache: () => getLanguagePreference(),
         apply: (value) => void setLocale(String(value)),
       },
+      {
+        key: PREFERENCE_KEYS.chatFontSize,
+        readCache: () => chatFontSizeLevel,
+        apply: (value) => setChatFontSizeLevel(value),
+      },
+      {
+        key: PREFERENCE_KEYS.previewFontSize,
+        readCache: () => previewFontSizeLevel,
+        apply: (value) => setPreviewFontSizeLevel(value),
+      },
+      {
+        key: PREFERENCE_KEYS.previewTheme,
+        readCache: () => previewThemeMode,
+        apply: (value) => setPreviewThemeMode(value),
+      },
+      {
+        key: PREFERENCE_KEYS.terminalFontSize,
+        readCache: () => terminalFontSizeLevel,
+        apply: (value) => setTerminalFontSizeLevel(value),
+      },
     ],
   });
   if (!outcome.ok) console.warn("[App] preference reconcile skipped:", outcome.reason);
@@ -5877,6 +5952,8 @@ function buildThemeGrid() {
       for (const entry of terminalClient.tabs.values()) {
         entry.tab?.setTheme?.(xtermTheme);
       }
+      // Re-resolve the preview theme/highlight against the new Picot theme.
+      applyAppearanceDom();
       themeGrid.querySelectorAll(".theme-swatch").forEach((s) => {
         s.classList.remove("active");
       });
@@ -5947,6 +6024,89 @@ function applyTerminalPreferencesToAllTabs(prefs) {
   }
 }
 
+// ── Appearance: live application + selectors ──────────────────────────
+
+function currentPicotThemeIsDark() {
+  const themeId = document.documentElement.getAttribute("data-theme") || getCurrentTheme();
+  return themes[themeId]?.dark ?? true;
+}
+
+/**
+ * Mirror the appearance state onto the document (font variables, forced
+ * preview theme attribute) and swap the CodeMirror highlight palette.
+ */
+function applyAppearanceDom() {
+  const picotThemeIsDark = currentPicotThemeIsDark();
+  applyAppearanceToDom({
+    chatFontSize: chatFontSizeLevel,
+    previewFontSize: previewFontSizeLevel,
+    previewTheme: previewThemeMode,
+    picotThemeIsDark,
+  });
+  setEditorHighlightTheme(resolvePreviewTheme(previewThemeMode, picotThemeIsDark));
+}
+
+function setChatFontSizeLevel(level) {
+  chatFontSizeLevel = normalizeFontLevel(level);
+  saveAppearanceCookie({ chatFontSize: chatFontSizeLevel });
+  applyAppearanceDom();
+}
+
+function setPreviewFontSizeLevel(level) {
+  previewFontSizeLevel = normalizeFontLevel(level);
+  saveAppearanceCookie({ previewFontSize: previewFontSizeLevel });
+  applyAppearanceDom();
+}
+
+function setPreviewThemeMode(mode) {
+  previewThemeMode = normalizePreviewThemeMode(mode);
+  saveAppearanceCookie({ previewTheme: previewThemeMode });
+  applyAppearanceDom();
+}
+
+function setTerminalFontSizeLevel(level) {
+  terminalFontSizeLevel = normalizeFontLevel(level);
+  terminalFontSize = TERMINAL_FONT_SIZE_PX[terminalFontSizeLevel];
+  saveAppearanceCookie({ terminalFontSize: terminalFontSizeLevel });
+  applyTerminalPreferencesToAllTabs({ fontSize: terminalFontSize });
+}
+
+const FONT_LEVEL_LABEL_KEYS = {
+  small: "settings.fontLevel.small",
+  normal: "settings.fontLevel.normal",
+  medium: "settings.fontLevel.medium",
+  large: "settings.fontLevel.large",
+  xlarge: "settings.fontLevel.xlarge",
+};
+
+function renderFontSizeControl(control) {
+  renderThinkingEffort(control.get(), {
+    thinkingSteps: control.steps,
+    thinkingMarker: control.marker,
+    thinkingName: control.name,
+    levels: FONT_SIZE_LEVELS,
+    nameFor: (level) => t(FONT_LEVEL_LABEL_KEYS[level]),
+  });
+}
+
+function buildAppearanceSelectors() {
+  for (const control of fontSizeControls) renderFontSizeControl(control);
+  if (!previewThemeSelect) return;
+  previewThemeSelect.replaceChildren();
+  const labels = {
+    system: t("settings.preview.themeSystem"),
+    light: t("settings.preview.themeLight"),
+    dark: t("settings.preview.themeDark"),
+  };
+  for (const mode of PREVIEW_THEME_MODES) {
+    const option = document.createElement("option");
+    option.value = mode;
+    option.textContent = labels[mode] || mode;
+    option.selected = mode === previewThemeMode;
+    previewThemeSelect.append(option);
+  }
+}
+
 function buildTerminalThemeSelector() {
   if (!terminalThemeSelect) return;
   terminalThemeSelect.replaceChildren();
@@ -5970,11 +6130,8 @@ function handleTerminalThemeChange() {
   applyTerminalThemeToAllTabs();
 }
 
-function handleTerminalFontSizeChange() {
-  terminalFontSize = normalizeFontSize(terminalFontSizeInput.value);
-  terminalFontSizeInput.value = String(terminalFontSize);
-  persistTerminalPreferences({ fontSize: terminalFontSize });
-  applyTerminalPreferencesToAllTabs({ fontSize: terminalFontSize });
+function handlePreviewThemeChange() {
+  setPreviewThemeMode(previewThemeSelect.value);
 }
 
 function handleTerminalScrollbackChange() {
@@ -5994,7 +6151,6 @@ function handleTerminalSmoothScrollChange() {
 }
 
 function syncTerminalDisplaySettings() {
-  if (terminalFontSizeInput) terminalFontSizeInput.value = String(terminalFontSize);
   if (terminalScrollbackInput) terminalScrollbackInput.value = String(terminalScrollbackLimit);
   if (terminalSmoothScrollInput) {
     terminalSmoothScrollInput.value = String(terminalSmoothScrollDuration);
@@ -6019,13 +6175,24 @@ function handleTerminalWebglToggle() {
 }
 
 terminalThemeSelect?.addEventListener("change", handleTerminalThemeChange);
-terminalFontSizeInput?.addEventListener("change", handleTerminalFontSizeChange);
+previewThemeSelect?.addEventListener("change", handlePreviewThemeChange);
+// Font-size sliders: click a dot to pick that level; the setter persists and
+// applies, then the control re-renders thumb + label.
+for (const control of fontSizeControls) {
+  control.steps?.addEventListener("click", (event) => {
+    const dot = event.target.closest(".thinking-effort-dot");
+    if (!dot) return;
+    control.set(dot.dataset.level);
+    renderFontSizeControl(control);
+  });
+}
 terminalScrollbackInput?.addEventListener("change", handleTerminalScrollbackChange);
 terminalSmoothScrollInput?.addEventListener("change", handleTerminalSmoothScrollChange);
 toggleTerminalWebgl?.addEventListener("click", handleTerminalWebglToggle);
 
 onLocaleChange(buildLanguageSelector);
 onLocaleChange(buildTerminalThemeSelector);
+onLocaleChange(buildAppearanceSelectors);
 
 onLocaleChange(() => {
   updateThinkingBtn();
@@ -6078,6 +6245,7 @@ async function openSettings(tabKey = "general", options = {}) {
   buildThemeGrid();
   buildLanguageSelector();
   buildTerminalThemeSelector();
+  buildAppearanceSelectors();
   syncTerminalDisplaySettings();
   syncTerminalWebglToggle();
   if (piVersionValue) {

@@ -2,12 +2,10 @@
 // ABOUTME: every process-sensitive key is rejected from the serialized payload.
 import { expect, test } from "vitest";
 import {
-  DEFAULT_FONT_SIZE,
   DEFAULT_SCROLLBACK_LIMIT,
   DEFAULT_SMOOTH_SCROLL_DURATION,
   DEFAULT_TERMINAL_THEME_MODE,
   defaultWebglRenderer,
-  normalizeFontSize,
   normalizeScrollbackLimit,
   normalizeSmoothScrollDuration,
   normalizeThemeMode,
@@ -48,8 +46,8 @@ test("serialized payload has no runtime or secret fields", () => {
   });
   const raw = storage.getItem("picot.terminal.preferences");
   expect(raw).not.toBeNull();
-  expect(raw).toContain("fontSize");
   for (const forbidden of [
+    "fontSize",
     "terminalId",
     "owner",
     "root",
@@ -72,22 +70,20 @@ test("load round-trips allowed preferences", () => {
   const storage = memStorage();
   const prefs = new TerminalPreferences(storage);
   prefs.save({
-    fontSize: 16,
     scrollbackLimit: 2000,
     smoothScrollDuration: 120,
   });
   expect(prefs.load()).toEqual({
-    fontSize: 16,
     scrollbackLimit: 2000,
     smoothScrollDuration: 120,
   });
+  // Font size is no longer a terminal preference; it lives in the global
+  // appearance store and must be rejected here.
+  prefs.save({ scrollbackLimit: 3000, fontSize: 20 });
+  expect(prefs.load()).toEqual({ scrollbackLimit: 3000 });
 });
 
 test("normalizes terminal display preferences to safe ranges", () => {
-  expect(normalizeFontSize(10)).toBe(10);
-  expect(normalizeFontSize(40)).toBe(32);
-  expect(normalizeFontSize("bad")).toBe(DEFAULT_FONT_SIZE);
-  expect(normalizeFontSize("")).toBe(DEFAULT_FONT_SIZE);
   expect(normalizeScrollbackLimit(50)).toBe(100);
   expect(normalizeScrollbackLimit(60000)).toBe(50000);
   expect(normalizeScrollbackLimit(undefined)).toBe(DEFAULT_SCROLLBACK_LIMIT);
@@ -111,7 +107,8 @@ test("load drops unknown keys from an older payload", () => {
     JSON.stringify({ fontSize: 12, legacyColor: "#fff", terminalId: "leak" }),
   );
   const prefs = new TerminalPreferences(storage);
-  expect(prefs.load()).toEqual({ fontSize: 12 });
+  // Font size migrated to the global appearance store; it is dropped here.
+  expect(prefs.load()).toEqual({});
 });
 
 test("webglRenderer is an allowed display preference and round-trips", () => {

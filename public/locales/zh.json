@@ -843,11 +843,34 @@
       "webgl": "WebGL 渲染器",
       "webglDescription": "GPU 加速的终端渲染；不可用时自动回退到 DOM 渲染器。",
       "fontSize": "字体大小",
-      "fontSizeDescription": "终端文字大小（像素）。",
+      "fontSizeDescription": "终端文字大小。",
       "scrollback": "滚动缓冲",
       "scrollbackDescription": "保留的终端历史行数。",
       "smoothScroll": "平滑滚动时长",
       "smoothScrollDescription": "滚动动画时长（毫秒）；0 表示关闭。"
+    },
+    "theme": "主题",
+    "preview": {
+      "title": "文件预览",
+      "theme": "预览主题",
+      "themeDescription": "跟随 Picot 主题，或为代码与 Markdown 预览强制浅色 / 深色。",
+      "themeSystem": "跟随 Picot 主题",
+      "themeLight": "浅色",
+      "themeDark": "深色",
+      "fontSize": "字体大小",
+      "fontSizeDescription": "代码编辑器与 Markdown 预览的文字大小。"
+    },
+    "chat": {
+      "title": "聊天",
+      "fontSize": "字体大小",
+      "fontSizeDescription": "聊天消息的文字大小。"
+    },
+    "fontLevel": {
+      "small": "小",
+      "normal": "正常",
+      "medium": "中",
+      "large": "大",
+      "xlarge": "特大"
     }
   },
   "cost": {

@@ -42,8 +42,10 @@ export {
   Decoration,
   EditorView,
   gutters,
+  highlightActiveLine,
   keymap,
   lineNumbers,
   ViewPlugin,
   WidgetType,
 } from "@codemirror/view";
+export { tags } from "@lezer/highlight";

@@ -3031,7 +3031,8 @@ body {
 }
 
 .settings-language-select,
-.settings-terminal-theme-select {
+.settings-terminal-theme-select,
+.settings-preview-theme-select {
   width: min(220px, 48%);
 }
 
@@ -3892,7 +3893,7 @@ body {
   border-radius: var(--radius-lg);
   word-wrap: break-word;
   overflow-wrap: break-word;
-  font-size: var(--font-size-lg);
+  font-size: var(--chat-font-size, var(--font-size-lg));
   line-height: 1.6;
 }
 
@@ -7484,6 +7485,42 @@ html.macos-overlay .settings-content {
     flex-basis 0.15s var(--ease);
 }
 
+/* Forced preview themes (Appearance page) scope-swap the Picot variables the
+   panel subtree consumes, so code editors and markdown previews render in the
+   canonical dark (night) or light (clean) palette regardless of the active
+   Picot theme. System mode sets no attribute and inherits the theme. */
+[data-preview-theme="dark"] .file-preview-panel {
+  --bg-solid: #212121;
+  --bg-glass: rgba(255, 255, 255, 0.04);
+  --bg-glass-hover: rgba(255, 255, 255, 0.06);
+  --bg-glass-active: rgba(255, 255, 255, 0.08);
+  --bg-glass-strong: rgba(255, 255, 255, 0.05);
+  --bg-frosted: rgba(33, 33, 33, 0.85);
+  --text-primary: rgba(255, 255, 255, 0.88);
+  --text-secondary: rgba(255, 255, 255, 0.5);
+  --text-dim: rgba(255, 255, 255, 0.3);
+  --text-ghost: rgba(255, 255, 255, 0.1);
+  --border: rgba(255, 255, 255, 0.06);
+  --border-hover: rgba(255, 255, 255, 0.1);
+  --border-bright: rgba(255, 255, 255, 0.14);
+}
+
+[data-preview-theme="light"] .file-preview-panel {
+  --bg-solid: #ffffff;
+  --bg-glass: rgba(0, 0, 0, 0.03);
+  --bg-glass-hover: rgba(0, 0, 0, 0.06);
+  --bg-glass-active: rgba(0, 0, 0, 0.09);
+  --bg-glass-strong: rgba(0, 0, 0, 0.04);
+  --bg-frosted: rgba(255, 255, 255, 0.82);
+  --text-primary: rgba(0, 0, 0, 0.88);
+  --text-secondary: rgba(0, 0, 0, 0.55);
+  --text-dim: rgba(0, 0, 0, 0.35);
+  --text-ghost: rgba(0, 0, 0, 0.12);
+  --border: rgba(0, 0, 0, 0.08);
+  --border-hover: rgba(0, 0, 0, 0.14);
+  --border-bright: rgba(0, 0, 0, 0.2);
+}
+
 .file-preview-panel.collapsed {
   width: 0 !important;
   flex-basis: 0 !important;
@@ -7860,8 +7897,30 @@ body.file-preview-resizing {
 
 .file-code-editor .cm-editor {
   height: 100%;
-  /* design-token-ignore: preserved literal sizing from private fork components */
-  font-size: 13px;
+  /* Historical 13px default; overridden by the Appearance preview font size. */
+  font-size: var(
+    --preview-font-size,
+    13px
+  ); /* design-token-ignore: historical literal from private fork */
+}
+
+/* CodeMirror's base chrome inherits from the page body and its baseTheme
+   injects black cursor styles AFTER style.css (module-load <style> mount),
+   so these rules run at three-class specificity to win the cascade, and pin
+   text, caret, and cursor to the panel-resolved tokens so forced dark/light
+   previews stay readable. */
+.file-code-editor .cm-editor .cm-content {
+  color: var(--text-primary);
+  caret-color: var(--text-primary);
+}
+
+.file-code-editor .cm-editor .cm-cursor,
+.file-code-editor .cm-editor .cm-dropCursor {
+  border-left-color: var(--text-primary);
+}
+
+.file-code-editor .cm-activeLine {
+  background: var(--bg-glass);
 }
 
 .file-code-editor .cm-lineNumbers {
@@ -7884,8 +7943,26 @@ body.file-preview-resizing {
   margin-left: var(--file-preview-line-number-gutter);
   overflow: auto;
   padding: var(--space-4);
-  font-size: var(--font-size-md);
+  /* Inherit reaches past the panel's forced-theme variable scope, so the
+     text color must be pinned here: otherwise a forced dark preview keeps
+     the light page theme's black text on the dark panel background. */
+  color: var(--text-primary);
+  /* One step larger than the code editor, preserving the historical 14px vs
+     13px relationship; both follow the Appearance preview font size. */
+  font-size: calc(
+    var(--preview-font-size, 13px) +
+    1px
+  ); /* design-token-ignore: historical literal from private fork */
   line-height: 1.6;
+}
+
+/* The universal reset strips UA list padding; without this the outside
+   list markers overflow the ol box and get clipped by the preview's left
+   edge (the 28px gutter strip), cutting numbers in half. Mirrors the
+   .message-content ol restoration rule. */
+.file-markdown-preview ul,
+.file-markdown-preview ol {
+  padding-left: var(--space-5);
 }
 
 .message.assistant .message-content img,

@@ -843,11 +843,34 @@
       "webgl": "Renderizador WebGL",
       "webglDescription": "Renderizado del terminal acelerado por GPU. Recurre al renderizador DOM cuando no está disponible.",
       "fontSize": "Tamaño de fuente",
-      "fontSizeDescription": "Tamaño del texto del terminal en píxeles.",
+      "fontSizeDescription": "Tamaño del texto de la terminal.",
       "scrollback": "Historial",
       "scrollbackDescription": "Número de líneas del historial del terminal que se conservan.",
       "smoothScroll": "Duración del desplazamiento suave",
       "smoothScrollDescription": "Duración de la animación en milisegundos; 0 la desactiva."
+    },
+    "theme": "Tema",
+    "preview": {
+      "title": "Vista previa de archivos",
+      "theme": "Tema de vista previa",
+      "themeDescription": "Sigue el tema de Picot o fuerza el modo claro u oscuro en las vistas previas de código y Markdown.",
+      "themeSystem": "Según el tema de Picot",
+      "themeLight": "Claro",
+      "themeDark": "Oscuro",
+      "fontSize": "Tamaño de fuente",
+      "fontSizeDescription": "Tamaño del texto en editores de código y vistas previas de Markdown."
+    },
+    "chat": {
+      "title": "Chat",
+      "fontSize": "Tamaño de fuente",
+      "fontSizeDescription": "Tamaño del texto de los mensajes del chat."
+    },
+    "fontLevel": {
+      "small": "Pequeño",
+      "normal": "Normal",
+      "medium": "Mediano",
+      "large": "Grande",
+      "xlarge": "Muy grande"
     }
   },
   "cost": {

@@ -11,13 +11,79 @@
  */
 
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { syntaxHighlighting } from "@codemirror/language";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { closeSearchPanel, openSearchPanel, search, searchKeymap } from "@codemirror/search";
 import { Compartment, EditorState } from "@codemirror/state";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
-import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+import { EditorView, highlightActiveLine, keymap, lineNumbers } from "@codemirror/view";
+import { tags as t } from "@lezer/highlight";
 import { languageExtensionForPath } from "./file-language.js";
 import { getLocale, onLocaleChange } from "./i18n.js";
+
+/**
+ * GitHub Light token colors (github-vscode-theme Light Default palette).
+ * Used when the preview theme is forced or resolves to light; the dark side
+ * stays on oneDark.
+ */
+const githubLightHighlightStyle = HighlightStyle.define([
+  { tag: t.comment, color: "#6e7781" },
+  {
+    tag: [
+      t.keyword,
+      t.modifier,
+      t.operatorKeyword,
+      t.definitionKeyword,
+      t.controlKeyword,
+      t.moduleKeyword,
+      t.operator,
+    ],
+    color: "#cf222e",
+  },
+  { tag: [t.string, t.special(t.string), t.regexp], color: "#0a3069" },
+  {
+    tag: [t.number, t.bool, t.null, t.atom, t.unit, t.color, t.constant(t.name)],
+    color: "#0550ae",
+  },
+  { tag: [t.function(t.variableName), t.function(t.propertyName), t.macroName], color: "#8250df" },
+  { tag: [t.typeName, t.className, t.namespace], color: "#953800" },
+  { tag: [t.propertyName, t.attributeName, t.self, t.labelName], color: "#0550ae" },
+  { tag: [t.tagName, t.standard(t.tagName)], color: "#116329" },
+  { tag: [t.variableName, t.punctuation, t.separator, t.bracket], color: "#24292f" },
+  { tag: t.heading, color: "#0550ae", fontWeight: "bold" },
+  { tag: [t.link, t.url], color: "#0a3069", textDecoration: "underline" },
+  { tag: t.emphasis, fontStyle: "italic" },
+  { tag: t.strong, fontWeight: "bold" },
+  { tag: t.invalid, color: "#82071e" },
+]);
+
+function highlightExtensionFor(mode) {
+  return syntaxHighlighting(mode === "light" ? githubLightHighlightStyle : oneDarkHighlightStyle);
+}
+
+/** Current-line highlight is an edit-mode affordance only. */
+function activeLineExtensionFor(readOnly) {
+  return readOnly ? [] : highlightActiveLine();
+}
+
+// Resolved highlight mode for every editor in this window. New editors pick
+// it up at creation; setEditorHighlightTheme reconfigures live ones.
+let editorHighlightMode = "dark";
+const editorHighlightCompartments = new Map();
+
+/**
+ * Switch the CodeMirror syntax palette for every editor in this window
+ * ("light" | "dark", already resolved from the preview theme preference).
+ */
+export function setEditorHighlightTheme(mode) {
+  const next = mode === "light" ? "light" : "dark";
+  if (next === editorHighlightMode) return;
+  editorHighlightMode = next;
+  for (const [view, compartment] of editorHighlightCompartments) {
+    view.dispatch({
+      effects: compartment.reconfigure(highlightExtensionFor(editorHighlightMode)),
+    });
+  }
+}
 
 const SEARCH_PHRASES = {
   zh: {
@@ -60,6 +126,8 @@ export function createCodeEditor({
   const readOnlyCompartment = new Compartment();
   const wrapCompartment = new Compartment();
   const languageCompartment = new Compartment();
+  const highlightCompartment = new Compartment();
+  const activeLineCompartment = new Compartment();
   const searchPhrasesCompartment = new Compartment();
   const languageExt = languageExtensionForPath(filePath || "");
   const extensions = [
@@ -73,7 +141,8 @@ export function createCodeEditor({
     searchPhrasesCompartment.of(EditorState.phrases.of(searchPhrasesForLocale(getLocale()))),
     wrapCompartment.of(wrapLines ? EditorView.lineWrapping : []),
     languageCompartment.of(languageExt ? [languageExt] : []),
-    syntaxHighlighting(oneDarkHighlightStyle),
+    highlightCompartment.of(highlightExtensionFor(editorHighlightMode)),
+    activeLineCompartment.of(activeLineExtensionFor(readOnly)),
     EditorView.updateListener.of((update) => {
       if (update.docChanged && typeof onChange === "function") {
         onChange(update.state.doc.toString());
@@ -88,6 +157,7 @@ export function createCodeEditor({
     }),
     parent: container,
   });
+  editorHighlightCompartments.set(view, highlightCompartment);
 
   const unsubscribeLocale = onLocaleChange((locale) => {
     view.dispatch({
@@ -150,6 +220,7 @@ export function createCodeEditor({
         effects: [
           editableCompartment.reconfigure(EditorView.editable.of(!newReadOnly)),
           readOnlyCompartment.reconfigure(EditorState.readOnly.of(newReadOnly)),
+          activeLineCompartment.reconfigure(activeLineExtensionFor(newReadOnly)),
         ],
       });
     },
@@ -162,6 +233,7 @@ export function createCodeEditor({
 
     destroy() {
       unsubscribeLocale();
+      editorHighlightCompartments.delete(view);
       if (typeof onViewDestroy === "function") {
         onViewDestroy();
       }
