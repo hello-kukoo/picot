@@ -1223,10 +1223,26 @@ fn oversized_code(kind: PayloadKind) -> &'static str {
     }
 }
 
+/// Outbound payload classification. `get_tree` returns snapshot-scale
+/// session content (an 868-entry session serializes to ~3.5MB); routing it
+/// under the generic Response cap rejects trees whose chat snapshot already
+/// renders, so tree replies share the Snapshot limit.
+fn outbound_payload_kind(frame_type: Option<&str>, command_type: Option<&str>) -> PayloadKind {
+    match frame_type {
+        Some("runtime_snapshot") => PayloadKind::Snapshot,
+        _ if command_type == Some("get_tree") => PayloadKind::Snapshot,
+        _ => PayloadKind::Response,
+    }
+}
+
 fn outbound_message(value: Value, kind: PayloadKind) -> Message {
     if validate(&value, kind).is_err() {
+        // Keep the requestId from the replaced frame: without it the pending
+        // frontend control cannot correlate the rejection and times out
+        // instead of surfacing the failure.
+        let request_id = value.get("requestId").and_then(Value::as_str);
         let error = structured_error(
-            None,
+            request_id,
             oversized_code(kind),
             "Outbound payload exceeds protocol limit",
         );
@@ -1481,6 +1497,14 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
     let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
     let writer = tokio::spawn(async move {
         while let Some(message) = outgoing_rx.recv().await {
+            // Large-frame trace: snapshot-scale frames (2MB+) are the ones
+            // whose loss shows up as a silent frontend timeout, so record
+            // that the writer actually handed them to the socket.
+            if let Message::Text(text) = &message {
+                if text.len() > 2 * 1024 * 1024 {
+                    log::info!("[ws-writer] sent large frame: {}B", text.len());
+                }
+            }
             if socket_sink.send(message).await.is_err() {
                 break;
             }
@@ -1690,6 +1714,18 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                         let state = Arc::clone(&state);
                         let context = client_context.clone();
                         let outgoing_tx = outgoing_tx.clone();
+                        // Snapshot-scale replies (get_tree) must share the
+                        // Snapshot payload limit, so capture the command type
+                        // before dispatch consumes the action.
+                        let command_type = match &action {
+                            RoutedAction::Runtime { frame, .. } => frame
+                                .pointer("/command/type")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned),
+                            _ => None,
+                        };
+                        let trace_get_tree = command_type.as_deref() == Some("get_tree");
+                        let t0 = std::time::Instant::now();
                         tokio::spawn(async move {
                             let response = dispatch(action, &state, context.as_ref(), progress_sink).await;
                             for progress in progress_frames.lock().map(|frames| frames.clone()).unwrap_or_default() {
@@ -1701,10 +1737,19 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                                     structured_error(request_id.as_deref(), code, &message)
                                 }
                             };
-                            let kind = match outgoing.get("type").and_then(Value::as_str) {
-                                Some("runtime_snapshot") => PayloadKind::Snapshot,
-                                _ => PayloadKind::Response,
-                            };
+                            let kind = outbound_payload_kind(
+                                outgoing.get("type").and_then(Value::as_str),
+                                command_type.as_deref(),
+                            );
+                            if trace_get_tree {
+                                log::info!(
+                                    "[get_tree] dispatched: requestId={:?} elapsed={}ms size={}B kind={:?}",
+                                    request_id,
+                                    t0.elapsed().as_millis(),
+                                    outgoing.to_string().len(),
+                                    kind
+                                );
+                            }
                             let _ = outgoing_tx.send(outbound_message(outgoing, kind));
                         });
                         continue;
@@ -2515,6 +2560,38 @@ async fn dispatch(
                         "sessionCount": session_count,
                     }))
                 }
+                Some("read_session_messages") => {
+                    let session_id = frame
+                        .get("sessionId")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_session", "sessionId is required".into()))?;
+                    let messages = state
+                        .data
+                        .read_session_messages(workspace_id, session_id)
+                        .map_err(host_data_error)?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "read_session_messages",
+                        "messages": messages,
+                    }))
+                }
+                Some("read_session_tree") => {
+                    let session_id = frame
+                        .get("sessionId")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_session", "sessionId is required".into()))?;
+                    let tree = state
+                        .data
+                        .read_session_tree(workspace_id, session_id)
+                        .map_err(host_data_error)?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "read_session_tree",
+                        "tree": tree,
+                    }))
+                }
                 Some("list_files") => {
                     let workspace_id = frame
                         .get("workspaceId")
@@ -2854,17 +2931,265 @@ fn now_seconds() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{bind_is_loopback, dialog_response_allowed, read_bounded_utf8, HostServer};
+    use super::{
+        bind_is_loopback, dialog_response_allowed, outbound_message, outbound_payload_kind,
+        read_bounded_utf8, HostServer,
+    };
     use crate::host_router::HostClientContext;
     use crate::metadata_store::MetadataStore;
     use crate::native_pi_manager::NativePiManager;
     use crate::remote_auth::RemoteAuth;
     use crate::runtime_coordinator::RuntimeTarget;
+    use crate::transport_limits::PayloadKind;
     use futures_util::{SinkExt, StreamExt};
     use serde_json::{json, Value};
     use std::fs;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn oversized_outbound_responses_keep_their_request_id() {
+        // A get_tree reply for an 868-entry session serializes past the
+        // Response cap. Replacing it with an error that has no requestId
+        // makes the pending frontend control time out instead of failing —
+        // the caller must be able to correlate the rejection.
+        let value = json!({
+            "type": "runtime_response",
+            "requestId": "tree-1",
+            "response": { "data": "x".repeat(crate::transport_limits::OUTBOUND_PAYLOAD_BYTES + 1) }
+        });
+        let message = outbound_message(value, PayloadKind::Response);
+        let error: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+        assert_eq!(error["type"], "error");
+        assert_eq!(error["requestId"], "tree-1");
+        assert_eq!(error["error"]["code"], "response_too_large");
+    }
+
+    #[test]
+    fn get_tree_responses_share_the_snapshot_payload_limit() {
+        // The tree carries the same session content the snapshot already
+        // delivers under the shared outbound cap; the generic Response
+        // trees for sessions whose chat renders fine.
+        assert_eq!(
+            outbound_payload_kind(Some("runtime_response"), Some("get_tree")),
+            PayloadKind::Snapshot
+        );
+        assert_eq!(
+            outbound_payload_kind(Some("runtime_response"), Some("get_state")),
+            PayloadKind::Response
+        );
+        assert_eq!(
+            outbound_payload_kind(Some("runtime_snapshot"), None),
+            PayloadKind::Snapshot
+        );
+        assert_eq!(
+            outbound_payload_kind(Some("runtime_response"), None),
+            PayloadKind::Response
+        );
+    }
+
+    #[tokio::test]
+    async fn large_get_tree_response_reaches_the_ws_client() {
+        use tokio_tungstenite::tungstenite::Message;
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-tree-{nonce}"));
+        let public = temp.join("public");
+        fs::create_dir_all(&public).unwrap();
+        fs::write(public.join("index.html"), "Picot").unwrap();
+        let metadata = Arc::new(Mutex::new(
+            MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
+        ));
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
+        let runtimes = NativePiManager::new(32);
+        let registry = Arc::new(crate::window_owner::WindowOwnerRegistry::default());
+        let (owner, capability) = registry
+            .create_owner_with_workspace(
+                "owner".into(),
+                temp.clone(),
+                0,
+                "http://127.0.0.1:1".into(),
+                Some("workspace-tree".into()),
+                crate::window_owner::TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        let target = RuntimeTarget::with_owner(
+            "workspace-tree",
+            "session-tree",
+            "instance-tree",
+            owner.as_str(),
+            0,
+        );
+        let mut fake = runtimes.register_in_memory(target.clone()).unwrap();
+        let host = HostServer::start(public, runtimes, auth, metadata)
+            .await
+            .unwrap();
+        host.set_owner_registry(registry);
+        let ws_url = host.origin().replace("http://", "ws://") + "/v2/ws";
+        let (mut socket, _) = tokio_tungstenite::connect_async(ws_url).await.unwrap();
+        socket
+            .send(Message::Text(
+                json!({
+                    "type": "hello", "protocolVersion": 2, "clientType": "desktop",
+                    "clientId": "tree-client", "desktopCapability": capability
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        socket.next().await.unwrap().unwrap();
+        socket
+            .send(Message::Text(
+                json!({
+                    "type": "runtime_subscribe", "requestId": "sub", "target": target
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        socket.next().await.unwrap().unwrap();
+
+        async fn request_tree(
+            socket: &mut tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+            fake: &mut crate::pi_rpc_bridge::InMemoryPiProcess,
+            request_id: &str,
+            payload_bytes: usize,
+        ) -> Value {
+            socket
+                .send(Message::Text(
+                    json!({
+                        "type": "runtime_request", "requestId": request_id,
+                        "idempotencyKey": format!("key-{request_id}"),
+                        "target": {
+                            "workspaceId": "workspace-tree",
+                            "sessionId": "session-tree",
+                            "instanceId": "instance-tree"
+                        },
+                        "command": { "type": "get_tree" }
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+            let outbound = fake.read_request().await.expect("get_tree dispatched");
+            let id = outbound["id"].as_str().expect("request id").to_owned();
+            fake.write_frame(json!({
+                "id": id,
+                "type": "response",
+                "command": "get_tree",
+                "success": true,
+                "data": { "tree": "t".repeat(payload_bytes) }
+            }))
+            .await
+            .unwrap();
+            // Every socket read is deadline-guarded: a dropped frame must
+            // fail the test here, not hang the suite.
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let frame = socket.next().await.unwrap().unwrap();
+                    let parsed: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+                    if parsed["requestId"] == request_id {
+                        return parsed;
+                    }
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("reply for {request_id} within 5s"))
+        }
+
+        // A 3.5MB tree (868-entry session measured at 3,509,731 bytes) is
+        // snapshot-scale: it must reach the client, not time out.
+        let big = request_tree(&mut socket, &mut fake, "tree-1", 3_500_000).await;
+        assert_eq!(big["type"], "runtime_response", "frame: {big:?}");
+        assert_eq!(
+            big["response"]["data"]["tree"].as_str().unwrap().len(),
+            3_500_000
+        );
+
+        // A 4.3MB tree also delivers: outbound session payloads share the
+        // physical frame ceiling (upstream reference + legacy embedded-server
+        // behavior), not a smaller business cap.
+        let also_big = request_tree(&mut socket, &mut fake, "tree-2", 4_300_000).await;
+        assert_eq!(also_big["type"], "runtime_response", "frame: {also_big:?}");
+
+        host.stop();
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[tokio::test]
+    async fn read_session_tree_data_op_serves_flat_entries_over_v2() {
+        use tokio_tungstenite::tungstenite::Message;
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-tree-op-{nonce}"));
+        let session_root = temp.join("sessions");
+        let (host, mut harness, harness_temp) =
+            desktop_harness("tree-op", Some(session_root.clone())).await;
+
+        // Read the registry-persisted bucket back from the DB (never
+        // re-derive it) and stage a branching session inside it.
+        let store = Arc::new(Mutex::new(
+            MetadataStore::open(&harness_temp.join("picot.sqlite3")).unwrap(),
+        ));
+        let bucket_dir = crate::host_data::HostDataPlane::new(store)
+            .with_session_root(session_root)
+            .session_bucket_for_workspace(&harness.workspace_id)
+            .expect("persisted bucket");
+        fs::create_dir_all(&bucket_dir).unwrap();
+        let workspace = harness_temp.join("workspace");
+        let cwd = serde_json::to_string(&workspace.to_string_lossy()).unwrap();
+        fs::write(
+            bucket_dir.join("2026-01-01T00-00-00-000Z_tree-op.jsonl"),
+            format!(
+                "{{\"type\":\"session\",\"id\":\"tree-op\",\"cwd\":{cwd}}}\n\
+                 {{\"type\":\"message\",\"id\":\"u1\",\"parentId\":null,\"message\":{{\"role\":\"user\",\"content\":\"q\"}}}}\n\
+                 {{\"type\":\"message\",\"id\":\"a1\",\"parentId\":\"u1\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"ok\"}}]}}}}\n"
+            ),
+        )
+        .unwrap();
+
+        harness
+            .socket
+            .send(Message::Text(
+                json!({
+                    "type": "data_request", "protocolVersion": 2, "requestId": "tree-op-1",
+                    "operation": "read_session_tree",
+                    "workspaceId": harness.workspace_id,
+                    "sessionId": "tree-op"
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(5), harness.socket.next())
+            .await
+            .expect("reply within 5s")
+            .unwrap()
+            .unwrap();
+        let response: Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
+        assert_eq!(response["type"], "data_response", "{response}");
+        assert_eq!(response["operation"], "read_session_tree");
+        let ids: Vec<&str> = response["tree"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["tree-op", "u1", "a1"]);
+        assert_eq!(response["tree"]["leafId"], "a1");
+
+        let _ = harness.socket.close(None).await;
+        host.stop();
+        let _ = fs::remove_dir_all(temp);
+    }
 
     #[test]
     fn oauth_runtime_restart_revokes_previous_operation() {

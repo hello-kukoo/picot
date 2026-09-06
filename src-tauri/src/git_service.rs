@@ -688,7 +688,7 @@ impl GitService {
         let output = git_os(root, &args).map_err(|_| "log failed".to_string())?;
         let fields = output.split(|byte| *byte == 0).collect::<Vec<_>>();
         let mut commits = Vec::new();
-        for group in fields.chunks_exact(5) {
+        for group in fields.as_chunks::<5>().0 {
             commits.push(GitLogEntry {
                 oid: String::from_utf8_lossy(group[0]).into_owned(),
                 subject: String::from_utf8_lossy(group[2]).into_owned(),

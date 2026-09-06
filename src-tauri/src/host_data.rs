@@ -25,6 +25,13 @@ pub struct SessionSummary {
     pub modified_at_ms: u128,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTreeSnapshot {
+    pub entries: Vec<serde_json::Value>,
+    pub leaf_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FileKind {
@@ -310,6 +317,65 @@ impl HostDataPlane {
     pub fn session_file_path(&self, workspace_id: &str, session_id: &str) -> Option<PathBuf> {
         let bucket = self.session_bucket_for_workspace(workspace_id)?;
         self.session_file_path_in_bucket(&bucket, session_id)
+    }
+
+    /// Active-branch transcript messages for the main chat (upstream
+    /// data-plane contract). Reads the session JSONL line-by-line, walks from
+    /// the last message entry (the same tip rule as `read_session_tree`) back
+    /// through parentId links, and returns the chain's user/assistant
+    /// messages with `entryId` attached — the stable anchor the frontend
+    /// stamps on transcript rows.
+    pub fn read_session_messages(
+        &self,
+        workspace_id: &str,
+        session_id: &str,
+    ) -> Result<Vec<serde_json::Value>, HostDataError> {
+        let path = self
+            .session_file_path(workspace_id, session_id)
+            .ok_or_else(|| HostDataError::Io(format!("session {session_id} not found")))?;
+        let file = std::fs::File::open(&path).map_err(|e| HostDataError::Io(e.to_string()))?;
+        let lines = parse_session_lines(file);
+        let Some((chain, _)) = active_chain(&lines) else {
+            return Ok(vec![]);
+        };
+        Ok(chain
+            .iter()
+            .filter(|&&i| lines[i].is_message)
+            .filter_map(|&i| {
+                lines[i]
+                    .entry
+                    .get("message")
+                    .cloned()
+                    .map(|m| message_with_entry_id(m, &lines[i].id))
+            })
+            .collect())
+    }
+
+    /// Flat session-tree snapshot for the Info panel (upstream data-plane
+    /// contract). Reads the session JSONL line-by-line — each line is a
+    /// shallow entry — so a deeply-branched session never crosses the
+    /// runtime bridge's nested-JSON parser. The leaf follows the same tip
+    /// rule as the transcript: the last message entry in the file heads the
+    /// active branch.
+    pub fn read_session_tree(
+        &self,
+        workspace_id: &str,
+        session_id: &str,
+    ) -> Result<SessionTreeSnapshot, HostDataError> {
+        let path = self
+            .session_file_path(workspace_id, session_id)
+            .ok_or_else(|| HostDataError::Io(format!("session {session_id} not found")))?;
+        let file = std::fs::File::open(&path).map_err(|e| HostDataError::Io(e.to_string()))?;
+        let lines = parse_session_lines(file);
+        let entries: Vec<serde_json::Value> = lines.iter().map(|l| l.entry.clone()).collect();
+        // The leaf follows the same tip rule as the transcript; a cyclic
+        // parent chain leaves the leaf unset (entries still return).
+        let leaf_id = active_chain(&lines).and_then(|(chain, intact)| {
+            intact
+                .then(|| chain.last().map(|&tip| lines[tip].id.clone()))
+                .flatten()
+        });
+        Ok(SessionTreeSnapshot { entries, leaf_id })
     }
 
     /// Resolve a sidebar-scanned JSONL path. The path stays untrusted: it must
@@ -1064,6 +1130,23 @@ pub(crate) fn parse_session_header(path: &Path) -> Option<SessionHeader> {
 /// Legacy header-sample vote: the three newest session files' headers vote
 /// for the bucket's recorded cwd; the majority canonical form must match the
 /// workspace root.
+/// Attach the stable entry id to a user/assistant message so the frontend
+/// can anchor transcript rows (`data-entry-id`) without carrying the whole
+/// session-file entry shape over the wire.
+fn message_with_entry_id(mut message: serde_json::Value, entry_id: &str) -> serde_json::Value {
+    let role = message.get("role").and_then(serde_json::Value::as_str);
+    if role != Some("user") && role != Some("assistant") {
+        return message;
+    }
+    if let Some(object) = message.as_object_mut() {
+        object.insert(
+            "entryId".to_owned(),
+            serde_json::Value::String(entry_id.to_owned()),
+        );
+    }
+    message
+}
+
 fn sample_bucket_cwd_matches(dir: &Path, canonical_root: &Path) -> bool {
     let mut candidates: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(dir)
         .ok()
@@ -1408,6 +1491,73 @@ fn parse_session_summary(
     }))
 }
 
+/// One JSONL session line reduced to its structural identity. Malformed or
+/// id-less lines are skipped: the file is append-only user data, not a
+/// trusted contract.
+struct SessionLine {
+    entry: serde_json::Value,
+    id: String,
+    parent_id: Option<String>,
+    is_message: bool,
+}
+
+fn parse_session_lines(file: std::fs::File) -> Vec<SessionLine> {
+    BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
+        .filter_map(|entry| {
+            let id = entry.get("id")?.as_str()?.to_owned();
+            let parent_id = entry
+                .get("parentId")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            let is_message =
+                entry.get("type").and_then(serde_json::Value::as_str) == Some("message");
+            Some(SessionLine {
+                entry,
+                id,
+                parent_id,
+                is_message,
+            })
+        })
+        .collect()
+}
+
+/// The active branch: indices from root to the LAST message entry (the tip)
+/// via parentId links, in file order. `None` when the file has no message;
+/// the bool is false when the parent chain cycles (callers keep the partial
+/// chain but treat the leaf as unknown).
+fn active_chain(lines: &[SessionLine]) -> Option<(Vec<usize>, bool)> {
+    let id_to_idx: HashMap<&str, usize> = lines
+        .iter()
+        .enumerate()
+        .map(|(i, line)| (line.id.as_str(), i))
+        .collect();
+    let tip = lines.iter().rposition(|line| line.is_message)?;
+    let mut walked = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+    let mut current = tip;
+    let mut intact = true;
+    loop {
+        if !visited.insert(current) {
+            intact = false; // cycle guard
+            break;
+        }
+        walked.push(current);
+        match lines[current].parent_id.as_deref() {
+            None => break,
+            Some(pid) => match id_to_idx.get(pid) {
+                Some(&idx) => current = idx,
+                None => break,
+            },
+        }
+    }
+    walked.reverse();
+    Some((walked, intact))
+}
+
 fn message_text(content: Option<&serde_json::Value>) -> Option<String> {
     match content? {
         serde_json::Value::String(text) => Some(text.clone()),
@@ -1453,6 +1603,160 @@ mod tests {
         let store = Arc::new(Mutex::new(MetadataStore::open(&db).unwrap()));
         let (row, _) = store.lock().unwrap().add_workspace(workspace).unwrap();
         (HostDataPlane::new(store), row.workspace_id)
+    }
+
+    #[test]
+    fn read_session_messages_returns_active_chain_with_entry_ids() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-msgs-{nonce}"));
+        let workspace = temp.join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        let (data, workspace_id) = test_data(&workspace);
+        let data = data.with_session_root(temp.join("sessions"));
+        let bucket_dir = data
+            .session_bucket_for_workspace(&workspace_id)
+            .expect("persisted session bucket");
+        fs::create_dir_all(&bucket_dir).unwrap();
+        // Same branching fixture as the tree test: the file's last message
+        // (a3) is the tip, so the transcript chain is u1→a1→u3→a3 — the u2
+        // sibling branch is inactive and must not render in the transcript.
+        let cwd = serde_json::to_string(&workspace.to_string_lossy()).unwrap();
+        let lines: Vec<String> = vec![
+            format!("{{\"type\":\"session\",\"id\":\"session-a\",\"timestamp\":\"2026-01-01\",\"cwd\":{cwd}}}"),
+            "{\"type\":\"message\",\"id\":\"u1\",\"parentId\":null,\"message\":{\"role\":\"user\",\"content\":\"q1\"}}".into(),
+            "{\"type\":\"message\",\"id\":\"tr1\",\"parentId\":\"u1\",\"message\":{\"role\":\"toolResult\",\"content\":[]}}".into(),
+            "{\"type\":\"compaction\",\"id\":\"c1\",\"parentId\":\"tr1\"}".into(),
+            "{\"type\":\"message\",\"id\":\"a1\",\"parentId\":\"c1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"ans\"}]}}".into(),
+            "{\"type\":\"message\",\"id\":\"u2\",\"parentId\":\"a1\",\"message\":{\"role\":\"user\",\"content\":\"other branch\"}}".into(),
+            "{\"type\":\"message\",\"id\":\"u3\",\"parentId\":\"a1\",\"message\":{\"role\":\"user\",\"content\":\"side\"}}".into(),
+            "{\"type\":\"message\",\"id\":\"a3\",\"parentId\":\"u3\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"side-ans\"}]}}".into(),
+        ];
+        fs::write(
+            bucket_dir.join("2026-01-01T00-00-00-000Z_session-a.jsonl"),
+            lines.join("\n") + "\n",
+        )
+        .unwrap();
+
+        let messages = data
+            .read_session_messages(&workspace_id, "session-a")
+            .unwrap();
+
+        // Full tip chain including the toolResult (rendered as a tool card);
+        // u2 (inactive sibling) and non-message entries (c1) never reach the
+        // transcript.
+        let roles: Vec<&str> = messages
+            .iter()
+            .map(|message| message["role"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            roles,
+            vec!["user", "toolResult", "assistant", "user", "assistant"]
+        );
+        // Only user/assistant messages carry the stable entry id anchor.
+        let ids: Vec<&str> = messages
+            .iter()
+            .filter(|message| message["entryId"].is_string())
+            .map(|message| message["entryId"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["u1", "a1", "u3", "a3"]);
+
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    /// Real-data probe: run the HOST read_session_tree against a real session
+    /// file and report the derived leaf. Env-gated diagnostic.
+    #[test]
+    #[ignore = "real registry+session probe; set PICOT_SMOKE_DB/PICOT_SMOKE_WS/PICOT_SMOKE_SESSION"]
+    fn read_session_tree_real_leaf_probe() {
+        let (db, ws, session) = match (
+            std::env::var("PICOT_SMOKE_DB"),
+            std::env::var("PICOT_SMOKE_WS"),
+            std::env::var("PICOT_SMOKE_SESSION"),
+        ) {
+            (Ok(db), Ok(ws), Ok(session)) => (db, ws, session),
+            _ => return,
+        };
+        let store = Arc::new(Mutex::new(
+            MetadataStore::open(std::path::Path::new(&db)).unwrap(),
+        ));
+        let data = HostDataPlane::new(store).with_session_root(std::path::PathBuf::from(
+            std::env::var("HOME").unwrap() + "/.pi/agent/sessions",
+        ));
+        let tree = data.read_session_tree(&ws, &session).expect("tree");
+        println!(
+            "[tree-probe] entries={} messages={} leaf={:?} tree_bytes={}",
+            tree.entries.len(),
+            tree.entries
+                .iter()
+                .filter(|e| e.get("type").and_then(|t| t.as_str()) == Some("message"))
+                .count(),
+            tree.leaf_id,
+            serde_json::to_string(&tree).unwrap_or_default().len()
+        );
+        let messages = data.read_session_messages(&ws, &session).expect("messages");
+        println!(
+            "[tree-probe] transcript messages={} bytes={}",
+            messages.len(),
+            serde_json::to_string(&messages).unwrap_or_default().len()
+        );
+    }
+
+    #[test]
+    fn read_session_tree_returns_full_entries_and_derived_leaf() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-tree-{nonce}"));
+        let workspace = temp.join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        let (data, workspace_id) = test_data(&workspace);
+        let data = data.with_session_root(temp.join("sessions"));
+        // The bucket is registry-persisted state: read it back from the DB
+        // exactly as production does — never re-derive it from the path.
+        let bucket_dir = data
+            .session_bucket_for_workspace(&workspace_id)
+            .expect("persisted session bucket");
+        fs::create_dir_all(&bucket_dir).unwrap();
+        // Branching session: active path u1→a1→u2; inactive sibling u3→a3;
+        // hidden toolResult + compaction entries stay in the snapshot.
+        let cwd = serde_json::to_string(&workspace.to_string_lossy()).unwrap();
+        let lines: Vec<String> = vec![
+            format!("{{\"type\":\"session\",\"id\":\"session-a\",\"timestamp\":\"2026-01-01\",\"cwd\":{cwd}}}"),
+            "{\"type\":\"message\",\"id\":\"u1\",\"parentId\":null,\"message\":{\"role\":\"user\",\"content\":\"q1\"}}".into(),
+            "{\"type\":\"message\",\"id\":\"tr1\",\"parentId\":\"u1\",\"message\":{\"role\":\"toolResult\",\"content\":[]}}".into(),
+            "{\"type\":\"compaction\",\"id\":\"c1\",\"parentId\":\"tr1\"}".into(),
+            "{\"type\":\"message\",\"id\":\"a1\",\"parentId\":\"c1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"ans\"}]}}".into(),
+            "{\"type\":\"message\",\"id\":\"u2\",\"parentId\":\"a1\",\"message\":{\"role\":\"user\",\"content\":\"q2\"}}".into(),
+            "{\"type\":\"message\",\"id\":\"u3\",\"parentId\":\"a1\",\"message\":{\"role\":\"user\",\"content\":\"side\"}}".into(),
+            "{\"type\":\"message\",\"id\":\"a3\",\"parentId\":\"u3\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"side-ans\"}]}}".into(),
+        ];
+        fs::write(
+            bucket_dir.join("2026-01-01T00-00-00-000Z_session-a.jsonl"),
+            lines.join("\n") + "\n",
+        )
+        .unwrap();
+
+        let tree = data.read_session_tree(&workspace_id, "session-a").unwrap();
+
+        // Every id-carrying entry survives verbatim (hidden ones included).
+        let ids: Vec<&str> = tree
+            .entries
+            .iter()
+            .map(|entry| entry["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["session-a", "u1", "tr1", "c1", "a1", "u2", "u3", "a3"]
+        );
+        // Active leaf follows the last-message tip rule (same as the transcript):
+        // the final message entry in the file heads the active branch.
+        assert_eq!(tree.leaf_id.as_deref(), Some("a3"));
+
+        fs::remove_dir_all(temp).unwrap();
     }
 
     #[test]

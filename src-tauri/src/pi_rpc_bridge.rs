@@ -34,6 +34,9 @@ impl BridgeError {
     }
 }
 
+/// Cap on stderr lines folded into an error message.
+const DIAGNOSTIC_TAIL_LINES: usize = 20;
+
 type PendingSender = oneshot::Sender<Result<Value, BridgeError>>;
 
 struct BridgeInner {
@@ -268,8 +271,15 @@ impl PiRpcProcess {
             .map_err(|error| format!("Cannot stop Pi RPC process tree: {error}"))
     }
 
-    pub fn take_diagnostic(&self) -> Option<String> {
-        self.diagnostics.try_recv().ok()
+    /// Everything `pi` has written to stderr and we have not reported yet.
+    /// The tail explains why a closed process rejected its last RPC request.
+    pub fn drain_diagnostics(&self) -> Option<String> {
+        let lines: Vec<String> = self.diagnostics.try_iter().collect();
+        if lines.is_empty() {
+            return None;
+        }
+        let start = lines.len().saturating_sub(DIAGNOSTIC_TAIL_LINES);
+        Some(lines[start..].join("\n"))
     }
 }
 
@@ -339,7 +349,11 @@ async fn read_frames(
                     "Pi RPC frame exceeded {max_frame_bytes} bytes"
                 )))
                 .await;
-            break;
+            // A status frame with raw newlines (pi 0.84.2 multi-line
+            // statusText) or an oversized frame loses that one frame; the
+            // reader must keep serving later frames. Killing the reader here
+            // turns one cosmetic frame into a dead runtime.
+            continue;
         }
         let parsed = match serde_json::from_slice::<Value>(&raw) {
             Ok(value) => value,
@@ -349,7 +363,7 @@ async fn read_frames(
                         "Invalid Pi RPC JSONL frame: {error}"
                     )))
                     .await;
-                break;
+                continue;
             }
         };
         if let Some(id) = parsed.get("id").and_then(Value::as_str) {
@@ -552,6 +566,56 @@ mod tests {
         assert!(request.await.unwrap().unwrap_err().is_process_closed());
     }
 
+    #[tokio::test]
+    async fn invalid_jsonl_lines_do_not_kill_the_reader() {
+        let (bridge, mut process) = PiRpcBridge::in_memory(1024);
+        let request = tokio::spawn({
+            let bridge = bridge.clone();
+            async move {
+                bridge
+                    .request(json!({ "type": "get_tree" }), Duration::from_secs(2))
+                    .await
+            }
+        });
+
+        let outbound = process.read_request().await.expect("request frame");
+        let id = outbound["id"].as_str().expect("request id").to_owned();
+        // Pi 0.84.2 emits status frames whose statusText carries raw
+        // newlines; the JSONL line splits into two invalid halves. The
+        // reader must drop them and keep serving later responses.
+        process
+            .write_raw("{\"type\":\"extension_ui_request\",\"statusText\":\"line one\n".into())
+            .await
+            .expect("first half");
+        process
+            .write_raw("line two\"}\n".into())
+            .await
+            .expect("second half");
+        let first_garbage =
+            tokio::time::timeout(Duration::from_millis(200), bridge.next_frame()).await;
+        assert!(
+            matches!(first_garbage, Ok(Some(BridgeFrame::ProtocolError(_)))),
+            "garbage lines must be reported, not swallowed silently"
+        );
+
+        process
+            .write_frame(json!({
+                "id": id,
+                "type": "response",
+                "command": "get_tree",
+                "success": true
+            }))
+            .await
+            .expect("response after garbage");
+        assert_eq!(
+            request
+                .await
+                .unwrap()
+                .expect("reader must survive garbage lines")["command"],
+            "get_tree"
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn process_tree_uses_child_group_and_escalates_to_termination() {
@@ -608,5 +672,34 @@ mod tests {
             .unwrap();
         assert_eq!(response["command"], "get_state");
         assert!(process.wait().unwrap().success());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn retains_stderr_tail_for_a_closed_process() {
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("echo 'session resume failed' >&2; exit 1")
+            .stdin(Stdio::piped());
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let child = command.spawn().unwrap();
+        let (_bridge, process) = PiRpcBridge::attach(child, 1024).unwrap();
+
+        std::thread::sleep(Duration::from_millis(25));
+        assert_eq!(
+            process.drain_diagnostics().as_deref(),
+            Some("session resume failed")
+        );
     }
 }

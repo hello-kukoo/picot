@@ -11,9 +11,12 @@ pub const PASTE_BODY_BYTES: usize = 4 * 1024 * 1024;
 pub const RUNTIME_COMMAND_BYTES: usize = 1024 * 1024;
 pub const DATA_REQUEST_BYTES: usize = 256 * 1024;
 pub const HOST_REQUEST_BYTES: usize = 256 * 1024;
-pub const RESPONSE_BYTES: usize = 2 * 1024 * 1024;
-pub const SNAPSHOT_BYTES: usize = 4 * 1024 * 1024;
-pub const EVENT_BYTES: usize = 2 * 1024 * 1024;
+// Outbound session payloads (responses, snapshots, events) share the physical
+// frame cap — no business ceiling below it, matching the upstream reference
+// host and the legacy embedded-server behavior: a session the old runtime
+// loaded must load here too. Inbound command caps stay tight — those gate
+// untrusted input.
+pub const OUTBOUND_PAYLOAD_BYTES: usize = WS_PHYSICAL_FRAME_BYTES;
 pub const PROGRESS_BYTES: usize = 64 * 1024;
 pub const RAW_FILE_BYTES: usize = 20 * 1024 * 1024;
 pub const EXPORT_BYTES: usize = 20 * 1024 * 1024;
@@ -45,9 +48,9 @@ pub fn validate(value: &Value, kind: PayloadKind) -> Result<(), &'static str> {
         PayloadKind::Command => RUNTIME_COMMAND_BYTES,
         PayloadKind::DataRequest => DATA_REQUEST_BYTES,
         PayloadKind::HostRequest => HOST_REQUEST_BYTES,
-        PayloadKind::Response => RESPONSE_BYTES,
-        PayloadKind::Snapshot => SNAPSHOT_BYTES,
-        PayloadKind::Event => EVENT_BYTES,
+        PayloadKind::Response | PayloadKind::Snapshot | PayloadKind::Event => {
+            OUTBOUND_PAYLOAD_BYTES
+        }
         PayloadKind::Progress => PROGRESS_BYTES,
         PayloadKind::RawFile => RAW_FILE_BYTES,
         PayloadKind::Export => EXPORT_BYTES,

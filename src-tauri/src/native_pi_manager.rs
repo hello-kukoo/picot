@@ -198,6 +198,29 @@ pub struct NativePiManager {
     inner: Arc<NativePiManagerInner>,
 }
 
+fn remove_closed_runtime(inner: &NativePiManagerInner, instance_id: &str) {
+    let runtime = inner
+        .runtimes
+        .lock()
+        .ok()
+        .and_then(|mut runtimes| runtimes.remove(instance_id));
+    let Some(mut runtime) = runtime else {
+        return;
+    };
+    if let Some(process) = &mut runtime.process {
+        let _ = process.kill();
+    }
+    let target = runtime.target.lock().ok().map(|target| target.clone());
+    if let Some(target) = target {
+        if let Ok(mut coordinator) = inner.coordinator.lock() {
+            let _ = coordinator.unregister(&target);
+        }
+    }
+    if let Ok(mut pending_ui) = inner.pending_ui.lock() {
+        pending_ui.remove(instance_id);
+    }
+}
+
 fn emit_runtime_crashed(
     inner: &Arc<NativePiManagerInner>,
     expected_target: &RuntimeTarget,
@@ -365,7 +388,10 @@ impl NativePiManager {
         &self,
         target: RuntimeTarget,
     ) -> Result<InMemoryPiProcess, String> {
-        let (bridge, process) = PiRpcBridge::in_memory(1024 * 1024);
+        // Production runtimes allow 16MB frames (snapshot-scale get_tree
+        // replies); tests that push big payloads must see the same ceiling,
+        // not a 1MB test-only cap.
+        let (bridge, process) = PiRpcBridge::in_memory(MAX_RPC_FRAME_BYTES);
         self.inner
             .coordinator
             .lock()
@@ -408,6 +434,7 @@ impl NativePiManager {
                         _ = poll.tick() => {
                             if observer.as_mut().and_then(|process| process.try_wait().ok()).flatten().is_some() {
                                 emit_runtime_crashed(&inner, &target, "runtime_crashed");
+                                remove_closed_runtime(&inner, &target.instance_id);
                                 return;
                             }
                             continue;
@@ -418,6 +445,7 @@ impl NativePiManager {
                 };
                 let Some(frame) = frame else {
                     emit_runtime_crashed(&inner, &target, "runtime_crashed");
+                    remove_closed_runtime(&inner, &target.instance_id);
                     return;
                 };
                 let current_target = inner.runtimes.lock().ok().and_then(|runtimes| {
@@ -433,8 +461,16 @@ impl NativePiManager {
                 };
                 let event = match frame {
                     BridgeFrame::Event(event) | BridgeFrame::ExtensionUi(event) => event,
-                    BridgeFrame::ProtocolError(_) | BridgeFrame::TransportError(_) => {
+                    // A garbled line (e.g. pi 0.84.2 statusText with raw
+                    // newlines) is a dropped frame, not a dead runtime: surface
+                    // it as a sequenced event and keep the pump running.
+                    BridgeFrame::ProtocolError(message) => serde_json::json!({
+                        "type": "protocol_error",
+                        "message": message
+                    }),
+                    BridgeFrame::TransportError(_) => {
                         emit_runtime_crashed(&inner, &current_target, "runtime_crashed");
+                        remove_closed_runtime(&inner, &current_target.instance_id);
                         return;
                     }
                 };
@@ -752,7 +788,7 @@ impl NativePiManager {
             if let Ok(mut registry) = self.inner.operations.lock() {
                 let _ = registry.mark_indeterminate(&operation_id, format!("rpc_{error:?}"));
             }
-            format!("Pi RPC request failed: {error:?}")
+            self.rpc_error_with_diagnostics(&target.instance_id, error)
         })?;
         self.inner
             .operations
@@ -905,7 +941,7 @@ impl NativePiManager {
         let response = bridge
             .request(command, timeout)
             .await
-            .map_err(|error| format!("Pi RPC request failed: {error:?}"))?;
+            .map_err(|error| self.rpc_error_with_diagnostics(&target.instance_id, error))?;
         if let Some(key) = mutation_key {
             self.inner
                 .coordinator
@@ -915,6 +951,27 @@ impl NativePiManager {
                 .map_err(|error| format!("Cannot cache mutation result: {error:?}"))?;
         }
         Ok(response)
+    }
+
+    /// Preserve Pi's stderr tail with its transport failure; otherwise a
+    /// closed child leaves callers no evidence about its exit.
+    fn rpc_error_with_diagnostics(
+        &self,
+        instance_id: &str,
+        error: crate::pi_rpc_bridge::BridgeError,
+    ) -> String {
+        let mut message = format!("Pi RPC request failed: {error:?}");
+        let stderr = self.inner.runtimes.lock().ok().and_then(|runtimes| {
+            runtimes
+                .get(instance_id)?
+                .process
+                .as_ref()?
+                .drain_diagnostics()
+        });
+        if let Some(stderr) = stderr {
+            message.push_str(&format!("\nPi stderr:\n{stderr}"));
+        }
+        message
     }
 
     fn record_cleanup(&self, target: &RuntimeTarget, stage: NativeCleanupStage) {
@@ -1810,6 +1867,10 @@ mod tests {
             events.recv().await.unwrap().event["type"],
             "snapshot_required"
         );
+        assert!(
+            manager.target_for_session_id("session-exit").is_none(),
+            "a crashed child must not remain reusable"
+        );
         let _ = std::fs::remove_dir_all(cwd);
     }
 
@@ -1880,26 +1941,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn protocol_fatal_emits_single_crash_transition() {
+    async fn invalid_frames_surface_protocol_error_without_crashing() {
         let manager = NativePiManager::in_memory(8);
         let target = RuntimeTarget::new("workspace-a", "session-a", "instance-a");
         let mut events = manager.subscribe();
         let mut fake = manager.register_in_memory(target.clone()).unwrap();
+        // Pi 0.84.2 status frames can carry raw newlines, splitting a frame
+        // into invalid halves. Each half is reported as a sequenced
+        // protocol_error and the runtime keeps serving traffic — a garbled
+        // status line must never read as a dead runtime.
         fake.write_raw("not-json\n".into()).await.unwrap();
-        assert_eq!(
-            events.recv().await.unwrap().event["type"],
-            "runtime_crashed"
-        );
-        assert_eq!(
-            events.recv().await.unwrap().event["type"],
-            "snapshot_required"
+        assert_eq!(events.recv().await.unwrap().event["type"], "protocol_error");
+        assert!(
+            manager.target_for_session_id("session-a").is_some(),
+            "a garbled line must not unregister the runtime"
         );
         let _ = fake.write_raw("also-not-json\n".into()).await;
-        assert!(
-            tokio::time::timeout(Duration::from_millis(50), events.recv())
-                .await
-                .is_err()
-        );
+        assert_eq!(events.recv().await.unwrap().event["type"], "protocol_error");
     }
 
     #[tokio::test]
