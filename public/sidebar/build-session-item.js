@@ -6,15 +6,6 @@ export function getSessionDisplayTitle(session) {
   return session?.name || session?.firstMessage || t("sidebar.emptySession");
 }
 
-export function sessionActivityTime(session) {
-  const modified = Number(session?.mtime);
-  if (Number.isFinite(modified)) return modified;
-  const timestamp = Date.parse(session?.timestamp || "");
-  if (Number.isFinite(timestamp)) return timestamp;
-  const created = Number(session?.ctime);
-  return Number.isFinite(created) ? created : 0;
-}
-
 /**
  * Relative timestamp for a session row ("Just now", "2h ago", weekday, …).
  * Shared by the normal sidebar and the focus sidebar so both render the same

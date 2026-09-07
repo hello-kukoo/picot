@@ -1,7 +1,8 @@
 // ABOUTME: Appearance preferences for the dedicated Appearance settings page:
-// ABOUTME: five-level font sizes (chat / preview / terminal) and the preview
-// ABOUTME: theme mode. Cookie is the synchronous render cache; the DB mirror
-// ABOUTME: goes through PREFERENCE_KEYS like ui.theme / ui.locale.
+// ABOUTME: five-level font sizes (chat / preview / terminal), the preview
+// ABOUTME: theme mode, and every terminal display preference (theme mode,
+// ABOUTME: scrollback, smooth scroll, WebGL). Cookie is the synchronous render
+// ABOUTME: cache; the DB mirror goes through PREFERENCE_KEYS like ui.theme.
 
 /**
  * Shared five-level font size scale. Per-surface px maps live in the
@@ -18,6 +19,12 @@ export const TERMINAL_FONT_SIZE_PX = { small: 12, normal: 15, medium: 18, large:
 /** Preview color scheme modes: follow the Picot theme, or force one. */
 export const PREVIEW_THEME_MODES = ["system", "light", "dark"];
 export const DEFAULT_PREVIEW_THEME_MODE = "system";
+
+/** Terminal color scheme modes: follow the Picot theme, or force one. */
+export const TERMINAL_THEME_MODES = ["system", "light", "dark"];
+export const DEFAULT_TERMINAL_THEME_MODE = "dark";
+export const DEFAULT_SCROLLBACK_LIMIT = 1000;
+export const DEFAULT_SMOOTH_SCROLL_DURATION = 0;
 
 const APPEARANCE_COOKIE = "picot-appearance";
 const APPEARANCE_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365 * 10; // 10 years
@@ -48,6 +55,37 @@ export function nearestFontLevel(px, pxMap) {
 /** Unknown/stale preview theme values fall back to system. */
 export function normalizePreviewThemeMode(value) {
   return PREVIEW_THEME_MODES.includes(value) ? value : DEFAULT_PREVIEW_THEME_MODE;
+}
+
+/** Unknown/stale terminal theme values fall back to dark. */
+export function normalizeThemeMode(value) {
+  return TERMINAL_THEME_MODES.includes(value) ? value : DEFAULT_TERMINAL_THEME_MODE;
+}
+
+function clampNumber(value, fallback, min, max) {
+  if (value === "" || value === null || value === undefined) return fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.round(Math.min(max, Math.max(min, number)));
+}
+
+export function normalizeScrollbackLimit(value) {
+  return clampNumber(value, DEFAULT_SCROLLBACK_LIMIT, 100, 50000);
+}
+
+export function normalizeSmoothScrollDuration(value) {
+  return clampNumber(value, DEFAULT_SMOOTH_SCROLL_DURATION, 0, 1000);
+}
+
+/**
+ * WebGL renderer is opt-in per platform: default ON on macOS/Linux, OFF on
+ * Windows until GPU driver coverage is validated. `userAgent` is injectable
+ * for tests.
+ */
+export function defaultWebglRenderer(
+  userAgent = typeof navigator !== "undefined" ? navigator.userAgent : "",
+) {
+  return !/Windows/i.test(userAgent);
 }
 
 /**
@@ -81,7 +119,12 @@ function writeAppearanceCookieRaw(value) {
   }
 }
 
-/** Normalized appearance values from the cookie cache; defaults when absent/corrupt. */
+/**
+ * Normalized appearance values from the cookie cache; defaults when
+ * absent/corrupt. `terminalWebglRenderer` is the one field without a static
+ * default — absent means "never touched", which defers to the platform
+ * default (defaultWebglRenderer), so it stays undefined instead.
+ */
 export function loadAppearanceCookie() {
   const raw = readAppearanceCookieRaw() || {};
   return {
@@ -89,6 +132,11 @@ export function loadAppearanceCookie() {
     previewFontSize: normalizeFontLevel(raw.previewFontSize),
     previewTheme: normalizePreviewThemeMode(raw.previewTheme),
     terminalFontSize: normalizeFontLevel(raw.terminalFontSize),
+    terminalThemeMode: normalizeThemeMode(raw.terminalThemeMode),
+    terminalScrollbackLimit: normalizeScrollbackLimit(raw.terminalScrollbackLimit),
+    terminalSmoothScrollDuration: normalizeSmoothScrollDuration(raw.terminalSmoothScrollDuration),
+    terminalWebglRenderer:
+      typeof raw.terminalWebglRenderer === "boolean" ? raw.terminalWebglRenderer : undefined,
   };
 }
 
@@ -100,6 +148,13 @@ export function saveAppearanceCookie(patch) {
     previewFontSize: normalizeFontLevel(merged.previewFontSize),
     previewTheme: normalizePreviewThemeMode(merged.previewTheme),
     terminalFontSize: normalizeFontLevel(merged.terminalFontSize),
+    terminalThemeMode: normalizeThemeMode(merged.terminalThemeMode),
+    terminalScrollbackLimit: normalizeScrollbackLimit(merged.terminalScrollbackLimit),
+    terminalSmoothScrollDuration: normalizeSmoothScrollDuration(
+      merged.terminalSmoothScrollDuration,
+    ),
+    terminalWebglRenderer:
+      typeof merged.terminalWebglRenderer === "boolean" ? merged.terminalWebglRenderer : undefined,
   });
 }
 
@@ -133,32 +188,65 @@ export function applyAppearanceToDom({
 }
 
 /**
- * One-time migration: lift the legacy terminal font size (px) out of the
- * per-origin localStorage payload onto the level scale, seed it for the
- * caller (which persists it into the cookie/DB dual-track), and drop the
- * key from localStorage. Returns the migrated level, or null when there is
- * nothing to migrate. Idempotent.
+ * One-time migration: the terminal display preferences used to live in a
+ * per-origin localStorage payload (each workspace window runs on a different
+ * port, so those values never synced across windows or machines). Lift all
+ * five legacy fields onto the global dual-track — seed the cookie fields the
+ * user never customized (still at their defaults) — and delete the storage
+ * key. Idempotent; best-effort (defaults apply on any unexpected input).
  */
-export function migrateLegacyTerminalFontSize(storage) {
+export function migrateLegacyTerminalPreferences(storage) {
   const KEY = "picot.terminal.preferences";
-  if (!storage) return null;
+  if (!storage) return;
   try {
     const raw = storage.getItem(KEY);
-    if (!raw) return null;
-    let parsed;
+    if (!raw) return;
+    let legacy;
     try {
-      parsed = JSON.parse(raw);
+      legacy = JSON.parse(raw);
     } catch {
-      return null;
+      legacy = null;
     }
-    if (!parsed || typeof parsed !== "object") return null;
-    const { fontSize, ...rest } = parsed;
-    const level = Number.isFinite(Number(fontSize))
-      ? nearestFontLevel(fontSize, TERMINAL_FONT_SIZE_PX)
-      : null;
-    storage.setItem(KEY, JSON.stringify(rest));
-    return level && level !== DEFAULT_FONT_SIZE_LEVEL ? level : null;
+    storage.removeItem(KEY);
+    if (!legacy || typeof legacy !== "object") return;
+    const pre = loadAppearanceCookie();
+    const seed = {};
+    if (Number.isFinite(Number(legacy.fontSize))) {
+      const level = nearestFontLevel(legacy.fontSize, TERMINAL_FONT_SIZE_PX);
+      if (level !== DEFAULT_FONT_SIZE_LEVEL && pre.terminalFontSize === DEFAULT_FONT_SIZE_LEVEL) {
+        seed.terminalFontSize = level;
+      }
+    }
+    const themeMode = normalizeThemeMode(legacy.themeMode);
+    if (
+      themeMode !== DEFAULT_TERMINAL_THEME_MODE &&
+      pre.terminalThemeMode === DEFAULT_TERMINAL_THEME_MODE
+    ) {
+      seed.terminalThemeMode = themeMode;
+    }
+    const scrollback = normalizeScrollbackLimit(legacy.scrollbackLimit);
+    if (
+      scrollback !== DEFAULT_SCROLLBACK_LIMIT &&
+      pre.terminalScrollbackLimit === DEFAULT_SCROLLBACK_LIMIT
+    ) {
+      seed.terminalScrollbackLimit = scrollback;
+    }
+    const smooth = normalizeSmoothScrollDuration(legacy.smoothScrollDuration);
+    if (
+      smooth !== DEFAULT_SMOOTH_SCROLL_DURATION &&
+      pre.terminalSmoothScrollDuration === DEFAULT_SMOOTH_SCROLL_DURATION
+    ) {
+      seed.terminalSmoothScrollDuration = smooth;
+    }
+    if (
+      typeof legacy.webglRenderer === "boolean" &&
+      legacy.webglRenderer !== defaultWebglRenderer() &&
+      typeof pre.terminalWebglRenderer !== "boolean"
+    ) {
+      seed.terminalWebglRenderer = legacy.webglRenderer;
+    }
+    if (Object.keys(seed).length > 0) saveAppearanceCookie(seed);
   } catch {
-    return null;
+    // best-effort migration; defaults apply when anything unexpected happens
   }
 }

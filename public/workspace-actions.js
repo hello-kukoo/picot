@@ -16,7 +16,7 @@
  */
 
 // Brand marks for known apps; monogram fallback covers anything else.
-export const OPEN_APP_MONOGRAMS = {
+const OPEN_APP_MONOGRAMS = {
   vscode: "VS",
   cursor: "C",
   webstorm: "WS",
@@ -26,7 +26,7 @@ export const OPEN_APP_MONOGRAMS = {
   finder: "F",
 };
 
-export const OPEN_APP_ICONS = {
+const OPEN_APP_ICONS = {
   vscode: "icons/app-vscode.png",
   cursor: "icons/app-cursor.svg",
   webstorm: "icons/app-webstorm.svg",
@@ -36,11 +36,11 @@ export const OPEN_APP_ICONS = {
   finder: "icons/app-finder.png",
 };
 
-export function appIconPath(app) {
+function appIconPath(app) {
   return app?.id ? OPEN_APP_ICONS[app.id] || "" : "";
 }
 
-export function appMonogram(app) {
+function appMonogram(app) {
   if (!app?.id) return "•";
   return OPEN_APP_MONOGRAMS[app.id] || app.label?.slice(0, 1).toUpperCase() || "•";
 }

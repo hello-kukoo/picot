@@ -17,9 +17,10 @@ look-and-feel settings there:
   - File preview/editor theme: `system` (follow Picot) / `light` / `dark`.
   - File preview/editor font size: five levels.
   - Main chat window font size: five levels.
-- **Reworked**: terminal font size changes from a free number (10–32px) to
-  the same five-level control, and moves from per-origin localStorage into
-  the global dual-track preference store.
+- **Reworked**: every terminal display preference (font size, theme mode,
+  scrollback, smooth scroll, WebGL) moves from per-origin localStorage into
+  the global dual-track preference store; `terminal-preferences.js` and its
+  per-window storage are deleted.
 
 Out of scope: HTML live preview, image and PDF renderers, chat tool cards,
 timestamps, composer, git diff views, and global app zoom are untouched.
@@ -37,6 +38,10 @@ Preference levels: `small` / `normal` / `medium` / `large` / `xlarge`
 | `ui.chatFontSize` | level | 14/16/18/20/22 | 16 (现状) |
 | `ui.previewFontSize` | level | 11/13/15/17/19 | 13 (现状); markdown 预览恒 = code + 1px |
 | `ui.terminalFontSize` | level | 12/15/18/22/26 | 15 (现状默认) |
+| `ui.terminalThemeMode` | `system`/`light`/`dark` | — | `dark` |
+| `ui.terminalScrollbackLimit` | integer | 100–50,000 | 1000 |
+| `ui.terminalSmoothScrollDuration` | integer | 0–1,000 | 0 |
+| `ui.terminalWebglRenderer` | boolean | — | 平台默认（Windows 关，其余开；仅在用户显式拨过开关后同步） |
 | `ui.previewTheme` | `system`/`light`/`dark` | — | `system` |
 
 Unknown/stale stored values fall back to the default via normalizers.
@@ -44,7 +49,9 @@ Unknown/stale stored values fall back to the default via normalizers.
 ### Storage — dual-track (same as ui.theme / ui.locale)
 
 - **Cookie cache**: single `picot-appearance` cookie, JSON
-  `{chatFontSize, previewFontSize, previewTheme, terminalFontSize}`, read
+  `{chatFontSize, previewFontSize, previewTheme, terminalFontSize,
+  terminalThemeMode, terminalScrollbackLimit, terminalSmoothScrollDuration,
+  terminalWebglRenderer}`, read
   synchronously before first paint (no font-size flash), shared across the
   per-port workspace windows.
 - **DB truth**: mirrored through the existing broker `preference.*`
@@ -53,13 +60,15 @@ Unknown/stale stored values fall back to the default via normalizers.
 
 ### Migration (one-time, idempotent)
 
-Legacy terminal font size lives in per-origin localStorage
-(`picot.terminal.preferences.fontSize`, px). On startup the appearance
-module reads the raw value, maps it to the nearest
-`ui.terminalFontSize` level (12/15/18/22/26 covers the old 10–32 range),
-seeds the cookie, and removes the key from the localStorage payload.
-`fontSize` leaves `ALLOWED_KEYS`; `TerminalPreferences` keeps
-scrollback/smoothScroll/webgl/themeMode only.
+Legacy terminal preferences live in per-origin localStorage
+(`picot.terminal.preferences`). On startup the appearance module lifts all
+five legacy fields onto the global dual-track: values that differ from the
+defaults seed the cookie (which the DB reconcile then mirrors), values at
+defaults are skipped, and the storage key is deleted entirely.
+`terminal-preferences.js` is removed. `ui.terminalWebglRenderer` is the one
+field without a static default: absent means "never touched" and defers to
+the platform default (OFF on Windows, ON elsewhere), so an untouched toggle
+still behaves per-platform after migration.
 
 ## Preview theme
 
@@ -87,8 +96,9 @@ scrollback/smoothScroll/webgl/themeMode only.
   `calc(var(--preview-font-size) + 1px)`.
 - Terminal font size: resolved level → px feeds the existing
   `TerminalTab` fontSize flow (construction options +
-  `applyPreferences({fontSize})` → refit). Other Terminal preferences keep
-  their current localStorage flow.
+  `applyPreferences({fontSize})` → refit). Terminal theme mode, scrollback,
+  smooth scroll, and WebGL flow through the same setters (cookie + DB
+  persist + live application to open tabs).
 - Inline bootstrap script (after the theme bootstrap, before CSS) reads the
   appearance cookie and sets the CSS variables and
   `data-preview-theme` before first paint.

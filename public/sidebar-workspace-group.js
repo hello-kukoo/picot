@@ -14,7 +14,7 @@ const FOLDER_OPEN_ICON =
 // Points right when collapsed; CSS rotates it 90deg to
 // point down when expanded.
 
-export function createFolderIcon() {
+function createFolderIcon() {
   const icon = document.createElement("span");
   icon.className = "chevron folder-icon";
   icon.setAttribute("aria-hidden", "true");

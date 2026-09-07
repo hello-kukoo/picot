@@ -240,3 +240,103 @@ describe("thinking effort cycle controls", () => {
     expect(composerThinkingTagRule).toContain("border-color: transparent");
   });
 });
+
+describe("agent settings dual-track persistence", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function makeDom() {
+    const html = readFileSync(join(process.cwd(), "public/index.html"), "utf8");
+    const dom = new JSDOM(html, { url: "http://localhost" });
+    vi.stubGlobal("localStorage", dom.window.localStorage);
+    return dom.window.document;
+  }
+
+  test("persists auto-compaction to the DB after a successful RPC", async () => {
+    const document = makeDom();
+    const toggleAutoCompact = document.querySelector("#toggle-auto-compact");
+    toggleAutoCompact.className = "settings-toggle on";
+    const rpcCommand = vi.fn().mockResolvedValue({ success: true });
+    const persistAutoCompaction = vi.fn();
+
+    setupSettingsToggles({
+      toggleAutoCompact,
+      thinkingSteps: null,
+      thinkingMarker: null,
+      thinkingName: null,
+      toggleShowThinking: null,
+      rpcCommand,
+      persistAutoCompaction,
+    });
+    toggleAutoCompact.click();
+    await vi.waitFor(() => expect(persistAutoCompaction).toHaveBeenCalledWith(false));
+
+    expect(rpcCommand).toHaveBeenCalledWith({ type: "set_auto_compaction", enabled: false });
+  });
+
+  test("does not persist and restores the toggle when the RPC fails", async () => {
+    const document = makeDom();
+    const toggleAutoCompact = document.querySelector("#toggle-auto-compact");
+    toggleAutoCompact.className = "settings-toggle on";
+    const rpcCommand = vi.fn().mockRejectedValue(new Error("down"));
+    const persistAutoCompaction = vi.fn();
+
+    setupSettingsToggles({
+      toggleAutoCompact,
+      thinkingSteps: null,
+      thinkingMarker: null,
+      thinkingName: null,
+      toggleShowThinking: null,
+      rpcCommand,
+      persistAutoCompaction,
+    });
+    toggleAutoCompact.click();
+    await vi.waitFor(() => expect(toggleAutoCompact.classList.contains("on")).toBe(true));
+
+    expect(persistAutoCompaction).not.toHaveBeenCalled();
+  });
+
+  test("persists the picked thinking level to the DB after a successful save", async () => {
+    const document = makeDom();
+    const track = document.querySelector("#thinking-effort-steps");
+    const rpcCommand = vi.fn().mockResolvedValue({
+      success: true,
+      data: { level: "high" },
+    });
+    const persistThinkingLevel = vi.fn();
+
+    setupSettingsToggles({
+      toggleAutoCompact: null,
+      thinkingSteps: track,
+      thinkingMarker: document.querySelector("#thinking-effort-marker"),
+      thinkingName: document.querySelector("#thinking-effort-name"),
+      toggleShowThinking: null,
+      rpcCommand,
+      persistThinkingLevel,
+    });
+    track.querySelector('[data-level="high"]').click();
+    await vi.waitFor(() => expect(persistThinkingLevel).toHaveBeenCalledWith("high"));
+  });
+
+  test("persists show-thinking to the DB on toggle", () => {
+    const document = makeDom();
+    const toggleShowThinking = document.querySelector("#toggle-show-thinking");
+    toggleShowThinking.className = "settings-toggle on";
+    const rpcCommand = vi.fn();
+    const persistShowThinking = vi.fn();
+
+    setupSettingsToggles({
+      toggleAutoCompact: null,
+      thinkingSteps: null,
+      thinkingMarker: null,
+      thinkingName: null,
+      toggleShowThinking,
+      rpcCommand,
+      persistShowThinking,
+    });
+    toggleShowThinking.click();
+
+    expect(persistShowThinking).toHaveBeenCalledWith(false);
+  });
+});

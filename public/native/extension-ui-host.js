@@ -1,9 +1,5 @@
 const BLOCKING_METHODS = new Set(["select", "confirm", "input", "editor"]);
 
-export function renderExtensionText(element, value) {
-  element.textContent = String(value ?? "");
-}
-
 export class ExtensionUiHost {
   #foregroundSessionId = null;
   #hooks;

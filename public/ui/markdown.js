@@ -342,29 +342,6 @@ function escapeHtml(text) {
     .replace(/"/g, "&quot;");
 }
 
-/**
- * Wire up code-block copy buttons via event delegation.
- * Call once on the messages container so all current and future
- * code blocks (including streamed ones) are handled without
- * inline onclick handlers or global functions.
- */
-export function initCodeCopyDelegation(container) {
-  container.addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-copy-code]");
-    if (!btn) return;
-    const codeBlock = btn.closest(".code-block-wrapper")?.querySelector("code");
-    if (!codeBlock) return;
-    navigator.clipboard.writeText(codeBlock.textContent).then(() => {
-      btn.textContent = t("messages.copied");
-      btn.classList.add("copied");
-      setTimeout(() => {
-        btn.textContent = t("messages.copy");
-        btn.classList.remove("copied");
-      }, 2000);
-    });
-  });
-}
-
 // Update already-rendered copy buttons when the locale changes.
 // Skip buttons marked .copied so a transient "Copied!" state is not clobbered.
 onLocaleChange(() => {

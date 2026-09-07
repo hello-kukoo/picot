@@ -8,17 +8,25 @@ import {
   CHAT_FONT_SIZE_PX,
   DEFAULT_FONT_SIZE_LEVEL,
   DEFAULT_PREVIEW_THEME_MODE,
+  DEFAULT_SCROLLBACK_LIMIT,
+  DEFAULT_SMOOTH_SCROLL_DURATION,
+  DEFAULT_TERMINAL_THEME_MODE,
+  defaultWebglRenderer,
   FONT_SIZE_LEVELS,
   loadAppearanceCookie,
-  migrateLegacyTerminalFontSize,
+  migrateLegacyTerminalPreferences,
   nearestFontLevel,
   normalizeFontLevel,
   normalizePreviewThemeMode,
+  normalizeScrollbackLimit,
+  normalizeSmoothScrollDuration,
+  normalizeThemeMode,
   PREVIEW_FONT_SIZE_PX,
   PREVIEW_THEME_MODES,
   resolvePreviewTheme,
   saveAppearanceCookie,
   TERMINAL_FONT_SIZE_PX,
+  TERMINAL_THEME_MODES,
 } from "./appearance-preferences.js";
 
 const COOKIE_KEY = "picot-appearance";
@@ -66,6 +74,10 @@ test("level lists and defaults match the approved contract", () => {
   expect(DEFAULT_FONT_SIZE_LEVEL).toBe("normal");
   expect(DEFAULT_PREVIEW_THEME_MODE).toBe("system");
   expect(PREVIEW_THEME_MODES).toEqual(["system", "light", "dark"]);
+  expect(DEFAULT_TERMINAL_THEME_MODE).toBe("dark");
+  expect(TERMINAL_THEME_MODES).toEqual(["system", "light", "dark"]);
+  expect(DEFAULT_SCROLLBACK_LIMIT).toBe(1000);
+  expect(DEFAULT_SMOOTH_SCROLL_DURATION).toBe(0);
 });
 
 test("normalizeFontLevel falls back to normal on unknown values", () => {
@@ -116,6 +128,10 @@ test("appearance cookie round-trips and normalizes partial writes", () => {
     previewFontSize: "normal",
     previewTheme: "system",
     terminalFontSize: "xlarge",
+    terminalThemeMode: "dark",
+    terminalScrollbackLimit: 1000,
+    terminalSmoothScrollDuration: 0,
+    terminalWebglRenderer: undefined,
   });
 
   saveAppearanceCookie({ previewFontSize: "small", previewTheme: "light" });
@@ -124,6 +140,10 @@ test("appearance cookie round-trips and normalizes partial writes", () => {
     previewFontSize: "small",
     previewTheme: "light",
     terminalFontSize: "xlarge",
+    terminalThemeMode: "dark",
+    terminalScrollbackLimit: 1000,
+    terminalSmoothScrollDuration: 0,
+    terminalWebglRenderer: undefined,
   });
 });
 
@@ -134,6 +154,10 @@ test("corrupt or stale cookie values fall back to defaults", () => {
     previewFontSize: "normal",
     previewTheme: "system",
     terminalFontSize: "normal",
+    terminalThemeMode: "dark",
+    terminalScrollbackLimit: 1000,
+    terminalSmoothScrollDuration: 0,
+    terminalWebglRenderer: undefined,
   });
 
   document.cookie = `${COOKIE_KEY}=${encodeURIComponent(
@@ -144,30 +168,109 @@ test("corrupt or stale cookie values fall back to defaults", () => {
     previewFontSize: "normal",
     previewTheme: "system",
     terminalFontSize: "normal",
+    terminalThemeMode: "dark",
+    terminalScrollbackLimit: 1000,
+    terminalSmoothScrollDuration: 0,
+    terminalWebglRenderer: undefined,
   });
 });
 
-test("migrateLegacyTerminalFontSize converts px, drops the key, and is idempotent", () => {
-  const storage = memStorage({
-    "picot.terminal.preferences": JSON.stringify({ fontSize: 24, scrollbackLimit: 2000 }),
-  });
-  expect(migrateLegacyTerminalFontSize(storage)).toBe("large");
-  expect(JSON.parse(storage.getItem("picot.terminal.preferences"))).toEqual({
-    scrollbackLimit: 2000,
-  });
-  // Second run: key is gone, nothing to migrate.
-  expect(migrateLegacyTerminalFontSize(storage)).toBe(null);
+test("terminalWebglRenderer round-trips as a boolean and stays undefined when absent", () => {
+  saveAppearanceCookie({ terminalWebglRenderer: false });
+  expect(loadAppearanceCookie().terminalWebglRenderer).toBe(false);
+  saveAppearanceCookie({ terminalWebglRenderer: true });
+  expect(loadAppearanceCookie().terminalWebglRenderer).toBe(true);
+  // A non-boolean must not poison the field: it defers to the platform default.
+  saveAppearanceCookie({ terminalWebglRenderer: "yes" });
+  expect(loadAppearanceCookie().terminalWebglRenderer).toBeUndefined();
+});
 
-  expect(
-    migrateLegacyTerminalFontSize(memStorage({ "picot.terminal.preferences": "{broken" })),
-  ).toBe(null);
-  expect(migrateLegacyTerminalFontSize(memStorage())).toBe(null);
-  // Non-finite px values do not migrate and are still dropped.
-  const junk = memStorage({
-    "picot.terminal.preferences": JSON.stringify({ fontSize: "bad" }),
+test("migrateLegacyTerminalPreferences lifts every terminal field and clears storage", () => {
+  const storage = memStorage({
+    "picot.terminal.preferences": JSON.stringify({
+      fontSize: 24,
+      themeMode: "light",
+      scrollbackLimit: 2000,
+      smoothScrollDuration: 120,
+      webglRenderer: false,
+      junk: "dropped",
+    }),
   });
-  expect(migrateLegacyTerminalFontSize(junk)).toBe(null);
-  expect(JSON.parse(junk.getItem("picot.terminal.preferences"))).toEqual({});
+  migrateLegacyTerminalPreferences(storage);
+  // The whole per-origin payload is obsolete: the key must be gone.
+  expect(storage.getItem("picot.terminal.preferences")).toBe(null);
+  const cookie = loadAppearanceCookie();
+  expect(cookie.terminalFontSize).toBe("large");
+  expect(cookie.terminalThemeMode).toBe("light");
+  expect(cookie.terminalScrollbackLimit).toBe(2000);
+  expect(cookie.terminalSmoothScrollDuration).toBe(120);
+  // jsdom's UA is non-Windows, so false is off-default and must be preserved.
+  expect(cookie.terminalWebglRenderer).toBe(false);
+  // Idempotent: second run is a no-op.
+  migrateLegacyTerminalPreferences(storage);
+  expect(loadAppearanceCookie()).toEqual(cookie);
+});
+
+test("migration skips default-valued legacy fields, invalid webgl, and corrupt JSON", () => {
+  const storage = memStorage({
+    "picot.terminal.preferences": JSON.stringify({
+      fontSize: 15,
+      themeMode: "dark",
+      scrollbackLimit: 1000,
+      smoothScrollDuration: 0,
+      webglRenderer: "yes",
+    }),
+  });
+  const before = loadAppearanceCookie();
+  migrateLegacyTerminalPreferences(storage);
+  expect(storage.getItem("picot.terminal.preferences")).toBe(null);
+  expect(loadAppearanceCookie()).toEqual(before);
+
+  const broken = memStorage({ "picot.terminal.preferences": "{broken" });
+  migrateLegacyTerminalPreferences(broken);
+  expect(broken.getItem("picot.terminal.preferences")).toBe(null);
+  expect(migrateLegacyTerminalPreferences(memStorage())).toBeUndefined();
+  expect(migrateLegacyTerminalPreferences(null)).toBeUndefined();
+});
+
+test("normalizeThemeMode accepts the three modes and defaults to dark", () => {
+  expect(normalizeThemeMode("system")).toBe("system");
+  expect(normalizeThemeMode("light")).toBe("light");
+  expect(normalizeThemeMode("dark")).toBe("dark");
+  expect(normalizeThemeMode("sepia")).toBe("dark");
+  expect(normalizeThemeMode(undefined)).toBe("dark");
+  expect(normalizeThemeMode(null)).toBe("dark");
+  expect(DEFAULT_TERMINAL_THEME_MODE).toBe("dark");
+});
+
+test("normalizes terminal display preferences to safe ranges", () => {
+  expect(normalizeScrollbackLimit(50)).toBe(100);
+  expect(normalizeScrollbackLimit(60000)).toBe(50000);
+  expect(normalizeScrollbackLimit(undefined)).toBe(DEFAULT_SCROLLBACK_LIMIT);
+  expect(normalizeSmoothScrollDuration(-1)).toBe(0);
+  expect(normalizeSmoothScrollDuration(2500)).toBe(1000);
+  expect(normalizeSmoothScrollDuration(undefined)).toBe(DEFAULT_SMOOTH_SCROLL_DURATION);
+  expect(normalizeSmoothScrollDuration("")).toBe(DEFAULT_SMOOTH_SCROLL_DURATION);
+});
+
+test("defaultWebglRenderer is ON except on Windows", () => {
+  expect(
+    defaultWebglRenderer(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+    ),
+  ).toBe(false);
+  expect(
+    defaultWebglRenderer(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    ),
+  ).toBe(true);
+  expect(
+    defaultWebglRenderer(
+      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36",
+    ),
+  ).toBe(true);
+  expect(defaultWebglRenderer("")).toBe(true);
+  expect(defaultWebglRenderer(undefined)).toBe(true);
 });
 
 test("applyAppearanceToDom sets font variables and the resolved preview theme", () => {

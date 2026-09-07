@@ -33,6 +33,15 @@ export function renderThinkingEffort(
   if (thinkingName) thinkingName.textContent = nameFor ? nameFor(normalized) : normalized;
 }
 
+export function applyShowThinking(show) {
+  const toggleShowThinking = document.getElementById("toggle-show-thinking");
+  if (toggleShowThinking) {
+    toggleShowThinking.className = `settings-toggle${show ? " on" : ""}`;
+  }
+  document.body.classList.toggle("hide-thinking", !show);
+  localStorage.setItem("pi-studio-show-thinking", show);
+}
+
 export function setupSettingsToggles({
   toggleAutoCompact,
   thinkingSteps,
@@ -43,11 +52,26 @@ export function setupSettingsToggles({
   getDefaultThinkingLevel,
   setDefaultThinkingLevel,
   onRuntimeLevelChanged,
+  persistAutoCompaction,
+  persistThinkingLevel,
+  persistShowThinking,
 }) {
+  // Dual-track persistence (SPEC §6.2): the RPC writes Pi's own truth; the
+  // injected persist callbacks mirror the picked value into the DB. Persist
+  // only after RPC success, and roll the optimistic UI back on failure so the
+  // toggle never shows a state Pi did not accept.
   toggleAutoCompact?.addEventListener("click", async () => {
     const isOn = toggleAutoCompact.classList.contains("on");
-    toggleAutoCompact.className = `settings-toggle${isOn ? "" : " on"}`;
-    await rpcCommand({ type: "set_auto_compaction", enabled: !isOn });
+    const enabling = !isOn;
+    toggleAutoCompact.className = `settings-toggle${enabling ? " on" : ""}`;
+    try {
+      const data = await rpcCommand({ type: "set_auto_compaction", enabled: enabling });
+      if (data?.success === false) throw new Error(data.error || "set_auto_compaction failed");
+      persistAutoCompaction?.(enabling);
+    } catch (error) {
+      console.error("[settings] auto-compaction change failed:", error);
+      toggleAutoCompact.className = `settings-toggle${isOn ? " on" : ""}`;
+    }
   });
 
   // Click a dot to set the default reasoning depth for future sessions and,
@@ -67,6 +91,7 @@ export function setupSettingsToggles({
     if (data?.success) {
       const effectiveLevel = data.data?.level || level;
       setDefaultThinkingLevel?.(effectiveLevel);
+      persistThinkingLevel?.(effectiveLevel);
       renderThinkingEffort(effectiveLevel, {
         thinkingSteps,
         thinkingMarker,
@@ -107,10 +132,9 @@ export function setupSettingsToggles({
   if (!showThinking) document.body.classList.add("hide-thinking");
 
   toggleShowThinking?.addEventListener("click", () => {
-    const isOn = toggleShowThinking.classList.contains("on");
-    toggleShowThinking.className = `settings-toggle${isOn ? "" : " on"}`;
-    document.body.classList.toggle("hide-thinking", isOn);
-    localStorage.setItem("pi-studio-show-thinking", !isOn);
+    const show = !toggleShowThinking.classList.contains("on");
+    applyShowThinking(show);
+    persistShowThinking?.(show);
   });
 
   // Check-and-reset: openSettings consumes the marker when its get_state

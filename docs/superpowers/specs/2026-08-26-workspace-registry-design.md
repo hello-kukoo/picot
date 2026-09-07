@@ -294,9 +294,21 @@ mod 声明。其语义归宿：
 
 ### 6.1 模型
 
-- key：点分命名空间字符串，如 `ui.theme`、`ui.locale`、`ui.sidebar.*`。
+- key：点分命名空间字符串，如 `ui.theme`、`ui.locale`、`ui.sidebar.*`、
+  `agent.*`（Settings General 页的 Pi 行为偏好）。
 - value：任意 JSON（`value_json` 列）。
 - 范围：应用全局（所有窗口共享；本表无 per-workspace 语义）。
+
+#### agent.* 键（Settings → General 双轨延伸）
+
+- `agent.autoCompaction`（boolean）、`agent.thinkingLevel`
+  （`off|minimal|low|medium|high`）：这两个值的运行时真相仍是 Pi 自身
+  （settings 文件 / runtime RPC）。用户在 Settings 页改动时，toggles 模块在
+  RPC 成功后才镜像写 DB（失败则不写且回滚 UI）。启动 reconcile：DB 有值 →
+  恢复 UI 并 best-effort 推回 Pi（跨机器/新装生效）；DB 无值 → Pi 默认生效，
+  无需迁移种子。
+- `agent.showThinking`（boolean）：纯 Picot UI 偏好，localStorage 为渲染
+  缓存，DB 为真相；DB 无值时以 localStorage 值播种（一次性迁移）。
 
 ### 6.2 theme/locale 的双轨策略（防首屏闪白）
 

@@ -26,7 +26,7 @@ export function consumeInjectedCapability(env = globalThis) {
   return value;
 }
 
-export function isHostOriginRequest(input, env = globalThis.window || globalThis) {
+function isHostOriginRequest(input, env = globalThis.window || globalThis) {
   const location = env?.location || globalThis.location;
   const pathname = typeof location?.pathname === "string" ? location.pathname : "";
   if (!pathname.startsWith("/workspaces/")) return false;

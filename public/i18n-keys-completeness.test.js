@@ -172,7 +172,6 @@ describe("JS t() literal key references", () => {
     "git-panel.js",
     "git-client.js",
     "git-diff-renderer.js",
-    "file-preview-panel-diff.js",
   ];
 
   it("every literal t(\"...\") / t('...') key exists in en.json", () => {

@@ -10,7 +10,7 @@ function isAppleOs() {
   return platform.startsWith("Mac") || /Mac OS|iPhone|iPad/.test(userAgent);
 }
 
-export function shortcutHintLabel() {
+function shortcutHintLabel() {
   return isAppleOs() ? "⌘K" : "Ctrl+K";
 }
 
@@ -127,6 +127,7 @@ export function setupSessionSearchDialog({
     button.className = "session-search-result";
     button.dataset.sessionId = sessionId;
     button.setAttribute("role", "option");
+    // pi-lens-ignore: no-inner-html-js
     button.innerHTML = `
       <span class="session-search-result-icon">${escapeHtml(icon)}</span>
       <span class="session-search-result-copy">

@@ -13,16 +13,20 @@ import { setupVoiceInput } from "./app/voice-input.js";
 import { resolveWebSocketUrl, WebSocketClient } from "./app/websocket-client.js";
 import {
   applyAppearanceToDom,
-  DEFAULT_FONT_SIZE_LEVEL,
+  defaultWebglRenderer,
   FONT_SIZE_LEVELS,
   loadAppearanceCookie,
-  migrateLegacyTerminalFontSize,
+  migrateLegacyTerminalPreferences,
   normalizeFontLevel,
   normalizePreviewThemeMode,
+  normalizeScrollbackLimit,
+  normalizeSmoothScrollDuration,
+  normalizeThemeMode,
   PREVIEW_THEME_MODES,
   resolvePreviewTheme,
   saveAppearanceCookie,
   TERMINAL_FONT_SIZE_PX,
+  TERMINAL_THEME_MODES,
 } from "./appearance-preferences.js";
 import { setEditorHighlightTheme } from "./code-editor.js";
 import { createCompactCoordinator } from "./compact-coordinator.js";
@@ -87,7 +91,12 @@ import { setupSettingsConfig } from "./settings/settings-config.js";
 import { setupSkillsInstallTab } from "./settings/skills-install-tab.js";
 import { setupSkillsPage } from "./settings/skills-page.js";
 import { setupSkillsTabShell } from "./settings/skills-tab-shell.js";
-import { renderThinkingEffort, setupSettingsToggles } from "./settings/toggles.js";
+import {
+  applyShowThinking,
+  renderThinkingEffort,
+  setupSettingsToggles,
+  THINKING_LEVELS,
+} from "./settings/toggles.js";
 import { SideChatManager } from "./side-chat-manager.js";
 import { buildSessionItem } from "./sidebar/build-session-item.js";
 import {
@@ -103,16 +112,6 @@ import { createSidebarResizer } from "./sidebar-resizer.js";
 import { TerminalClient } from "./terminal-client.js";
 import { loadTerminalFont, TERMINAL_FONT_FAMILY, TERMINAL_FONT_STACK } from "./terminal-font.js";
 import { formatTerminalStartError, TerminalPanel } from "./terminal-panel.js";
-import {
-  DEFAULT_SCROLLBACK_LIMIT,
-  DEFAULT_SMOOTH_SCROLL_DURATION,
-  defaultWebglRenderer,
-  normalizeScrollbackLimit,
-  normalizeSmoothScrollDuration,
-  normalizeThemeMode,
-  TERMINAL_THEME_MODES,
-  TerminalPreferences,
-} from "./terminal-preferences.js";
 import { TerminalSearch } from "./terminal-search.js";
 import {
   encodeBase64 as encodeTerminalBase64,
@@ -974,7 +973,9 @@ const fileSidebarPath = document.getElementById("file-sidebar-path");
 const gitPanelElement = document.getElementById("git-panel");
 const gitClient = new GitClient({
   send: (message) => {
-    if (wsClient.ws && wsClient.ws.readyState === WebSocket.OPEN) {
+    // 1 === WebSocket.OPEN; the numeric literal avoids a live global lookup
+    // that breaks in test environments where WebSocket is unstubbed.
+    if (wsClient.ws && wsClient.ws.readyState === 1) {
       wsClient.ws.send(JSON.stringify(message));
     }
   },
@@ -1153,23 +1154,12 @@ windowCloseCoordinator.registerParticipant("quick", quickChatDialog);
 // ── Terminal panel (native owner only) ──────────────────────────────────────
 // The host owns every PTY; the WebView owns xterm rendering. The panel is gated
 // on native capability, so LAN/mobile clients render no terminal surface.
-const terminalPreferences = new TerminalPreferences();
-const savedTerminalPreferences = terminalPreferences.load();
 
 // ── Appearance preferences (Settings → Appearance) ─────────────────────
 // The cookie cache is read synchronously at bootstrap for first paint; here
-// we lift any legacy per-origin terminal fontSize (px) once, then keep all
-// four settings on the cookie + DB dual-track like ui.theme.
-const appearanceBeforeMigration = loadAppearanceCookie();
-const legacyTerminalFontLevel = migrateLegacyTerminalFontSize(
-  typeof localStorage !== "undefined" ? localStorage : null,
-);
-if (
-  legacyTerminalFontLevel &&
-  appearanceBeforeMigration.terminalFontSize === DEFAULT_FONT_SIZE_LEVEL
-) {
-  saveAppearanceCookie({ terminalFontSize: legacyTerminalFontLevel });
-}
+// we lift any legacy per-origin terminal preferences once, then keep every
+// appearance setting on the cookie + DB dual-track like ui.theme.
+migrateLegacyTerminalPreferences(typeof localStorage !== "undefined" ? localStorage : null);
 const savedAppearance = loadAppearanceCookie();
 let chatFontSizeLevel = savedAppearance.chatFontSize;
 let previewFontSizeLevel = savedAppearance.previewFontSize;
@@ -1180,20 +1170,18 @@ let terminalFontSizeLevel = savedAppearance.terminalFontSize;
 applyAppearanceDom();
 // WebGL renderer is opt-in: absent preference falls back to the platform
 // default (ON on macOS/Linux, OFF on Windows — see defaultWebglRenderer).
-// Mutable: the Settings > General toggle updates these live.
+// Mutable: the Appearance page toggle updates these live.
 let webglRendererEnabled =
-  typeof savedTerminalPreferences.webglRenderer === "boolean"
-    ? savedTerminalPreferences.webglRenderer
+  typeof savedAppearance.terminalWebglRenderer === "boolean"
+    ? savedAppearance.terminalWebglRenderer
     : defaultWebglRenderer();
 // Terminal color scheme: "system" follows the Picot theme; "light"/"dark"
-// force canonical palettes. Default dark (TerminalPreferences contract).
-let terminalThemeMode = normalizeThemeMode(savedTerminalPreferences.themeMode);
+// force canonical palettes. Default dark.
+let terminalThemeMode = normalizeThemeMode(savedAppearance.terminalThemeMode);
 let terminalFontSize = TERMINAL_FONT_SIZE_PX[terminalFontSizeLevel];
-let terminalScrollbackLimit = normalizeScrollbackLimit(
-  savedTerminalPreferences.scrollbackLimit ?? DEFAULT_SCROLLBACK_LIMIT,
-);
+let terminalScrollbackLimit = normalizeScrollbackLimit(savedAppearance.terminalScrollbackLimit);
 let terminalSmoothScrollDuration = normalizeSmoothScrollDuration(
-  savedTerminalPreferences.smoothScrollDuration ?? DEFAULT_SMOOTH_SCROLL_DURATION,
+  savedAppearance.terminalSmoothScrollDuration,
 );
 const terminalClient = new TerminalClient({
   send: (envelope) => {
@@ -5916,9 +5904,68 @@ async function reconcilePreferencesOnce() {
         readCache: () => terminalFontSizeLevel,
         apply: (value) => setTerminalFontSizeLevel(value),
       },
+      {
+        key: PREFERENCE_KEYS.terminalThemeMode,
+        readCache: () => terminalThemeMode,
+        apply: (value) => setTerminalThemeMode(value),
+      },
+      {
+        key: PREFERENCE_KEYS.terminalScrollbackLimit,
+        readCache: () => terminalScrollbackLimit,
+        apply: (value) => setTerminalScrollbackLimit(value),
+      },
+      {
+        key: PREFERENCE_KEYS.terminalSmoothScrollDuration,
+        readCache: () => terminalSmoothScrollDuration,
+        apply: (value) => setTerminalSmoothScrollDuration(value),
+      },
+      {
+        key: PREFERENCE_KEYS.terminalWebglRenderer,
+        readCache: () =>
+          typeof webglRendererEnabled === "boolean" ? webglRendererEnabled : undefined,
+        apply: (value) => setTerminalWebglRenderer(value),
+      },
     ],
   });
   if (!outcome.ok) console.warn("[App] preference reconcile skipped:", outcome.reason);
+  await reconcileAgentPreferences();
+}
+
+// Agent settings dual-track (same contract as SPEC §6.2): the DB is the
+// durable truth for the Settings toggles; Pi's own settings/runtime stay the
+// runtime truth that the toggles' RPC writes into. DB empty → Pi's default
+// governs (seeded on first user change, no migration needed). DB present →
+// restore the UI state and push the value back into Pi best-effort, so a
+// fresh install (or another machine) adopts the stored picks.
+async function reconcileAgentPreferences() {
+  if (!preferencesClient.available()) return;
+  try {
+    const showThinking = await preferencesClient.get(PREFERENCE_KEYS.showThinking);
+    if (typeof showThinking === "boolean") {
+      applyShowThinking(showThinking);
+    } else {
+      // First run: lift the existing localStorage cache into the DB.
+      const cached = localStorage.getItem("pi-studio-show-thinking") !== "false";
+      await preferencesClient.set(PREFERENCE_KEYS.showThinking, cached);
+    }
+    const autoCompaction = await preferencesClient.get(PREFERENCE_KEYS.agentAutoCompaction);
+    if (typeof autoCompaction === "boolean") {
+      toggleAutoCompact.className = `settings-toggle${autoCompaction ? " on" : ""}`;
+      await rpcCommand({ type: "set_auto_compaction", enabled: autoCompaction }, null, true);
+    }
+    const thinkingLevel = await preferencesClient.get(PREFERENCE_KEYS.agentThinkingLevel);
+    if (THINKING_LEVELS.includes(thinkingLevel)) {
+      currentDefaultThinkingLevel = thinkingLevel;
+      renderThinkingEffort(thinkingLevel, {
+        thinkingSteps: thinkingEffortSteps,
+        thinkingMarker: thinkingEffortMarker,
+        thinkingName: thinkingEffortName,
+      });
+      await rpcCommand({ type: "set_default_thinking_level", level: thinkingLevel }, null, true);
+    }
+  } catch (error) {
+    console.warn("[App] agent preference reconcile failed:", error);
+  }
 }
 
 function buildThemeGrid() {
@@ -5952,8 +5999,6 @@ function buildThemeGrid() {
       for (const entry of terminalClient.tabs.values()) {
         entry.tab?.setTheme?.(xtermTheme);
       }
-      // Re-resolve the preview theme/highlight against the new Picot theme.
-      applyAppearanceDom();
       themeGrid.querySelectorAll(".theme-swatch").forEach((s) => {
         s.classList.remove("active");
       });
@@ -6004,13 +6049,6 @@ async function handleLanguageSelectChange() {
 languageSelect?.addEventListener("change", handleLanguageSelectChange);
 
 // ── Terminal preferences (Settings → General) ───────────────────────────
-// Display-only localStorage prefs; no process-sensitive value is persisted
-// (TerminalPreferences rejects unknown keys). Changes apply live to every
-// open xterm tab; the WebGL toggle upgrades/downgrades renderers in place.
-function persistTerminalPreferences(patch) {
-  terminalPreferences.save({ ...terminalPreferences.load(), ...patch });
-}
-
 function applyTerminalThemeToAllTabs() {
   const theme = resolveTerminalTheme(terminalThemeMode);
   for (const entry of terminalClient.tabs.values()) {
@@ -6046,21 +6084,37 @@ function applyAppearanceDom() {
   setEditorHighlightTheme(resolvePreviewTheme(previewThemeMode, picotThemeIsDark));
 }
 
+// data-theme is written asynchronously inside View Transitions (and by the OS
+// scheme fallback in themes.js), so the preview highlight must follow it no
+// matter which path changed it — re-resolve on every attribute change.
+new MutationObserver(() => applyAppearanceDom()).observe(document.documentElement, {
+  attributeFilter: ["data-theme"],
+});
+
+// Render + cookie are applied by the caller; mirror into the DB truth so the
+// value survives restarts and other machines (same contract as ui.theme).
+function persistAppearancePreference(key, value) {
+  void saveUserRenderPreference({ client: preferencesClient, key, value, apply: () => {} });
+}
+
 function setChatFontSizeLevel(level) {
   chatFontSizeLevel = normalizeFontLevel(level);
   saveAppearanceCookie({ chatFontSize: chatFontSizeLevel });
+  persistAppearancePreference(PREFERENCE_KEYS.chatFontSize, chatFontSizeLevel);
   applyAppearanceDom();
 }
 
 function setPreviewFontSizeLevel(level) {
   previewFontSizeLevel = normalizeFontLevel(level);
   saveAppearanceCookie({ previewFontSize: previewFontSizeLevel });
+  persistAppearancePreference(PREFERENCE_KEYS.previewFontSize, previewFontSizeLevel);
   applyAppearanceDom();
 }
 
 function setPreviewThemeMode(mode) {
   previewThemeMode = normalizePreviewThemeMode(mode);
   saveAppearanceCookie({ previewTheme: previewThemeMode });
+  persistAppearancePreference(PREFERENCE_KEYS.previewTheme, previewThemeMode);
   applyAppearanceDom();
 }
 
@@ -6068,6 +6122,7 @@ function setTerminalFontSizeLevel(level) {
   terminalFontSizeLevel = normalizeFontLevel(level);
   terminalFontSize = TERMINAL_FONT_SIZE_PX[terminalFontSizeLevel];
   saveAppearanceCookie({ terminalFontSize: terminalFontSizeLevel });
+  persistAppearancePreference(PREFERENCE_KEYS.terminalFontSize, terminalFontSizeLevel);
   applyTerminalPreferencesToAllTabs({ fontSize: terminalFontSize });
 }
 
@@ -6124,30 +6179,48 @@ function buildTerminalThemeSelector() {
   }
 }
 
-function handleTerminalThemeChange() {
-  terminalThemeMode = normalizeThemeMode(terminalThemeSelect.value);
-  persistTerminalPreferences({ themeMode: terminalThemeMode });
+function setTerminalThemeMode(mode) {
+  terminalThemeMode = normalizeThemeMode(mode);
+  saveAppearanceCookie({ terminalThemeMode });
+  persistAppearancePreference(PREFERENCE_KEYS.terminalThemeMode, terminalThemeMode);
   applyTerminalThemeToAllTabs();
+}
+
+function handleTerminalThemeChange() {
+  setTerminalThemeMode(terminalThemeSelect.value);
 }
 
 function handlePreviewThemeChange() {
   setPreviewThemeMode(previewThemeSelect.value);
 }
 
-function handleTerminalScrollbackChange() {
-  terminalScrollbackLimit = normalizeScrollbackLimit(terminalScrollbackInput.value);
-  terminalScrollbackInput.value = String(terminalScrollbackLimit);
-  persistTerminalPreferences({ scrollbackLimit: terminalScrollbackLimit });
+function setTerminalScrollbackLimit(value) {
+  terminalScrollbackLimit = normalizeScrollbackLimit(value);
+  if (terminalScrollbackInput) terminalScrollbackInput.value = String(terminalScrollbackLimit);
+  saveAppearanceCookie({ terminalScrollbackLimit });
+  persistAppearancePreference(PREFERENCE_KEYS.terminalScrollbackLimit, terminalScrollbackLimit);
   applyTerminalPreferencesToAllTabs({ scrollback: terminalScrollbackLimit });
 }
 
+function handleTerminalScrollbackChange() {
+  setTerminalScrollbackLimit(terminalScrollbackInput.value);
+}
+
+function setTerminalSmoothScrollDuration(value) {
+  terminalSmoothScrollDuration = normalizeSmoothScrollDuration(value);
+  if (terminalSmoothScrollInput) {
+    terminalSmoothScrollInput.value = String(terminalSmoothScrollDuration);
+  }
+  saveAppearanceCookie({ terminalSmoothScrollDuration });
+  persistAppearancePreference(
+    PREFERENCE_KEYS.terminalSmoothScrollDuration,
+    terminalSmoothScrollDuration,
+  );
+  applyTerminalPreferencesToAllTabs({ smoothScrollDuration: terminalSmoothScrollDuration });
+}
+
 function handleTerminalSmoothScrollChange() {
-  terminalSmoothScrollDuration = normalizeSmoothScrollDuration(terminalSmoothScrollInput.value);
-  terminalSmoothScrollInput.value = String(terminalSmoothScrollDuration);
-  persistTerminalPreferences({ smoothScrollDuration: terminalSmoothScrollDuration });
-  applyTerminalPreferencesToAllTabs({
-    smoothScrollDuration: terminalSmoothScrollDuration,
-  });
+  setTerminalSmoothScrollDuration(terminalSmoothScrollInput.value);
 }
 
 function syncTerminalDisplaySettings() {
@@ -6161,9 +6234,10 @@ function syncTerminalWebglToggle() {
   toggleTerminalWebgl?.classList.toggle("on", webglRendererEnabled);
 }
 
-function handleTerminalWebglToggle() {
-  webglRendererEnabled = !webglRendererEnabled;
-  persistTerminalPreferences({ webglRenderer: webglRendererEnabled });
+function setTerminalWebglRenderer(enabled) {
+  webglRendererEnabled = Boolean(enabled);
+  saveAppearanceCookie({ terminalWebglRenderer: webglRendererEnabled });
+  persistAppearancePreference(PREFERENCE_KEYS.terminalWebglRenderer, webglRendererEnabled);
   syncTerminalWebglToggle();
   for (const entry of terminalClient.tabs.values()) {
     if (webglRendererEnabled) {
@@ -6172,6 +6246,10 @@ function handleTerminalWebglToggle() {
       entry.tab?.disableWebgl?.();
     }
   }
+}
+
+function handleTerminalWebglToggle() {
+  setTerminalWebglRenderer(!webglRendererEnabled);
 }
 
 terminalThemeSelect?.addEventListener("change", handleTerminalThemeChange);
@@ -6341,6 +6419,13 @@ const settingsToggles = setupSettingsToggles({
     currentThinkingLevel = level;
     updateThinkingBtn();
   },
+  // Dual-track: mirror the pick into the DB after the RPC succeeded, so the
+  // value survives restarts and other machines (same contract as ui.theme).
+  persistAutoCompaction: (enabled) =>
+    void preferencesClient.set(PREFERENCE_KEYS.agentAutoCompaction, enabled),
+  persistThinkingLevel: (level) =>
+    void preferencesClient.set(PREFERENCE_KEYS.agentThinkingLevel, level),
+  persistShowThinking: (show) => void preferencesClient.set(PREFERENCE_KEYS.showThinking, show),
 });
 
 const mobileAccessCard = setupMobileAccess({

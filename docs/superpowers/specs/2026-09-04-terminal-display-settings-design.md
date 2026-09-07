@@ -4,11 +4,12 @@
 
 Implemented on 2026-09-04. Approved by Dr. Lin on 2026-09-04.
 
-> 2026-09-04 update: the `fontSize` contract below (number 10–32, stored in
-> per-origin localStorage, General page) is superseded by
-> `2026-09-04-appearance-settings-page-design.md` — terminal font size is now
-> a five-level global preference on the Appearance page. Scrollback and
-> smooth scroll contracts are unchanged.
+> 2026-09-04 update: this spec's localStorage contracts (fontSize 10–32,
+> scrollback, smoothScroll, WebGL in per-origin localStorage on the General
+> page) are superseded by
+> `2026-09-04-appearance-settings-page-design.md` — every terminal display
+> preference is now a global dual-track preference (cookie + DB) on the
+> Appearance page, and `terminal-preferences.js` is deleted.
 
 ## Scope
 

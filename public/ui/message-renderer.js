@@ -8,8 +8,8 @@ import { onLocaleChange, t } from "../i18n.js";
 import { createIcon, setButtonIcon } from "../icons.js";
 import { renderMarkdown, renderStreamingMarkdown, renderUserMarkdown } from "./markdown.js";
 
-export const USER_MESSAGE_COLLAPSE_CHAR_THRESHOLD = 400;
-export const USER_MESSAGE_COLLAPSE_NEWLINE_THRESHOLD = 8;
+const USER_MESSAGE_COLLAPSE_CHAR_THRESHOLD = 400;
+const USER_MESSAGE_COLLAPSE_NEWLINE_THRESHOLD = 8;
 
 export function shouldCollapseUserMessage(text) {
   if (typeof text !== "string" || text.length === 0) return false;

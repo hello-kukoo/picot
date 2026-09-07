@@ -12,6 +12,13 @@ export const PREFERENCE_KEYS = Object.freeze({
   previewFontSize: "ui.previewFontSize",
   previewTheme: "ui.previewTheme",
   terminalFontSize: "ui.terminalFontSize",
+  terminalThemeMode: "ui.terminalThemeMode",
+  terminalScrollbackLimit: "ui.terminalScrollbackLimit",
+  terminalSmoothScrollDuration: "ui.terminalSmoothScrollDuration",
+  terminalWebglRenderer: "ui.terminalWebglRenderer",
+  agentAutoCompaction: "agent.autoCompaction",
+  agentThinkingLevel: "agent.thinkingLevel",
+  showThinking: "agent.showThinking",
 });
 
 /**

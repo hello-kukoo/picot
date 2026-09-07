@@ -120,6 +120,8 @@ class FakeWebSocket extends EventTarget {
 }
 
 beforeEach(async () => {
+  // jsdom does not implement scrollIntoView; Info panel locate rows call it.
+  window.HTMLElement.prototype.scrollIntoView = () => {};
   window.history.pushState(null, "", "/workspaces/ws-uuid-1/sessions/session-a");
   const fixture = new DOMParser().parseFromString(
     readFileSync(join(process.cwd(), "public/index.html"), "utf8"),

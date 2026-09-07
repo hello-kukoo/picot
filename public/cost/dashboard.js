@@ -19,6 +19,7 @@ function escapeHtml(value) {
 }
 
 function renderShell(target) {
+  // pi-lens-ignore: no-inner-html-js
   target.innerHTML = `
     <link rel="stylesheet" href="cost.css">
     <style>
@@ -138,7 +139,7 @@ function renderLoadError(section, error) {
   }
 }
 
-export class CostDashboard extends HTMLElement {
+class CostDashboard extends HTMLElement {
   connectedCallback() {
     if (this._initialized) {
       this._unsubscribeLocale = onLocaleChange(() => this._renderForLocale());
@@ -252,11 +253,4 @@ export class CostDashboard extends HTMLElement {
 
 if (!customElements.get("cost-dashboard")) {
   customElements.define("cost-dashboard", CostDashboard);
-}
-
-export function createCostDashboard(target) {
-  if (!target) return null;
-  const element = document.createElement("cost-dashboard");
-  target.replaceChildren(element);
-  return element;
 }

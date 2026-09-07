@@ -6,8 +6,8 @@
  * TerminalTab wraps one xterm.js Terminal + Fit/Serialize/Search/Unicode11/
  * Webgl addons behind injectable factories so jsdom tests assert Picot
  * behavior, not xterm internals. Production passes `globalThis.PicotXterm`
- * factories. The Webgl factory is optional and opt-in (see
- * terminal-preferences.js): any WebGL failure falls back to the DOM renderer.
+ * factories. The Webgl factory is optional and opt-in: any WebGL failure falls
+ * back to the DOM renderer.
  */
 import { loadTerminalFont } from "./terminal-font.js";
 
@@ -339,7 +339,7 @@ export function encodeBase64(bytes) {
   return btoa(bin);
 }
 
-export function decodeBase64(b64) {
+function decodeBase64(b64) {
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i += 1) {

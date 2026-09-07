@@ -7,6 +7,13 @@ import { consumeInjectedCapability, readInjectedCapability } from "./host-origin
  * WebSocket Client - Handles connection to backend WebSocket server
  */
 
+// WebSocket readyState constants (spec §4.1). Named literals instead of live
+// `WebSocket.OPEN` lookups: the global may be unstubbed in test environments.
+const WS_CONNECTING = 0;
+const WS_OPEN = 1;
+const WS_CLOSING = 2;
+const WS_CLOSED = 3;
+
 /**
  * Resolve sole WebSocket endpoint from current HostServer origin.
  *
@@ -104,8 +111,8 @@ export class WebSocketClient extends EventTarget {
 
   connect() {
     if (this.connectionState === "connecting") return;
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
-    if (this.ws && this.ws.readyState === WebSocket.CONNECTING) return;
+    if (this.ws && this.ws.readyState === WS_OPEN) return;
+    if (this.ws && this.ws.readyState === WS_CONNECTING) return;
 
     this.isIntentionallyClosed = false;
     this.connectionState = "connecting";
@@ -115,10 +122,7 @@ export class WebSocketClient extends EventTarget {
       this.reconnectTimer = null;
     }
     // Close only fully stale sockets before reconnecting
-    if (
-      this.ws &&
-      (this.ws.readyState === WebSocket.CLOSING || this.ws.readyState === WebSocket.CLOSED)
-    ) {
+    if (this.ws && (this.ws.readyState === WS_CLOSING || this.ws.readyState === WS_CLOSED)) {
       this.ws = null;
     }
     this.ws = new WebSocket(this.url);
@@ -177,7 +181,7 @@ export class WebSocketClient extends EventTarget {
     this.reconnectAttempts = 0;
     this.isIntentionallyClosed = false;
     this.connectionState = "closed";
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    if (this.ws && this.ws.readyState === WS_OPEN) {
       try {
         this.ws.close(1000, "force reconnect");
       } catch (_e) {}
@@ -213,7 +217,7 @@ export class WebSocketClient extends EventTarget {
   }
 
   send(data) {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    if (this.ws && this.ws.readyState === WS_OPEN) {
       const requestId = `req-${++this.requestCounter}`;
       const payload = {
         type: "runtime_request",
@@ -276,7 +280,7 @@ export class WebSocketClient extends EventTarget {
   }
 
   requestRuntimeSnapshot(target) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || this.ws.readyState !== WS_OPEN) return;
     if (!target?.workspaceId || !target?.sessionId || !target?.instanceId) return;
     this.ws.send(
       JSON.stringify({
@@ -294,7 +298,7 @@ export class WebSocketClient extends EventTarget {
 
   // Send canonical v2 hello. Desktop windows present injected capability.
   _sendClientHello() {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || this.ws.readyState !== WS_OPEN) return;
     const capability = this._readNativeCapability();
     this._readCanonicalRoute();
     const hello = {
@@ -314,7 +318,7 @@ export class WebSocketClient extends EventTarget {
   // Send an owner-scoped ephemeral command and return its requestId. The broker
   // derives the owner from the authenticated connection, never from the payload.
   sendEphemeral(instanceId, generation, payload) {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    if (this.ws && this.ws.readyState === WS_OPEN) {
       const requestId = `ep-${++this.requestCounter}`;
       const envelope = {
         type: "ephemeral_command",
@@ -340,7 +344,7 @@ export class WebSocketClient extends EventTarget {
   // commands sent during startup wait briefly for the broker connection instead
   // of failing the race between page load and the WS handshake.
   waitForOpen(timeoutMs = 5000) {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) return Promise.resolve();
+    if (this.ws && this.ws.readyState === WS_OPEN) return Promise.resolve();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.removeEventListener("connected", onConnected);
@@ -366,7 +370,7 @@ export class WebSocketClient extends EventTarget {
   // requestId correlation deterministic). When not yet connected we wait briefly
   // for the broker handshake to win the page-load race before sending.
   sendControl(command, args = {}, options = {}) {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    if (this.ws && this.ws.readyState === WS_OPEN) {
       return this._sendControlNow(command, args, options);
     }
     return this.waitForOpen().then(() => this._sendControlNow(command, args, options));
@@ -374,7 +378,7 @@ export class WebSocketClient extends EventTarget {
 
   _sendControlNow(command, args = {}, { onProgress = null, timeoutMs } = {}) {
     return new Promise((resolve, reject) => {
-      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      if (!this.ws || this.ws.readyState !== WS_OPEN) {
         reject(new Error("WebSocket not connected; cannot send control command"));
         return;
       }
@@ -453,7 +457,7 @@ export class WebSocketClient extends EventTarget {
   _sendRequest(envelopeFor, { label, timeoutMs, unwrap, rejectOnFailure = false }) {
     const deliver = () =>
       new Promise((resolve, reject) => {
-        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        if (!this.ws || this.ws.readyState !== WS_OPEN) {
           reject(new Error(`WebSocket not connected; cannot send ${label}`));
           return;
         }
@@ -488,12 +492,12 @@ export class WebSocketClient extends EventTarget {
           reject(err);
         }
       });
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) return deliver();
+    if (this.ws && this.ws.readyState === WS_OPEN) return deliver();
     return this.waitForOpen().then(deliver);
   }
 
   subscribeRuntimeTarget(target) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || this.ws.readyState !== WS_OPEN) return;
     if (!target?.workspaceId || !target?.sessionId || !target?.instanceId) return;
     this.ws.send(
       JSON.stringify({
@@ -531,7 +535,7 @@ export class WebSocketClient extends EventTarget {
 
   _recoverFromSequenceGap() {
     if (this.sequenceGapRecoveryPending) return;
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || this.ws.readyState !== WS_OPEN) return;
     if (!this.workspaceId || !this.sessionId) return;
     this.sequenceGapRecoveryPending = true;
     this.ws.send(
