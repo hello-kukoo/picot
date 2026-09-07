@@ -253,12 +253,11 @@ describe("agent settings dual-track persistence", () => {
     return dom.window.document;
   }
 
-  test("persists auto-compaction to the DB after a successful RPC", async () => {
+  test("persists auto-compaction to the session and Pi's global settings", async () => {
     const document = makeDom();
     const toggleAutoCompact = document.querySelector("#toggle-auto-compact");
     toggleAutoCompact.className = "settings-toggle on";
     const rpcCommand = vi.fn().mockResolvedValue({ success: true });
-    const persistAutoCompaction = vi.fn();
 
     setupSettingsToggles({
       toggleAutoCompact,
@@ -267,20 +266,24 @@ describe("agent settings dual-track persistence", () => {
       thinkingName: null,
       toggleShowThinking: null,
       rpcCommand,
-      persistAutoCompaction,
     });
     toggleAutoCompact.click();
-    await vi.waitFor(() => expect(persistAutoCompaction).toHaveBeenCalledWith(false));
+    await vi.waitFor(() => expect(rpcCommand).toHaveBeenCalledTimes(2));
 
+    // Session takes effect immediately; the global default lands in Pi's
+    // settings.json so new sessions inherit it.
     expect(rpcCommand).toHaveBeenCalledWith({ type: "set_auto_compaction", enabled: false });
+    expect(rpcCommand).toHaveBeenCalledWith({
+      type: "set_default_auto_compaction",
+      enabled: false,
+    });
   });
 
-  test("does not persist and restores the toggle when the RPC fails", async () => {
+  test("skips the global settings write when the session RPC fails", async () => {
     const document = makeDom();
     const toggleAutoCompact = document.querySelector("#toggle-auto-compact");
     toggleAutoCompact.className = "settings-toggle on";
     const rpcCommand = vi.fn().mockRejectedValue(new Error("down"));
-    const persistAutoCompaction = vi.fn();
 
     setupSettingsToggles({
       toggleAutoCompact,
@@ -289,12 +292,12 @@ describe("agent settings dual-track persistence", () => {
       thinkingName: null,
       toggleShowThinking: null,
       rpcCommand,
-      persistAutoCompaction,
     });
     toggleAutoCompact.click();
     await vi.waitFor(() => expect(toggleAutoCompact.classList.contains("on")).toBe(true));
 
-    expect(persistAutoCompaction).not.toHaveBeenCalled();
+    // Session RPC fired once; the global write never ran.
+    expect(rpcCommand).toHaveBeenCalledTimes(1);
   });
 
   test("persists the picked thinking level to the DB after a successful save", async () => {

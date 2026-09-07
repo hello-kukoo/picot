@@ -52,14 +52,14 @@ export function setupSettingsToggles({
   getDefaultThinkingLevel,
   setDefaultThinkingLevel,
   onRuntimeLevelChanged,
-  persistAutoCompaction,
   persistThinkingLevel,
   persistShowThinking,
 }) {
-  // Dual-track persistence (SPEC §6.2): the RPC writes Pi's own truth; the
-  // injected persist callbacks mirror the picked value into the DB. Persist
-  // only after RPC success, and roll the optimistic UI back on failure so the
-  // toggle never shows a state Pi did not accept.
+  // Auto-compaction: the session RPC takes effect immediately; the config
+  // bridge writes Pi's global default (settings.json) so new sessions
+  // inherit it. The global write is skipped if the session RPC fails (UI
+  // rolls back); a failed global write must not undo the live session,
+  // so it is logged instead of thrown.
   toggleAutoCompact?.addEventListener("click", async () => {
     const isOn = toggleAutoCompact.classList.contains("on");
     const enabling = !isOn;
@@ -67,10 +67,15 @@ export function setupSettingsToggles({
     try {
       const data = await rpcCommand({ type: "set_auto_compaction", enabled: enabling });
       if (data?.success === false) throw new Error(data.error || "set_auto_compaction failed");
-      persistAutoCompaction?.(enabling);
     } catch (error) {
       console.error("[settings] auto-compaction change failed:", error);
       toggleAutoCompact.className = `settings-toggle${isOn ? " on" : ""}`;
+      return;
+    }
+    try {
+      await rpcCommand({ type: "set_default_auto_compaction", enabled: enabling });
+    } catch (error) {
+      console.error("[settings] global auto-compaction default failed:", error);
     }
   });
 

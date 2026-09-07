@@ -301,12 +301,13 @@ mod 声明。其语义归宿：
 
 #### agent.* 键（Settings → General 双轨延伸）
 
-- `agent.autoCompaction`（boolean）、`agent.thinkingLevel`
-  （`off|minimal|low|medium|high`）：这两个值的运行时真相仍是 Pi 自身
-  （settings 文件 / runtime RPC）。用户在 Settings 页改动时，toggles 模块在
-  RPC 成功后才镜像写 DB（失败则不写且回滚 UI）。启动 reconcile：DB 有值 →
-  恢复 UI 并 best-effort 推回 Pi（跨机器/新装生效）；DB 无值 → Pi 默认生效，
-  无需迁移种子。
+- `agent.autoCompaction`：**不走 DB**。toggle 双写：runtime RPC（当前会
+  话立即生效）+ config bridge 写 Pi settings.json 的 `compaction.enabled`
+  （全局默认，新会话继承）；Settings 回显读 bridge 的全局值。
+- `agent.thinkingLevel`（`off|minimal|low|medium|high`）：运行时真相仍是
+  Pi 自身（settings 文件 / runtime RPC）。用户在 Settings 页改动时，
+  toggles 模块在 RPC 成功后才镜像写 DB（失败则不写）。启动 reconcile：
+  DB 有值 → 恢复 UI 并 best-effort 推回 Pi；DB 无值 → Pi 默认生效。
 - `agent.showThinking`（boolean）：纯 Picot UI 偏好，localStorage 为渲染
   缓存，DB 为真相；DB 无值时以 localStorage 值播种（一次性迁移）。
 

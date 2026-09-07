@@ -16,7 +16,6 @@ export const PREFERENCE_KEYS = Object.freeze({
   terminalScrollbackLimit: "ui.terminalScrollbackLimit",
   terminalSmoothScrollDuration: "ui.terminalSmoothScrollDuration",
   terminalWebglRenderer: "ui.terminalWebglRenderer",
-  agentAutoCompaction: "agent.autoCompaction",
   agentThinkingLevel: "agent.thinkingLevel",
   showThinking: "agent.showThinking",
 });

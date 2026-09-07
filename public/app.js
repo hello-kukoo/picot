@@ -3620,6 +3620,11 @@ const SKILL_HOST_COMMANDS = new Map([
     "set_default_thinking_level",
     (cmd) => bridgeData("set_default_thinking_level", { level: cmd.level }),
   ],
+  ["get_default_auto_compaction", () => bridgeData("get_default_auto_compaction", {})],
+  [
+    "set_default_auto_compaction",
+    (cmd) => bridgeData("set_default_auto_compaction", { enabled: cmd.enabled }),
+  ],
 ]);
 
 function nativeRpcCommand(cmd) {
@@ -5932,11 +5937,10 @@ async function reconcilePreferencesOnce() {
 }
 
 // Agent settings dual-track (same contract as SPEC §6.2): the DB is the
-// durable truth for the Settings toggles; Pi's own settings/runtime stay the
-// runtime truth that the toggles' RPC writes into. DB empty → Pi's default
-// governs (seeded on first user change, no migration needed). DB present →
-// restore the UI state and push the value back into Pi best-effort, so a
-// fresh install (or another machine) adopts the stored picks.
+// durable truth for the show-thinking pref; the thinking level mirror is
+// restored into Pi's own settings.json best-effort (fresh install / another
+// machine adopts it). Auto-compaction has no DB track: Pi's settings.json is
+// its global truth, written by the toggle via the config bridge.
 async function reconcileAgentPreferences() {
   if (!preferencesClient.available()) return;
   try {
@@ -5947,11 +5951,6 @@ async function reconcileAgentPreferences() {
       // First run: lift the existing localStorage cache into the DB.
       const cached = localStorage.getItem("pi-studio-show-thinking") !== "false";
       await preferencesClient.set(PREFERENCE_KEYS.showThinking, cached);
-    }
-    const autoCompaction = await preferencesClient.get(PREFERENCE_KEYS.agentAutoCompaction);
-    if (typeof autoCompaction === "boolean") {
-      toggleAutoCompact.className = `settings-toggle${autoCompaction ? " on" : ""}`;
-      await rpcCommand({ type: "set_auto_compaction", enabled: autoCompaction }, null, true);
     }
     const thinkingLevel = await preferencesClient.get(PREFERENCE_KEYS.agentThinkingLevel);
     if (THINKING_LEVELS.includes(thinkingLevel)) {
@@ -6336,11 +6335,17 @@ async function openSettings(tabKey = "general", options = {}) {
   void mobileAccessCard.refresh();
   // Fetch current state for toggles
   try {
+    // The auto-compaction toggle owns Pi's global default (settings.json via
+    // the config bridge), not the live session's runtime value — read the
+    // global truth so the switch reflects what new sessions will inherit.
+    const defaults = await rpcCommand({ type: "get_default_auto_compaction" }, null, true);
+    const defaultEnabled = defaults?.data?.enabled;
+    if (typeof defaultEnabled === "boolean") {
+      toggleAutoCompact.className = `settings-toggle${defaultEnabled ? " on" : ""}`;
+    }
     const data = await rpcCommand({ type: "get_state" }, null, true);
     if (data.success && data.data) {
       const s = data.data;
-      // Auto-compaction toggle
-      toggleAutoCompact.className = `settings-toggle${s.autoCompactionEnabled ? " on" : ""}`;
       // Thinking level. The get_state request was issued when Settings opened;
       // if the user picked a level in the meantime, that snapshot is stale and
       // must not revert their choice (check-and-reset marker from toggles.js).
@@ -6421,8 +6426,8 @@ const settingsToggles = setupSettingsToggles({
   },
   // Dual-track: mirror the pick into the DB after the RPC succeeded, so the
   // value survives restarts and other machines (same contract as ui.theme).
-  persistAutoCompaction: (enabled) =>
-    void preferencesClient.set(PREFERENCE_KEYS.agentAutoCompaction, enabled),
+  // Auto-compaction is NOT mirrored here: its global default lives in Pi's
+  // settings.json (the toggle writes it via the config bridge).
   persistThinkingLevel: (level) =>
     void preferencesClient.set(PREFERENCE_KEYS.agentThinkingLevel, level),
   persistShowThinking: (show) => void preferencesClient.set(PREFERENCE_KEYS.showThinking, show),
