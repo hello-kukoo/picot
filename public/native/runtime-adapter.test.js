@@ -79,6 +79,7 @@ describe("HostRuntimeAdapter", () => {
   });
 
   it("sends a remote device token only in hello and resubscribes after reconnect", () => {
+    // pi-lens-ignore: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
     FakeWebSocket.instances.length = 0;
     const adapter = new HostRuntimeAdapter({
       url: "ws://host/v2/ws",

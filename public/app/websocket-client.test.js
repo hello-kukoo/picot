@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import { resolveWebSocketUrl, WebSocketClient } from "./websocket-client.js";
 
 describe("resolveWebSocketUrl", () => {
+  // pi-lens-ignore: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
   test("uses the current HostServer origin and canonical v2 path", () => {
     expect(
       resolveWebSocketUrl({

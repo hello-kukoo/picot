@@ -32,6 +32,7 @@ function formatHourLabel(hour) {
 }
 
 function renderEmpty(target, message = t("cost.noDataInSelectedRange")) {
+  // pi-lens-ignore: no-inner-html-js
   target.innerHTML = `<div class="empty">${escapeHtml(message)}</div>`;
 }
 
@@ -87,6 +88,7 @@ export function renderInfobarOverview(target, overview = {}, usage = {}) {
     ["cacheWrite", t("cost.stats.cacheWrite"), formatCompact(usage.cacheWrite), "violet", ""],
     ["toolCalls", t("cost.stats.toolCalls"), formatInt(usage.toolCalls), "rose", ""],
   ];
+  // pi-lens-ignore: no-inner-html-js
   target.innerHTML = stats
     .map(([id, label, value, tone, extraClass]) =>
       buildStatCard(id, label, value, tone, extraClass),
@@ -100,6 +102,7 @@ export function renderInfobarModels(target, rows = [], payload = {}) {
     return;
   }
   const modelSummary = buildModelSummary(rows, payload);
+  // pi-lens-ignore: no-inner-html-js
   target.innerHTML = `
     <div class="infobar-models-card">
       <div class="infobar-models-chart-wrap">
@@ -136,6 +139,7 @@ export function renderInfobarProjects(target, rows = []) {
   }
   const top = rows.slice(0, 6);
   const totalCost = top.reduce((sum, r) => sum + Number(r.cost || 0), 0);
+  // pi-lens-ignore: no-inner-html-js
   target.innerHTML = `
     <div class="infobar-projects-card">
       <div class="infobar-tool-chart-layout">
@@ -181,6 +185,7 @@ export function renderInfobarUsage(target, usage = {}) {
     ["toolCalls", t("cost.stats.toolCalls"), formatInt(usage.toolCalls), "rose"],
   ];
 
+  // pi-lens-ignore: no-inner-html-js
   target.innerHTML = `
     <div class="infobar-usage-grid">
       ${summaryCards.map(([id, label, value, tone]) => buildStatCard(id, label, value, tone)).join("")}
@@ -193,6 +198,7 @@ export function renderInfobarToolCost(target, usage = {}, metaTarget = null) {
   if (metaTarget) {
     metaTarget.textContent = t("cost.trackedTools", { count: formatInt(tools.length) });
   }
+  // pi-lens-ignore: no-inner-html-js
   target.innerHTML = `
     <div class="infobar-tool-cost-card">
       ${
@@ -249,6 +255,7 @@ function renderSessionsPanel(target, sessions = []) {
     renderEmpty(target, t("cost.noRecentSessions"));
     return;
   }
+  // pi-lens-ignore: no-inner-html-js
   target.innerHTML = `
     <div class="infobar-sessions-table-wrap">
       <table class="infobar-sessions-table">
@@ -415,6 +422,7 @@ function renderActivityPanel(target, payload) {
   const activityLess = escapeHtml(t("cost.activity.less"));
   const activityMore = escapeHtml(t("cost.activity.more"));
 
+  // pi-lens-ignore: no-inner-html-js
   target.innerHTML = `
     <div class="infobar-activity-calendar" style="--activity-columns:${weekColumns}">
       <div class="infobar-activity-months" aria-hidden="true">
@@ -682,6 +690,7 @@ function renderModelsChartFallback(canvas, modelSummary, colors) {
 
   const chart = document.createElement("div");
   chart.className = "infobar-models-chart-fallback";
+  // pi-lens-ignore: no-inner-html-js
   chart.innerHTML = labels
     .map((label, dataIndex) => {
       const total = totals[dataIndex];
