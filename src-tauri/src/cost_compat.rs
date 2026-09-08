@@ -590,7 +590,11 @@ pub fn scan_compat_cost_dashboard(
     if !session_root.is_dir() {
         return Ok(empty_payload(params));
     }
-    let mut sessions = Vec::new();
+    // Collect candidates first with a cheap mtime pre-filter: a session file
+    // is append-only, so its last modification bounds the newest entry —
+    // files untouched since before `from` cannot contribute to this range
+    // and are skipped without reading (298MB of history scans as metadata).
+    let mut candidates = Vec::new();
     for project in std::fs::read_dir(session_root)
         .map_err(|error| error.to_string())?
         .filter_map(Result::ok)
@@ -606,16 +610,62 @@ pub fn scan_compat_cost_dashboard(
             if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
                 continue;
             }
-            let Some(metrics) =
-                parse_session_metrics(&path).map_err(|_| "session parse failed".to_owned())?
-            else {
-                continue;
-            };
-            if let Some(session) = legacy_cost_session(&metrics, current_root, params) {
-                sessions.push(session);
+            let stat = std::fs::metadata(&path)
+                .ok()
+                .and_then(|meta| Some((meta.modified().ok()?, meta.len())));
+            match stat {
+                // Entries can never be newer than the file's last write.
+                Some((modified, _)) if DateTime::<Utc>::from(modified) < params.from => {
+                    continue;
+                }
+                Some((_, len)) => candidates.push((path, len)),
+                None => candidates.push((path, 0)),
             }
         }
     }
+    // Biggest file first: a handful of multi-MB sessions dominates the scan,
+    // so size-ordering keeps the fixed-count chunks byte-balanced across
+    // workers instead of letting the giants land in one chunk.
+    candidates.sort_by_key(|&(_, len)| std::cmp::Reverse(len));
+
+    // Parse in parallel on plain std threads (no async runtime here, no new
+    // deps): JSON line parsing is CPU-bound and dominates the 3-4s cold scan.
+    // build_cost_payload sorts every aggregate deterministically, so thread
+    // merge order cannot change the payload.
+    let workers = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1)
+        .clamp(1, 8);
+    let chunk_size = candidates.len().div_ceil(workers);
+    let mut sessions = Vec::new();
+    std::thread::scope(|scope| -> Result<(), String> {
+        let handles: Vec<_> = candidates
+            .chunks(chunk_size)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    let mut parsed = Vec::with_capacity(chunk.len());
+                    for (path, _) in chunk {
+                        let metrics = parse_session_metrics(path)
+                            .map_err(|_| "session parse failed".to_owned())?;
+                        if let Some(session) = metrics
+                            .and_then(|metrics| legacy_cost_session(&metrics, current_root, params))
+                        {
+                            parsed.push(session);
+                        }
+                    }
+                    Ok(parsed)
+                })
+            })
+            .collect();
+        for handle in handles {
+            let chunk_sessions = handle
+                .join()
+                .map_err(|_| "session parse failed".to_owned())
+                .and_then(|result| result)?;
+            sessions.extend(chunk_sessions);
+        }
+        Ok(())
+    })?;
     Ok(build_cost_payload(sessions, params, now))
 }
 

@@ -57,45 +57,6 @@ pub struct SessionSearchResult {
     pub matches: Vec<SessionSearchMatch>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct CostDashboardSummary {
-    pub total_cost: f64,
-    pub total_tokens: u64,
-    pub session_count: u64,
-    pub user_message_count: u64,
-    pub avg_cost_per_session: f64,
-    pub avg_cost_per_user_message: f64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CostBreakdownEntry {
-    pub name: String,
-    pub cost: f64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CostSessionRow {
-    pub id: String,
-    pub title: String,
-    pub model: String,
-    pub time: String,
-    pub total_cost: f64,
-    pub total_tokens: u64,
-    pub user_messages: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct CostDashboard {
-    pub summary: CostDashboardSummary,
-    pub by_model: Vec<CostBreakdownEntry>,
-    pub by_tool: Vec<CostBreakdownEntry>,
-    pub top_sessions: Vec<CostSessionRow>,
-}
-
 #[derive(Debug, Default)]
 pub(crate) struct SessionMetrics {
     pub(crate) id: String,
@@ -758,42 +719,6 @@ impl HostDataPlane {
         }
         Ok(results)
     }
-
-    pub fn cost_dashboard(&self, workspace_id: &str) -> Result<CostDashboard, HostDataError> {
-        let workspace = self.workspace_root(workspace_id)?;
-        let Some(session_root) = &self.session_root else {
-            return Ok(CostDashboard::default());
-        };
-        if !session_root.is_dir() {
-            return Ok(CostDashboard::default());
-        }
-        let mut sessions = Vec::new();
-        for project in std::fs::read_dir(session_root)
-            .map_err(|error| HostDataError::Io(error.to_string()))?
-            .filter_map(Result::ok)
-        {
-            if !project.path().is_dir() {
-                continue;
-            }
-            for file in std::fs::read_dir(project.path())
-                .map_err(|error| HostDataError::Io(error.to_string()))?
-                .filter_map(Result::ok)
-            {
-                let path = file.path();
-                if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
-                    continue;
-                }
-                if let Some(metrics) = parse_session_metrics(&path)? {
-                    // HostDataPlane is workspace-scoped: only sessions whose
-                    // canonical cwd matches the registered workspace root.
-                    if metrics.cwd_canonical.as_deref() == Some(&workspace) {
-                        sessions.push(metrics);
-                    }
-                }
-            }
-        }
-        Ok(build_cost_dashboard(sessions))
-    }
 }
 
 fn find_chars(haystack: &[char], needle: &[char]) -> Option<usize> {
@@ -1330,65 +1255,6 @@ pub(crate) fn parse_session_metrics(path: &Path) -> Result<Option<SessionMetrics
         metrics.title = "Untitled".to_owned();
     }
     Ok(Some(metrics))
-}
-
-fn build_cost_dashboard(sessions: Vec<SessionMetrics>) -> CostDashboard {
-    let mut dashboard = CostDashboard::default();
-    let mut by_model: Vec<(String, f64)> = Vec::new();
-    let mut by_tool: HashMap<String, f64> = HashMap::new();
-    for session in &sessions {
-        dashboard.summary.total_cost += session.total_cost;
-        let session_tokens = session.input_tokens + session.output_tokens + session.cache_read;
-        dashboard.summary.total_tokens += session_tokens;
-        dashboard.summary.user_message_count += session.user_messages;
-        dashboard.summary.session_count += 1;
-
-        match by_model.iter_mut().find(|(name, _)| name == &session.model) {
-            Some((_, cost)) => *cost += session.total_cost,
-            None => by_model.push((session.model.clone(), session.total_cost)),
-        }
-        for (tool_name, cost) in &session.tool_cost_by_name {
-            *by_tool.entry(tool_name.clone()).or_insert(0.0) += cost;
-        }
-    }
-    dashboard.summary.avg_cost_per_session = if dashboard.summary.session_count > 0 {
-        dashboard.summary.total_cost / dashboard.summary.session_count as f64
-    } else {
-        0.0
-    };
-    dashboard.summary.avg_cost_per_user_message = if dashboard.summary.user_message_count > 0 {
-        dashboard.summary.total_cost / dashboard.summary.user_message_count as f64
-    } else {
-        0.0
-    };
-    by_model.sort_by(|left, right| right.1.total_cmp(&left.1));
-    dashboard.by_model = by_model
-        .into_iter()
-        .map(|(name, cost)| CostBreakdownEntry { name, cost })
-        .collect();
-    let mut by_tool: Vec<(String, f64)> = by_tool.into_iter().collect();
-    by_tool.sort_by(|left, right| right.1.total_cmp(&left.1));
-    dashboard.by_tool = by_tool
-        .into_iter()
-        .map(|(name, cost)| CostBreakdownEntry { name, cost })
-        .collect();
-
-    let mut top_sessions: Vec<CostSessionRow> = sessions
-        .into_iter()
-        .map(|session| CostSessionRow {
-            id: session.id,
-            title: session.title,
-            model: session.model,
-            time: session.timestamp,
-            total_cost: session.total_cost,
-            total_tokens: session.input_tokens + session.output_tokens + session.cache_read,
-            user_messages: session.user_messages,
-        })
-        .collect();
-    top_sessions.sort_by(|left, right| right.total_cost.total_cmp(&left.total_cost));
-    top_sessions.truncate(20);
-    dashboard.top_sessions = top_sessions;
-    dashboard
 }
 
 fn parse_session_summary(
@@ -2165,48 +2031,6 @@ mod tests {
                 == 1
         );
         assert!(data.search_sessions("missing", "widget").is_err());
-        fs::remove_dir_all(temp).unwrap();
-    }
-
-    #[test]
-    fn builds_cost_dashboard_scoped_to_the_registered_workspace() {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let temp = std::env::temp_dir().join(format!("picot-host-cost-{nonce}"));
-        let workspace = temp.join("workspace");
-        let other = temp.join("other");
-        let sessions = temp.join("sessions/project");
-        fs::create_dir_all(&workspace).unwrap();
-        fs::create_dir_all(&other).unwrap();
-        fs::create_dir_all(&sessions).unwrap();
-        fs::write(
-            sessions.join("included.jsonl"),
-            format!(
-                "{{\"type\":\"session\",\"id\":\"session-a\",\"timestamp\":\"2026-01-01\",\"cwd\":{}}}\n{{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n{{\"type\":\"message\",\"message\":{{\"role\":\"assistant\",\"model\":\"gpt-5\",\"usage\":{{\"input\":10,\"output\":20,\"cost\":{{\"total\":0.5}}}},\"content\":[{{\"type\":\"toolCall\",\"name\":\"bash\"}}]}}}}\n",
-                serde_json::to_string(&workspace.to_string_lossy()).unwrap()
-            ),
-        )
-        .unwrap();
-        fs::write(
-            sessions.join("excluded.jsonl"),
-            format!(
-                "{{\"type\":\"session\",\"id\":\"session-b\",\"cwd\":{}}}\n{{\"type\":\"message\",\"message\":{{\"role\":\"assistant\",\"model\":\"gpt-5\",\"usage\":{{\"cost\":{{\"total\":99.0}}}}}}}}\n",
-                serde_json::to_string(&other.to_string_lossy()).unwrap()
-            ),
-        )
-        .unwrap();
-        let (data, workspace_id) = test_data(&workspace);
-        let data = data.with_session_root(temp.join("sessions"));
-
-        let dashboard = data.cost_dashboard(&workspace_id).unwrap();
-        assert_eq!(dashboard.summary.session_count, 1);
-        assert_eq!(dashboard.summary.total_cost, 0.5);
-        assert_eq!(dashboard.summary.total_tokens, 30);
-        assert_eq!(dashboard.by_model[0].name, "gpt-5");
-        assert_eq!(dashboard.by_tool[0].name, "bash");
-        assert_eq!(dashboard.top_sessions[0].id, "session-a");
         fs::remove_dir_all(temp).unwrap();
     }
 }

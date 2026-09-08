@@ -2650,16 +2650,38 @@ async fn dispatch(
                         .get("workspaceId")
                         .and_then(Value::as_str)
                         .ok_or(("invalid_workspace", "workspaceId is required".into()))?;
-                    let dashboard = state
+                    // Same P4-parity payload as the /api/cost-dashboard facade:
+                    // range/granularity/scope/models shape the aggregation and
+                    // the compat keys land at the top level of the frame, which
+                    // is what the embedded Cost Dashboard infobar renders.
+                    let pairs = ["range", "granularity", "scope", "models"]
+                        .iter()
+                        .filter_map(|key| {
+                            frame
+                                .get(*key)
+                                .and_then(Value::as_str)
+                                .map(|value| ((*key).to_string(), value.to_string()))
+                        })
+                        .collect::<Vec<(String, String)>>();
+                    let params = crate::cost_compat::parse_cost_range_params(&pairs)
+                        .ok_or(("invalid_cost_range", "Invalid cost range".into()))?;
+                    let payload = state
                         .data
-                        .cost_dashboard(workspace_id)
+                        .cost_dashboard_compat(workspace_id, &params, chrono::Utc::now())
                         .map_err(host_data_error)?;
-                    Ok(json!({
+                    let mut response = json!({
                         "type": "data_response",
                         "requestId": request_id,
                         "operation": "cost_dashboard",
-                        "dashboard": dashboard,
-                    }))
+                    });
+                    if let (Some(target), Some(source)) =
+                        (response.as_object_mut(), payload.as_object())
+                    {
+                        for (key, value) in source {
+                            target.insert(key.clone(), value.clone());
+                        }
+                    }
+                    Ok(response)
                 }
                 Some("file_read") => {
                     let path = frame
