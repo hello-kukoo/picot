@@ -32,6 +32,9 @@ reqwest = { version = "0.12", features = ["json"] }
 dirs = "5"
 log = "0.4"
 fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-foundation = { version = "0.3.2", features = ["NSString", "NSUserDefaults"] }
 futures-util = "0.3"
 tokio-tungstenite = "0.24"
 percent-encoding = "2"

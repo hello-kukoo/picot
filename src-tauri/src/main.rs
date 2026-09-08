@@ -73,6 +73,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::image::Image;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, TitleBarStyle, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
 use temp_resources::{canonical_temp_root, cleanup_quick_chat_dir};
@@ -3103,6 +3104,97 @@ fn handle_window_destroyed(window: &tauri::Window) {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
+// Native menus belong in the macOS system menu bar (same as upstream). The
+// Edit submenu's key equivalents are load-bearing for WKWebView text input:
+// without a native menu the responder chain eats key auto-repeat events, so
+// holding a key in the terminal (xterm.js) types exactly one character.
+// Windows/Linux draw in-window menus instead, so the builder stays menu-less
+// there exactly as upstream does.
+const MENU_NEW_SESSION_ID: &str = "picot-new-session";
+
+#[cfg(target_os = "macos")]
+fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let new_session = MenuItem::with_id(
+        app,
+        MENU_NEW_SESSION_ID,
+        "New Session",
+        true,
+        Some("CmdOrCtrl+N"),
+    )?;
+    let file = Submenu::with_items(
+        app,
+        "File",
+        true,
+        &[
+            &new_session,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::close_window(app, None)?,
+        ],
+    )?;
+    let edit = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+    let window = Submenu::with_items(
+        app,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app, None)?,
+            &PredefinedMenuItem::maximize(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::close_window(app, None)?,
+        ],
+    )?;
+    let help = Submenu::with_items(app, "Help", true, &[])?;
+    let app_menu = Submenu::with_items(
+        app,
+        app.package_info().name.clone(),
+        true,
+        &[
+            &PredefinedMenuItem::about(app, None, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, None)?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::quit(app, None)?,
+        ],
+    )?;
+    let view = Submenu::with_items(
+        app,
+        "View",
+        true,
+        &[&PredefinedMenuItem::fullscreen(app, None)?],
+    )?;
+    Menu::with_items(app, &[&app_menu, &file, &edit, &view, &window, &help])
+}
+
+// With a native menu bar installed, macOS wires WKWebView's text-input
+// context fully — including the "Press and Hold" accent picker, which
+// swallows key auto-repeat and pops the diacritic popover (hold "u" → ü…).
+// Terminal-style repeat requires the picker off; the flag lives in this
+// app's own defaults domain, so the change is scoped to Picot only. Must run
+// before the first webview creates its NSTextInputContext.
+#[cfg(target_os = "macos")]
+fn disable_press_and_hold_accents() {
+    use objc2_foundation::{NSString, NSUserDefaults};
+    let defaults = NSUserDefaults::standardUserDefaults();
+    let key = NSString::from_str("ApplePressAndHoldEnabled");
+    defaults.setBool_forKey(false, &key);
+}
+
 fn main() {
     // Sync the user's login-shell environment before anything else.
     // macOS GUI apps (launched from Finder/Dock) inherit neither PATH nor
@@ -3113,7 +3205,28 @@ fn main() {
         eprintln!("[picot] failed to sync PATH and provider environment from login shell: {err}");
     }
 
-    tauri::Builder::default()
+    #[cfg(target_os = "macos")]
+    disable_press_and_hold_accents();
+
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(build_app_menu).on_menu_event(|app, event| {
+        if event.id().as_ref() == MENU_NEW_SESSION_ID {
+            // v3's session creation is owned by the web UI over the host WS
+            // (upstream instead spawned a runtime from Rust). The menu just
+            // re-dispatches the accelerator into the focused workspace window
+            // so the existing Cmd+N handler in app.js runs the real flow.
+            let focused = app.webview_windows().into_values().find(|window| {
+                window.label().starts_with("native-workspace-") && window.is_focused().unwrap_or(false)
+            });
+            if let Some(window) = focused {
+                let _ = window.eval(
+                    "document.dispatchEvent(new KeyboardEvent('keydown', {key: 'n', metaKey: true, bubbles: true, cancelable: true}))",
+                );
+            }
+        }
+    });
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())

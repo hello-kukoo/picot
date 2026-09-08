@@ -2873,6 +2873,7 @@ dependencies = [
  "hex",
  "libc",
  "log",
+ "objc2-foundation",
  "percent-encoding",
  "portable-pty",
  "rand 0.8.6",
