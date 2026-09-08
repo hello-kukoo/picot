@@ -41,10 +41,10 @@
 接受的边界：
 
 | 威胁 | 是否防范 | 说明 |
-|---|---|---|
+| --- | --- | --- |
 | 离职后**新装**公司 extension | ✅ | PAT 失效，clone 与验活都 401 |
 | 离职后**更新**已装 extension | ✅ | `pi update` 的 `git fetch` 同样 401 |
-| 离职后**打开 Picot** | ✅（对正常员工）| 启动验活 401 → 全应用锁定 |
+| 离职后**打开 Picot** | ✅（对正常员工） | 启动验活 401 → 全应用锁定 |
 | **已装到** `~/.pi/agent/git/...` 的副本 | ❌ | clone 后永远在磁盘上，pi 每次启动照常加载 |
 | 在职期间**早已拿到**的源码 | ❌ | extension 是明文 TypeScript，装即获得 |
 | **patch Picot 的 JS** 绕过登录 | ❌ | `public/*.js` 是磁盘明文资源（见下） |
@@ -117,7 +117,7 @@
 ### 5.3 组件分工
 
 | 组件 | 职责 | 位置 |
-|---|---|---|
+| --- | --- | --- |
 | PAT 存储 | keychain 读写 | Rust 新增 `company-account` 模块 |
 | 启动验活 | PAT 调 `<gitlab>/api/v4/user`，reqwest + `.no_proxy()` | Rust `validate_company_account()` |
 | 账户状态文件 | `last_valid_at` 等读写 | Rust |
@@ -153,7 +153,7 @@ spawn 失败兜底）。锁定窗口内容为："公司账户已失效或令牌�
 ### 5.5 账户状态机
 
 | 状态 | 触发 | 表现 |
-|---|---|---|
+| --- | --- | --- |
 | `unconfigured` | 首次运行，无 PAT | 显示设置窗口，引导输入 PAT |
 | `valid` | 最近一次 `/api/v4/user` 返回 200 | 正常启动 |
 | `offline_grace` | 当前断网，但 `last_valid_at` ≤ grace_days | 正常启动；后台周期重试验活 |
@@ -225,11 +225,11 @@ IP 保护逻辑自洽。
 prompt）。要让 clone 拿到 PAT，有几种方式；**选 `GIT_ASKPASS`**：
 
 | 方式 | 是否落盘 | 选择 |
-|---|---|---|
-| URL 内嵌 token（`https://oauth2:<PAT>@host/...`）| ❌ PAT 写进 clone 的 `.git/config`，永久明文 | 不选 |
-| 临时 git credential helper | 不落盘（helper 进程内存）| 备选 |
+| --- | --- | --- |
+| URL 内嵌 token（`https://oauth2:<PAT>@host/...`） | ❌ PAT 写进 clone 的 `.git/config`，永久明文 | 不选 |
+| 临时 git credential helper | 不落盘（helper 进程内存） | 备选 |
 | **`GIT_ASKPASS=<helper script>`** | **不落盘** | **选** |
-| 全局 credential helper（store/osxkeychain）| 视 helper 而定 | 不选（污染全局 git 配置）|
+| 全局 credential helper（store/osxkeychain） | 视 helper 而定 | 不选（污染全局 git 配置） |
 
 实现：Rust 在调 `run_pi_command(["install", src])` 前，写一个**一次性临时脚本**
 （`ASKPASS` 程序），该脚本被 git 调用时对 `<company gitlab host>` 的用户名/密码
@@ -242,7 +242,7 @@ prompt）。要让 clone 拿到 PAT，有几种方式；**选 `GIT_ASKPASS`**：
 
 ### 5.9 PAT 存储细节
 
-- macOS：Keychain（service=`works.earendil.picot`，account=`company-pat`）。
+- macOS：Keychain（service=`com.palandata.picot`，account=`company-pat`）。
 - Windows：Credential Manager（同 key）。
 - 通过 Tauri 插件或 Rust keyring crate 访问；首次写入需在主线程/keychain 授权下进行。
 - 绝不回显：前端"Company Account"页只显示 PAT 的存在性（`configured: true`）与

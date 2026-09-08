@@ -94,7 +94,7 @@ embedded-server 全量扫描 `~/.pi/agent/sessions/**`（当前 27 个 workspace
 ### 4.1 DB 位置与 schema
 
 沿用 `app_data_dir/picot.sqlite3`（macOS：
-`~/Library/Application Support/works.earendil.picot/picot.sqlite3`），
+`~/Library/Application Support/com.palandata.picot/picot.sqlite3`），
 文件不变、表结构升级：`SCHEMA_VERSION: 1 → 3`。
 
 > 本机现状：该 DB 已是 **v2**（Dr. Lin 另一功能分支写入了

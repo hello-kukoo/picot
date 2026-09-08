@@ -54,16 +54,16 @@ Picot 有两个独立的版本号，都要报：
 
 Picot 用 `tauri-plugin-log`（见 `src-tauri/src/main.rs`），默认双路输出：**stdout** + **LogDir 文件**，日志等级 `Info`（`tokio_util`/`hyper` 降到 `Warn`）。
 
-- **打包后的 .app（生产环境）** — 日志文件在系统日志目录（bundle id `works.earendil.picot`）：
-  - macOS: `~/Library/Logs/works.earendil.picot/Picot.log`
-  - Windows: `%LOCALAPPDATA%\works.earendil.picot\logs\Picot.log`
-  - Linux: `$XDG_DATA_HOME/works.earendil.picot/logs/Picot.log`（一般是 `~/.local/share/...`）
+- **打包后的 .app（生产环境）** — 日志文件在系统日志目录（bundle id `com.palandata.picot`）：
+  - macOS: `~/Library/Logs/com.palandata.picot/Picot.log`
+  - Windows: `%LOCALAPPDATA%\com.palandata.picot\logs\Picot.log`
+  - Linux: `$XDG_DATA_HOME/com.palandata.picot/logs/Picot.log`（一般是 `~/.local/share/...`）
 
   快速查看最近报错：
 
   ```bash
-  tail -n 200 ~/Library/Logs/works.earendil.picot/Picot.log
-  grep -i "error\|panic\|failed" ~/Library/Logs/works.earendil.picot/Picot.log | tail -n 50
+  tail -n 200 ~/Library/Logs/com.palandata.picot/Picot.log
+  grep -i "error\|panic\|failed" ~/Library/Logs/com.palandata.picot/Picot.log | tail -n 50
   ```
 
 - **`bun run dev` 本地开发** — 日志直接打印到运行 `bun run dev` 的终端 stdout/stderr，不用去找文件；往上翻终端 scrollback 即可。关键前缀：
@@ -114,5 +114,5 @@ Get-Process | Where-Object { $_.ProcessName -match "picot|pi" } | Select-Object 
 ## 注意事项
 
 - 不要把用户 `$PATH` 上全局安装的 `pi`（若存在）误当成 Picot 在用的 pi —— Picot **只**用 `src-tauri/resources/pi/` 里锁定版本的内嵌二进制，全局 pi 完全无关（见 AGENTS.md）
-- 日志路径依赖 Tauri 的 `identifier`（`works.earendil.picot`），如果该值以后变了要同步更新本 skill
+- 日志路径依赖 Tauri 的 `identifier`（`com.palandata.picot`），如果该值以后变了要同步更新本 skill
 - 生产环境日志文件会持续追加，体积大时优先 `tail -n` 而不是整份 `cat`
