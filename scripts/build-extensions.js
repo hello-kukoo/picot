@@ -34,7 +34,8 @@ const SRC_DIR = path.join(ROOT, "extensions");
 const OUT_DIR = path.join(SRC_DIR, "dist");
 
 // [inputPath, outputName] — outputName defaults to inputPath with .ts→.mjs
-const ENTRIES = [["picot-bridge.ts"], ["pi-chat-src/extension-entry.ts", "pi-chat.mjs"]];
+// Native runtime loads only the Picot bridge; pi-chat is not a shipped runtime surface.
+const ENTRIES = [["picot-bridge.ts"]];
 
 const EXTERNAL = [
   "@earendil-works/pi-coding-agent",

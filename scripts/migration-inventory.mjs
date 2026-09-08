@@ -65,6 +65,8 @@ const inventory = {
   surfaces: {
     hostHttp: hostRoutes,
     nativeCommands: commands,
+    // Retired Pi-origin `/ws` and `/api/rpc` are verified rejection contracts,
+    // not active native surfaces; keep them out of the generated live inventory.
     websocket: ["/v2/ws", "browser connection", "extension_ui_response", "OAuth commands"],
     brokerControls: controls,
     hostFrames,
@@ -101,9 +103,11 @@ const lines = [
   "",
   "## Host HTTP routes",
   "",
-  ...hostRoutes.map(
-    (path, index) => `- HOST-HTTP-${String(index + 1).padStart(2, "0")} \`${path}\``,
-  ),
+  ...hostRoutes.map((path, index) => {
+    const retired = path === "/api/rpc" || path === "/ws";
+    const status = retired ? " *(retired: explicit rejection)*" : "";
+    return `- HOST-HTTP-${String(index + 1).padStart(2, "0")} \`${path}\`${status}`;
+  }),
   "",
   "## Native commands",
   "",

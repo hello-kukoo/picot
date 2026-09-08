@@ -117,10 +117,13 @@
       "git_log",
       "git_log_detail",
       "git_status",
+      "host_health",
       "install_pi_package",
       "is_dev",
       "list_installed_apps",
+      "list_package_skill_inventory",
       "list_pi_packages",
+      "list_skill_inventory",
       "navigate_tree",
       "new_session",
       "open_devtools",
@@ -131,13 +134,20 @@
       "pick_image_files",
       "pick_skill_source",
       "png",
+      "quick-chat",
       "relaunch_app",
       "remove_pi_package",
       "restart_runtime",
       "rpc_extension_ui_response",
+      "runtime_instances",
+      "session_delete_batch",
+      "session_rename",
       "session_ui_profile_load",
       "session_ui_profile_save",
+      "set_default_thinking_level",
       "set_pi_package_disabled",
+      "set_skill_enabled",
+      "side-chat",
       "skill_install_links",
       "skill_scan_install_source",
       "spawn_session_process",
@@ -162,51 +172,15 @@
   },
   "callers": [
     {
-      "id": "extensions/pi-chat-setup.ts:161",
-      "file": "extensions/pi-chat-setup.ts",
-      "line": 161,
-      "text": "const response = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {"
-    },
-    {
-      "id": "extensions/pi-chat-src/live/common.ts:83",
-      "file": "extensions/pi-chat-src/live/common.ts",
-      "line": 83,
-      "text": "const response = await fetch(url, { headers });"
-    },
-    {
-      "id": "extensions/pi-chat-src/live/telegram.ts:75",
-      "file": "extensions/pi-chat-src/live/telegram.ts",
-      "line": 75,
-      "text": "const response = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {"
-    },
-    {
-      "id": "extensions/pi-chat-src/live/telegram.ts:422",
-      "file": "extensions/pi-chat-src/live/telegram.ts",
-      "line": 422,
-      "text": "const firstResponse = await fetch("
-    },
-    {
-      "id": "extensions/pi-chat-src/live/telegram.ts:441",
-      "file": "extensions/pi-chat-src/live/telegram.ts",
-      "line": 441,
-      "text": "const response = await fetch(`https://api.telegram.org/bot${account.botToken}/${method}`, {"
-    },
-    {
-      "id": "extensions/pi-chat-src/tui/telegram-setup.ts:91",
-      "file": "extensions/pi-chat-src/tui/telegram-setup.ts",
-      "line": 91,
-      "text": "const response = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {"
-    },
-    {
-      "id": "public/app.js:3017",
+      "id": "public/app.js:3276",
       "file": "public/app.js",
-      "line": 3017,
+      "line": 3276,
       "text": "const response = await fetch(\"/v2/paste-offload\", {"
     },
     {
-      "id": "public/app.js:3384",
+      "id": "public/app.js:3710",
       "file": "public/app.js",
-      "line": 3384,
+      "line": 3710,
       "text": "const response = await fetch(exportUrl);"
     },
     {
@@ -234,51 +208,51 @@
       "text": "return this.wsClient.sendControl(command, args, options);"
     },
     {
-      "id": "public/app/websocket-client.js:58",
+      "id": "public/app/websocket-client.js:65",
       "file": "public/app/websocket-client.js",
-      "line": 58,
+      "line": 65,
       "text": "// the promise returned by sendControl() when a matching host_response"
     },
     {
-      "id": "public/app/websocket-client.js:344",
+      "id": "public/app/websocket-client.js:372",
       "file": "public/app/websocket-client.js",
-      "line": 344,
+      "line": 372,
       "text": "sendControl(command, args = {}, options = {}) {"
     },
     {
-      "id": "public/app/websocket-client.test.js:35",
+      "id": "public/app/websocket-client.test.js:36",
       "file": "public/app/websocket-client.test.js",
-      "line": 35,
+      "line": 36,
       "text": "const result = client.sendControl(\"get_pi_version\", {});"
     },
     {
-      "id": "public/app/websocket-client.test.js:66",
+      "id": "public/app/websocket-client.test.js:67",
       "file": "public/app/websocket-client.test.js",
-      "line": 66,
+      "line": 67,
       "text": "client.sendControl(command, {});"
     },
     {
-      "id": "public/app/websocket-client.test.js:73",
+      "id": "public/app/websocket-client.test.js:74",
       "file": "public/app/websocket-client.test.js",
-      "line": 73,
+      "line": 74,
       "text": "const result = client.sendControl(\"new_session\", {});"
     },
     {
-      "id": "public/app/websocket-client.test.js:86",
+      "id": "public/app/websocket-client.test.js:87",
       "file": "public/app/websocket-client.test.js",
-      "line": 86,
+      "line": 87,
       "text": "const result = client.sendControl("
     },
     {
-      "id": "public/app/websocket-client.test.js:211",
+      "id": "public/app/websocket-client.test.js:212",
       "file": "public/app/websocket-client.test.js",
-      "line": 211,
+      "line": 212,
       "text": "const result = client.sendControl(\"get_pi_version\", {});"
     },
     {
-      "id": "public/app/websocket-client.test.js:428",
+      "id": "public/app/websocket-client.test.js:478",
       "file": "public/app/websocket-client.test.js",
-      "line": 428,
+      "line": 478,
       "text": "const result = client.sendControl(\"get_pi_version\", {});"
     },
     {
@@ -330,10 +304,46 @@
       "text": "const res = await fetch(PKG_CATALOG_URL, { headers: { Accept: \"application/json\" } });"
     },
     {
-      "id": "public/sidebar/index.js:1225",
+      "id": "public/sidebar/archive-protection.test.js:84",
+      "file": "public/sidebar/archive-protection.test.js",
+      "line": 84,
+      "text": "const response = await global.fetch(\"/api/sessions/delete-batch\", {"
+    },
+    {
+      "id": "public/sidebar/index.js:1308",
       "file": "public/sidebar/index.js",
-      "line": 1225,
+      "line": 1308,
       "text": "const response = await fetch(result.exportUrl);"
+    },
+    {
+      "id": "public/sidebar/workspace-delete.test.js:76",
+      "file": "public/sidebar/workspace-delete.test.js",
+      "line": 76,
+      "text": "const response = await global.fetch(\"/api/sessions/delete-batch\", {"
+    },
+    {
+      "id": "public/sidebar/workspace-registry.test.js:36",
+      "file": "public/sidebar/workspace-registry.test.js",
+      "line": 36,
+      "text": "const response = await globalThis.fetch(`/api/workspace-sessions?${query}`);"
+    },
+    {
+      "id": "public/sidebar/workspace-registry.test.js:40",
+      "file": "public/sidebar/workspace-registry.test.js",
+      "line": 40,
+      "text": "const response = await globalThis.fetch("
+    },
+    {
+      "id": "public/sidebar/workspace-registry.test.js:46",
+      "file": "public/sidebar/workspace-registry.test.js",
+      "line": 46,
+      "text": "const response = await globalThis.fetch(\"/api/sessions/delete-batch\", {"
+    },
+    {
+      "id": "public/sidebar/workspace-registry.test.js:53",
+      "file": "public/sidebar/workspace-registry.test.js",
+      "line": 53,
+      "text": "const response = await globalThis.fetch(\"/api/sessions/rename\", {"
     },
     {
       "id": "public/vendor/pdf.js:4653",
@@ -562,7 +572,7 @@
     "hostHttp": 45,
     "nativeCommands": 43,
     "callers": 66,
-    "brokerControls": 54,
+    "brokerControls": 64,
     "hostFrames": 6
   }
 }

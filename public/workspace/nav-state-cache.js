@@ -1,13 +1,10 @@
-// ABOUTME: Persists ephemeral SPA state across cross-port pi-instance navigations.
-// ABOUTME: Without this, every workspace/session switch (which is a full page
-// ABOUTME: reload to a different pi process port) resets scroll position,
+// ABOUTME: Persists ephemeral SPA state across host-origin workspace routes.
+// ABOUTME: Without this, a full-page route change resets scroll position,
 // ABOUTME: sidebar expansion, input drafts, and the sidebar session list — the
 // ABOUTME: user perceives "everything jumps back to initial state".
 //
-// Storage channel: document.cookie, NOT sessionStorage/localStorage. Web
-// storage is isolated per origin INCLUDING port, so a snapshot written on
-// port A cannot be read after navigating to port B. Cookies are scoped by
-// scheme+host+path and ignore the port, so they survive the port hop.
+// Storage channel: document.cookie, NOT sessionStorage/localStorage. Cookies
+// are shared by the host-origin routes while Web Storage remains origin-bound.
 
 const STATE_COOKIE = "pi-studio:nav-state";
 const SIDEBAR_CACHE_COOKIE = "pi-studio:sidebar-cache";

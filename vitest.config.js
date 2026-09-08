@@ -16,9 +16,6 @@ export default defineConfig({
       exclude: [
         "**/*.test.{js,ts}",
         "extensions/dist/**",
-        // These extension entry points run inside the Pi host; jsdom mocks do
-        // not provide a meaningful measure of their production behavior.
-        "extensions/pi-chat-src/**",
         // Node CLI scripts have contract tests but do not execute under jsdom.
         "scripts/**",
         "public/**/*-vendor-entry.js",

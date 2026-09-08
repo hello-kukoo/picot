@@ -167,7 +167,7 @@ const mobileClientMode = new URLSearchParams(window.location.search).get("mobile
 // `currentFocusProject` is the project whose task-workspace sidebar is
 // currently rendered; null while the normal sidebar is shown. It is the
 // single in-memory mirror of the URL `focusWorkspaceId` param: navigation
-// uses it to decide whether to carry focus across a same-workspace port hop.
+// uses it to decide whether to carry focus across a same-workspace runtime route.
 let currentFocusProject = null;
 // Snapshot of the normal sidebar (scroll/search/expansion) captured on
 // focus entry and restored on exit. Null outside an active focus session.
@@ -220,7 +220,7 @@ const navigateInWindow = (url, metadata = {}) => {
 // ──────────────────────────────────────────────────────────────────────
 // Focus replaces the normal sidebar with a task-workbench view of a single
 // workspace (back / new task / read-only session list). Its state lives only
-// in the URL `focusWorkspaceId` param: it survives a same-workspace port hop
+// in the URL `focusWorkspaceId` param: it survives a same-workspace runtime route
 // (New Task / parallel session) and is dropped on any cross-workspace nav.
 // `currentFocusProject` is the in-memory mirror used by navigateInWindow.
 function focusSidebarEl() {
@@ -423,7 +423,7 @@ function resolveAndApplyFocus() {
 // Instance-swap overlay
 // ──────────────────────────────────────────────────────────────────────
 // `+ New Session`, `start new chat`, `Open Project`, and `Open Folder`
-// all end with `window.location.href = http://<current-host>:<newPort>/`,
+// all end with a host-origin workspace route,
 // which is a full-page navigation and would otherwise show a 1–2s
 // freeze (while pi spawns) and then a white flash (while the WebView
 // reloads). To make this look like a single smooth transition we:
@@ -629,7 +629,7 @@ const sidebar = new SessionSidebar(
 // is reflected on every open.
 const sessionInfoToggle = document.getElementById("session-info-toggle");
 replaceButtonGlyph(sessionInfoToggle, "circle-info", { size: 16 });
-const sessionInfo = setupSessionInfo({
+setupSessionInfo({
   toggle: sessionInfoToggle,
   panel: document.getElementById("session-info-panel"),
   fileValue: document.getElementById("session-info-file"),
@@ -718,7 +718,6 @@ const sessionUsageEl = document.getElementById("session-usage");
 const tokenUsageEl = document.getElementById("token-usage");
 setButtonIcon(refreshSessionsBtn, "refresh-cw", { size: 16 });
 setButtonIcon(document.getElementById("quick-chat-btn"), "message-circle", { size: 16 });
-const _scrollBottomBtn = document.getElementById("scroll-bottom-btn"); // hidden legacy stub, unused
 const scrollBottomBadge = document.getElementById("scroll-bottom-badge");
 for (const target of [
   scrollBottomBadge?.querySelector(".scroll-bottom-badge-icon"),
@@ -729,7 +728,6 @@ for (const target of [
   });
   if (target && icon) target.replaceChildren(icon);
 }
-const _scrollPrevBtn = document.getElementById("scroll-prev-btn"); // hidden legacy stub, unused
 const convNavEl = document.getElementById("conv-nav");
 const convNavTrack = document.getElementById("conv-nav-track");
 
@@ -2441,8 +2439,6 @@ messagesContainer.addEventListener("messageedit", async (e) => {
     if (btn) btn.disabled = false;
   }
 });
-
-// scrollBottomBtn is now a hidden legacy stub; navigation handled by convNavDown.
 
 function showNewMessageBadge() {
   if (isScrolledUp) {
@@ -4733,91 +4729,13 @@ async function handleSessionSelectImpl(session, project) {
     return;
   }
 
-  await switchSession(session.filePath, session, project);
+  // Native runtime owns session selection; the browser-only transport has no
+  // supported session-switch fallback.
 
   // Close sidebar on mobile after selecting
   if (isMobile()) {
     sidebarEl.classList.add("collapsed");
     sidebarOverlay.classList.remove("visible");
-  }
-}
-
-async function switchSession(sessionFile, session = null, project = null) {
-  try {
-    state.reset();
-    clearConversationRenderers();
-    // Drop the previous session's todo snapshot — the next renderSessionHistory
-    // call below will rehydrate from the new session's history if applicable.
-    todoMirrorPanel.clear();
-    filePreviewFollow.clear();
-    cancelFileBrowserRefresh();
-
-    if (sessionFile && session) {
-      messageRenderer.renderSystemMessage(t("status.loadingSession"));
-
-      const dirName = project?.dirName;
-      const file = session.file;
-      console.log("[App] Loading history:", { dirName, file, sessionFile });
-
-      if (dirName && file) {
-        try {
-          const data = await transport.sessionHistory(session.id, session.filePath);
-          console.log("[App] History entries:", data.entries?.length || 0);
-
-          clearConversationRenderers();
-          renderSessionHistory(data.entries || [], { searchQuery: sidebar.searchQuery });
-        } catch (e) {
-          console.error("[App] History fetch error:", e);
-        }
-      } else {
-        console.log("[App] Skipped history load: dirName or file missing");
-      }
-    } else {
-      renderWorkspaceWelcome();
-    }
-
-    // In mirror mode, check if this session is live on any instance
-    if (isMirrorMode) {
-      const liveTarget =
-        wsClient.getRuntimeTarget()?.sessionId === sessionFile ? wsClient.getRuntimeTarget() : null;
-      if (liveTarget) {
-        mirrorActiveSessionFile = sessionFile;
-        sessionInfo.refresh();
-        viewingActiveSession = true;
-        wsClient.setRoutingContext({
-          workspaceId: liveTarget.workspaceId,
-          sessionId: sessionFile,
-          instanceId: liveTarget.instanceId,
-        });
-        updateMirrorInputState();
-        wsClient.requestSnapshot();
-        return;
-      }
-
-      // Check if this is the active session on the current instance
-      viewingActiveSession = sessionFile === mirrorActiveSessionFile;
-      updateMirrorInputState();
-
-      if (viewingActiveSession) {
-        // Re-request live state from HostServer
-        wsClient.requestSnapshot();
-      }
-    } else if (sessionFile && session) {
-      const prepared = await transport.prepareWorkspaceTarget(session.cwd || project?.path, {
-        sessionPath: sessionFile,
-        forceNewSession: true,
-        reuseExisting: false,
-      });
-      if (typeof prepared?.transitionGeneration !== "number") {
-        throw new Error("Session runtime transition was not prepared");
-      }
-      await transport.commitWorkspaceTransition(prepared.transitionGeneration);
-      snapshotUiStateForNavigation();
-      navigateInWindow(prepared.targetOrigin, { targetCwd: session.cwd || project?.path });
-    }
-  } catch (error) {
-    console.error("[App] Failed to switch session:", error);
-    messageRenderer.renderError(t("errors.failedToSwitchSessionShort"));
   }
 }
 

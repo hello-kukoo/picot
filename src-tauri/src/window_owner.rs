@@ -135,7 +135,7 @@ impl WindowOwnerRegistry {
         temporary_kind: TemporaryKind,
     ) -> Result<(OwnerId, String), String> {
         let origin = normalize_origin(&current_origin)
-            .ok_or_else(|| "owner origin must be an http loopback Pi origin".to_string())?;
+            .ok_or_else(|| "owner origin must be an http loopback host origin".to_string())?;
 
         let mut state = self.inner.lock().expect("owner registry lock poisoned");
         if state
@@ -202,7 +202,7 @@ impl WindowOwnerRegistry {
             .filter(|session_id| !session_id.is_empty())
             .map(str::to_owned);
         let origin = normalize_origin(&origin)
-            .ok_or_else(|| "navigation origin must be an http loopback Pi origin".to_string())?;
+            .ok_or_else(|| "navigation origin must be an http loopback host origin".to_string())?;
         let mut state = self.inner.lock().expect("owner registry lock poisoned");
         let owner_record = state
             .owners
@@ -325,7 +325,7 @@ impl WindowOwnerRegistry {
         temporary_kind: TemporaryKind,
     ) -> Result<(), String> {
         let target = normalize_origin(&target_origin)
-            .ok_or_else(|| "commit origin must be an http loopback Pi origin".to_string())?;
+            .ok_or_else(|| "commit origin must be an http loopback host origin".to_string())?;
         let mut state = self.inner.lock().expect("owner registry lock poisoned");
         let record = state
             .owners
@@ -410,17 +410,6 @@ impl WindowOwnerRegistry {
         state.owners.get(owner).map(|r| r.workspace_generation)
     }
 
-    #[allow(dead_code)] // legacy port routing API: removed with the D10 deletion cycle
-    pub fn replace_primary_port(&self, owner: &OwnerId, port: u16) -> Result<(), String> {
-        let mut state = self.inner.lock().expect("owner registry lock poisoned");
-        let record = state
-            .owners
-            .get_mut(owner)
-            .ok_or_else(|| "unknown owner".to_string())?;
-        record.primary_port = port;
-        Ok(())
-    }
-
     /// The pending navigation permit's target origin, if one is prepared but not
     /// yet committed. Used by the workspace-transition commit path.
     pub fn pending_target_origin(&self, owner: &OwnerId) -> Option<String> {
@@ -439,16 +428,6 @@ impl WindowOwnerRegistry {
             .owners
             .get(owner)
             .and_then(|record| record.pending.as_ref()?.target_session_id.clone())
-    }
-
-    /// The pending navigation permit's target port, if one is prepared.
-    #[allow(dead_code)] // legacy port routing API: removed with the D10 deletion cycle
-    pub fn pending_target_port(&self, owner: &OwnerId) -> Option<u16> {
-        let state = self.inner.lock().expect("owner registry lock poisoned");
-        state
-            .owners
-            .get(owner)
-            .and_then(|r| r.pending.as_ref().map(|p| p.target_port))
     }
 
     /// The pending navigation permit's canonical target cwd, if one is prepared.

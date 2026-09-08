@@ -1,17 +1,15 @@
 // Configuration data plane for the native Picot Settings → Configuration tab.
 //
-// The legacy `embedded-server.ts` served these operations over its own HTTP/WS
-// server. In the native architecture there is no such server: the WebView talks
-// to the Rust host, which forwards commands to pi over stdio RPC. pi's native
-// RPC command set is fixed (see docs/rpc.md) and cannot be extended, so this
-// module is invoked through a registered pi command (`/picot-config`) whose
-// handler runs immediately without hitting the LLM or session history. Results
-// are returned to the WebView via `ctx.ui.notify(JSON)`, correlated by request
-// id (see public/native/config-gateway.js).
+// The WebView talks to the Rust host, which forwards commands to pi over
+// stdio RPC. pi's native RPC command set is fixed (see docs/rpc.md) and cannot
+// be extended, so this module is invoked through a registered pi command
+// (`/picot-config`) whose handler runs immediately without hitting the LLM or
+// session history. Results are returned to the WebView via `ctx.ui.notify(JSON)`,
+// correlated by request id (see public/native/config-gateway.js).
 //
-// All model-registry access (catalog, auth status, API keys, visibility,
-// health) goes through the live `ctx.modelRegistry` — the same object the old
-// embedded-server used — so we never re-implement pi's provider knowledge.
+// All model-registry access (catalog, auth status, API keys, visibility, and
+// health) goes through the live `ctx.modelRegistry`, so we never re-implement
+// pi's provider knowledge.
 
 import { execFile } from "node:child_process";
 import * as fs from "node:fs";
@@ -36,15 +34,6 @@ import {
 } from "./oauth-login-operations";
 import { buildPackageSkillInventory } from "./package-skill-inventory";
 import { writePasteOffloadFile } from "./paste-offload";
-import {
-  buildTelegramDmConfig,
-  buildTelegramDoctorReport,
-  getLatestTelegramUpdateId,
-  getTelegramBotIdentity,
-  observeTelegramPrivateDm,
-  type TelegramBotIdentity,
-  type TelegramWorkerStatusLike,
-} from "./pi-chat-setup";
 import { createPiOAuthLoginAdapter } from "./pi-oauth-login-adapter";
 import { generateTitleForSession } from "./session-title";
 import {
@@ -136,7 +125,6 @@ type ConfigContext = {
 };
 
 type ListedSession = { path?: string };
-type JsonObject = Record<string, unknown>;
 
 async function renameHistoricalSession(filePath: unknown, requestedName: unknown) {
   if (typeof filePath !== "string" || typeof requestedName !== "string") {
@@ -253,9 +241,6 @@ const APPEND_SYSTEM_MD_PATH = path.join(PI_AGENT_ROOT, "APPEND_SYSTEM.md");
 const MODELS_CONFIG_PATH = path.join(PI_AGENT_ROOT, "models.json");
 const CHAT_CONFIG_PATH = path.join(PI_AGENT_ROOT, "chat", "config.json");
 const AUTH_CONFIG_PATH = path.join(PI_AGENT_ROOT, "auth.json");
-const CHAT_WORKER_STATUS_DIR = path.join(PI_AGENT_ROOT, "chat", "worker-status");
-const SUPER_AGENT_TASKS_PATH = path.join(PI_AGENT_ROOT, "super-agent", "tasks.json");
-const PISTUDIO_INSTANCES_DIR = path.join(os.homedir(), ".pi", "pistudio-instances");
 const PROJECT_CONFIG_DIR_NAME = ".pi";
 const THINKING_LEVELS = new Set<ThinkingLevel>([
   "off",
@@ -852,71 +837,6 @@ function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function readJsonFile(filePath: string): JsonObject | undefined {
-  try {
-    const value: unknown = JSON.parse(fs.readFileSync(filePath, "utf8"));
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as JsonObject)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function getChatWorkerStatuses(): TelegramWorkerStatusLike[] {
-  let entries: string[];
-  try {
-    entries = fs.readdirSync(CHAT_WORKER_STATUS_DIR);
-  } catch {
-    return [];
-  }
-  return entries
-    .filter((entry) => entry.endsWith(".json"))
-    .map((entry) => readJsonFile(path.join(CHAT_WORKER_STATUS_DIR, entry)))
-    .filter((value): value is JsonObject & TelegramWorkerStatusLike => Boolean(value));
-}
-
-type SuperAgentProject = { name: string; cwd: string; status: string };
-
-// The Runtime panel's project picker lists dispatch targets. In the native
-// architecture the old `/api/super-agent/projects` HTTP endpoint no longer
-// exists, so we reconstruct the list from the per-process instance records
-// Picot writes to ~/.pi/pistudio-instances/*.json (each has a `cwd`). The
-// super-agent workspace itself is never a dispatch target.
-function listSuperAgentProjects(): SuperAgentProject[] {
-  let entries: string[];
-  try {
-    entries = fs.readdirSync(PISTUDIO_INSTANCES_DIR);
-  } catch {
-    return [];
-  }
-  const byCwd = new Map<string, SuperAgentProject>();
-  for (const entry of entries) {
-    if (!entry.endsWith(".json")) continue;
-    const record = readJsonFile(path.join(PISTUDIO_INSTANCES_DIR, entry)) as
-      | { cwd?: unknown }
-      | undefined;
-    const cwd = typeof record?.cwd === "string" ? record.cwd.replace(/\/+$/, "") : "";
-    if (!cwd || cwd.endsWith("/.pi/agent/super-agent")) continue;
-    byCwd.set(cwd, { name: cwd.split("/").pop() || cwd, cwd, status: "running" });
-  }
-  return [...byCwd.values()].sort((a, b) => a.name.localeCompare(b.name));
-}
-
-function telegramBotPayload(identity: TelegramBotIdentity) {
-  return {
-    id: identity.id,
-    name: identity.name,
-    username: identity.username,
-    webUrl: identity.username ? `https://web.telegram.org/k/#@${identity.username}` : undefined,
-    appUrl: identity.username ? `tg://resolve?domain=${identity.username}` : undefined,
-  };
-}
-
 function readAuthConfig(): Record<string, unknown> {
   if (!fs.existsSync(AUTH_CONFIG_PATH)) return {};
   let parsed: unknown;
@@ -1406,118 +1326,6 @@ export async function handlePicotConfig(
       case "write_chat_config": {
         writeConfigFile(CHAT_CONFIG_PATH, params.content);
         return { ok: true, data: { path: CHAT_CONFIG_PATH } };
-      }
-
-      case "telegram_validate": {
-        const botToken = asString(params.botToken);
-        if (!botToken) throw new Error("botToken required");
-        const identity = await getTelegramBotIdentity(botToken);
-        const afterUpdateId = await getLatestTelegramUpdateId(botToken);
-        return {
-          ok: true,
-          data: {
-            bot: telegramBotPayload(identity),
-            afterUpdateId,
-          },
-        };
-      }
-
-      case "telegram_bind": {
-        const botToken = asString(params.botToken);
-        if (!botToken) throw new Error("botToken required");
-        const identity = await getTelegramBotIdentity(botToken);
-        const dm = await observeTelegramPrivateDm(botToken, identity.id, {
-          afterUpdateId: asNumber(params.afterUpdateId),
-          timeoutMs: 90_000,
-        });
-        if (!dm) {
-          throw new Error(
-            "Timed out waiting for a private Telegram message. Send /start to the bot and try again.",
-          );
-        }
-
-        const existingConfig = fs.existsSync(CHAT_CONFIG_PATH)
-          ? (JSON.parse(fs.readFileSync(CHAT_CONFIG_PATH, "utf8")) as Record<string, unknown>)
-          : {};
-        const nextConfig = buildTelegramDmConfig(existingConfig, {
-          botToken,
-          identity,
-          dm,
-        });
-        const content = `${JSON.stringify(nextConfig, null, "\t")}\n`;
-        writeConfigFile(CHAT_CONFIG_PATH, content);
-        return {
-          ok: true,
-          data: {
-            content,
-            bot: telegramBotPayload(identity),
-            dm,
-            path: CHAT_CONFIG_PATH,
-          },
-        };
-      }
-
-      case "telegram_doctor": {
-        const config = fs.existsSync(CHAT_CONFIG_PATH)
-          ? (JSON.parse(fs.readFileSync(CHAT_CONFIG_PATH, "utf8")) as Record<string, unknown>)
-          : {};
-        const telegramAccount = Object.values(
-          (config as { accounts?: Record<string, unknown> }).accounts || {},
-        ).find(
-          (account) =>
-            typeof account === "object" &&
-            account !== null &&
-            (account as { service?: unknown }).service === "telegram",
-        ) as { botToken?: string } | undefined;
-        let bot: TelegramBotIdentity | undefined;
-        let botError: string | undefined;
-        if (telegramAccount?.botToken) {
-          try {
-            bot = await getTelegramBotIdentity(telegramAccount.botToken);
-          } catch (e: unknown) {
-            botError = errMessage(e);
-          }
-        }
-        return {
-          ok: true,
-          data: {
-            report: buildTelegramDoctorReport(config, {
-              bot,
-              botError,
-              workerStatuses: getChatWorkerStatuses(),
-            }),
-          },
-        };
-      }
-
-      case "read_super_agent_tasks": {
-        let content: string;
-        if (fs.existsSync(SUPER_AGENT_TASKS_PATH)) {
-          content = fs.readFileSync(SUPER_AGENT_TASKS_PATH, "utf8");
-        } else {
-          fs.mkdirSync(path.dirname(SUPER_AGENT_TASKS_PATH), { recursive: true });
-          content = '{"tasks":[]}';
-          fs.writeFileSync(SUPER_AGENT_TASKS_PATH, content, "utf8");
-        }
-        let tasks: unknown[] = [];
-        try {
-          const parsed = JSON.parse(content) as { tasks?: unknown[] };
-          tasks = Array.isArray(parsed?.tasks) ? parsed.tasks : [];
-        } catch {
-          tasks = [];
-        }
-        return { ok: true, data: { tasks } };
-      }
-
-      case "write_super_agent_tasks": {
-        const tasks = Array.isArray(params.tasks) ? params.tasks : [];
-        fs.mkdirSync(path.dirname(SUPER_AGENT_TASKS_PATH), { recursive: true });
-        fs.writeFileSync(SUPER_AGENT_TASKS_PATH, JSON.stringify({ tasks }, null, 2), "utf8");
-        return { ok: true, data: { count: tasks.length } };
-      }
-
-      case "list_super_agent_projects": {
-        return { ok: true, data: { projects: listSuperAgentProjects() } };
       }
 
       case "open_external": {
