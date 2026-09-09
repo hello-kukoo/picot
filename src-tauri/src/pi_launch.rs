@@ -1,18 +1,10 @@
 // ABOUTME: Shared Pi launch contract helpers for binary, arguments, paths, stderr, and environment.
 // ABOUTME: Keeps native Pi launch inputs consistent across runtime types.
-#[cfg(target_os = "windows")]
-use std::io;
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::OnceLock;
 
 use crate::native_pi_manager::{NativeLaunchSpec, NativeRuntimeType, ReadinessPolicy};
 use base64::Engine;
-
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// `scripts/pi-version.json` baked into the binary at compile time so the
 /// host can expose the locked Pi version without re-running fetch logic.
@@ -47,16 +39,6 @@ pub fn locked_pi_version() -> &'static str {
         rest[..end_quote].to_string()
     })
 }
-
-#[cfg(target_os = "windows")]
-pub(crate) fn configure_child_process_for_windows(command: &mut Command) {
-    // Prevent child `pi.exe` processes from creating a visible console window
-    // when Picot runs as a GUI app on Windows.
-    command.creation_flags(CREATE_NO_WINDOW);
-}
-
-#[cfg(not(target_os = "windows"))]
-pub(crate) fn configure_child_process_for_windows(_command: &mut Command) {}
 
 /// Build an augmented PATH for child processes.
 ///

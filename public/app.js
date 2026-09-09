@@ -51,7 +51,7 @@ import { createIcon, replaceButtonGlyph, setButtonIcon } from "./icons.js";
 import { processImageFile, processImagePayload } from "./image-attachments.js";
 import { InfoPanel } from "./info-panel.js";
 import { setupLanQr } from "./lan-qr.js";
-import { selectModel } from "./models/selection.js";
+import { isSelectedModel, selectModel } from "./models/selection.js";
 import { renderPackageInstallFailure } from "./packages/install-status.js";
 import {
   createPreferencesClient,
@@ -1117,7 +1117,9 @@ async function getActiveSessionStartupProfile() {
   if (!activeUiSessionFile) return null;
   const profile = await sessionUiState.loadProfile();
   if (profile) return profile;
-  const model = availableModels.find((entry) => entry.id === currentModelId);
+  const model = availableModels.find((entry) =>
+    isSelectedModel(entry, { provider: currentModelProvider, modelId: currentModelId }),
+  );
   if (!model?.provider || !model?.id) return null;
   return {
     provider: model.provider,
@@ -2026,13 +2028,10 @@ async function handleResumeBranch(entryId) {
     // (extension → pi ctx.navigateTree). A native `navigate_tree` RPC does
     // not exist in pi 0.84.2.
     await bridgeData("navigate_tree", { targetId: entryId, summarize: false });
-    // Per the design, resuming clears the composer (the old branch's draft
-    // belongs to the old branch). The clear is programmatic (no input
-    // event), so persist it or the next snapshot's draft restore would
-    // resurrect the stale draft.
+    // Per the design, resuming clears the composer because the old branch's
+    // unsent input does not belong to the resumed branch.
     messageInput.value = "";
     messageInput.style.height = "auto";
-    persistComposerDraft();
     await reanchorAfterTreeNavigation();
   } catch (err) {
     messageRenderer.renderError(t("errors.treeNavigateFailed", { error: err }));
@@ -2428,10 +2427,6 @@ messagesContainer.addEventListener("messageedit", async (e) => {
       messageInput.value = text;
       messageInput.style.height = "auto";
       messageInput.focus();
-      // Programmatic .value assignment fires no input event, so persist the
-      // prefill now: the pending snapshot's restoreSessionUiState reloads
-      // this session's saved draft and would otherwise wipe it.
-      persistComposerDraft();
     }
     await reanchorAfterTreeNavigation();
   } catch (err) {
@@ -3248,11 +3243,10 @@ messageInput.addEventListener("keydown", (e) => {
   }
 });
 
-// Auto-resize textarea and keep the draft isolated from the active session.
+// Auto-resize textarea without persisting unsent text per session.
 messageInput.addEventListener("input", () => {
   messageInput.style.height = "auto";
   messageInput.style.height = `${Math.min(messageInput.scrollHeight, 160)}px`;
-  persistComposerDraft();
 });
 
 // ═══════════════════════════════════════
@@ -3367,8 +3361,6 @@ function sendMessage() {
 
   messageInput.value = "";
   messageInput.style.height = "auto";
-  if (activeUiSessionFile) sessionUiState.clearDraft(activeUiSessionFile);
-
   const cmd = {
     type: "prompt",
     message,
@@ -3785,6 +3777,7 @@ function updateThinkingBtn() {
   );
   thinkingBtn.classList.toggle("off", currentThinkingLevel === "off");
 }
+let currentModelProvider = "";
 let currentModelId = "";
 let availableModels = [];
 let hasLoadedAvailableModels = false;
@@ -3849,9 +3842,15 @@ async function fetchModelInfo() {
       }
     }
     if (stateData.success && stateData.data?.model) {
+      currentModelProvider = stateData.data.model.provider || "";
       currentModelId = stateData.data.model.id || "";
 
-      const model = availableModels.find((m) => m.id === currentModelId);
+      const model = availableModels.find((entry) =>
+        isSelectedModel(entry, {
+          provider: currentModelProvider,
+          modelId: currentModelId,
+        }),
+      );
       if (!model && availableModels.length > 0) {
         const fallbackModel = availableModels[0];
         const resp = await rpcCommand({
@@ -3860,6 +3859,7 @@ async function fetchModelInfo() {
           modelId: fallbackModel.id,
         });
         if (resp?.success) {
+          currentModelProvider = fallbackModel.provider || "";
           currentModelId = fallbackModel.id;
           if (fallbackModel.contextWindow) {
             contextWindowSize = fallbackModel.contextWindow;
@@ -3975,7 +3975,11 @@ function openModelDropdown() {
         return;
 
       const el = document.createElement("div");
-      el.className = `model-dropdown-item${m.id === currentModelId ? " active" : ""}`;
+      const selected = isSelectedModel(m, {
+        provider: currentModelProvider,
+        modelId: currentModelId,
+      });
+      el.className = `model-dropdown-item${selected ? " active" : ""}`;
       const ctxK = m.contextWindow ? `${(m.contextWindow / 1000).toFixed(0)}k` : "";
       const name = document.createElement("span");
       name.textContent = shortName;
@@ -4014,6 +4018,7 @@ function openModelDropdown() {
           rpcCommand,
           refreshModelInfo: fetchModelInfo,
           applySelectedModel: (selectedModel) => {
+            currentModelProvider = selectedModel.provider || "";
             currentModelId = selectedModel.id;
             if (selectedModel.thinkingLevel) {
               currentThinkingLevel = selectedModel.thinkingLevel;
@@ -4340,10 +4345,6 @@ function setComposerDraft(value) {
   messageInput.style.height = `${Math.min(messageInput.scrollHeight, 160)}px`;
 }
 
-function persistComposerDraft() {
-  if (activeUiSessionFile) sessionUiState.saveDraft(activeUiSessionFile, messageInput.value);
-}
-
 function restoreSessionUiState(sessionFile) {
   const next = sessionFile || null;
   // Bump the guard token only when the bound session actually changes, so
@@ -4353,12 +4354,13 @@ function restoreSessionUiState(sessionFile) {
     activeUiSessionFile = next;
     uiSessionGeneration += 1;
   }
-  setComposerDraft(activeUiSessionFile ? sessionUiState.loadDraft(activeUiSessionFile) : "");
 }
 
 function saveCurrentSessionProfile() {
   if (!activeUiSessionFile) return;
-  const model = availableModels.find((entry) => entry.id === currentModelId);
+  const model = availableModels.find((entry) =>
+    isSelectedModel(entry, { provider: currentModelProvider, modelId: currentModelId }),
+  );
   if (!model?.provider || !model.id) return;
   void sessionUiState.saveProfile({
     provider: model.provider,
@@ -4377,6 +4379,7 @@ async function applySessionUiProfile(sessionFile) {
   restoreSessionUiState(sessionFile);
   const generation = uiSessionGeneration;
   const reported = {
+    provider: currentModelProvider,
     modelId: currentModelId,
     thinkingLevel: currentThinkingLevel || "off",
   };
@@ -4416,7 +4419,9 @@ async function applySessionUiProfile(sessionFile) {
   // Keep transcript restore independent: do not send an invalid set_model;
   // still restore thinking level when runtime accepts it.
   const modelAvailable = Boolean(model);
-  const modelAlreadyMatches = reported.modelId === profile.modelId || !modelAvailable;
+  const modelAlreadyMatches =
+    (reported.provider === profile.provider && reported.modelId === profile.modelId) ||
+    !modelAvailable;
   const thinkingAlreadyMatches = reported.thinkingLevel === profile.thinkingLevel;
   if (modelAlreadyMatches && thinkingAlreadyMatches) return;
   const modelResult = modelAlreadyMatches
@@ -4430,6 +4435,7 @@ async function applySessionUiProfile(sessionFile) {
   // abandon this restore so it cannot overwrite the now-active session's UI.
   if (generation !== uiSessionGeneration) return;
   if (modelResult?.success) {
+    currentModelProvider = profile.provider;
     currentModelId = profile.modelId;
     if (modelResult.data?.thinkingLevel) {
       currentThinkingLevel = modelResult.data.thinkingLevel;
@@ -4464,7 +4470,9 @@ function snapshotReportedProfile(reported) {
   // Only pin when the model registry can resolve a provider for the reported
   // id; a cold-start race (mirror_sync before /api/models) simply skips this
   // snapshot and retries on the next sync.
-  const model = availableModels.find((entry) => entry.id === reported.modelId);
+  const model = availableModels.find((entry) =>
+    isSelectedModel(entry, { provider: reported.provider, modelId: reported.modelId }),
+  );
   if (!model?.provider || !model.id) return;
   void sessionUiState.saveProfile({
     provider: model.provider,
@@ -4615,7 +4623,6 @@ async function handleSessionSelectImpl(session, project) {
   // let a stale toolCallId surface another session's file.
   filePreviewFollow.clear();
   cancelFileBrowserRefresh();
-  persistComposerDraft();
   sidebar.setActive(session.filePath);
   restoreSessionUiState(session.filePath);
   resolveAndApplyFocus();
@@ -4802,7 +4809,7 @@ function handleMirrorSync(data) {
   // Consume a fork's deferred composer prefill. setSidebarActive above has
   // already rebound activeUiSessionFile and restored the saved draft, so this
   // is the first point where applying the prefill cannot be wiped — and
-  // persistComposerDraft then saves it under the forked session file.
+  // Apply the fork's explicit composer prefill after the new session is bound.
   if (
     pendingPostSyncComposer &&
     activeUiSessionFile !== pendingPostSyncComposer.previousSessionFile
@@ -4810,7 +4817,6 @@ function handleMirrorSync(data) {
     const prefill = pendingPostSyncComposer;
     pendingPostSyncComposer = null;
     setComposerDraft(prefill.text);
-    persistComposerDraft();
   }
 
   if (
@@ -4924,6 +4930,7 @@ function handleMirrorSync(data) {
 
   // Update model display
   if (data.model) {
+    currentModelProvider = data.model.provider || "";
     currentModelId = data.model.id || "";
     updateModelLabel();
     if (data.model.contextWindow) {

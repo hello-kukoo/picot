@@ -49,32 +49,11 @@ describe("SessionUiStateStore profiles", () => {
 });
 
 describe("SessionUiStateStore drafts", () => {
-  test("keeps drafts isolated in memory for the lifetime of one store", () => {
+  test("does not expose session-scoped draft persistence", () => {
     const store = new SessionUiStateStore();
 
-    store.saveDraft("/sessions/a.jsonl", "draft for A");
-
-    expect(store.loadDraft("/sessions/a.jsonl")).toBe("draft for A");
-    expect(store.loadDraft("/sessions/b.jsonl")).toBe("");
-  });
-
-  test("discards drafts when a new store instance represents a refreshed window", () => {
-    const firstPage = new SessionUiStateStore();
-    firstPage.saveDraft("/sessions/a.jsonl", "draft from the old page");
-
-    const refreshedPage = new SessionUiStateStore();
-
-    expect(refreshedPage.loadDraft("/sessions/a.jsonl")).toBe("");
-  });
-
-  test("clearDraft removes only the selected in-memory draft", () => {
-    const store = new SessionUiStateStore();
-    store.saveDraft("/sessions/a.jsonl", "draft for A");
-    store.saveDraft("/sessions/b.jsonl", "draft for B");
-
-    store.clearDraft("/sessions/a.jsonl");
-
-    expect(store.loadDraft("/sessions/a.jsonl")).toBe("");
-    expect(store.loadDraft("/sessions/b.jsonl")).toBe("draft for B");
+    expect(store.loadDraft).toBeUndefined();
+    expect(store.saveDraft).toBeUndefined();
+    expect(store.clearDraft).toBeUndefined();
   });
 });

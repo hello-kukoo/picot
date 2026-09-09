@@ -9,6 +9,10 @@ import { NativeFileBrowser } from "./file-browser.js";
 import { parseAppRoute, replaceTemporarySessionRoute } from "./router.js";
 import { HostRuntimeAdapter, resolveHostWebSocketUrl } from "./runtime-adapter.js";
 import { RuntimeGateway } from "./runtime-gateway.js";
+import {
+  createAssistantMessageStream,
+  getAssistantMessageText,
+} from "./session/assistant-message-stream.js";
 import { createSessionStore, reduceSessionState } from "./session-store.js";
 import { buildCommandCatalog, resolveComposerInput } from "./slash-commands.js";
 
@@ -36,6 +40,7 @@ let commandCatalog = buildCommandCatalog({
   ],
 });
 let streamingElement = null;
+const assistantMessageStream = createAssistantMessageStream();
 
 const adapter = new HostRuntimeAdapter({
   url: resolveHostWebSocketUrl(window),
@@ -204,15 +209,6 @@ function runBuiltin(action) {
   }
 }
 
-function getAssistantText(message) {
-  if (typeof message?.content === "string") return message.content;
-  if (!Array.isArray(message?.content)) return "";
-  return message.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text || "")
-    .join("\n");
-}
-
 function getAssistantThinking(message) {
   if (!Array.isArray(message?.content)) return "";
   return message.content
@@ -224,6 +220,7 @@ function getAssistantThinking(message) {
 async function handleRuntimeEvent(event) {
   switch (event.type) {
     case "agent_start":
+      assistantMessageStream.reset();
       setStatus("Working…");
       break;
     case "agent_settled":
@@ -233,27 +230,30 @@ async function handleRuntimeEvent(event) {
       if (event.message?.role === "user")
         messageRenderer.renderUserMessage({ ...event.message, timestamp: Date.now() });
       else if (event.message?.role === "assistant") {
-        streamingElement = messageRenderer.renderAssistantMessage(event.message, true);
+        const message = assistantMessageStream.start(event.message);
+        streamingElement = messageRenderer.renderAssistantMessage(message, true);
       }
       break;
-    case "message_update":
+    case "message_update": {
+      const message = assistantMessageStream.update(event);
       if (!streamingElement) {
-        streamingElement = messageRenderer.renderAssistantMessage(event.message, true);
+        streamingElement = messageRenderer.renderAssistantMessage(message, true);
       } else {
-        messageRenderer.updateStreamingMessage(streamingElement, getAssistantText(event.message));
+        messageRenderer.updateStreamingMessage(streamingElement, getAssistantMessageText(message));
       }
       break;
+    }
     case "message_end":
       if (event.message?.role === "assistant" && streamingElement) {
-        const assistantText = getAssistantText(event.message);
-        messageRenderer.updateStreamingMessage(streamingElement, assistantText);
+        const message = assistantMessageStream.finish(event.message);
+        messageRenderer.updateStreamingMessage(streamingElement, getAssistantMessageText(message));
         // Finalize attaches the toolbar (copy + finalize timestamp + usage).
         // The native path has no turn folding, so every completed assistant
         // message is treated as a final answer and gets a toolbar.
         messageRenderer.finalizeStreamingMessage(
           streamingElement,
-          event.message.usage ?? null,
-          getAssistantThinking(event.message),
+          message.usage ?? null,
+          getAssistantThinking(message),
         );
         streamingElement = null;
       }
@@ -285,6 +285,7 @@ async function handleRuntimeEvent(event) {
 
 async function adoptTarget(nextTarget) {
   if (nextTarget.sessionId === target.sessionId) return;
+  assistantMessageStream.reset();
   replaceTemporarySessionRoute(history, target.workspaceId, target.sessionId, nextTarget.sessionId);
   target = nextTarget;
   store = { ...store, target: { ...nextTarget } };

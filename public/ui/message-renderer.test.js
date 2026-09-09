@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n, setLocale } from "../i18n.js";
 import {
+  createAssistantMessageStream,
+  getAssistantMessageText,
+} from "../native/session/assistant-message-stream.js";
+import {
   formatMessageTime,
   MessageRenderer,
   shouldCollapseUserMessage,
@@ -88,6 +92,19 @@ describe("MessageRenderer streaming markdown preview", () => {
     const content = el.querySelector(".message-content");
     expect(content.innerHTML).toContain("<strong>bold</strong>");
     expect(content.innerHTML).toContain("<code>code</code>");
+  });
+
+  it("renders delta-only assistant content through the streaming text contract", () => {
+    const stream = createAssistantMessageStream();
+    stream.start({ role: "assistant", content: [] });
+    const message = stream.update({
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "hello **bold**" },
+    });
+    const el = renderer.renderAssistantMessage({ content: "" }, true);
+
+    renderer.updateStreamingMessage(el, getAssistantMessageText(message));
+
+    expect(el.querySelector(".message-content").innerHTML).toContain("<strong>bold</strong>");
   });
 
   it("does not add a copy footer to empty finalized streaming messages", () => {

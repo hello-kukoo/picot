@@ -1042,11 +1042,13 @@ async fn api_gone() -> (StatusCode, Json<Value>) {
 
 fn open_directory_in_file_manager(path: &std::path::Path) {
     #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open").arg(path).spawn();
+    let mut command = std::process::Command::new("open");
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("explorer").arg(path).spawn();
+    let mut command = std::process::Command::new("explorer");
     #[cfg(all(unix, not(target_os = "macos")))]
-    let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+    let mut command = std::process::Command::new("xdg-open");
+    crate::windows_child::hide_console(&mut command);
+    let _ = command.arg(path).spawn();
 }
 
 /// P4-d: stream a session file for a redeemed one-shot export token.
@@ -2313,7 +2315,9 @@ async fn dispatch(
                 }
                 let pi = crate::pi_launch::resolve_bundled_pi(&state.static_dir)
                     .map_err(|error| ("export_unavailable", error))?;
-                let output = Command::new(pi)
+                let mut command = Command::new(pi);
+                crate::windows_child::hide_console(&mut command);
+                let output = command
                     .arg("--export")
                     .arg(&session_path)
                     .arg(&html_path)

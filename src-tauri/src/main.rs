@@ -51,6 +51,7 @@ mod terminal_registry;
 mod terminal_state_store;
 mod transport_limits;
 mod window_owner;
+mod windows_child;
 mod workspace_controls;
 
 use ephemeral_registry::{EphemeralKind, EphemeralRegistry};
@@ -120,7 +121,7 @@ fn run_bundled_pi_command(
     let augmented_path = pi_launch::build_augmented_path();
     let agent_root = pi_launch::resolve_pi_agent_root()?;
     let mut command = Command::new(&pi_bin_str);
-    pi_launch::configure_child_process_for_windows(&mut command);
+    windows_child::hide_console(&mut command);
     command
         .args(args)
         .env("PATH", augmented_path)
@@ -421,7 +422,9 @@ fn open_in_app_core(
 
     // CLI command launch (cross-platform): `code <path>`, `cursor <path>`, …
     if let Some(command) = command.map(|c| c.trim()).filter(|c| !c.is_empty()) {
-        let status = Command::new(command)
+        let mut child_command = Command::new(command);
+        windows_child::hide_console(&mut child_command);
+        let status = child_command
             .arg(trimmed_path)
             .status()
             .map_err(|e| format!("Failed to launch `{command}`: {e}"))?;
@@ -435,7 +438,9 @@ fn open_in_app_core(
     if let Some(app_name) = app_name.map(|a| a.trim()).filter(|a| !a.is_empty()) {
         #[cfg(target_os = "macos")]
         {
-            let status = Command::new("open")
+            let mut child_command = Command::new("open");
+            windows_child::hide_console(&mut child_command);
+            let status = child_command
                 .arg("-a")
                 .arg(app_name)
                 .arg(trimmed_path)
@@ -448,7 +453,9 @@ fn open_in_app_core(
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let status = Command::new(app_name)
+            let mut child_command = Command::new(app_name);
+            windows_child::hide_console(&mut child_command);
+            let status = child_command
                 .arg(trimmed_path)
                 .status()
                 .map_err(|e| format!("Failed to open `{app_name}`: {e}"))?;
@@ -461,11 +468,13 @@ fn open_in_app_core(
 
     // Fallback: reveal in the OS file manager.
     #[cfg(target_os = "macos")]
-    let status = Command::new("open").arg(trimmed_path).status();
+    let mut child_command = Command::new("open");
     #[cfg(target_os = "windows")]
-    let status = Command::new("explorer").arg(trimmed_path).status();
+    let mut child_command = Command::new("explorer");
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    let status = Command::new("xdg-open").arg(trimmed_path).status();
+    let mut child_command = Command::new("xdg-open");
+    windows_child::hide_console(&mut child_command);
+    let status = child_command.arg(trimmed_path).status();
 
     status
         .map_err(|e| format!("Failed to reveal path: {e}"))
@@ -490,13 +499,16 @@ fn open_external_core(url: &str) -> Result<(), String> {
     }
 
     #[cfg(target_os = "macos")]
-    let status = Command::new("open").arg(trimmed).status();
+    let mut child_command = Command::new("open");
     #[cfg(target_os = "windows")]
-    let status = Command::new("cmd")
-        .args(["/C", "start", "", trimmed])
-        .status();
+    let mut child_command = Command::new("cmd");
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    let status = Command::new("xdg-open").arg(trimmed).status();
+    let mut child_command = Command::new("xdg-open");
+    windows_child::hide_console(&mut child_command);
+    #[cfg(target_os = "windows")]
+    let status = child_command.args(["/C", "start", "", trimmed]).status();
+    #[cfg(not(target_os = "windows"))]
+    let status = child_command.arg(trimmed).status();
 
     status
         .map_err(|e| format!("Failed to open URL: {e}"))

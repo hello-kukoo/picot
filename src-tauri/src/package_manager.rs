@@ -275,9 +275,11 @@ async fn run_update_command(command: &str, args: &[String], cwd: &Path) -> Resul
     {
         return Err("offline mode".to_string());
     }
+    let mut child_command = Command::new(command);
+    crate::windows_child::hide_console_tokio(&mut child_command);
     let output = timeout(
         Duration::from_secs(UPDATE_CHECK_TIMEOUT_SECS),
-        Command::new(command)
+        child_command
             .args(args)
             .current_dir(cwd)
             .env("GIT_TERMINAL_PROMPT", "0")

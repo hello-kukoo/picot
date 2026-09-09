@@ -1,7 +1,14 @@
 import { describe, expect, test, vi } from "vitest";
-import { selectModel } from "./selection.js";
+import { isSelectedModel, selectModel } from "./selection.js";
 
 describe("model selection", () => {
+  test("matches provider and model ID together", () => {
+    const selection = { provider: "openai", modelId: "gpt-5" };
+
+    expect(isSelectedModel({ provider: "openai", id: "gpt-5" }, selection)).toBe(true);
+    expect(isSelectedModel({ provider: "anthropic", id: "gpt-5" }, selection)).toBe(false);
+  });
+
   test("updates the local model after a successful runtime switch", async () => {
     const rpcCommand = vi.fn(async () => ({ success: true }));
     const refreshModelInfo = vi.fn();

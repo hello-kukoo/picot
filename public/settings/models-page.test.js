@@ -488,6 +488,31 @@ describe("models provider editor", () => {
     expect(saved.providers.local.models[0].id).toBe("qwen");
   });
 
+  test("visual models form exposes a save button for edited fields", async () => {
+    const onModelConfigurationChanged = vi.fn();
+    const page = setupModelsPage({
+      configGateway: { call },
+      oauthGateway,
+      onModelConfigurationChanged,
+    });
+    await page.loadInlineModelsEditor();
+
+    const toolbarSave = document.querySelector(".models-config-toolbar-save");
+    expect(toolbarSave).not.toBeNull();
+
+    document.querySelectorAll(".models-provider-item")[1].click();
+    const baseUrl = document.querySelector(
+      '.models-config-field input[placeholder="https://api.example.com/v1"]',
+    );
+    baseUrl.value = "http://127.0.0.1:11434/v1";
+    baseUrl.dispatchEvent(new window.Event("input", { bubbles: true }));
+    toolbarSave.click();
+
+    await vi.waitFor(() => expect(onModelConfigurationChanged).toHaveBeenCalledOnce());
+    const write = call.mock.calls.find(([operation]) => operation === "write_models_config");
+    expect(JSON.parse(write[1].content).providers.local.baseUrl).toBe("http://127.0.0.1:11434/v1");
+  });
+
   test("does not overwrite an existing provider when adding a custom provider", async () => {
     const page = setupModelsPage({ configGateway: { call }, oauthGateway });
     await page.loadInlineModelsEditor();

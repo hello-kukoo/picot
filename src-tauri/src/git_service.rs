@@ -1818,6 +1818,7 @@ fn terminate_git(child: &mut Child) {
 }
 fn git_command(root: &Path, args: impl IntoIterator<Item = OsString>) -> Command {
     let mut command = Command::new("git");
+    crate::windows_child::hide_console(&mut command);
     command
         .current_dir(root)
         .args(args)

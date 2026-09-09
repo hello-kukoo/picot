@@ -8,6 +8,15 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export function isSelectedModel(model, selection) {
+  return Boolean(
+    model?.provider &&
+      model?.id &&
+      model.provider === selection?.provider &&
+      model.id === selection?.modelId,
+  );
+}
+
 export async function selectModel({ model, rpcCommand, refreshModelInfo, applySelectedModel }) {
   const display = model.id.replace(/^claude-/, "").replace(/-\d{8}$/, "");
   const cmd = { type: "set_model", provider: model.provider, modelId: model.id };

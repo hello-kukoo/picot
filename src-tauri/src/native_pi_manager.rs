@@ -1608,9 +1608,7 @@ impl NativePiManager {
 
 #[cfg(target_os = "windows")]
 fn configure_child_process(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    // Preserve hidden-console behavior for GUI launches.
-    command.creation_flags(0x0800_0000);
+    crate::windows_child::hide_console(command);
 }
 
 #[cfg(unix)]
