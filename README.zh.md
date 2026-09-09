@@ -66,65 +66,131 @@ curl -fsSL https://raw.githubusercontent.com/shixin-guo/picot/main/scripts/insta
 
 ## 功能特性
 
-### 📸 界面预览
-
 <p align="center">
   <img width="1200" alt="Picot 工作区与项目界面" src="docs/images/workspace.webp" />
 </p>
 
-<details>
-<summary><strong>💬 对话</strong></summary>
+---
+
+### 💬 对话
+
+<p align="center">
+  <img width="1200" alt="对话界面中的工具调用卡片与思考块" src="docs/images/chat.webp" />
+</p>
 
 - 完整 Markdown 渲染，代码块语法高亮
 - **流式响应**，实时打字效果（基于 remend）
 - 图片附件支持——粘贴、拖放或按钮上传
 - 编辑工具调用的**内联 Diff 视图**（红绿行对比）
-- 工具调用卡片和**思考块**实时渲染
+- 工具调用卡片和**思考块**实时渲染，并分别显示 token 花费
 - 一键复制任意消息
 - 滚动到底部按钮，含未读消息提示
 - **消息队列** — Agent 工作时可继续输入，消息以气泡形式排队，完成后自动依序发送
-- **`@` 文件提及** — 在任意输入框输入 `@` 即可搜索并插入文件路径引用（工作区、`../`、`~/` 或绝对路径）
 - **对话轮次导航条** — 聊天区旁的 Codex 风格圆点轨道，悬浮预览、点击跳转到对应轮次
 - **命令面板** — 快速执行压缩上下文、展开/折叠所有工具卡片、打开设置、查看帮助
 - **从任意消息分叉** — 从对话中任意一点分叉出新会话
 
-</details>
+**`@` 文件提及** — 在任意输入框输入 `@` 即可搜索并插入文件路径引用（工作区、`../`、`~/` 或绝对路径）：
 
-<details>
-<summary><strong>🗂️ 多会话 & 多 Agent</strong></summary>
+<p align="center">
+  <img width="1200" alt="输入框中的 @ 文件提及菜单" src="docs/images/composer-mentions.webp" />
+</p>
+
+---
+
+### 🗂️ 多会话 & 多 Agent
+
+<p align="center">
+  <img width="1200" alt="侧边栏中的项目、最近访问与工作区操作菜单" src="docs/images/sessions.webp" />
+</p>
 
 - **多 Agent 并行** — 每个会话启动独立的 headless pi 进程，不弹新窗口，不中断已有会话
 - 从侧边栏浏览并恢复任意历史会话
-- 跨所有会话历史**全文搜索**，高亮匹配片段
 - 会话按创建时间排序，活跃会话显示绿点
 - 内联重命名、收藏、标签和筛选
 - **安全单条删除** — 可从侧边栏或「已归档」删除会话；运行中的会话会被服务端拒绝
 - **最近访问** — 跨工作区的最近使用列表固定显示最后访问的五个会话
 
-</details>
+**全文搜索** — 跨所有会话历史搜索并高亮匹配片段（`⌘K`）：
 
-<details>
-<summary><strong>📥 Agent Inbox</strong> <sub>（Beta）</sub></summary>
+<p align="center">
+  <img width="1200" alt="会话全文搜索与高亮片段" src="docs/images/session-search.webp" />
+</p>
+
+---
+
+### 📥 Agent Inbox <sub>（Beta）</sub>
+
+<p align="center">
+  <img width="1200" alt="Agent Inbox 设置与 Telegram Doctor 检测" src="docs/images/agent-inbox-settings.webp" />
+</p>
 
 - 接入 Telegram Bot — 收到的私信会进入一个固定置顶的 **Agent Inbox** 会话，与普通项目对话区分开
 - 可将 Inbox 中的任务派发给任意已打开项目的 Agent，在可伸缩的任务面板中追踪 待处理 / 运行中 / 已完成 状态
 - 任务生命周期事件（已派发、需要更多信息、完成、失败）会回传到 Inbox，并可回复给原始 Telegram 用户
-- 设置中内置 Telegram Doctor 检测，快速诊断 Bot / Token / 连通性问题
+- 内置 **Telegram Doctor** 检测，快速诊断 Bot / Token / 连通性问题
 
-</details>
+---
 
-<details>
-<summary><strong>🗃️ 项目与工作区</strong></summary>
+### 🗃️ 项目与工作区
+
+<p align="center">
+  <img width="1200" alt="项目头部的 Git 分支与「在外部编辑器中打开」菜单" src="docs/images/workspace-open-in.webp" />
+</p>
 
 - **多项目** — 每个项目独立窗口、工作目录、会话历史和 Agent
 - 项目头部显示**当前 Git 分支**
-- **在外部编辑器中打开** — 直接从 Picot 启动 VS Code、Cursor 等
+- **在外部编辑器中打开** — 直接从 Picot 启动 VS Code、Cursor、Zed、Ghostty、终端或访达
 - 原生文件夹选择器，无需使用终端打开项目
 
-</details>
+---
 
-<details>
-<summary><strong>📱 移动端 & 局域网访问</strong></summary>
+### 🗄️ 文件浏览、预览与编辑
+
+<p align="center">
+  <img width="1200" alt="对话、Markdown 预览与工作区文件树并排显示" src="docs/images/file-browser.webp" />
+</p>
+
+- 右侧边栏提供懒加载的工作区文件树
+- 单击文件即可在可调整宽度的标签预览面板中打开；每个工作区独立恢复标签
+- 可预览 Markdown、图片、PDF 文档和源代码；Markdown 渲染前会经过安全清理
+- 双击文件可使用系统默认桌面应用打开
+- 将文件从树中拖到聊天输入框，可插入工作区相对的 `@path` 引用
+
+**内置 CodeMirror 编辑器** — 语法高亮、自动换行、搜索、跳转行、自动保存和外部修改冲突保护：
+
+<p align="center">
+  <img width="1200" alt="与对话并排的多标签 CodeMirror 编辑器" src="docs/images/code-editor.webp" />
+</p>
+
+---
+
+### 🔀 Git 变更与 Diff
+
+<p align="center">
+  <img width="1200" alt="Git 变更面板与左右对照 Diff" src="docs/images/git-diff.webp" />
+</p>
+
+- Git 面板按**已暂存 / 已修改 / 未跟踪 / 冲突**分组，并显示每个目录的变更数
+- 在与文件预览相同的面板中查看**原始 vs 修改**左右对照 Diff
+- 可直接在面板中暂存或撤销变更
+- 头部显示当前分支与 ahead/behind 状态
+
+---
+
+### ⌨️ 内置终端
+
+<p align="center">
+  <img width="1200" alt="对话下方的内置终端面板" src="docs/images/terminal.webp" />
+</p>
+
+- 基于 xterm.js 的真实终端，工作目录即项目根目录（``Ctrl+` ``）
+- 支持多标签、面板可伸缩、重新打开时恢复
+- 与对话并排使用——查看构建结果无需切换窗口
+
+---
+
+### 📱 移动端 & 局域网访问
 
 <p align="center">
   <img width="900" alt="局域网与移动端访问面板" src="docs/images/lan-mobile-panel.webp" />
@@ -136,10 +202,9 @@ curl -fsSL https://raw.githubusercontent.com/shixin-guo/picot/main/scripts/insta
 - **设置 → 远程访问** — 扫描纯 `/app` 启动器 URL 即可在同网络设备上打开；新设备需请求访问并在桌面端批准
 - 移动端 URL 优化处理，支持 PWA 安装（iOS/Android 可添加到主屏幕）
 
-</details>
+---
 
-<details>
-<summary><strong>📦 包管理器</strong></summary>
+### 📦 包管理器
 
 <p align="center">
   <img width="1200" alt="内置包管理器界面" src="docs/images/package-manager.webp" />
@@ -148,10 +213,9 @@ curl -fsSL https://raw.githubusercontent.com/shixin-guo/picot/main/scripts/insta
 - 在 UI 内浏览、安装和删除社区包
 - 基于 `pi install`，无需额外命令
 
-</details>
+---
 
-<details>
-<summary><strong>💰 费用 & 用量面板</strong></summary>
+### 💰 费用 & 用量面板
 
 <p align="center">
   <img width="1200" alt="费用面板总览" src="docs/images/cost-dashboard.webp" />
@@ -162,12 +226,20 @@ curl -fsSL https://raw.githubusercontent.com/shixin-guo/picot/main/scripts/insta
 
 - 每个会话实时 Token 用量和费用追踪
 - 完整费用面板，含信息栏、趋势图和按模型分类
-- **上下文窗口可视化** — 点击 Token 气泡查看已缓存 Token、新输入和可用空间
 
-</details>
+**上下文窗口可视化** — 点击 Token 气泡查看已缓存 Token、新输入和可用空间，并可直接压缩：
 
-<details>
-<summary><strong>🎨 主题 & 外观</strong></summary>
+<p align="center">
+  <img width="1200" alt="上下文窗口弹层，显示输入、输出、可用与缓存 Token" src="docs/images/context-window.webp" />
+</p>
+
+---
+
+### 🎨 主题 & 外观
+
+<p align="center">
+  <img width="1200" alt="Midnight 主题下的 Picot" src="docs/images/theme-midnight.webp" />
+</p>
 
 - 六款内置主题：**Dusk（默认）**、Dawn、Midnight、Clean、Terracotta、Sage
 - 毛玻璃头部和输入栏（`backdrop-filter: blur`）
@@ -175,33 +247,27 @@ curl -fsSL https://raw.githubusercontent.com/shixin-guo/picot/main/scripts/insta
 - 支持从顶部**拖动窗口**，媲美原生 App 体验
 - **语言** — 可在英文、简体中文和跟随系统之间即时切换
 
-</details>
+<p align="center">
+  <img width="1200" alt="设置 → 通用：主题色板、Agent 选项与更新" src="docs/images/settings-general.webp" />
+</p>
 
-<details>
-<summary><strong>🎤 语音输入</strong></summary>
+---
+
+### 🎤 语音输入
+
+<p align="center">
+  <img width="1000" alt="输入栏：附件、模型选择、思考级别、麦克风与发送" src="docs/images/composer.webp" />
+</p>
 
 - 输入框中的麦克风按钮，调用 Web Speech API（本地语音识别）
 - 实时转录到输入框，录音时红色脉冲动画
 
-</details>
+---
 
-<details>
-<summary><strong>🗄️ 文件浏览、预览与编辑</strong></summary>
-
-- 右侧边栏提供懒加载的工作区文件树
-- 单击文件即可在可调整宽度的标签预览面板中打开；每个工作区独立恢复标签
-- 可预览 Markdown、图片、PDF 文档和源代码；Markdown 渲染前会经过安全清理
-- 内置 CodeMirror 编辑器可编辑受支持的文本文件，提供语法高亮、自动换行、搜索、跳转行、自动保存和外部修改冲突保护
-- 双击文件可使用系统默认桌面应用打开
-- 将文件从树中拖到聊天输入框，可插入工作区相对的 `@path` 引用
-
-</details>
-
-<details>
-<summary><strong>⚙️ 设置 & 控制</strong></summary>
+### ⚙️ 设置 & 控制
 
 <p align="center">
-  <img width="1200" alt="设置与控制面板" src="docs/images/settings.webp" />
+  <img width="1200" alt="带搜索与上下文长度的模型选择器" src="docs/images/model-picker.webp" />
 </p>
 
 - 模型选择器，支持搜索/筛选和键盘操作
@@ -211,7 +277,9 @@ curl -fsSL https://raw.githubusercontent.com/shixin-guo/picot/main/scripts/insta
 - **技能管理** — 设置 → 技能：按 source root 浏览所有发现的技能，用 Pi 的 `!`/`+`/`-` 规则语义启用/禁用单个技能或整组（下次会话/重启后生效）
 - **自动更新** — 设置 → 通用 → 更新，一键应用内升级
 
-</details>
+<p align="center">
+  <img width="1200" alt="设置与控制面板" src="docs/images/settings.webp" />
+</p>
 
 ---
 

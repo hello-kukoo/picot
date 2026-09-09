@@ -30,6 +30,7 @@ import { setupComposerImageAttachments } from "./composer/composer-images.js";
 import { setupComposerPasteOffload } from "./composer/composer-paste-offload.js";
 import { setupComposerSlashMenu } from "./composer/composer-slash-menu.js";
 import { setupComposerSubmitHandling } from "./composer/composer-submit.js";
+import { isSelectedModel } from "./composer/model-selection.js";
 import { renderQueuedMessages } from "./composer/queued-messages.js";
 import {
   buildCommandCatalog,
@@ -62,6 +63,7 @@ import {
 } from "./notifications/task-completion-notifications.js";
 import { extractAssistantError, extractRuntimeEventError } from "./session/assistant-error.js";
 import { shouldSuppressFileBrowserRefresh } from "./session/file-browser-refresh-guard.js";
+import { createAssistantMessageStream } from "./session/assistant-message-stream.js";
 import { InfoPanel } from "./session/info-panel.js";
 import { activeSession, setupSessionInfo } from "./session/session-info.js";
 import { createSessionSelectionHandler } from "./session/session-navigation.js";
@@ -200,12 +202,14 @@ function formatThinkingLevelLabel(level) {
   return label === key ? normalizedLevel : label;
 }
 let currentThinkingLevel = "off";
+let currentModelProvider = null;
 let currentModelId = null;
 
-// Session UI state: persists per-session model + thinking level and input draft
-// so switching between sessions restores the composer state. Profiles live in
-// the native host (SessionUiProfileStore) keyed by the runtime session id;
-// drafts stay window-memory because they are not worth serialising.
+// Session UI state: persists per-session model + thinking level so switching
+// between sessions restores the composer's model/thinking selection. Profiles
+// live in the native host (SessionUiProfileStore) keyed by the runtime session
+// id. Unsent composer text is intentionally NOT session-scoped: it follows the
+// user across session switches instead of being saved/restored per session.
 const sessionUiState = new SessionUiStateStore({
   profileClient: {
     load: () => {
@@ -268,6 +272,7 @@ const configGatewayReady = new Promise((resolve) => {
 let store = createSessionStore(target);
 let navigationGeneration = 0;
 let commandCatalog = buildCommandCatalog({});
+const assistantMessageStream = createAssistantMessageStream();
 let streamingElement = null;
 let liveProcessGroup = null;
 let lastShownProviderError = null;
@@ -1928,6 +1933,7 @@ async function handleRuntimeEvent(event) {
   switch (event.type) {
     case "agent_start":
       lastShownProviderError = null;
+      assistantMessageStream.reset();
       setStatus("working");
       contextUsage.setWorking(true);
       sidebar?.setStreaming(target.sessionId, true);
@@ -1966,26 +1972,32 @@ async function handleRuntimeEvent(event) {
         messageRenderer.renderUserMessage(event.message);
         upsertActiveSessionFromUserMessage(event.message);
       } else if (event.message?.role === "assistant") {
+        const message = assistantMessageStream.start(event.message);
         showLiveProcessIndicator();
-        streamingElement = messageRenderer.renderAssistantMessage(event.message, true);
+        streamingElement = messageRenderer.renderAssistantMessage(message, true);
       }
       break;
-    case "message_update":
+    case "message_update": {
+      // Pi's current RPC protocol emits deltas in assistantMessageEvent and
+      // intentionally omits the former cumulative event.message snapshot.
+      const message = assistantMessageStream.update(event);
       if (!streamingElement) {
         showLiveProcessIndicator();
-        streamingElement = messageRenderer.renderAssistantMessage(event.message, true);
+        streamingElement = messageRenderer.renderAssistantMessage(message, true);
       } else {
-        messageRenderer.updateStreamingMessage(streamingElement, event.message?.content ?? []);
+        messageRenderer.updateStreamingMessage(streamingElement, message.content);
       }
       break;
+    }
     case "message_end":
       if (event.message?.role === "assistant") {
+        const message = assistantMessageStream.finish(event.message);
         if (streamingElement) {
-          messageRenderer.updateStreamingMessage(streamingElement, event.message.content ?? []);
-          messageRenderer.finalizeStreamingMessage(streamingElement, event.message.usage ?? null);
-          contextUsage.setUsage(event.message.usage ?? null, currentModelContextWindow);
-          setSessionCost(sessionTotalCost + (event.message.usage?.cost?.total ?? 0));
-          headerStatusBar?.applyLiveUsage?.(event.message.usage ?? null);
+          messageRenderer.updateStreamingMessage(streamingElement, message.content);
+          messageRenderer.finalizeStreamingMessage(streamingElement, message.usage ?? null);
+          contextUsage.setUsage(message.usage ?? null, currentModelContextWindow);
+          setSessionCost(sessionTotalCost + (message.usage?.cost?.total ?? 0));
+          headerStatusBar?.applyLiveUsage?.(message.usage ?? null);
           streamingElement = null;
           convNav.notifyNewMessage();
         }
@@ -2085,6 +2097,7 @@ async function adoptTarget(nextTarget, { updateRoute = true } = {}) {
   // or workspace; carrying them across would leak state (v3 e2567dd).
   turnWrittenPaths = [];
   cancelFileBrowserRefresh();
+  assistantMessageStream.reset();
   streamingElement = null;
   liveProcessGroup = null;
   adapter.subscribeTarget(target);
@@ -2120,19 +2133,15 @@ async function adoptTarget(nextTarget, { updateRoute = true } = {}) {
   // Re-hydrate the aggregate stats for the new session.
   hydrateHeaderSessionStats();
   setSessionCost(0);
-  // Save the outgoing session's draft and restore the incoming session's
-  if (previousTarget.sessionId && previousTarget.sessionId !== "pending-bootstrap") {
-    sessionUiState.saveDraft(previousTarget.sessionId, input.value);
-  }
   // Restore model/thinking for the new session
   const restoredProfile = await sessionUiState.loadProfile();
   if (restoredProfile) {
-    updateComposerModel({ id: restoredProfile.modelId });
+    updateComposerModel({ provider: restoredProfile.provider, id: restoredProfile.modelId });
     updateComposerThinking(restoredProfile.thinkingLevel);
   }
-  // Restore input draft for the new session
-  const draft = sessionUiState.loadDraft(nextTarget.sessionId);
-  input.value = draft || "";
+  // Intentionally leave input.value untouched here: an unsent composer draft
+  // must follow the user across session switches instead of being cleared or
+  // swapped for a different session's stored draft.
   composerAutoResize.sync();
   await extensionUi.setForegroundSession(target.sessionId, { flush: false });
 }
@@ -2506,17 +2515,18 @@ function showError(error) {
 // ── Composer model dropdown & thinking button (functions & event wiring) ────────
 
 function updateComposerModel(model) {
+  currentModelProvider = model?.provider ?? null;
   currentModelId = model?.id ?? null;
   // Persist the model change to session UI state
   sessionUiState
     .saveProfile({
-      provider: "anthropic",
+      provider: currentModelProvider || "",
       modelId: currentModelId || "",
       thinkingLevel: currentThinkingLevel,
     })
     .catch(() => {});
   currentModelContextWindow =
-    Number(model?.contextWindow) || findModelContextWindow(currentModelId);
+    Number(model?.contextWindow) || findModelContextWindow(currentModelProvider, currentModelId);
   contextUsage.setContextWindowSize(currentModelContextWindow);
   if (modelDropdownLabel) {
     modelDropdownLabel.textContent = formatModelName(model) || "model";
@@ -2527,7 +2537,7 @@ function updateComposerThinking(level) {
   currentThinkingLevel = level ?? "off";
   sessionUiState
     .saveProfile({
-      provider: "anthropic",
+      provider: currentModelProvider || "",
       modelId: currentModelId || "",
       thinkingLevel: currentThinkingLevel,
     })
@@ -2547,7 +2557,7 @@ async function loadAvailableModels() {
     const runtimeModels = result?.response?.data?.models ?? [];
     availableModels = await applyConfiguredModelVisibility(runtimeModels);
     if (!currentModelContextWindow) {
-      currentModelContextWindow = findModelContextWindow(currentModelId);
+      currentModelContextWindow = findModelContextWindow(currentModelProvider, currentModelId);
       contextUsage.setContextWindowSize(currentModelContextWindow);
     }
     renderModelDropdownMenu();
@@ -2575,9 +2585,11 @@ async function applyConfiguredModelVisibility(models) {
   }
 }
 
-function findModelContextWindow(modelId) {
-  if (!modelId) return 0;
-  const model = availableModels.find((candidate) => candidate.id === modelId);
+function findModelContextWindow(provider, modelId) {
+  if (!provider || !modelId) return 0;
+  const model = availableModels.find(
+    (candidate) => candidate.provider === provider && candidate.id === modelId,
+  );
   return Number(model?.contextWindow) || 0;
 }
 
@@ -2620,7 +2632,11 @@ function renderEmptyModelDropdown(container) {
 function buildModelDropdownItem(model) {
   const item = document.createElement("button");
   item.type = "button";
-  item.className = `model-dropdown-item${model.id === currentModelId ? " active" : ""}`;
+  const selected = isSelectedModel(model, {
+    provider: currentModelProvider,
+    modelId: currentModelId,
+  });
+  item.className = `model-dropdown-item${selected ? " active" : ""}`;
 
   const nameWrap = document.createElement("span");
   nameWrap.className = "model-dropdown-item-name";

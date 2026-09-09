@@ -67,65 +67,132 @@ Provide your model credentials via `pi /login` inside any workspace, or by writi
 
 ## Features
 
-### 📸 UI Preview
 
 <p align="center">
   <img width="1200" alt="Picot workspace and project UI" src="docs/images/workspace.webp" />
 </p>
 
-<details>
-<summary><strong>💬 Chat</strong></summary>
+---
+
+### 💬 Chat
+
+<p align="center">
+  <img width="1200" alt="Chat with tool-call cards and thinking blocks" src="docs/images/chat.webp" />
+</p>
 
 - Full markdown rendering with syntax-highlighted code blocks
 - **Streaming responses** with live typing indicator (powered by remend)
 - Image attachments — paste, drag & drop, or button
 - Inline **diff viewer** for edit tool calls (red/green lines)
-- Tool-call cards and **thinking blocks** rendered live
+- Tool-call cards and **thinking blocks** rendered live, each with its own token cost
 - Copy any message with one click
 - Scroll-to-bottom button with unread indicator
 - **Message queuing** — type while the agent is working; messages queue as pills and auto-send when ready
-- **`@` file mentions** — type `@` in any composer to search and insert a file-path reference (workspace, `../`, `~/`, or absolute)
 - **Conversation turn navigator** — Codex-style dot rail beside the chat; hover a dot for a preview, click to jump to that turn
 - **Command palette** — quick access to Compact, Expand/Collapse All Tools, Settings, and Help
 - **Fork from any message** — branch a new session off any point in the conversation
 
-</details>
+**`@` file mentions** — type `@` in any composer to search and insert a file-path reference (workspace, `../`, `~/`, or absolute):
 
-<details>
-<summary><strong>🗂️ Multi-Session & Multi-Agent</strong></summary>
+<p align="center">
+  <img width="1200" alt="@ file mention menu in the composer" src="docs/images/composer-mentions.webp" />
+</p>
+
+---
+
+### 🗂️ Multi-Session & Multi-Agent
+
+<p align="center">
+  <img width="1200" alt="Session sidebar with projects, RECENT, and workspace actions" src="docs/images/sessions.webp" />
+</p>
 
 - **Multiple agents in parallel** — each session spawns its own headless pi process; no new OS window, no interruption of running sessions
 - Browse and resume any past session from the sidebar
-- Full-text search across all session history with highlighted snippets
 - Sessions sorted by creation time; live session marked with a green dot
 - Inline session rename, favourites, tags, and filtering
 - **Safe individual deletion** — delete a session from the sidebar or ARCHIVED; running sessions are refused by the server
 - **RECENT** — a cross-workspace, most-recently-used list keeps the last five visited sessions at the top of the sidebar
 
-</details>
+**Full-text search** across all session history, with highlighted snippets (`⌘K`):
 
-<details>
-<summary><strong>📥 Agent Inbox</strong> <sub>(Beta)</sub></summary>
+<p align="center">
+  <img width="1200" alt="Full-text session search with highlighted snippets" src="docs/images/session-search.webp" />
+</p>
+
+---
+
+### 📥 Agent Inbox <sub>(Beta)</sub>
+
+<p align="center">
+  <img width="1200" alt="Agent Inbox settings with the Telegram Doctor check" src="docs/images/agent-inbox-settings.webp" />
+</p>
 
 - Connect a Telegram bot — incoming DMs land in a pinned **Agent Inbox** session, kept separate from your normal project chats
 - Dispatch tasks from the inbox to any open project's agent; track pending / running / done in a resizable task panel
 - Task lifecycle events (dispatched, needs input, done, failed) round-trip back to the inbox, including a reply to the original Telegram sender
-- Built-in Telegram Doctor check to diagnose bot/token/connectivity issues from Settings
+- Built-in **Telegram Doctor** check to diagnose bot/token/connectivity issues from Settings
 
-</details>
+---
 
-<details>
-<summary><strong>🗃️ Projects & Workspace</strong></summary>
+### 🗃️ Projects & Workspace
+
+<p align="center">
+  <img width="1200" alt="Project header with git branch and the open-in-editor menu" src="docs/images/workspace-open-in.webp" />
+</p>
 
 - **Multi-project** — each project gets its own window, working directory, session history, and agent
 - Shows the **current git branch** in the project header
-- **Open in external editor** — launch VS Code, Cursor, or any app directly from Picot
+- **Open in external editor** — launch VS Code, Cursor, Zed, Ghostty, a terminal, or Finder directly from Picot
 - Native folder picker to open any project without touching the terminal
 
-</details>
+---
 
-<details>
-<summary><strong>📱 Mobile & LAN Access</strong></summary>
+### 🗄️ File Browser, Preview & Editor
+
+<p align="center">
+  <img width="1200" alt="Chat, Markdown preview, and the workspace file tree side by side" src="docs/images/file-browser.webp" />
+</p>
+
+- Right sidebar with a lazy-loaded workspace file tree
+- Click a file to open it in a resizable, tabbed preview panel; tabs are restored separately for each workspace
+- Preview Markdown, images, PDF documents, and source files; Markdown is sanitized before rendering
+- Double-click to open a file in its native desktop application
+- Drag a file from the tree onto the chat input to insert a workspace-relative `@path` reference
+
+**Built-in CodeMirror editor** with syntax highlighting, line wrapping, search, go-to-line, auto-save, and external-change conflict protection:
+
+<p align="center">
+  <img width="1200" alt="Tabbed CodeMirror editor next to the chat" src="docs/images/code-editor.webp" />
+</p>
+
+---
+
+### 🔀 Git Changes & Diffs
+
+<p align="center">
+  <img width="1200" alt="Git changes panel with a side-by-side diff" src="docs/images/git-diff.webp" />
+</p>
+
+- Git panel grouped into **staged / changes / untracked / conflicted**, with per-directory counts
+- Side-by-side **original vs. modified** diff in the same preview panel used for files
+- Stage or discard changes from the panel
+- Branch and ahead/behind status in the header
+
+---
+
+### ⌨️ Built-in Terminal
+
+<p align="center">
+  <img width="1200" alt="Integrated terminal panel below the chat" src="docs/images/terminal.webp" />
+</p>
+
+- Real xterm.js terminal rooted at the workspace directory (``Ctrl+` ``)
+- Multiple tabs, resizable panel, and restore-on-reopen
+- Runs alongside the chat — no window switching to check a build
+
+---
+
+### 📱 Mobile & LAN Access
 
 <p align="center">
   <img width="900" alt="LAN and mobile access panel" src="docs/images/lan-mobile-panel.webp" />
@@ -137,10 +204,9 @@ Provide your model credentials via `pi /login` inside any workspace, or by writi
 - **Settings → Remote Access** — scan the plain `/app` launcher URL on the same network; new devices request access and require desktop approval
 - Mobile-optimised URL handling and App Launcher support (installable as PWA on iOS/Android)
 
-</details>
+---
 
-<details>
-<summary><strong>📦 Package Manager</strong></summary>
+### 📦 Package Manager
 
 <p align="center">
   <img width="1200" alt="Built-in package manager UI" src="docs/images/package-manager.webp" />
@@ -149,10 +215,9 @@ Provide your model credentials via `pi /login` inside any workspace, or by writi
 - Browse, install, and remove community packages from within the UI
 - Built on top of `pi install` — no separate package commands needed
 
-</details>
+---
 
-<details>
-<summary><strong>💰 Cost & Usage Dashboard</strong></summary>
+### 💰 Cost & Usage Dashboard
 
 <p align="center">
   <img width="1200" alt="Cost dashboard overview" src="docs/images/cost-dashboard.webp" />
@@ -163,12 +228,20 @@ Provide your model credentials via `pi /login` inside any workspace, or by writi
 
 - Per-session cost tracking with live token/cost metrics
 - Full cost dashboard with infobar, trends, and per-model breakdown
-- **Context window visualiser** — click the token pill to see cached tokens, fresh input, and available space
 
-</details>
+**Context window visualiser** — click the token pill to see cached tokens, fresh input, and available space, and compact from there:
 
-<details>
-<summary><strong>🎨 Themes & Appearance</strong></summary>
+<p align="center">
+  <img width="1200" alt="Context window popover showing input, output, available, and cached tokens" src="docs/images/context-window.webp" />
+</p>
+
+---
+
+### 🎨 Themes & Appearance
+
+<p align="center">
+  <img width="1200" alt="Picot in the Midnight theme" src="docs/images/theme-midnight.webp" />
+</p>
 
 - Six built-in themes: **Dusk** (default), Dawn, Midnight, Clean, Terracotta, Sage
 - Frosted-glass header and input bar (`backdrop-filter: blur`)
@@ -176,33 +249,27 @@ Provide your model credentials via `pi /login` inside any workspace, or by writi
 - **Window dragging** from the header area — feels like a native app
 - **Language** — switch the live interface between English, Simplified Chinese, or the system preference
 
-</details>
+<p align="center">
+  <img width="1200" alt="Settings → General with theme swatches, agent options, and updates" src="docs/images/settings-general.webp" />
+</p>
 
-<details>
-<summary><strong>🎤 Voice Input</strong></summary>
+---
+
+### 🎤 Voice Input
+
+<p align="center">
+  <img width="1000" alt="Composer with attach, model picker, thinking toggle, mic, and send" src="docs/images/composer.webp" />
+</p>
 
 - Mic button in the input area using Web Speech API (on-device dictation)
 - Live transcription into the textarea; pulses red while recording
 
-</details>
+---
 
-<details>
-<summary><strong>🗄️ File Browser, Preview & Editor</strong></summary>
-
-- Right sidebar with a lazy-loaded workspace file tree
-- Click a file to open it in a resizable, tabbed preview panel; tabs are restored separately for each workspace
-- Preview Markdown, images, PDF documents, and source files; Markdown is sanitized before rendering
-- Edit supported text files in the built-in CodeMirror editor with syntax highlighting, line wrapping, search, go-to-line, auto-save, and external-change conflict protection
-- Double-click to open a file in its native desktop application
-- Drag a file from the tree onto the chat input to insert a workspace-relative `@path` reference
-
-</details>
-
-<details>
-<summary><strong>⚙️ Settings & Control</strong></summary>
+### ⚙️ Settings & Control
 
 <p align="center">
-  <img width="1200" alt="Settings and controls" src="docs/images/settings.webp" />
+  <img width="1200" alt="Model picker with search and context sizes" src="docs/images/model-picker.webp" />
 </p>
 
 - Model picker with search/filter and keyboard support
@@ -212,7 +279,9 @@ Provide your model credentials via `pi /login` inside any workspace, or by writi
 - **Skills management** — Settings → Skills: browse every discovered skill per source root and toggle individual skills or whole groups using Pi's `!`/`+`/`-` rule semantics (takes effect on next session/restart)
 - **Auto-updater** — Settings → General → Updates for one-click in-app updates
 
-</details>
+<p align="center">
+  <img width="1200" alt="Settings and controls" src="docs/images/settings.webp" />
+</p>
 
 ---
 
