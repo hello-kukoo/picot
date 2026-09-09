@@ -172,15 +172,15 @@
   },
   "callers": [
     {
-      "id": "public/app.js:3276",
+      "id": "public/app.js:3275",
       "file": "public/app.js",
-      "line": 3276,
+      "line": 3275,
       "text": "const response = await fetch(\"/v2/paste-offload\", {"
     },
     {
-      "id": "public/app.js:3710",
+      "id": "public/app.js:3707",
       "file": "public/app.js",
-      "line": 3710,
+      "line": 3707,
       "text": "const response = await fetch(exportUrl);"
     },
     {
@@ -256,9 +256,9 @@
       "text": "const result = client.sendControl(\"get_pi_version\", {});"
     },
     {
-      "id": "public/ephemeral-chat-view.js:182",
+      "id": "public/ephemeral-chat-view.js:184",
       "file": "public/ephemeral-chat-view.js",
-      "line": 182,
+      "line": 184,
       "text": "const response = await fetch(\"/v2/paste-offload\", {"
     },
     {
@@ -278,12 +278,6 @@
       "file": "public/i18n.js",
       "line": 108,
       "text": "const res = await fetch(`/locales/${locale}.json`, { cache: \"no-store\" });"
-    },
-    {
-      "id": "public/native/app.js:102",
-      "file": "public/native/app.js",
-      "line": 102,
-      "text": "const response = await fetch(`/v2/bootstrap?${query}`);"
     },
     {
       "id": "public/pair.html:133",
@@ -571,7 +565,7 @@
   "counts": {
     "hostHttp": 45,
     "nativeCommands": 43,
-    "callers": 66,
+    "callers": 65,
     "brokerControls": 64,
     "hostFrames": 6
   }

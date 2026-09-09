@@ -5,7 +5,7 @@
 // files; a second failure means it's a real bug, so we stop retrying.
 const RELOAD_GUARD_KEY = "picot:bootstrap-reload-attempted";
 
-const entry = window.location.pathname.startsWith("/app/") ? "./native/app.js" : "./app.js";
+const entry = "./app.js";
 
 import(entry)
   .then(() => sessionStorage.removeItem(RELOAD_GUARD_KEY))

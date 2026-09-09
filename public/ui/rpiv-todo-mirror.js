@@ -122,13 +122,9 @@ export class RpivTodoMirrorPanel {
 
   expand() {
     this.#element.classList.add("is-hover-expanded");
-    // v3: upstream leaves the class on indefinitely (the comment in
-    // public/native/app.js says "expand the panel instead of rendering
-    // a duplicate system message"). In practice that means once any
-    // /todos call hits, the panel stays force-expanded until the next
-    // session change — the user has no way to re-collapse it. Auto-clear
-    // the class after a short window so the panel returns to its hover
-    // affordance.
+    // Keep the panel expanded while the todo result is visible instead of
+    // rendering a duplicate system message. Auto-clear the class after a
+    // short window so the panel returns to its hover affordance.
     if (this.#expandTimer != null) clearTimeout(this.#expandTimer);
     this.#expandTimer = setTimeout(() => {
       this.#element.classList.remove("is-hover-expanded");

@@ -3,8 +3,8 @@
 // `http://<lan-ip>:<port>`, which the browser treats as an *insecure*
 // context — `crypto.randomUUID` is `undefined` there, so calling it directly
 // throws a `TypeError` and can crash whichever module called it at import
-// time (see `native/app.js`, which used to build its WebSocket `clientId`
-// this way, breaking session list / model list / everything else on LAN).
+// time (the old native entry built its WebSocket `clientId` this way,
+// breaking session list / model list / everything else on LAN).
 //
 // `crypto.getRandomValues()` remains available in insecure contexts, so we
 // fall back to building a UUID-shaped random id from it instead of a weaker

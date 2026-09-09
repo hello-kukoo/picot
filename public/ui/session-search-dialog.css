@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════
-   Global Session Search dialog (public/native/session-search-dialog.js)
+   Global Session Search dialog
    Note: this dialog uses its own `searchSheetIn` keyframe rather than
    the shared `sheetIn` (defined in style.css). `sheetIn`'s end transform
    is `translate(-50%, -50%)`, matching centered modals whose static
