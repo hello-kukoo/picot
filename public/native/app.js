@@ -62,8 +62,8 @@ import {
   createTaskCompletionNotifications,
 } from "./notifications/task-completion-notifications.js";
 import { extractAssistantError, extractRuntimeEventError } from "./session/assistant-error.js";
-import { shouldSuppressFileBrowserRefresh } from "./session/file-browser-refresh-guard.js";
 import { createAssistantMessageStream } from "./session/assistant-message-stream.js";
+import { shouldSuppressFileBrowserRefresh } from "./session/file-browser-refresh-guard.js";
 import { InfoPanel } from "./session/info-panel.js";
 import { activeSession, setupSessionInfo } from "./session/session-info.js";
 import { createSessionSelectionHandler } from "./session/session-navigation.js";
