@@ -17,6 +17,21 @@ export function isSelectedModel(model, selection) {
   );
 }
 
+export function filterModelsByCatalogVisibility(models, catalog) {
+  if (!Array.isArray(models)) return [];
+  if (!catalog?.ok || !Array.isArray(catalog.data?.providers)) return models;
+
+  const visibleKeys = new Set();
+  for (const provider of catalog.data.providers) {
+    for (const model of provider.models ?? []) {
+      if (model.available && model.visible !== false) {
+        visibleKeys.add(`${model.provider || provider.provider}/${model.id}`);
+      }
+    }
+  }
+  return models.filter((model) => visibleKeys.has(`${model.provider}/${model.id}`));
+}
+
 export async function selectModel({ model, rpcCommand, refreshModelInfo, applySelectedModel }) {
   const display = model.id.replace(/^claude-/, "").replace(/-\d{8}$/, "");
   const cmd = { type: "set_model", provider: model.provider, modelId: model.id };

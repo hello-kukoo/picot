@@ -51,7 +51,11 @@ import { createIcon, replaceButtonGlyph, setButtonIcon } from "./icons.js";
 import { processImageFile, processImagePayload } from "./image-attachments.js";
 import { InfoPanel } from "./info-panel.js";
 import { setupLanQr } from "./lan-qr.js";
-import { isSelectedModel, selectModel } from "./models/selection.js";
+import {
+  filterModelsByCatalogVisibility,
+  isSelectedModel,
+  selectModel,
+} from "./models/selection.js";
 import { renderPackageInstallFailure } from "./packages/install-status.js";
 import {
   createPreferencesClient,
@@ -1111,6 +1115,7 @@ const createEphemeralView = (runtime) =>
     // Ephemeral chats share the window's owner workspace (served by the
     // main-session Pi), never the Quick Chat temporary cwd.
     getWorkspaceRoot: () => getCurrentWorkspacePath(),
+    loadModelCatalog: () => configGateway.call("list_model_catalog"),
   });
 
 async function getActiveSessionStartupProfile() {
@@ -2803,9 +2808,8 @@ function handleAgentSettled() {
 /**
  * Walk the just-finished turn's children in the messages container (everything
  * after the last .user message) and pack any thinking blocks and tool cards
- * into a collapsed process-details group. Matches upstream's
- * `collapseCompletedTurn` in public/native/app.js: the user prompt and the
- * final assistant answer stay visible, everything else gets folded away.
+ * into a collapsed process-details group. The user prompt and final assistant
+ * answer stay visible; everything else gets folded away.
  */
 function collapseCompletedTurn() {
   const children = Array.from(messagesElement.children);
@@ -3809,6 +3813,15 @@ function updateOnboardingUI() {
   return onboarding;
 }
 
+async function filterConfiguredModels(models) {
+  try {
+    return filterModelsByCatalogVisibility(models, await configGateway.call("list_model_catalog"));
+  } catch (error) {
+    console.warn("[Models] Failed to load configured model visibility:", error);
+    return models;
+  }
+}
+
 async function fetchModelInfo() {
   try {
     // Populate models from the host-wide cache first so the dropdown renders
@@ -3819,7 +3832,7 @@ async function fetchModelInfo() {
     try {
       const cached = await transport.getCachedModels();
       if (Array.isArray(cached?.models) && cached.models.length > 0) {
-        availableModels = cached.models;
+        availableModels = await filterConfiguredModels(cached.models);
         hasLoadedAvailableModels = true;
         didAutoOpenEmptyModelsDropdown = false;
       }
@@ -3835,7 +3848,7 @@ async function fetchModelInfo() {
     const stateData = stateResult || {};
 
     if (modelsData.success && Array.isArray(modelsData.data?.models)) {
-      availableModels = modelsData.data.models;
+      availableModels = await filterConfiguredModels(modelsData.data.models);
       hasLoadedAvailableModels = true;
       if (availableModels.length > 0) {
         didAutoOpenEmptyModelsDropdown = false;
@@ -5146,8 +5159,7 @@ function assistantHasText(content) {
 /**
  * Split the final assistant message of a turn into the steps that should be
  * folded away (everything up to and including the last non-text block —
- * thinking/tool-calls) and the final answer (trailing text blocks). Mirrors
- * upstream's splitFinalAssistantBlocks in public/native/app.js.
+ * thinking/tool-calls) and the final answer (trailing text blocks).
  */
 function splitFinalAssistantBlocks(content) {
   if (!Array.isArray(content)) return { processBlocks: [], answerBlocks: [] };

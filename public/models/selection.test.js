@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { isSelectedModel, selectModel } from "./selection.js";
+import { filterModelsByCatalogVisibility, isSelectedModel, selectModel } from "./selection.js";
 
 describe("model selection", () => {
   test("matches provider and model ID together", () => {
@@ -7,6 +7,35 @@ describe("model selection", () => {
 
     expect(isSelectedModel({ provider: "openai", id: "gpt-5" }, selection)).toBe(true);
     expect(isSelectedModel({ provider: "anthropic", id: "gpt-5" }, selection)).toBe(false);
+  });
+
+  test("filters runtime models by the configured catalog visibility", () => {
+    const models = [
+      { provider: "anthropic", id: "visible" },
+      { provider: "anthropic", id: "hidden" },
+    ];
+    const catalog = {
+      ok: true,
+      data: {
+        providers: [
+          {
+            provider: "anthropic",
+            models: [
+              { provider: "anthropic", id: "visible", available: true, visible: true },
+              { provider: "anthropic", id: "hidden", available: true, visible: false },
+            ],
+          },
+        ],
+      },
+    };
+
+    expect(filterModelsByCatalogVisibility(models, catalog)).toEqual([models[0]]);
+  });
+
+  test("keeps runtime models when the catalog cannot be read", () => {
+    const models = [{ provider: "anthropic", id: "visible" }];
+
+    expect(filterModelsByCatalogVisibility(models, null)).toBe(models);
   });
 
   test("updates the local model after a successful runtime switch", async () => {

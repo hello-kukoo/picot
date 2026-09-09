@@ -8,6 +8,7 @@ import { setupComposerPasteOffload } from "./composer-paste-offload.js";
 import { onLocaleChange, t } from "./i18n.js";
 import { createIcon } from "./icons.js";
 import { processImageFile, processImagePayload } from "./image-attachments.js";
+import { filterModelsByCatalogVisibility } from "./models/selection.js";
 import { createHostFileMentionSearch, setupAtFileMention } from "./ui/at-file-mention.js";
 import { DialogHandler } from "./ui/dialogs.js";
 import { MessageRenderer } from "./ui/message-renderer.js";
@@ -27,7 +28,7 @@ function setRegistryIcon(doc, button, name, options = {}) {
  * views can stay alive while only one is visible.
  */
 export class EphemeralChatView {
-  constructor({ runtime, kind, toolsEnabled, getWorkspaceRoot, searchFiles }) {
+  constructor({ runtime, kind, toolsEnabled, getWorkspaceRoot, searchFiles, loadModelCatalog }) {
     this.runtime = runtime;
     this.kind = kind || "side-chat";
     this.toolsEnabled = toolsEnabled !== false;
@@ -39,6 +40,7 @@ export class EphemeralChatView {
     // Mention completion comes from the host data plane. An ephemeral Pi has no
     // HTTP origin of its own, so a fetch against the Pi port could never work.
     this._searchFiles = searchFiles || createHostFileMentionSearch(() => this.runtime?.transport);
+    this._loadModelCatalog = loadModelCatalog;
 
     const doc = globalThis.document;
     this._doc = doc;
@@ -448,6 +450,13 @@ export class EphemeralChatView {
       }
       if (models.length === 0) {
         models = await this.runtime.getAvailableModels();
+      }
+      if (this._loadModelCatalog) {
+        try {
+          models = filterModelsByCatalogVisibility(models, await this._loadModelCatalog());
+        } catch {
+          // Keep the runtime list if the shared configuration bridge is unavailable.
+        }
       }
       if (this.destroyed || this._modelMenu.classList.contains("hidden")) return;
       this._renderModelMenu(models);
