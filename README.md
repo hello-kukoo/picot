@@ -67,7 +67,6 @@ Provide your model credentials via `pi /login` inside any workspace, or by writi
 
 ## Features
 
-
 <p align="center">
   <img width="1200" alt="Picot workspace and project UI" src="docs/images/workspace.webp" />
 </p>
