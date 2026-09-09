@@ -55,6 +55,7 @@ import {
   filterModelsByCatalogVisibility,
   isSelectedModel,
   selectModel,
+  splitModelsByScope,
 } from "./models/selection.js";
 import { renderPackageInstallFailure } from "./packages/install-status.js";
 import {
@@ -3947,6 +3948,8 @@ function openModelDropdown() {
   itemsContainer.className = "model-dropdown-items";
   modelDropdownMenu.appendChild(itemsContainer);
 
+  let scopedModelIds = [];
+
   function renderItems(filter) {
     itemsContainer.replaceChildren();
     const query = (filter || "").toLowerCase();
@@ -3977,83 +3980,122 @@ function openModelDropdown() {
       itemsContainer.appendChild(empty);
       return;
     }
-    availableModels.forEach((m) => {
+    const matchingModels = availableModels.filter((m) => {
       const shortName = m.id.replace(/-\d{8}$/, "");
       const providerStr = m.provider || "";
-      if (
-        query &&
-        !shortName.toLowerCase().includes(query) &&
-        !providerStr.toLowerCase().includes(query)
-      )
-        return;
-
-      const el = document.createElement("div");
-      const selected = isSelectedModel(m, {
-        provider: currentModelProvider,
-        modelId: currentModelId,
-      });
-      el.className = `model-dropdown-item${selected ? " active" : ""}`;
-      const ctxK = m.contextWindow ? `${(m.contextWindow / 1000).toFixed(0)}k` : "";
-      const name = document.createElement("span");
-      name.textContent = shortName;
-      if (m.provider && m.provider !== "anthropic") {
-        const provider = document.createElement("span");
-        provider.className = "model-dropdown-item-provider";
-        provider.textContent = m.provider;
-        name.appendChild(provider);
-      }
-      const context = document.createElement("span");
-      context.className = "model-dropdown-item-ctx";
-      context.textContent = ctxK;
-      el.append(name, context);
-      el.addEventListener("click", async () => {
-        closeModelDropdown();
-        // If the session is stuck auto-retrying the current (failing) model, or
-        // the last turn errored out, the in-flight run stays bound to the old
-        // model and the switch would have no visible effect. Abort the dead run
-        // first so the new model applies to the next prompt immediately. A
-        // healthy stream is left untouched — we only interrupt retry/error runs.
-        if (isAutoRetrying || lastTurnErrored) {
-          wsClient.send({ type: "abort" });
-          isAutoRetrying = false;
-          lastTurnErrored = false;
-          showTypingIndicator(false);
-          if (state.isStreaming) {
-            state.setStreaming(false);
-            currentStreamingElement = null;
-            currentStreamingText = "";
-            currentStreamingThinking = "";
-            updateUI();
-          }
-        }
-        const result = await selectModel({
-          model: m,
-          rpcCommand,
-          refreshModelInfo: fetchModelInfo,
-          applySelectedModel: (selectedModel) => {
-            currentModelProvider = selectedModel.provider || "";
-            currentModelId = selectedModel.id;
-            if (selectedModel.thinkingLevel) {
-              currentThinkingLevel = selectedModel.thinkingLevel;
-            }
-            saveCurrentSessionProfile();
-            updateThinkingBtn();
-            updateModelLabel();
-            if (selectedModel.contextWindow) {
-              contextWindowSize = selectedModel.contextWindow;
-              updateTokenUsage();
-            }
-          },
-        });
-        if (!result?.success) {
-          messageRenderer.renderError(`Model switch failed: ${result?.error || "unknown error"}`);
-        }
-      });
-      itemsContainer.appendChild(el);
+      return (
+        !query ||
+        shortName.toLowerCase().includes(query) ||
+        providerStr.toLowerCase().includes(query)
+      );
     });
+    const { scoped, remaining } = splitModelsByScope(matchingModels, scopedModelIds);
+
+    function appendSection(models, label, isScoped) {
+      if (models.length === 0) return;
+      const heading = document.createElement("div");
+      heading.className = "model-dropdown-section";
+      heading.textContent = label;
+      itemsContainer.appendChild(heading);
+      models.forEach((m) => {
+        const el = document.createElement("div");
+        const selected = isSelectedModel(m, {
+          provider: currentModelProvider,
+          modelId: currentModelId,
+        });
+        el.className = `model-dropdown-item${selected ? " active" : ""}`;
+        const ctxK = m.contextWindow ? `${(m.contextWindow / 1000).toFixed(0)}k` : "";
+        const name = document.createElement("span");
+        name.textContent = m.id.replace(/-\d{8}$/, "");
+        if (m.provider && m.provider !== "anthropic") {
+          const provider = document.createElement("span");
+          provider.className = "model-dropdown-item-provider";
+          provider.textContent = m.provider;
+          name.appendChild(provider);
+        }
+        const context = document.createElement("span");
+        context.className = "model-dropdown-item-ctx";
+        context.textContent = ctxK;
+        const star = document.createElement("button");
+        star.type = "button";
+        star.className = `model-dropdown-star${isScoped ? " active" : ""}`;
+        star.textContent = isScoped ? "★" : "☆";
+        star.setAttribute("aria-label", t(isScoped ? "models.removeScoped" : "models.addScoped"));
+        star.addEventListener("click", async (event) => {
+          event.stopPropagation();
+          const response = await configGateway.call("set_scoped_model", {
+            provider: m.provider,
+            modelId: m.id,
+            enabled: !isScoped,
+          });
+          if (response?.ok && Array.isArray(response.data?.modelIds)) {
+            scopedModelIds = response.data.modelIds;
+            renderItems(search.value);
+          }
+        });
+        el.append(name, context, star);
+        el.addEventListener("click", async () => {
+          closeModelDropdown();
+          // If the session is stuck auto-retrying the current (failing) model, or
+          // the last turn errored out, the in-flight run stays bound to the old
+          // model and the switch would have no visible effect. Abort the dead run
+          // first so the new model applies to the next prompt immediately. A
+          // healthy stream is left untouched — we only interrupt retry/error runs.
+          if (isAutoRetrying || lastTurnErrored) {
+            wsClient.send({ type: "abort" });
+            isAutoRetrying = false;
+            lastTurnErrored = false;
+            showTypingIndicator(false);
+            if (state.isStreaming) {
+              state.setStreaming(false);
+              currentStreamingElement = null;
+              currentStreamingText = "";
+              currentStreamingThinking = "";
+              updateUI();
+            }
+          }
+          const result = await selectModel({
+            model: m,
+            rpcCommand,
+            refreshModelInfo: fetchModelInfo,
+            applySelectedModel: (selectedModel) => {
+              currentModelProvider = selectedModel.provider || "";
+              currentModelId = selectedModel.id;
+              if (selectedModel.thinkingLevel) {
+                currentThinkingLevel = selectedModel.thinkingLevel;
+              }
+              saveCurrentSessionProfile();
+              updateThinkingBtn();
+              updateModelLabel();
+              if (selectedModel.contextWindow) {
+                contextWindowSize = selectedModel.contextWindow;
+                updateTokenUsage();
+              }
+            },
+          });
+          if (!result?.success) {
+            messageRenderer.renderError(`Model switch failed: ${result?.error || "unknown error"}`);
+          }
+        });
+        itemsContainer.appendChild(el);
+      });
+    }
+
+    appendSection(scoped, t("models.scoped"), true);
+    appendSection(remaining, t("models.allEnabled"), false);
   }
 
-  renderItems("");
+  const loadScopedModels = async () => {
+    try {
+      const response = await configGateway.call("list_scoped_models");
+      if (response?.ok && Array.isArray(response.data?.modelIds)) {
+        scopedModelIds = response.data.modelIds;
+      }
+    } catch {
+      // An unavailable config bridge degrades to the unscoped enabled list.
+    }
+    if (!modelDropdownMenu.classList.contains("hidden")) renderItems(search.value);
+  };
 
   search.addEventListener("input", () => renderItems(search.value));
   search.addEventListener("keydown", (e) => {
@@ -4069,6 +4111,7 @@ function openModelDropdown() {
 
   modelDropdownMenu.classList.remove("hidden");
   modelDropdown.classList.add("open");
+  void loadScopedModels();
   requestAnimationFrame(() => search.focus());
 }
 

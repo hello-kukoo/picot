@@ -32,6 +32,19 @@ export function filterModelsByCatalogVisibility(models, catalog) {
   return models.filter((model) => visibleKeys.has(`${model.provider}/${model.id}`));
 }
 
+export function splitModelsByScope(models, scopedModelIds) {
+  if (!Array.isArray(models)) return { scoped: [], remaining: [] };
+  const byId = new Map(models.map((model) => [`${model.provider}/${model.id}`, model]));
+  const scoped = (Array.isArray(scopedModelIds) ? scopedModelIds : [])
+    .map((id) => byId.get(id))
+    .filter(Boolean);
+  const scopedIds = new Set(scoped.map((model) => `${model.provider}/${model.id}`));
+  return {
+    scoped,
+    remaining: models.filter((model) => !scopedIds.has(`${model.provider}/${model.id}`)),
+  };
+}
+
 export async function selectModel({ model, rpcCommand, refreshModelInfo, applySelectedModel }) {
   const display = model.id.replace(/^claude-/, "").replace(/-\d{8}$/, "");
   const cmd = { type: "set_model", provider: model.provider, modelId: model.id };

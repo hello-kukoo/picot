@@ -118,7 +118,11 @@
     "searchPlaceholder": "Buscar modelos…",
     "emptyTitle": "No hay modelos disponibles",
     "emptyHelp": "No hay claves API configuradas. Establece una clave en Ajustes → Modelos.",
-    "openSettings": "Abrir ajustes"
+    "openSettings": "Abrir ajustes",
+    "scoped": "Modelos con alcance",
+    "allEnabled": "Todos los modelos habilitados",
+    "addScoped": "Añadir a los modelos con alcance",
+    "removeScoped": "Quitar de los modelos con alcance"
   },
   "queue": {
     "queued": "En cola",

@@ -166,6 +166,57 @@ describe("picot config default settings operations", () => {
     });
   });
 
+  it("persists scoped models atomically while preserving unrelated settings", async () => {
+    const { home, handlePicotConfig } = await loadConfigWithTempHome();
+    const settingsPath = join(home, ".pi", "agent", "settings.json");
+    mkdirSync(dirname(settingsPath), { recursive: true });
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({ enabledModels: ["anthropic/old:high", "openai/keep"], unknown: true }),
+      "utf8",
+    );
+
+    await expect(
+      handlePicotConfig(
+        "set_scoped_model",
+        { provider: "anthropic", modelId: "new", enabled: true },
+        {},
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      data: {
+        provider: "anthropic",
+        modelId: "new",
+        enabled: true,
+        modelIds: ["anthropic/old", "openai/keep", "anthropic/new"],
+      },
+    });
+    await expect(handlePicotConfig("list_scoped_models", {}, {})).resolves.toEqual({
+      ok: true,
+      data: { modelIds: ["anthropic/old", "openai/keep", "anthropic/new"] },
+    });
+
+    await expect(
+      handlePicotConfig(
+        "set_scoped_model",
+        { provider: "anthropic", modelId: "old", enabled: false },
+        {},
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      data: {
+        provider: "anthropic",
+        modelId: "old",
+        enabled: false,
+        modelIds: ["openai/keep", "anthropic/new"],
+      },
+    });
+    expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toEqual({
+      enabledModels: ["openai/keep", "anthropic/new"],
+      unknown: true,
+    });
+  });
+
   it("rejects unsupported default thinking levels", async () => {
     const { handlePicotConfig } = await loadConfigWithTempHome();
 

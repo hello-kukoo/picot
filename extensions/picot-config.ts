@@ -837,6 +837,44 @@ function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function readEnabledModels(settings: Record<string, unknown>): string[] {
+  return Array.isArray(settings.enabledModels)
+    ? settings.enabledModels.filter(
+        (model): model is string => typeof model === "string" && model.trim().length > 0,
+      )
+    : [];
+}
+
+function scopedModelId(pattern: string): string {
+  const suffixIndex = pattern.lastIndexOf(":");
+  return suffixIndex === -1 ? pattern : pattern.slice(0, suffixIndex);
+}
+
+async function setScopedModel(provider: unknown, modelId: unknown, enabled: unknown) {
+  const normalizedProvider = asString(provider);
+  const normalizedModelId = asString(modelId);
+  if (!normalizedProvider || !normalizedModelId)
+    throw new Error("provider and modelId are required");
+  if (typeof enabled !== "boolean") throw new Error("enabled must be a boolean");
+  const reference = `${normalizedProvider}/${normalizedModelId}`;
+  let models: string[] = [];
+  await withSettingsLock(AGENT_CONFIG_PATH, () => {
+    const settings = readSettingsObject(AGENT_CONFIG_PATH);
+    const current = readEnabledModels(settings);
+    const withoutModel = current.filter((pattern) => scopedModelId(pattern) !== reference);
+    models = enabled ? [...withoutModel, reference] : withoutModel;
+    if (models.length > 0) settings.enabledModels = models;
+    else delete settings.enabledModels;
+    writeSettingsObject(AGENT_CONFIG_PATH, settings);
+  });
+  return {
+    provider: normalizedProvider,
+    modelId: normalizedModelId,
+    enabled,
+    modelIds: models.map(scopedModelId),
+  };
+}
+
 function readAuthConfig(): Record<string, unknown> {
   if (!fs.existsSync(AUTH_CONFIG_PATH)) return {};
   let parsed: unknown;
@@ -1097,6 +1135,17 @@ export async function handlePicotConfig(
         preferences.setVisibility(provider, modelId, visible);
         return { ok: true, data: { provider, modelId, visible } };
       }
+
+      case "list_scoped_models": {
+        const models = readEnabledModels(readSettingsObject(AGENT_CONFIG_PATH));
+        return { ok: true, data: { modelIds: models.map(scopedModelId) } };
+      }
+
+      case "set_scoped_model":
+        return {
+          ok: true,
+          data: await setScopedModel(params.provider, params.modelId, params.enabled),
+        };
 
       case "check_model_health": {
         const reg = requireRegistry();

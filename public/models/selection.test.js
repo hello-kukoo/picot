@@ -1,5 +1,10 @@
 import { describe, expect, test, vi } from "vitest";
-import { filterModelsByCatalogVisibility, isSelectedModel, selectModel } from "./selection.js";
+import {
+  filterModelsByCatalogVisibility,
+  isSelectedModel,
+  selectModel,
+  splitModelsByScope,
+} from "./selection.js";
 
 describe("model selection", () => {
   test("matches provider and model ID together", () => {
@@ -36,6 +41,17 @@ describe("model selection", () => {
     const models = [{ provider: "anthropic", id: "visible" }];
 
     expect(filterModelsByCatalogVisibility(models, null)).toBe(models);
+  });
+
+  test("splits scoped models first without repeating them in the remaining list", () => {
+    const one = { provider: "anthropic", id: "one" };
+    const two = { provider: "openai", id: "two" };
+    const three = { provider: "google", id: "three" };
+
+    expect(splitModelsByScope([one, two, three], ["google/three", "anthropic/one"])).toEqual({
+      scoped: [three, one],
+      remaining: [two],
+    });
   });
 
   test("updates the local model after a successful runtime switch", async () => {
