@@ -25,8 +25,10 @@ describe("Skills tab shell", () => {
     activate = vi.fn();
   });
 
-  it("selects tabs with roving tabindex and lazy activation", () => {
+  it("does not activate the default tab until the user opens it", () => {
     setupSkillsTabShell({ tabs, panels, activate });
+    expect(activate).not.toHaveBeenCalled();
+
     tabs[1].click();
     expect(activate).toHaveBeenCalledWith("install");
     expect(tabs[1].getAttribute("aria-selected")).toBe("true");
