@@ -3,10 +3,37 @@
 
 use chrono::{DateTime, Datelike, Utc};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashSet};
-use std::path::Path;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use crate::host_data::{parse_session_metrics, SessionMetrics};
+
+/// Parsed-metrics cache for the cost scan. Session files are append-only, so
+/// an unchanged `(mtime, len)` pair implies an unchanged parse result — range
+/// switches reuse it instead of re-reading hundreds of MB of jsonl.
+#[derive(Default)]
+pub(crate) struct SessionMetricsCache {
+    entries: HashMap<PathBuf, (std::time::SystemTime, u64, SessionMetrics)>,
+}
+
+impl SessionMetricsCache {
+    fn get(&self, path: &Path, mtime: std::time::SystemTime, len: u64) -> Option<&SessionMetrics> {
+        self.entries
+            .get(path)
+            .and_then(|(m, l, metrics)| (*m == mtime && *l == len).then_some(metrics))
+    }
+
+    fn put(
+        &mut self,
+        path: PathBuf,
+        mtime: std::time::SystemTime,
+        len: u64,
+        metrics: SessionMetrics,
+    ) {
+        self.entries.insert(path, (mtime, len, metrics));
+    }
+}
 
 /// Query parameters of the legacy `/api/cost-dashboard` surface
 /// (`parseRangeParams`): range, granularity, scope=all|current, models CSV,
@@ -586,6 +613,7 @@ pub fn scan_compat_cost_dashboard(
     current_root: &Path,
     params: &CostRangeParams,
     now: DateTime<Utc>,
+    cache: Option<&Mutex<SessionMetricsCache>>,
 ) -> Result<Value, String> {
     if !session_root.is_dir() {
         return Ok(empty_payload(params));
@@ -594,6 +622,7 @@ pub fn scan_compat_cost_dashboard(
     // is append-only, so its last modification bounds the newest entry —
     // files untouched since before `from` cannot contribute to this range
     // and are skipped without reading (298MB of history scans as metadata).
+    // Files carry their (mtime, len) so the parse cache can validate entries.
     let mut candidates = Vec::new();
     for project in std::fs::read_dir(session_root)
         .map_err(|error| error.to_string())?
@@ -618,54 +647,81 @@ pub fn scan_compat_cost_dashboard(
                 Some((modified, _)) if DateTime::<Utc>::from(modified) < params.from => {
                     continue;
                 }
-                Some((_, len)) => candidates.push((path, len)),
-                None => candidates.push((path, 0)),
+                Some((modified, len)) => candidates.push((path, modified, len)),
+                None => candidates.push((path, std::time::SystemTime::UNIX_EPOCH, 0)),
             }
         }
     }
     // Biggest file first: a handful of multi-MB sessions dominates the scan,
     // so size-ordering keeps the fixed-count chunks byte-balanced across
     // workers instead of letting the giants land in one chunk.
-    candidates.sort_by_key(|&(_, len)| std::cmp::Reverse(len));
+    candidates.sort_by_key(|&(_, _, len)| std::cmp::Reverse(len));
 
-    // Parse in parallel on plain std threads (no async runtime here, no new
-    // deps): JSON line parsing is CPU-bound and dominates the 3-4s cold scan.
-    // build_cost_payload sorts every aggregate deterministically, so thread
-    // merge order cannot change the payload.
+    // Cache hits resolve without touching the file; only misses reach the
+    // parallel parse below. The lock is held just for this split and the
+    // insert afterwards — never across worker threads.
+    let mut metrics_all = Vec::new();
+    let mut misses = Vec::new();
+    if let Some(cache) = cache {
+        let guard = cache.lock().map_err(|_| "cost cache poisoned".to_owned())?;
+        for (path, modified, len) in &candidates {
+            match guard.get(path, *modified, *len) {
+                Some(metrics) => metrics_all.push(metrics.clone()),
+                None => misses.push((path.clone(), *modified, *len)),
+            }
+        }
+    } else {
+        misses = candidates;
+    }
+
+    // Parse misses in parallel on plain std threads (no async runtime here,
+    // no new deps): JSON line parsing is CPU-bound and dominates the cold
+    // scan. build_cost_payload sorts every aggregate deterministically, so
+    // thread merge order cannot change the payload.
     let workers = std::thread::available_parallelism()
         .map(|count| count.get())
         .unwrap_or(1)
         .clamp(1, 8);
-    let chunk_size = candidates.len().div_ceil(workers);
-    let mut sessions = Vec::new();
+    let chunk_size = misses.len().div_ceil(workers).max(1);
+    let mut parsed: Vec<(PathBuf, std::time::SystemTime, u64, SessionMetrics)> = Vec::new();
     std::thread::scope(|scope| -> Result<(), String> {
-        let handles: Vec<_> = candidates
+        let handles: Vec<_> = misses
             .chunks(chunk_size)
             .map(|chunk| {
                 scope.spawn(move || {
-                    let mut parsed = Vec::with_capacity(chunk.len());
-                    for (path, _) in chunk {
+                    let mut chunk_metrics = Vec::with_capacity(chunk.len());
+                    for (path, modified, len) in chunk {
                         let metrics = parse_session_metrics(path)
                             .map_err(|_| "session parse failed".to_owned())?;
-                        if let Some(session) = metrics
-                            .and_then(|metrics| legacy_cost_session(&metrics, current_root, params))
-                        {
-                            parsed.push(session);
+                        if let Some(metrics) = metrics {
+                            chunk_metrics.push((path.clone(), *modified, *len, metrics));
                         }
                     }
-                    Ok(parsed)
+                    Ok(chunk_metrics)
                 })
             })
             .collect();
         for handle in handles {
-            let chunk_sessions = handle
+            let chunk_metrics = handle
                 .join()
                 .map_err(|_| "session parse failed".to_owned())
                 .and_then(|result| result)?;
-            sessions.extend(chunk_sessions);
+            parsed.extend(chunk_metrics);
         }
         Ok(())
     })?;
+    if let Some(cache) = cache {
+        let mut guard = cache.lock().map_err(|_| "cost cache poisoned".to_owned())?;
+        for (path, modified, len, metrics) in &parsed {
+            guard.put(path.clone(), *modified, *len, metrics.clone());
+        }
+    }
+    metrics_all.extend(parsed.into_iter().map(|(_, _, _, metrics)| metrics));
+
+    let sessions = metrics_all
+        .iter()
+        .filter_map(|metrics| legacy_cost_session(metrics, current_root, params))
+        .collect();
     Ok(build_cost_payload(sessions, params, now))
 }
 
@@ -719,8 +775,15 @@ mod tests {
             models: HashSet::new(),
         };
         let now = parse_js_date("2026-08-30T12:00:00Z").unwrap();
-        let rust_payload =
-            scan_compat_cost_dashboard(&root.join("sessions"), &workspace, &params, now).unwrap();
+        let cache = std::sync::Mutex::new(SessionMetricsCache::default());
+        let rust_payload = scan_compat_cost_dashboard(
+            &root.join("sessions"),
+            &workspace,
+            &params,
+            now,
+            Some(&cache),
+        )
+        .unwrap();
 
         let params_json = serde_json::json!({
             "range": "custom",
@@ -760,9 +823,14 @@ mod tests {
             scope: "current".into(),
             ..params
         };
-        let current_payload =
-            scan_compat_cost_dashboard(&root.join("sessions"), &workspace, &current_params, now)
-                .unwrap();
+        let current_payload = scan_compat_cost_dashboard(
+            &root.join("sessions"),
+            &workspace,
+            &current_params,
+            now,
+            Some(&cache),
+        )
+        .unwrap();
         let session_rows = current_payload["sessions"].as_array().unwrap();
         assert!(
             session_rows

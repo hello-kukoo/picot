@@ -765,8 +765,10 @@ test("tree navigation flips the Info panel's active branch to pi's live leaf", a
 });
 
 test("/picot-config reads wait for a foreground snapshot before dispatching", async () => {
-  // The skills page eagerly activates at startup and would otherwise fire
-  // list_skill_inventory into a runtime that is still spawning.
+  // Since 8c84b0b the Skills tab no longer activates eagerly at startup;
+  // the readiness gate still defers any config read (e.g. the user opening
+  // Settings → Skills) until the CURRENT target's first foreground snapshot
+  // proves the runtime live.
   FakeWebSocket.suppressSnapshot = true;
   try {
     await import("./app.js?config-gate");
@@ -778,12 +780,23 @@ test("/picot-config reads wait for a foreground snapshot before dispatching", as
           frame.type === "runtime_request" &&
           String(frame.command?.message || "").includes("list_skill_inventory"),
       );
-    // Gate closed: no snapshot has proven the runtime live yet.
+
+    // A user-initiated Skills read queues behind the gate: no snapshot has
+    // proven the runtime live yet, so nothing dispatches.
+    document.getElementById("settings-btn").click();
+    document.querySelector('[data-settings-tab="skills"]').click();
     expect(configFrames()).toHaveLength(0);
 
     // Deliver the first foreground snapshot: the gate opens and exactly the
-    // deferred startup inventory read dispatches.
-    socket.reply(hostSnapshotFrame());
+    // queued inventory read dispatches. The reply must carry the PENDING
+    // snapshot request's id — snapshot ids share the client's request
+    // counter, so a hardcoded "snapshot-1" breaks whenever an earlier
+    // startup request consumed a number.
+    const snapshotRequest = socket.sent.find((frame) => frame.type === "runtime_snapshot_request");
+    expect(snapshotRequest).toBeTruthy();
+    const snapshot = hostSnapshotFrame();
+    snapshot.requestId = snapshotRequest.requestId;
+    socket.reply(snapshot);
     await vi.waitFor(() => expect(configFrames()).toHaveLength(1));
     expect(configFrames()[0].command.type).toBe("prompt");
   } finally {

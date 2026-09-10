@@ -57,7 +57,7 @@ pub struct SessionSearchResult {
     pub matches: Vec<SessionSearchMatch>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct SessionMetrics {
     pub(crate) id: String,
     pub(crate) title: String,
@@ -90,6 +90,9 @@ pub enum HostDataError {
 pub struct HostDataPlane {
     metadata: crate::metadata_store::SharedMetadataStore,
     session_root: Option<PathBuf>,
+    /// Parsed-metrics cache for the cost dashboard scan; shared with the
+    /// startup prewarm thread, so the first Usage open is already warm.
+    cost_cache: std::sync::Arc<std::sync::Mutex<crate::cost_compat::SessionMetricsCache>>,
 }
 
 impl HostDataPlane {
@@ -97,6 +100,9 @@ impl HostDataPlane {
         Self {
             metadata,
             session_root: None,
+            cost_cache: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::cost_compat::SessionMetricsCache::default(),
+            )),
         }
     }
 
@@ -111,6 +117,13 @@ impl HostDataPlane {
     pub fn with_session_root(mut self, session_root: PathBuf) -> Self {
         self.session_root = Some(session_root);
         self
+    }
+
+    /// Shared handle for the startup prewarm thread.
+    pub fn cost_metrics_cache(
+        &self,
+    ) -> std::sync::Arc<std::sync::Mutex<crate::cost_compat::SessionMetricsCache>> {
+        std::sync::Arc::clone(&self.cost_cache)
     }
 
     /// Pi's session-project directory name for a workspace root.
@@ -506,6 +519,7 @@ impl HostDataPlane {
                 &workspace,
                 params,
                 now,
+                Some(&self.cost_cache),
             )
             .map_err(HostDataError::Io),
             None => Ok(crate::cost_compat::empty_payload(params)),

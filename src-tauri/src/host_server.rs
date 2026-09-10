@@ -231,6 +231,33 @@ impl HostServer {
             lan_access,
             host_port: std::sync::atomic::AtomicU16::new(0),
         });
+        // Prewarm the cost-metrics cache in the background: one 90d scan at
+        // startup parses every file the 7d/30d/90d chips can need, so the
+        // first Settings → Usage open answers from cache instead of parsing
+        // hundreds of MB of session jsonl on the request path. Guarded off
+        // in test builds: the suite starts real servers against the user's
+        // real session root, and a background full scan there starves the
+        // timing-sensitive spawn/route tests of CPU.
+        if !cfg!(test) {
+            if let Some(session_root) = state.data.session_root_path() {
+                let cache = state.data.cost_metrics_cache();
+                std::thread::spawn(move || {
+                    let Some(params) = crate::cost_compat::parse_cost_range_params(&[(
+                        "range".to_string(),
+                        "90d".to_string(),
+                    )]) else {
+                        return;
+                    };
+                    let _ = crate::cost_compat::scan_compat_cost_dashboard(
+                        &session_root,
+                        std::path::Path::new("/"),
+                        &params,
+                        chrono::Utc::now(),
+                        Some(&cache),
+                    );
+                });
+            }
+        }
         let index = static_dir.join("index.html");
         // Serve this build's JS/CSS/HTML under a version-stamped path
         // (`/v/<version>/...`) and point index.html's `<base>` at it. The

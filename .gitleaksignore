@@ -1,1 +1,9 @@
+# gitleaks allowlist — false positive: the README feature-list phrase
+# "quick access to Compact, Expand/Collapse All Tools" matches the
+# generic-api-key heuristic on "Expand/Collapse". Documentation text only.
+# Fingerprints cover both git-history scans (commit-prefixed) and no-git
+# scans at the line numbers the phrase occupied across README revisions.
+b9c2dfd8976e95c1f0187fa33dc8d70fb1004776:README.md:generic-api-key:81
+adb92dcea5f776f51b28d7fcf3c2432a8794a6b3:README.md:generic-api-key:109
 README.md:generic-api-key:85
+README.md:generic-api-key:95
