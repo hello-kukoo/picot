@@ -60,18 +60,6 @@ pub fn handle_control(
     args: &Value,
     metadata: &SharedMetadataStore,
 ) -> Result<(Value, Option<RegistryChange>), String> {
-    let session_root = dirs::home_dir()
-        .map(|home| home.join(".pi/agent/sessions"))
-        .unwrap_or_default();
-    handle_control_with_session_root(command, args, metadata, &session_root)
-}
-
-pub fn handle_control_with_session_root(
-    command: &str,
-    args: &Value,
-    metadata: &SharedMetadataStore,
-    session_root: &std::path::Path,
-) -> Result<(Value, Option<RegistryChange>), String> {
     let mut store = metadata
         .lock()
         .map_err(|_| "Picot metadata lock poisoned".to_string())?;
@@ -94,18 +82,7 @@ pub fn handle_control_with_session_root(
         "workspace.add" => {
             let path = arg_str(args, "path")?;
             match store.add_workspace(std::path::Path::new(&path)) {
-                Ok((mut workspace, added)) => {
-                    if added {
-                        if let Some(bucket) =
-                            crate::host_data::HostDataPlane::discover_session_bucket(
-                                session_root,
-                                std::path::Path::new(&workspace.canonical_path),
-                            )
-                        {
-                            store.set_workspace_session_bucket(&workspace.workspace_id, &bucket)?;
-                            workspace.session_bucket = Some(bucket);
-                        }
-                    }
+                Ok((workspace, added)) => {
                     let change = if added {
                         Some(RegistryChange::Added)
                     } else {
@@ -177,10 +154,7 @@ pub fn handle_control_with_session_root(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        handle_control, handle_control_with_session_root, require_native_owner, RegistryChange,
-        NATIVE_OWNER_REQUIRED,
-    };
+    use super::{handle_control, require_native_owner, RegistryChange, NATIVE_OWNER_REQUIRED};
     use crate::host_control::{ClientClass, VerifiedClientContext};
     use crate::metadata_store::{MetadataStore, SharedMetadataStore};
     use crate::window_owner::OwnerId;
@@ -283,9 +257,7 @@ mod tests {
         );
         assert_eq!(result["workspace"]["displayName"], "project");
         assert_eq!(result["workspace"]["pinned"], false);
-        assert!(result["workspace"]["sessionBucket"]
-            .as_str()
-            .is_some_and(|bucket| bucket.starts_with("--") && bucket.ends_with("--")));
+        assert!(result["workspace"]["sessionBucket"].is_null());
 
         // Idempotent re-add reports no broadcast-worthy change.
         let (_, change2) = handle_control(
@@ -329,35 +301,6 @@ mod tests {
 
         // Directory content untouched by registry removal.
         assert!(project.is_dir());
-    }
-
-    #[test]
-    fn registration_persists_discovered_legacy_session_bucket() {
-        let (store, temp) = shared_store();
-        let workspace = temp.join("workspace");
-        let sessions = temp.join("sessions");
-        let legacy = sessions.join("--legacy-history--");
-        fs::create_dir_all(&workspace).unwrap();
-        fs::create_dir_all(&legacy).unwrap();
-        fs::write(
-            legacy.join("prior.jsonl"),
-            format!(
-                "{{\"type\":\"session\",\"id\":\"prior\",\"cwd\":{}}}\n{{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n",
-                serde_json::to_string(&workspace.canonicalize().unwrap().to_string_lossy()).unwrap()
-            ),
-        )
-        .unwrap();
-
-        let (result, change) = handle_control_with_session_root(
-            "workspace.add",
-            &json!({ "path": workspace.to_string_lossy() }),
-            &store,
-            &sessions,
-        )
-        .unwrap();
-
-        assert_eq!(change, Some(RegistryChange::Added));
-        assert_eq!(result["workspace"]["sessionBucket"], "--legacy-history--");
     }
 
     #[test]

@@ -2125,6 +2125,30 @@ async fn dispatch(
                             .map_err(|message| ("session_binding_failed", message))?;
                     }
                 }
+                if let Some(session_file) = state_response
+                    .pointer("/data/sessionFile")
+                    .and_then(Value::as_str)
+                    .filter(|session_file| !session_file.is_empty())
+                {
+                    match state
+                        .data
+                        .record_pi_session_bucket(&target.workspace_id, session_file)
+                    {
+                        Ok(true) => {
+                            state.host_events.broadcast_native_event(json!({
+                                "type": "registry_changed",
+                                "reason": "session_bucket_recorded",
+                            }));
+                        }
+                        Ok(false) => {}
+                        Err(error) => {
+                            log::warn!(
+                                "[picot-host] Pi returned invalid session bucket for workspace {}: {error}",
+                                target.workspace_id
+                            );
+                        }
+                    }
+                }
                 let messages_response = state
                     .runtimes
                     .request(
@@ -3187,13 +3211,18 @@ mod tests {
         let (host, mut harness, harness_temp) =
             desktop_harness("tree-op", Some(session_root.clone())).await;
 
-        // Read the registry-persisted bucket back from the DB (never
-        // re-derive it) and stage a branching session inside it.
-        let store = Arc::new(Mutex::new(
-            MetadataStore::open(&harness_temp.join("picot.sqlite3")).unwrap(),
-        ));
-        let bucket_dir = crate::host_data::HostDataPlane::new(store)
-            .with_session_root(session_root)
+        // Simulate Pi returning the bucket before staging a branching
+        // session; Picot must not derive it from the workspace path.
+        host.state
+            .data
+            .record_pi_session_bucket(
+                &harness.workspace_id,
+                "/pi/sessions/--tree-op-bucket--/session.jsonl",
+            )
+            .unwrap();
+        let bucket_dir = host
+            .state
+            .data
             .session_bucket_for_workspace(&harness.workspace_id)
             .expect("persisted bucket");
         fs::create_dir_all(&bucket_dir).unwrap();
@@ -3705,22 +3734,20 @@ mod tests {
         let session_root = outer.join("sessions");
         fs::create_dir_all(&session_root).unwrap();
 
-        // The harness registers its own workspace in the metadata registry;
-        // the fixture bucket must encode THAT root (the scan resolves the
-        // workspace row, not any directory the test happens to own).
+        // The bucket is an explicit value returned by Pi in this fixture;
+        // Picot must not derive it from the workspace path.
         let (host, mut harness, temp) =
             desktop_harness("sessions", Some(session_root.clone())).await;
         let canonical = fs::canonicalize(temp.join("workspace")).unwrap();
-        // Pi's encoded project dir name: `--` + path without leading slash
-        // with separators folded to `-` + trailing `--`.
-        let encoded = format!(
-            "--{}--",
-            canonical
-                .to_string_lossy()
-                .trim_start_matches('/')
-                .replace(['/', '\\', ':'], "-")
-        );
-        let bucket = session_root.join(&encoded);
+        let bucket_name = "--pi-returned-session-bucket--";
+        let bucket = session_root.join(bucket_name);
+        host.state
+            .data
+            .record_pi_session_bucket(
+                &harness.workspace_id,
+                "/pi/sessions/--pi-returned-session-bucket--/session.jsonl",
+            )
+            .unwrap();
         fs::create_dir_all(&bucket).unwrap();
         fs::write(
             bucket.join("2026-09-01T00-00-00-000Z_sess-1.jsonl"),

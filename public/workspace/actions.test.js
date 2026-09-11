@@ -38,6 +38,10 @@ beforeEach(async () => {
 
 function makeTransport() {
   return {
+    addWorkspace: vi.fn().mockResolvedValue({
+      added: true,
+      workspace: { canonicalPath: "/work" },
+    }),
     prepareWorkspaceTarget: vi.fn().mockResolvedValue({
       classification: "same",
       transitionGeneration: 1,
@@ -241,9 +245,13 @@ describe("native navigation stays on host origin", () => {
     expect(navigate).toHaveBeenCalledWith(expect.any(String), { targetCwd: "/work/gamma" });
   });
 
-  it("openFolderAsWorkspace propagates the picked folder as targetCwd", async () => {
+  it("openFolderAsWorkspace registers and starts a fresh session", async () => {
     const transport = makeTransport();
     transport.pickFolder = vi.fn().mockResolvedValue("/work/delta");
+    transport.addWorkspace.mockResolvedValue({
+      added: true,
+      workspace: { canonicalPath: "/work/delta" },
+    });
     const navigate = vi.fn();
 
     const ok = await openFolderAsWorkspace({
@@ -255,7 +263,36 @@ describe("native navigation stays on host origin", () => {
 
     expect(ok).toBe(true);
     expect(transport.pickFolder).toHaveBeenCalled();
+    expect(transport.addWorkspace).toHaveBeenCalledWith("/work/delta");
+    expect(transport.prepareWorkspaceTarget).toHaveBeenCalledWith("/work/delta", {
+      forceNewSession: true,
+      reuseExisting: false,
+    });
     expect(navigate).toHaveBeenCalledWith(expect.any(String), { targetCwd: "/work/delta" });
+  });
+
+  it("openFolderAsWorkspace starts a fresh session for an existing registration", async () => {
+    const transport = makeTransport();
+    transport.pickFolder = vi.fn().mockResolvedValue("/work/existing");
+    transport.addWorkspace.mockResolvedValue({
+      added: false,
+      workspace: { canonicalPath: "/work/existing" },
+    });
+    const navigate = vi.fn();
+
+    const ok = await openFolderAsWorkspace({
+      transport,
+      navigate,
+      onBeforeSwap: vi.fn(),
+      renderError: vi.fn(),
+    });
+
+    expect(ok).toBe(true);
+    expect(transport.prepareWorkspaceTarget).toHaveBeenCalledWith("/work/existing", {
+      forceNewSession: true,
+      reuseExisting: false,
+    });
+    expect(navigate).toHaveBeenCalledWith(expect.any(String), { targetCwd: "/work/existing" });
   });
 });
 

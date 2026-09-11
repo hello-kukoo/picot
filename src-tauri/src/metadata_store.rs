@@ -450,12 +450,11 @@ impl MetadataStore {
         let display_name = canonical
             .file_name()
             .map(|name| name.to_string_lossy().to_string());
-        let session_bucket = Self::session_bucket_name_for_root(&canonical);
         self.connection
             .execute(
-                "INSERT INTO workspaces (workspace_id, canonical_path, display_name, session_bucket)
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![id, canonical_text.as_str(), display_name, session_bucket],
+                "INSERT INTO workspaces (workspace_id, canonical_path, display_name)
+                 VALUES (?1, ?2, ?3)",
+                params![id, canonical_text.as_str(), display_name],
             )
             .map_err(|error| AddWorkspaceError::Db(format!("Cannot store workspace: {error}")))?;
         let row = self
@@ -467,20 +466,6 @@ impl MetadataStore {
         Ok((row, true))
     }
 
-    pub fn session_bucket_name_for_root(root: &Path) -> Option<String> {
-        let text = root.to_string_lossy();
-        let stripped = text.strip_prefix(['/', '\\']).unwrap_or(&text);
-        let encoded: String = stripped
-            .chars()
-            .map(|character| match character {
-                '/' | '\\' | ':' => '-',
-                _ => character,
-            })
-            .collect();
-        let bucket = format!("--{encoded}--");
-        Self::is_valid_session_bucket_name(&bucket).then_some(bucket)
-    }
-
     pub fn is_valid_session_bucket_name(name: &str) -> bool {
         name.starts_with("--")
             && name.ends_with("--")
@@ -488,22 +473,26 @@ impl MetadataStore {
             && !name.contains(['/', '\\', '\0', ':'])
     }
 
-    /// Store a host-discovered historical Pi bucket after registration.
-    pub fn set_workspace_session_bucket(
+    /// Store the bucket returned by Pi. Pi is authoritative, including when
+    /// replacing a bucket written by an older Picot version.
+    pub fn set_workspace_session_bucket_from_pi(
         &mut self,
         workspace_id: &str,
         session_bucket: &str,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         if !Self::is_valid_session_bucket_name(session_bucket) {
             return Err("invalid_session_bucket".to_string());
         }
-        self.connection
+        let changed = self
+            .connection
             .execute(
-                "UPDATE workspaces SET session_bucket = ?2 WHERE workspace_id = ?1",
+                "UPDATE workspaces
+                 SET session_bucket = ?2
+                 WHERE workspace_id = ?1 AND (session_bucket IS NULL OR session_bucket != ?2)",
                 params![workspace_id, session_bucket],
             )
             .map_err(|error| format!("Cannot update Picot workspace session bucket: {error}"))?;
-        Ok(())
+        Ok(changed == 1)
     }
 
     /// Remove a registry row. Returns whether a row was deleted. Sessions and

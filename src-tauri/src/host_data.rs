@@ -126,36 +126,24 @@ impl HostDataPlane {
         std::sync::Arc::clone(&self.cost_cache)
     }
 
-    /// Pi's session-project directory name for a workspace root.
-    fn encode_session_dir_name(workspace_root: &Path) -> Option<String> {
-        crate::metadata_store::MetadataStore::session_bucket_name_for_root(workspace_root)
-    }
-
-    /// One-time registration discovery. Prefer Pi's deterministic bucket, then
-    /// inspect legacy buckets whose session headers identify this workspace.
-    pub fn discover_session_bucket(session_root: &Path, workspace_root: &Path) -> Option<String> {
-        let canonical = workspace_root
-            .canonicalize()
-            .unwrap_or_else(|_| workspace_root.to_path_buf());
-        let encoded = Self::encode_session_dir_name(&canonical)?;
-        if session_root.join(&encoded).is_dir() {
-            return Some(encoded);
-        }
-        std::fs::read_dir(session_root)
-            .ok()?
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .find(|path| {
-                path.is_dir()
-                    && sample_bucket_cwd_matches(path, &canonical)
-                    && path.file_name().and_then(|name| name.to_str()).is_some_and(
-                        crate::metadata_store::MetadataStore::is_valid_session_bucket_name,
-                    )
-            })
-            .and_then(|path| {
-                path.file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-            })
+    /// Persist the bucket directory reported by Pi's `sessionFile` RPC field.
+    /// The host never derives a bucket from workspace paths or scans sessions to
+    /// discover one.
+    pub fn record_pi_session_bucket(
+        &self,
+        workspace_id: &str,
+        session_file: &str,
+    ) -> Result<bool, String> {
+        let bucket = Path::new(session_file)
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| "Pi returned an invalid sessionFile path".to_string())?;
+        let mut metadata = self
+            .metadata
+            .lock()
+            .map_err(|_| "Picot metadata lock poisoned".to_string())?;
+        metadata.set_workspace_session_bucket_from_pi(workspace_id, bucket)
     }
 
     /// Resolve the single persisted bucket for a workspace. The registry owns
@@ -171,57 +159,6 @@ impl HostDataPlane {
         let bucket = row.session_bucket?;
         crate::metadata_store::MetadataStore::is_valid_session_bucket_name(&bucket)
             .then(|| session_root.join(bucket))
-    }
-
-    /// Locate the session-project directory for a workspace root: the Pi
-    /// encoding first, then a bounded header-sample fallback for dirs Pi
-    /// created under a different spelling of the same workspace.
-    #[allow(dead_code)]
-    pub fn session_dir_for_workspace(&self, workspace_root: &Path) -> Option<PathBuf> {
-        self.session_dirs_for_workspace(workspace_root)
-            .into_iter()
-            .next()
-    }
-
-    /// All session-project buckets for a workspace root: every on-disk Pi
-    /// encoding of its path spellings plus every dir whose newest session
-    /// headers vote for the same canonical root (legacy multi-bucket merge —
-    /// a workspace whose encoded dir name changed keeps its history).
-    pub fn session_dirs_for_workspace(&self, workspace_root: &Path) -> Vec<PathBuf> {
-        let Some(session_root) = &self.session_root else {
-            return Vec::new();
-        };
-        let canonical = workspace_root
-            .canonicalize()
-            .unwrap_or_else(|_| workspace_root.to_path_buf());
-        let mut candidates = vec![workspace_root.to_path_buf(), canonical.clone()];
-        candidates.dedup();
-        let mut buckets: Vec<PathBuf> = Vec::new();
-        for candidate in &candidates {
-            if let Some(encoded) = Self::encode_session_dir_name(candidate) {
-                let dir = session_root.join(&encoded);
-                if dir.is_dir() && !buckets.contains(&dir) {
-                    buckets.push(dir);
-                }
-            }
-        }
-        // Header-sample fallback: bounded to the three newest session
-        // headers per dir (majority cwd must canonicalize to the root).
-        for dir in std::fs::read_dir(session_root)
-            .ok()
-            .into_iter()
-            .flatten()
-            .filter_map(Result::ok)
-        {
-            let dir_path = dir.path();
-            if !dir_path.is_dir() || buckets.contains(&dir_path) {
-                continue;
-            }
-            if sample_bucket_cwd_matches(&dir_path, &canonical) && !buckets.contains(&dir_path) {
-                buckets.push(dir_path);
-            }
-        }
-        buckets
     }
 
     /// Read one persisted workspace bucket once. Count-only skips JSONL
@@ -286,8 +223,7 @@ impl HostDataPlane {
         (bucket_name, sessions, count)
     }
 
-    /// Session file path for a workspace session
-    /// (`<sessions>/<encoded-workspace>/<session-id>.jsonl`).
+    /// Session file path for a workspace session in Pi's persisted bucket.
     pub fn session_file_path(&self, workspace_id: &str, session_id: &str) -> Option<PathBuf> {
         let bucket = self.session_bucket_for_workspace(workspace_id)?;
         self.session_file_path_in_bucket(&bucket, session_id)
@@ -662,31 +598,23 @@ impl HostDataPlane {
 
     pub fn list_sessions(&self, workspace_id: &str) -> Result<Vec<SessionSummary>, HostDataError> {
         let workspace = self.workspace_root(workspace_id)?;
-        let Some(session_root) = &self.session_root else {
+        let Some(bucket) = self.session_bucket_for_workspace(workspace_id) else {
             return Ok(Vec::new());
         };
-        if !session_root.is_dir() {
+        if !bucket.is_dir() {
             return Ok(Vec::new());
         }
         let mut sessions = Vec::new();
-        for project in std::fs::read_dir(session_root)
+        for file in std::fs::read_dir(bucket)
             .map_err(|error| HostDataError::Io(error.to_string()))?
             .filter_map(Result::ok)
         {
-            if !project.path().is_dir() {
+            let path = file.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
                 continue;
             }
-            for file in std::fs::read_dir(project.path())
-                .map_err(|error| HostDataError::Io(error.to_string()))?
-                .filter_map(Result::ok)
-            {
-                let path = file.path();
-                if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
-                    continue;
-                }
-                if let Some(summary) = parse_session_summary(&path, workspace_id, &workspace)? {
-                    sessions.push(summary);
-                }
+            if let Some(summary) = parse_session_summary(&path, workspace_id, &workspace)? {
+                sessions.push(summary);
             }
         }
         sessions.sort_by_key(|session| std::cmp::Reverse(session.modified_at_ms));
@@ -700,35 +628,27 @@ impl HostDataPlane {
     ) -> Result<Vec<SessionSearchResult>, HostDataError> {
         const MAX_RESULTS: usize = 30;
         let workspace = self.workspace_root(workspace_id)?;
-        let Some(session_root) = &self.session_root else {
+        let Some(bucket) = self.session_bucket_for_workspace(workspace_id) else {
             return Ok(Vec::new());
         };
         let query = query.trim().to_lowercase();
-        if query.len() < 2 || !session_root.is_dir() {
+        if query.len() < 2 || !bucket.is_dir() {
             return Ok(Vec::new());
         }
         let mut results = Vec::new();
-        for project in std::fs::read_dir(session_root)
+        for file in std::fs::read_dir(bucket)
             .map_err(|error| HostDataError::Io(error.to_string()))?
             .filter_map(Result::ok)
         {
-            if !project.path().is_dir() {
+            if results.len() >= MAX_RESULTS {
+                return Ok(results);
+            }
+            let path = file.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
                 continue;
             }
-            for file in std::fs::read_dir(project.path())
-                .map_err(|error| HostDataError::Io(error.to_string()))?
-                .filter_map(Result::ok)
-            {
-                if results.len() >= MAX_RESULTS {
-                    return Ok(results);
-                }
-                let path = file.path();
-                if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
-                    continue;
-                }
-                if let Some(result) = search_session_file(&path, &workspace, &query)? {
-                    results.push(result);
-                }
+            if let Some(result) = search_session_file(&path, &workspace, &query)? {
+                results.push(result);
             }
         }
         Ok(results)
@@ -1066,9 +986,6 @@ pub(crate) fn parse_session_header(path: &Path) -> Option<SessionHeader> {
     })
 }
 
-/// Legacy header-sample vote: the three newest session files' headers vote
-/// for the bucket's recorded cwd; the majority canonical form must match the
-/// workspace root.
 /// Attach the stable entry id to a user/assistant message so the frontend
 /// can anchor transcript rows (`data-entry-id`) without carrying the whole
 /// session-file entry shape over the wire.
@@ -1084,38 +1001,6 @@ fn message_with_entry_id(mut message: serde_json::Value, entry_id: &str) -> serd
         );
     }
     message
-}
-
-fn sample_bucket_cwd_matches(dir: &Path, canonical_root: &Path) -> bool {
-    let mut candidates: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(dir)
-        .ok()
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .filter(|file| file.path().extension().and_then(|value| value.to_str()) == Some("jsonl"))
-        .filter_map(|file| {
-            let modified = file.metadata().ok()?.modified().ok()?;
-            Some((modified, file.path()))
-        })
-        .collect();
-    candidates.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
-    candidates.truncate(3);
-    let total = candidates.len();
-    let mut votes = 0usize;
-    for (_, path) in &candidates {
-        let matches = parse_session_header(path)
-            .and_then(|header| header.cwd)
-            .map(|cwd| {
-                PathBuf::from(&cwd)
-                    .canonicalize()
-                    .unwrap_or_else(|_| PathBuf::from(cwd))
-            })
-            .is_some_and(|cwd| cwd == canonical_root);
-        if matches {
-            votes += 1;
-        }
-    }
-    votes * 2 > total && total > 0
 }
 
 /// Legacy `sessionActivityTime`: mtime, else parsed timestamp, else ctime.
@@ -1482,6 +1367,11 @@ mod tests {
         let db = std::env::temp_dir().join(format!("picot-host-data-db-{}", uuid::Uuid::new_v4()));
         let store = Arc::new(Mutex::new(MetadataStore::open(&db).unwrap()));
         let (row, _) = store.lock().unwrap().add_workspace(workspace).unwrap();
+        store
+            .lock()
+            .unwrap()
+            .set_workspace_session_bucket_from_pi(&row.workspace_id, "--test-bucket--")
+            .unwrap();
         (HostDataPlane::new(store), row.workspace_id)
     }
 
@@ -1753,15 +1643,15 @@ mod tests {
     }
 
     #[test]
-    fn session_file_path_accepts_verified_prefixed_pi_filename() {
+    fn session_file_path_accepts_verified_pi_filename() {
         let temp = tempfile::tempdir().unwrap();
         let workspace = temp.path().join("workspace");
         let sessions = temp.path().join("sessions");
         fs::create_dir_all(&workspace).unwrap();
         let (data, workspace_id) = test_data(&workspace);
         let root = workspace.canonicalize().unwrap();
-        let bucket_name = HostDataPlane::encode_session_dir_name(&root).unwrap();
-        let bucket = sessions.join(&bucket_name);
+        let bucket_name = "--test-bucket--";
+        let bucket = sessions.join(bucket_name);
         fs::create_dir_all(&bucket).unwrap();
         let file = bucket.join("2026-09-03T12-00-00-000Z_saved.jsonl");
         fs::write(
@@ -1781,15 +1671,15 @@ mod tests {
     }
 
     #[test]
-    fn session_file_path_finds_verified_prefixed_pi_filename_by_header_id() {
+    fn session_file_path_finds_pi_filename_by_header_id() {
         let temp = tempfile::tempdir().unwrap();
         let workspace = temp.path().join("workspace");
         let sessions = temp.path().join("sessions");
         fs::create_dir_all(&workspace).unwrap();
         let (data, workspace_id) = test_data(&workspace);
         let root = workspace.canonicalize().unwrap();
-        let bucket_name = HostDataPlane::encode_session_dir_name(&root).unwrap();
-        let bucket = sessions.join(&bucket_name);
+        let bucket_name = "--test-bucket--";
+        let bucket = sessions.join(bucket_name);
         fs::create_dir_all(&bucket).unwrap();
         let file = bucket.join("2026-09-03T12-00-00-000Z_saved.jsonl");
         fs::write(
@@ -1816,8 +1706,8 @@ mod tests {
         fs::create_dir_all(&workspace).unwrap();
         let (data, workspace_id) = test_data(&workspace);
         let root = workspace.canonicalize().unwrap();
-        let bucket_name = HostDataPlane::encode_session_dir_name(&root).unwrap();
-        let bucket = sessions.join(&bucket_name);
+        let bucket_name = "--test-bucket--";
+        let bucket = sessions.join(bucket_name);
         fs::create_dir_all(&bucket).unwrap();
         fs::write(
             bucket.join("safe.jsonl"),
@@ -1842,48 +1732,35 @@ mod tests {
     }
 
     #[test]
-    fn session_dir_for_workspace_resolves_by_encoding_then_header_sample() {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let temp = std::env::temp_dir().join(format!("picot-p4-dir-{nonce}"));
-        let workspace = temp.join("workspace");
+    fn record_pi_session_bucket_uses_pi_authority() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
         fs::create_dir_all(&workspace).unwrap();
-        let encoded = format!(
-            "--{}--",
-            workspace
-                .to_string_lossy()
-                .trim_start_matches('/')
-                .replace('/', "-")
-        );
-        // Header-sample fallback dir: a name the encoding would never claim.
-        let sampled = temp.join("sessions").join("--legacy-name--");
-        fs::create_dir_all(&sampled).unwrap();
-        fs::write(
-            sampled.join("session-x.jsonl"),
-            format!(
-                "{{\"type\":\"session\",\"id\":\"x\",\"cwd\":{}}}\n{{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n",
-                serde_json::to_string(&workspace.to_string_lossy()).unwrap()
-            ),
-        )
-        .unwrap();
+        let db = temp.path().join("metadata.sqlite3");
+        let sessions = temp.path().join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        let metadata = Arc::new(Mutex::new(MetadataStore::open(&db).unwrap()));
+        let (row, _) = metadata.lock().unwrap().add_workspace(&workspace).unwrap();
+        let data = HostDataPlane::new(metadata).with_session_root(sessions);
 
-        let (data, _) = test_data(&workspace);
-        let data = data.with_session_root(temp.join("sessions"));
-
-        let dir = data
-            .session_dir_for_workspace(&workspace)
-            .expect("header-sample fallback must locate the project dir");
-        assert_eq!(dir, sampled);
-
-        // Deterministic encoding match wins once the Pi-shaped dir exists.
-        let exact = temp.join("sessions").join(&encoded);
-        fs::create_dir_all(&exact).unwrap();
+        assert!(data
+            .record_pi_session_bucket(
+                &row.workspace_id,
+                "/home/user/.pi/agent/sessions/--pi-returned-bucket--/chat.jsonl",
+            )
+            .unwrap());
+        assert!(data
+            .record_pi_session_bucket(
+                &row.workspace_id,
+                "/home/user/.pi/agent/sessions/--another-bucket--/chat.jsonl",
+            )
+            .unwrap());
         assert_eq!(
-            data.session_dir_for_workspace(&workspace)
-                .expect("encoding match"),
-            exact
+            data.session_bucket_for_workspace(&row.workspace_id)
+                .and_then(|path| path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())),
+            Some("--another-bucket--".to_string())
         );
     }
 
@@ -1968,7 +1845,7 @@ mod tests {
         let temp = std::env::temp_dir().join(format!("picot-host-sessions-{nonce}"));
         let workspace = temp.join("workspace");
         let other = temp.join("other");
-        let sessions = temp.join("sessions/project");
+        let sessions = temp.join("sessions/--test-bucket--");
         fs::create_dir_all(&workspace).unwrap();
         fs::create_dir_all(&other).unwrap();
         fs::create_dir_all(&sessions).unwrap();
@@ -2010,7 +1887,7 @@ mod tests {
         let temp = std::env::temp_dir().join(format!("picot-host-search-{nonce}"));
         let workspace = temp.join("workspace");
         let other = temp.join("other");
-        let sessions = temp.join("sessions/project");
+        let sessions = temp.join("sessions/--test-bucket--");
         fs::create_dir_all(&workspace).unwrap();
         fs::create_dir_all(&other).unwrap();
         fs::create_dir_all(&sessions).unwrap();

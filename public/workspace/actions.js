@@ -92,11 +92,39 @@ async function attachToWorkspace({
   }
 }
 
-// "+ New Session" button in the current window's header.
-// Spawns a fresh headless pi process for the current cwd, then navigates
-// THIS window's WebView to it. The previous pi process keeps running in
-// the background — it's not killed, just no longer attached to this
-// window. The user can return to it via the running-instances list.
+// Registering a workspace must end in a fresh primary session owned by this
+// window. The same primitive is also used by the header "+ New Session" path;
+// it spawns a fresh headless pi and navigates THIS window to it.
+export async function startRegisteredWorkspaceSession({
+  targetCwd,
+  transport,
+  navigate,
+  onBeforeSwap,
+  beforeWorkspaceTransition,
+  onWorkspaceTransitionCancelled,
+  renderError,
+}) {
+  if (!targetCwd) {
+    renderError(t("errors.newSessionPathUnavailable"));
+    return false;
+  }
+  if (typeof navigate !== "function") {
+    renderError(t("errors.newSessionNavUnavailable"));
+    return false;
+  }
+  return spawnFreshSession({
+    targetCwd,
+    transport,
+    navigate,
+    onBeforeSwap,
+    beforeWorkspaceTransition,
+    onWorkspaceTransitionCancelled,
+    renderError,
+    label: t("sidebar.startingSession"),
+    debugTag: "workspaceRegister",
+  });
+}
+
 export async function startInWindowNewSession({
   transport,
   getCurrentCwd,
@@ -147,10 +175,9 @@ export async function startInWindowNewSession({
   });
 }
 
-// Spawn a brand-new headless pi for `targetCwd` and either activate it
-// in-place (when `onParallelSessionCreated` is provided) or navigate the
-// current window to it. Shared by "+ New Session" and the project-tile
-// "start new chat" flow.
+// Spawn a brand-new headless pi for `targetCwd` and navigate the current
+// window to it. Shared by workspace registration and the other new-session
+// entry points.
 async function spawnFreshSession({
   targetCwd,
   transport,
@@ -349,17 +376,16 @@ export async function openFolderAsWorkspace({
     const selectedPath = await transport.pickFolder();
     if (!selectedPath) return false;
 
-    // Register (idempotently) before attaching so the sidebar row exists even
-    // if the attach is cancelled midway. Best-effort: opening proceeds even
-    // when the registry rejects (e.g. transient broker state).
-    try {
-      await transport.addWorkspace?.(selectedPath);
-    } catch {
-      // Registry registration is optional for opening a workspace.
+    // Registration must precede the owner-bound runtime admission. An
+    // existing registry row is deliberately not a no-op: adding a workspace
+    // always opens a fresh primary session in the current window.
+    if (typeof transport.addWorkspace !== "function") {
+      throw new Error("Workspace registration is unavailable");
     }
-
-    const result = await attachToWorkspace({
-      targetCwd: selectedPath,
+    const registration = await transport.addWorkspace(selectedPath);
+    const targetCwd = registration?.workspace?.canonicalPath || selectedPath;
+    return startRegisteredWorkspaceSession({
+      targetCwd,
       transport,
       navigate,
       onBeforeSwap,
@@ -367,7 +393,6 @@ export async function openFolderAsWorkspace({
       onWorkspaceTransitionCancelled,
       renderError,
     });
-    return result !== null;
   } catch (e) {
     renderError(`${t("errors.openFolderFailed")}: ${String(e)}`);
     return false;

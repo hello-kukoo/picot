@@ -64,6 +64,7 @@ export class SessionSidebar {
     this.onSessionSelect = onSessionSelect;
     this.onNewChat = onNewChat;
     this.onOpenProject = options.onOpenProject || null;
+    this.onRegisterWorkspace = options.onRegisterWorkspace || null;
     this.onSessionNotice = options.onSessionNotice || null;
     this.getLiveInstances = options.getLiveInstances || null;
     this.isFocusActive = options.isFocusActive || null;
@@ -481,6 +482,7 @@ export class SessionSidebar {
         });
         if (loadGeneration !== this._registrySessionLoadGeneration) return;
         project.sessionCount = Number(data?.sessionCount) || 0;
+        this.applyProvisionalSession();
         this.render();
       } catch (error) {
         console.error("[Sidebar] workspace count refresh failed:", error);
@@ -508,6 +510,7 @@ export class SessionSidebar {
       project.sessionCount =
         typeof data?.sessionCount === "number" ? data.sessionCount : sessions.length;
       project.sessions = sessions;
+      this.applyProvisionalSession();
       this.render();
     } catch (error) {
       console.error("[Sidebar] workspace session load failed:", error);
@@ -626,6 +629,7 @@ export class SessionSidebar {
       return;
     }
     project.sessions = [pending, ...sessions.filter((session) => !session?.provisional)];
+    project.sessionCount = Math.max(Number(project.sessionCount) || 0, project.sessions.length);
   }
 
   async fetchLiveInstances() {
@@ -1064,19 +1068,26 @@ export class SessionSidebar {
       return;
     }
     const added = result?.added !== false;
-    if (!added) {
-      this.onSessionNotice?.(t("sidebar.alreadyRegistered"));
+    if (result?.workspace?.workspaceId) {
+      const workspaceId = `ws:${result.workspace.workspaceId}`;
+      this.expandedWorkspaces.add(workspaceId);
     }
+    if (typeof this.onRegisterWorkspace === "function") {
+      const launched = await this.onRegisterWorkspace(
+        result?.workspace?.canonicalPath || pickedPath,
+      );
+      if (launched !== false) return;
+    }
+    // Non-native callers retain the old local refresh behavior. Native callers
+    // navigate to the new owner-bound session, whose first sidebar load is the
+    // authoritative refresh and avoids rendering an empty intermediate row.
     await this.refresh();
     if (added && result?.workspace?.workspaceId) {
       const project = this.projects.find(
         (candidate) =>
           candidate.source === "registry" && candidate.registryId === result.workspace.workspaceId,
       );
-      if (project) {
-        this.expandedWorkspaces.add(project.workspaceId);
-        await this.ensureWorkspaceSessions(project);
-      }
+      if (project) await this.ensureWorkspaceSessions(project);
     }
   }
 

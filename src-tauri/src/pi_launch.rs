@@ -278,8 +278,9 @@ pub(crate) fn native_launch_spec_for(
     rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut secret_bytes);
     let spec = NativeLaunchSpec {
         binary,
-        cwd: cwd.to_path_buf(),
-        session_path: session_path.map(PathBuf::from),
+        cwd: PathBuf::from(strip_verbatim_prefix(&cwd.to_string_lossy())),
+        session_path: session_path
+            .map(|path| PathBuf::from(strip_verbatim_prefix(&path.to_string_lossy()))),
         extensions: vec![bridge],
         pi_version: locked_pi_version().to_owned(),
         path_env: build_augmented_path(),
@@ -401,6 +402,31 @@ mod launch_spec_tests {
         let cwd = std::env::temp_dir();
         native_launch_spec_for(&static_dir(), runtime_type, &cwd, session_path)
             .expect("builder must produce a launch spec")
+    }
+
+    #[test]
+    fn native_launch_paths_strip_windows_verbatim_prefixes() {
+        assert_eq!(strip_verbatim_prefix(r"\\?\C:\workspace"), r"C:\workspace");
+        assert_eq!(
+            strip_verbatim_prefix(r"\\?\UNC\server\share\workspace"),
+            r"\\server\share\workspace"
+        );
+        assert_eq!(strip_verbatim_prefix(r"C:\workspace"), r"C:\workspace");
+
+        let cwd = Path::new(r"\\?\C:\workspace");
+        let session = Path::new(r"\\?\C:\sessions\chat.jsonl");
+        let spec = native_launch_spec_for(
+            &static_dir(),
+            NativeRuntimeType::Dedicated,
+            cwd,
+            Some(session),
+        )
+        .expect("verbatim-prefixed paths should produce a launch spec");
+        assert_eq!(spec.cwd, PathBuf::from(r"C:\workspace"));
+        assert_eq!(
+            spec.session_path,
+            Some(PathBuf::from(r"C:\sessions\chat.jsonl"))
+        );
     }
 
     #[test]

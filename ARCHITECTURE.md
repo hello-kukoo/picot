@@ -126,7 +126,7 @@ Pi 默认将 canonical workspace path 映射到一个确定性 bucket：
 ~/.pi/agent/sessions/--<canonical-path-with-separators-folded-to-dash>--
 ```
 
-workspace 注册时，Picot 先检查该 bucket；只有未命中时才执行一次历史 JSONL header/CWD 发现，并把命中的单个 bucket name 写入 `workspaces.session_bucket`。未命中时仍持久化 Pi 的确定性 bucket name，供 Pi 首次创建 session 使用。Sidebar 的 `workspace_sessions` 读取已持久化 bucket，`countOnly` 仅 `readdir` 计数，完整读取在同一次目录遍历内生成 count 和 session entries；刷新路径不得调用全局 bucket discovery。每个 v2 routed request 独立调度并经单一 socket writer 回传，慢 Pi runtime snapshot 不得阻塞 sidebar data-plane count/list。bucket 缺失表示 0 session，不移除 workspace；workspace canonical path 缺失才按 registry prune 规则删除该 row。
+workspace 注册时，Picot 将 `session_bucket` 留空；注册成功后，当前窗口必须先通过 owner-bound 的 `workspace_target_prepare(forceNewSession: true)` 创建一个新的主 Pi runtime，再 commit transition 并导航到该 session。目标页面首屏会先渲染 route 对应的 provisional session，避免 bucket 尚未由 snapshot 写回时显示 0；Pi runtime 的 `get_state.data.sessionFile` 是唯一 bucket 来源，正常 runtime 的 `runtime_snapshot_request` 走 Pi 权威写回路径；不再启动无 owner 的探测进程。已有 registry row 再次 register 也创建新 session。临时 session 必须先绑定正式 session id，再保存 Pi 返回的 bucket；Pi 是唯一权威，返回值可以纠正旧版本 Picot 写入的值。Picot 不再根据 workspace 路径计算 bucket，也不扫描全局 sessions root 发现 bucket。Sidebar 的 `workspace_sessions`、`list_sessions`、`search_sessions` 和 session-file 读取只使用 registry 中的单个 bucket；`countOnly` 仅 `readdir` 计数，完整读取在同一次目录遍历内生成 count 和 session entries。每个 v2 routed request 独立调度并经单一 socket writer 回传，慢 Pi runtime snapshot 不得阻塞 sidebar data-plane count/list。bucket 缺失表示 0 session，不移除 workspace；workspace canonical path 缺失才按 registry prune 规则删除该 row。
 
 ### 操作注册表（OperationRegistry）
 
@@ -152,7 +152,7 @@ workspace 注册时，Picot 先检查该 bucket；只有未命中时才执行一
 | `paste_offload.rs` | paste 临时文件（TTL/quota/symlink/.gitignore） |
 | `transport_limits.rs` | 帧/响应/事件/快照/进度大小限制 |
 | `cost_compat.rs` | cost-dashboard payload parity |
-| `metadata_store.rs` | SQLite 工作区注册 + preferences；每个注册项持久化单个 Pi `session_bucket`。注册时仅一次 legacy history discovery；sidebar 以后只读此 bucket，不扫描全局 Pi sessions。schema 兼容契约：接受 user_version ≤ 6（Corp v4–v6 表归 Corp 构建，public 只读不建），public 迁移只完成 v1–v3 并只盖 v3 戳；public-owned `session_bucket` 列按存在性增量补齐，绝不改 Corp 版本戳 |
+| `metadata_store.rs` | SQLite 工作区注册 + preferences；每个注册项持久化单个 Pi `session_bucket`，仅由 Pi `get_state.data.sessionFile` 的父目录写入；sidebar 只读该 bucket，不扫描全局 Pi sessions。schema 兼容契约：接受 user_version ≤ 6（Corp v4–v6 表归 Corp 构建，public 只读不建），public 迁移只完成 v1–v3 并只盖 v3 戳；public-owned `session_bucket` 列按存在性增量补齐，绝不改 Corp 版本戳 |
 | `window_owner.rs` | 窗口 owner 注册与 capability |
 | `remote_auth.rs` | 远程设备配对与 device token |
 | `ephemeral_registry.rs` | Side/Quick chat 生命周期 |

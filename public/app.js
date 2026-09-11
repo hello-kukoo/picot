@@ -147,6 +147,7 @@ import {
   openFolderAsWorkspace,
   startInWindowNewSession,
   startNewProjectChat,
+  startRegisteredWorkspaceSession,
 } from "./workspace/actions.js";
 import { FileBrowser } from "./workspace/file-browser.js";
 import {
@@ -615,6 +616,7 @@ const sidebar = new SessionSidebar(
       if (!project?.path) return handleOpenFolder();
       return transport.openInApp(project.path);
     },
+    onRegisterWorkspace: (targetCwd) => handleRegisteredWorkspace(targetCwd),
     onWorkspaceFocus: (project) => enterFocus(project),
     isCurrentWorkspace: (project) => project?.path === getCurrentWorkspacePath(),
     onSessionNotice: (message) => {
@@ -701,7 +703,11 @@ setupAtFileMention({
 const addProjectBtn = document.getElementById("add-project-btn");
 if (addProjectBtn) {
   setButtonIcon(addProjectBtn, "folder-plus", { size: 16 });
-  addProjectBtn.addEventListener("click", () => void sidebar.addProjectViaPicker());
+  addProjectBtn.addEventListener("click", () => {
+    if (workspaceLaunchInProgress) return;
+    setWorkspaceLaunchInProgress(true);
+    void sidebar.addProjectViaPicker().finally(() => setWorkspaceLaunchInProgress(false));
+  });
 }
 const sidebarEl = document.getElementById("sidebar");
 const sidebarToggle = document.getElementById("sidebar-toggle");
@@ -5822,6 +5828,10 @@ void updater.initUpdaterUI();
 // App-global registry changed on the host (any window or prune). Refresh the
 // sidebar everywhere so all native windows stay in sync.
 wsClient.addEventListener("registryChanged", () => {
+  // The initiating window is already navigating to the new owner-bound
+  // session; refreshing its old page here would render an empty workspace
+  // before Pi has prepared the session. Other windows still refresh normally.
+  if (workspaceLaunchInProgress) return;
   void sidebar.refresh();
 });
 
@@ -6614,6 +6624,22 @@ document.querySelector(".mode-link:first-child")?.addEventListener("click", () =
 });
 
 // ═══════════════════════════════════════
+// Register workspace and create its first primary session
+// ═══════════════════════════════════════
+
+function handleRegisteredWorkspace(targetCwd) {
+  return startRegisteredWorkspaceSession({
+    targetCwd,
+    transport,
+    navigate: navigateInWindow,
+    onBeforeSwap: onBeforeInstanceSwap,
+    beforeWorkspaceTransition: prepareEphemeralWorkspaceTransition,
+    onWorkspaceTransitionCancelled: cancelEphemeralWorkspaceTransition,
+    renderError: (message) => messageRenderer.renderError(message),
+  });
+}
+
+// ═══════════════════════════════════════
 // Open Folder as workspace
 // ═══════════════════════════════════════
 
@@ -6667,13 +6693,25 @@ let initialSidebarRefreshStarted = false;
 function refreshInitialSidebar() {
   if (initialSidebarRefreshStarted) return;
   initialSidebarRefreshStarted = true;
+  const runtimeTarget = wsClient.getRuntimeTarget();
+  if (runtimeTarget) {
+    sidebar.setProvisionalSession({
+      workspaceId: runtimeTarget.workspaceId,
+      sessionId: runtimeTarget.sessionId,
+    });
+  }
   sidebar.refresh().then((projects) => {
-    const runtimeTarget = wsClient.getRuntimeTarget();
-    if (runtimeTarget) {
-      sidebar.setProvisionalSession({
-        workspaceId: runtimeTarget.workspaceId,
-        sessionId: runtimeTarget.sessionId,
-      });
+    // Native startup normally has the route target before the first refresh.
+    // Keep the fallback for a late route bootstrap without delaying the normal
+    // provisional row until after the registry request completes.
+    if (!runtimeTarget) {
+      const lateRuntimeTarget = wsClient.getRuntimeTarget();
+      if (lateRuntimeTarget) {
+        sidebar.setProvisionalSession({
+          workspaceId: lateRuntimeTarget.workspaceId,
+          sessionId: lateRuntimeTarget.sessionId,
+        });
+      }
     }
     sessionsLoaded = true;
     // Cache fresh sidebar data for next native navigation (C).

@@ -65,6 +65,7 @@ async function makeSidebar({
   fetchRoutes = {},
   isCurrentWorkspace,
   onWorkspaceFocus,
+  onRegisterWorkspace,
 } = {}) {
   const transport = makeRegistryTransport(rows, {
     ...transportResponses,
@@ -81,6 +82,7 @@ async function makeSidebar({
     onSessionNotice: (message) => notices.push(message),
     isCurrentWorkspace: isCurrentWorkspace ?? (() => false),
     onWorkspaceFocus,
+    onRegisterWorkspace,
   });
   // House pattern: initI18n reads dictionaries through this same stub, so
   // serve the keys this suite asserts on before any API route.
@@ -365,43 +367,34 @@ describe("add / remove / pin registry flows", () => {
     globalThis.fetch = previousFetch;
   });
 
-  test("addProjectViaPicker registers, reloads, and expands the new row", async () => {
+  test("addProjectViaPicker registers, preserves expansion, and starts a new session", async () => {
     const rows = [];
+    const onRegisterWorkspace = vi.fn().mockResolvedValue(true);
     const { sidebar, transport } = await makeSidebar({
       get rows() {
         return rows;
       },
+      onRegisterWorkspace,
     });
     transport.pickFolder.mockResolvedValue("/work/gamma");
     transport.addWorkspace.mockResolvedValue({
       added: true,
       workspace: { workspaceId: "uuid-3", canonicalPath: "/work/gamma" },
     });
-    // Reload serves both original rows plus the freshly added one.
-    transport.listWorkspaces.mockImplementation(async () => ({
-      workspaces: [
-        ...REGISTRY_ROWS,
-        {
-          workspaceId: "uuid-3",
-          canonicalPath: "/work/gamma",
-          displayName: "gamma",
-          pinned: false,
-          lastOpenedAt: null,
-        },
-      ],
-      removed: [],
-    }));
-
     await sidebar.addProjectViaPicker();
 
     expect(transport.addWorkspace).toHaveBeenCalledWith("/work/gamma");
-    const gamma = sidebar.projects.find((project) => project.workspaceId === "ws:uuid-3");
-    expect(gamma).toBeTruthy();
+    expect(onRegisterWorkspace).toHaveBeenCalledWith("/work/gamma");
+    expect(transport.listWorkspaces).not.toHaveBeenCalled();
     expect(sidebar.expandedWorkspaces.has("ws:uuid-3")).toBe(true);
   });
 
-  test("re-adding an existing project shows alreadyRegistered without error", async () => {
-    const { sidebar, transport, notices } = await makeSidebar({ rows: REGISTRY_ROWS });
+  test("re-adding an existing project still starts a new session", async () => {
+    const onRegisterWorkspace = vi.fn().mockResolvedValue(true);
+    const { sidebar, transport } = await makeSidebar({
+      rows: REGISTRY_ROWS,
+      onRegisterWorkspace,
+    });
     transport.pickFolder.mockResolvedValue("/work/alpha");
     transport.addWorkspace.mockResolvedValue({
       added: false,
@@ -410,7 +403,7 @@ describe("add / remove / pin registry flows", () => {
 
     await sidebar.addProjectViaPicker();
 
-    expect(notices).toContain("This project is already in the list.");
+    expect(onRegisterWorkspace).toHaveBeenCalledWith("/work/alpha");
   });
 
   test("removeFromList only deletes the DB row and keeps expansion clean", async () => {
@@ -644,6 +637,21 @@ describe("registry cache invalidation wiring", () => {
     );
     expect(document.querySelector(".session-item.active .session-delete-btn")).toBeNull();
     expect(document.querySelector(".session-item.active .session-rename-btn")).toBeNull();
+  });
+
+  test("refresh preserves a provisional session while the bucket is still empty", async () => {
+    const { sidebar } = await makeRegistrySidebar();
+    sidebar.setProvisionalSession({ workspaceId: "uuid-1", sessionId: "native-session-new" });
+
+    await sidebar.refresh({ workspacePath: "/work/alpha" });
+    await settleFetches();
+
+    const alpha = sidebar.projects.find((project) => project.workspaceId === "ws:uuid-1");
+    expect(alpha.sessions[0]).toMatchObject({
+      filePath: "native-session-new",
+      provisional: true,
+    });
+    expect(alpha.sessionCount).toBeGreaterThanOrEqual(1);
   });
 
   test("coalesced refresh preserves in-flight session-list generation", async () => {
