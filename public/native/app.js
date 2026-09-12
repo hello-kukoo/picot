@@ -348,7 +348,7 @@ const adapter = new HostRuntimeAdapter({
   clientType: remoteAuth.clientType,
   deviceToken: remoteAuth.deviceToken,
 });
-setupTerminalPanel({
+const terminalIntegration = setupTerminalPanel({
   adapter,
   getWorkspaceId: () => target.workspaceId,
 });
@@ -1055,6 +1055,7 @@ const settingsPanel = setupSettingsPanel({
   data,
   control,
   preferences,
+  terminal: terminalIntegration,
   getWorkspaceId: () => target.workspaceId,
   configGateway: config,
   oauthGateway,
