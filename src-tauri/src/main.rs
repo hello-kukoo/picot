@@ -848,6 +848,7 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
             remote_auth,
             std::collections::HashMap::from([(target.workspace_id.clone(), PathBuf::from(&cwd))]),
             Some(app.handle().clone()),
+            Some(Arc::clone(&metadata)),
         )
         .await?;
         runtimes.spawn(target.clone(), launch)?;
