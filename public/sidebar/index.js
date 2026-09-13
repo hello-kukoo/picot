@@ -88,6 +88,7 @@ export class SessionSidebar {
     // by local session mutations and refreshed per workspace on demand.
     this.workspaceSessionsCache = new Map();
     this._registryBusyRows = new Set();
+    this._registryBusyPromises = new Map();
     this._registryCountBusyRows = new Set();
     this._registryWarmupScheduled = false;
     this._registrySessionLoadGeneration = 0;
@@ -245,11 +246,11 @@ export class SessionSidebar {
       dialog.className = "sidebar-confirm-dialog workspace-delete-confirm-dialog";
       dialog.setAttribute("role", "dialog");
       dialog.setAttribute("aria-modal", "true");
-      dialog.setAttribute("aria-label", t("sidebar.deleteWorkspaceSessions"));
+      dialog.setAttribute("aria-label", t("sidebar.deleteWorkspaceMainSessions"));
 
       const message = document.createElement("div");
       message.className = "sidebar-confirm-message";
-      message.textContent = t("sidebar.deleteWorkspaceConfirm", { count });
+      message.textContent = t("sidebar.deleteWorkspaceMainSessionsConfirm", { count });
 
       const prompt = document.createElement("div");
       prompt.className = "workspace-delete-confirm-prompt";
@@ -470,7 +471,7 @@ export class SessionSidebar {
     const hostWorkspaceId = project.registryId || project.workspaceId;
     // Count mode: readdir-only header badge refresh; full mode: lazy history.
     if (countOnly) {
-      if (project.sessionCount !== undefined && !force) return;
+      if (typeof project.sessionCount === "number" && !force) return;
       if (this._registryCountBusyRows.has(project.workspaceId)) return;
       this._registryCountBusyRows.add(project.workspaceId);
       try {
@@ -481,7 +482,9 @@ export class SessionSidebar {
           countOnly: true,
         });
         if (loadGeneration !== this._registrySessionLoadGeneration) return;
-        project.sessionCount = Number(data?.sessionCount) || 0;
+        project.sessionCount = typeof data?.sessionCount === "number" ? data.sessionCount : null;
+        project.hiddenSubagentCount =
+          typeof data?.hiddenSubagentCount === "number" ? data.hiddenSubagentCount : null;
         this.applyProvisionalSession();
         this.render();
       } catch (error) {
@@ -491,32 +494,42 @@ export class SessionSidebar {
       }
       return;
     }
-    if (this._registryBusyRows.has(project.workspaceId)) return;
+    const inFlight = this._registryBusyPromises.get(project.workspaceId);
+    if (inFlight) {
+      if (!force) return;
+      await inFlight;
+    }
     if (!force && this.workspaceSessionsCache.has(cacheKey)) {
       project.sessions = this.workspaceSessionsCache.get(cacheKey);
       this.render();
       return;
     }
     this._registryBusyRows.add(project.workspaceId);
-    try {
-      if (typeof this.transport?.workspaceSessions !== "function") {
-        throw new Error("Host workspace sessions unavailable");
+    const loadPromise = (async () => {
+      try {
+        if (typeof this.transport?.workspaceSessions !== "function") {
+          throw new Error("Host workspace sessions unavailable");
+        }
+        const data = await this.transport.workspaceSessions(hostWorkspaceId);
+        if (loadGeneration !== this._registrySessionLoadGeneration) return;
+        const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
+        this.workspaceSessionsCache.set(cacheKey, sessions);
+        project.dirName = data?.dirName ?? null;
+        project.sessionCount = typeof data?.sessionCount === "number" ? data.sessionCount : null;
+        project.hiddenSubagentCount =
+          typeof data?.hiddenSubagentCount === "number" ? data.hiddenSubagentCount : null;
+        project.sessions = sessions;
+        this.applyProvisionalSession();
+        this.render();
+      } catch (error) {
+        console.error("[Sidebar] workspace session load failed:", error);
+      } finally {
+        this._registryBusyRows.delete(project.workspaceId);
+        this._registryBusyPromises.delete(project.workspaceId);
       }
-      const data = await this.transport.workspaceSessions(hostWorkspaceId);
-      if (loadGeneration !== this._registrySessionLoadGeneration) return;
-      const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
-      this.workspaceSessionsCache.set(cacheKey, sessions);
-      project.dirName = data?.dirName ?? null;
-      project.sessionCount =
-        typeof data?.sessionCount === "number" ? data.sessionCount : sessions.length;
-      project.sessions = sessions;
-      this.applyProvisionalSession();
-      this.render();
-    } catch (error) {
-      console.error("[Sidebar] workspace session load failed:", error);
-    } finally {
-      this._registryBusyRows.delete(project.workspaceId);
-    }
+    })();
+    this._registryBusyPromises.set(project.workspaceId, loadPromise);
+    await loadPromise;
   }
 
   /** Drop the cached history of one workspace; next expand refetches it. */
@@ -629,7 +642,9 @@ export class SessionSidebar {
       return;
     }
     project.sessions = [pending, ...sessions.filter((session) => !session?.provisional)];
-    project.sessionCount = Math.max(Number(project.sessionCount) || 0, project.sessions.length);
+    if (typeof project.sessionCount === "number") {
+      project.sessionCount = Math.max(project.sessionCount, project.sessions.length);
+    }
   }
 
   async fetchLiveInstances() {
@@ -949,7 +964,7 @@ export class SessionSidebar {
         : []),
       {
         iconKind: "trash-2",
-        label: t("sidebar.deleteWorkspaceSessions"),
+        label: t("sidebar.deleteWorkspaceMainSessions"),
         action: () => this.deleteWorkspaceSessions(workspace),
       },
     ];
@@ -1108,13 +1123,21 @@ export class SessionSidebar {
   // Paths the server reports as `running` or `errors` remain protected;
   // only confirmed deletions are removed after the session list reloads.
   async deleteWorkspaceSessions(workspace) {
-    const filePaths = (workspace?.sessions || [])
+    if (!workspace) return;
+    const loading = this.ensureWorkspaceSessions(workspace, { force: true });
+    if (workspace.source === "registry") await loading;
+    const filePaths = (workspace.sessions || [])
       .map((session) => session?.filePath)
       .filter(
         (filePath) =>
           typeof filePath === "string" && filePath && this.deletionBlockedReason(filePath) === null,
       );
-    if (filePaths.length === 0) return;
+    if (filePaths.length === 0) {
+      if (workspace.hiddenSubagentCount > 0) {
+        this.onSessionNotice?.(t("sidebar.noMainSessionsToDelete"));
+      }
+      return;
+    }
     const workspaceName =
       workspace?.folderName ||
       basenameLocalPath(workspace?.path) ||
@@ -1123,11 +1146,12 @@ export class SessionSidebar {
     const ok = await this.confirmWorkspaceDeletion(workspaceName, filePaths.length);
     if (!ok) return;
 
+    let data = { deleted: 0, running: [], errors: [] };
     try {
       if (typeof this.transport?.sessionDeleteBatch !== "function") {
         throw new Error("Host session delete unavailable");
       }
-      const data = await this.transport.sessionDeleteBatch(filePaths);
+      data = await this.transport.sessionDeleteBatch(filePaths);
       if ((data.running || []).length > 0) {
         this.onSessionNotice?.(t("sidebar.deleteSessionRunning"));
       }
@@ -1138,7 +1162,21 @@ export class SessionSidebar {
     // Batch deletes must invalidate this workspace's cache or the reload
     // below would restore the deleted sessions from it (ghost entries).
     this.invalidateWorkspaceSessions(workspace?.path);
-    await this.refresh();
+    await this.refresh({ workspacePath: workspace.path });
+    const refreshedWorkspace = this.projects.find(
+      (project) => workspacePathKey(project.path) === workspacePathKey(workspace.path),
+    );
+    if (refreshedWorkspace?.source === "registry") {
+      await this.ensureWorkspaceSessions(refreshedWorkspace, { force: true });
+    }
+    if (data.deleted > 0 && refreshedWorkspace?.hiddenSubagentCount > 0) {
+      this.onSessionNotice?.(
+        t("sidebar.deletedMainSessionsSubagentsKept", {
+          count: data.deleted,
+          hiddenCount: refreshedWorkspace.hiddenSubagentCount,
+        }),
+      );
+    }
   }
 
   closeContextMenu() {
@@ -1507,7 +1545,10 @@ export class SessionSidebar {
             // Pinned and Projects sections render the same workspace object;
             // use host's authoritative count in both places. The array may be
             // a lazy cache and can lag one session behind the registry count.
-            sessionCount: workspace?.sessionCount ?? pinned.sessions.length,
+            sessionCount:
+              workspace?.sessionCount === null
+                ? null
+                : (workspace?.sessionCount ?? pinned.sessions.length),
             expanded: this.isWorkspaceExpanded(expansionWorkspace),
             onToggle: (expanded) => this.setWorkspaceExpanded(expansionWorkspace, expanded),
             onNewChat: !pinned.unavailable && workspace ? () => this.onNewChat(workspace) : null,
@@ -1583,6 +1624,7 @@ export class SessionSidebar {
       this.isWorkspaceExpanded(project),
       visibleCount,
       project.sessionCount ?? null,
+      project.hiddenSubagentCount ?? null,
       (project.sessions || []).map((session) => [
         session.filePath,
         session.name ?? null,
@@ -1616,7 +1658,10 @@ export class SessionSidebar {
       // Collapsed rows that have not loaded details yet show the cheap
       // readdir count; expanded rows show the precise loaded-session count.
       // Running-instance rows always count so a live window never shows 0.
-      sessionCount: Math.max(project.sessionCount ?? 0, visibleSessions.length),
+      sessionCount:
+        project.sessionCount === null
+          ? null
+          : Math.max(project.sessionCount ?? 0, visibleSessions.length),
       expanded: this.isWorkspaceExpanded(project),
       onToggle: (expanded) => this.setWorkspaceExpanded(project, expanded),
       onNewChat: this.onNewChat ? () => this.onNewChat(project) : null,

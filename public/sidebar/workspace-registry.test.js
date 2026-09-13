@@ -97,6 +97,7 @@ async function makeSidebar({
               "Directory missing — removed from the list. Session files were kept.",
             emptyRegistryTitle: "No projects yet",
             emptyRegistryHint: "Add a project to see its sessions here.",
+            sessionCountPending: "Session count will be calculated after opening this workspace.",
             alreadyRegistered: "This project is already in the list.",
             newSession: "New chat",
             removeFromList: "Remove from list",
@@ -544,10 +545,13 @@ describe("registry cache invalidation wiring", () => {
             : path === "/work/alpha"
               ? ALPHA_SESSIONS
               : [];
+          const visibleSessions = sessions.filter((session) => !deleted.has(session.filePath));
           return {
             path,
             dirName: path === "/work/alpha" ? "-work-alpha" : null,
-            sessions: sessions.filter((session) => !deleted.has(session.filePath)),
+            sessions: url.searchParams.has("countOnly") ? [] : visibleSessions,
+            sessionCount: visibleSessions.length,
+            hiddenSubagentCount: 0,
           };
         },
       },
@@ -651,7 +655,7 @@ describe("registry cache invalidation wiring", () => {
       filePath: "native-session-new",
       provisional: true,
     });
-    expect(alpha.sessionCount).toBeGreaterThanOrEqual(1);
+    expect(alpha.sessionCount).toBeNull();
   });
 
   test("coalesced refresh preserves in-flight session-list generation", async () => {

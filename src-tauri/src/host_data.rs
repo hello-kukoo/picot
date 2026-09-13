@@ -1,8 +1,9 @@
 // ABOUTME: Host data-plane reads for registry-authorized workspaces.
 // ABOUTME: Resolves workspace roots through shared MetadataStore authority.
+use crate::metadata_store::SessionSidebarVisibilityRow;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -161,66 +162,257 @@ impl HostDataPlane {
             .then(|| session_root.join(bucket))
     }
 
-    /// Read one persisted workspace bucket once. Count-only skips JSONL
-    /// parsing; full mode returns the count from that same directory walk.
+    /// Read one persisted workspace bucket once. Count-only never opens JSONL
+    /// content; a cold or changed bucket therefore reports an unknown count.
     pub fn read_workspace_session_bucket(
         &self,
         workspace_id: &str,
         count_only: bool,
-    ) -> (Option<String>, Vec<serde_json::Value>, usize) {
+    ) -> WorkspaceSessionBucketResult {
         let Some(bucket) = self.session_bucket_for_workspace(workspace_id) else {
-            return (None, Vec::new(), 0);
+            return (None, Vec::new(), Some(0), Some(0));
+        };
+        let workspace = match self.workspace_root(workspace_id) {
+            Ok(workspace) => workspace,
+            Err(_) => return (None, Vec::new(), None, None),
         };
         let bucket_name = bucket
             .file_name()
             .map(|name| name.to_string_lossy().into_owned());
+        if !bucket.exists() {
+            return (bucket_name, Vec::new(), Some(0), Some(0));
+        }
         let files = match std::fs::read_dir(&bucket) {
-            Ok(files) => files,
-            Err(_) => return (bucket_name, Vec::new(), 0),
+            Ok(files) => files.filter_map(Result::ok).collect::<Vec<_>>(),
+            Err(_) => return (bucket_name, Vec::new(), None, None),
         };
-        let mut count = 0;
+        let jsonl_files = files
+            .into_iter()
+            .map(|file| file.path())
+            .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("jsonl"))
+            .collect::<Vec<_>>();
+        if count_only {
+            let mut visible_count = 0;
+            for path in &jsonl_files {
+                let Some(metadata) = sidebar_file_metadata(path) else {
+                    return (bucket_name, Vec::new(), None, None);
+                };
+                let Ok(Some(row)) = self.visibility_cache(path) else {
+                    return (bucket_name, Vec::new(), None, None);
+                };
+                if row.modified_at_ms != metadata.modified_at_ms
+                    || row.size_bytes != metadata.size_bytes
+                {
+                    return (bucket_name, Vec::new(), None, None);
+                }
+                if row.is_sidebar_visible {
+                    visible_count += 1;
+                }
+            }
+            return (bucket_name, Vec::new(), Some(visible_count), None);
+        }
+
+        let retained_paths = jsonl_files
+            .iter()
+            .map(|path| cache_path(path).to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        if let Some(bucket_name) = bucket_name.as_deref() {
+            let _ = self.prune_visibility_cache(bucket_name, &retained_paths);
+        }
+
         let mut sessions = Vec::new();
-        for file in files.filter_map(Result::ok) {
-            let path = file.path();
-            if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
-                continue;
-            }
-            count += 1;
-            if count_only {
-                continue;
-            }
-            let (Ok(metadata), Some(header)) = (file.metadata(), parse_session_header(&path))
+        let mut visible_count = 0;
+        let mut hidden_count = 0;
+        let mut all_resolved = true;
+        for path in &jsonl_files {
+            let Some(classification) =
+                self.classify_sidebar_file(path, bucket_name.as_deref(), &workspace)
             else {
+                all_resolved = false;
                 continue;
             };
-            let modified = metadata.modified().ok().and_then(|value| {
-                value
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .ok()
-                    .map(|duration| duration.as_millis())
-            });
-            let created = metadata.created().ok().and_then(|value| {
-                value
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .ok()
-                    .map(|duration| duration.as_millis())
-            });
-            sessions.push(serde_json::json!({
-                "id": header.id,
-                "timestamp": header.timestamp,
-                "name": header.name,
-                "firstMessage": header.first_message,
-                "cwd": header.cwd,
-                "file": path.file_name().map(|name| name.to_string_lossy().into_owned()),
-                "filePath": path.to_string_lossy(),
-                "mtime": modified,
-                "ctime": created,
-            }));
+            if !classification.resolved {
+                all_resolved = false;
+                continue;
+            }
+            if classification.is_subagent {
+                hidden_count += 1;
+                continue;
+            }
+            if !classification.is_sidebar_visible {
+                continue;
+            }
+            let Some(header) = classification.header else {
+                all_resolved = false;
+                continue;
+            };
+            visible_count += 1;
+            sessions.push(session_summary_value(path, &header));
         }
         sessions.sort_by(|left, right| {
             session_activity_time(right).total_cmp(&session_activity_time(left))
         });
-        (bucket_name, sessions, count)
+        if all_resolved {
+            (
+                bucket_name,
+                sessions,
+                Some(visible_count),
+                Some(hidden_count),
+            )
+        } else {
+            (bucket_name, sessions, None, None)
+        }
+    }
+
+    fn visibility_cache(
+        &self,
+        path: &Path,
+    ) -> Result<Option<SessionSidebarVisibilityRow>, HostDataError> {
+        self.metadata
+            .lock()
+            .map_err(|_| HostDataError::Io("Picot metadata lock poisoned".to_owned()))?
+            .session_sidebar_visibility(&cache_path(path))
+            .map_err(HostDataError::Io)
+    }
+
+    fn prune_visibility_cache(
+        &self,
+        bucket_name: &str,
+        retained_paths: &[String],
+    ) -> Result<(), HostDataError> {
+        self.metadata
+            .lock()
+            .map_err(|_| HostDataError::Io("Picot metadata lock poisoned".to_owned()))?
+            .prune_session_sidebar_visibility_bucket(bucket_name, retained_paths)
+            .map_err(HostDataError::Io)
+    }
+
+    fn save_visibility_cache(&self, row: &SessionSidebarVisibilityRow) {
+        if let Ok(metadata) = self.metadata.lock() {
+            let _ = metadata.upsert_session_sidebar_visibility(row);
+        }
+    }
+
+    fn classify_sidebar_file(
+        &self,
+        path: &Path,
+        bucket_name: Option<&str>,
+        workspace: &Path,
+    ) -> Option<SidebarFileClassification> {
+        let before = sidebar_file_metadata(path)?;
+        let cached = self.visibility_cache(path).ok().flatten();
+        let bucket_name = bucket_name?.to_owned();
+        let path = cache_path(path);
+
+        if let Some(row) = cached.as_ref() {
+            if sidebar_file_metadata_matches(
+                before,
+                SidebarFileMetadata {
+                    modified_at_ms: row.modified_at_ms,
+                    size_bytes: row.size_bytes,
+                },
+            ) {
+                if row.is_subagent || !row.is_sidebar_visible {
+                    return Some(SidebarFileClassification {
+                        is_subagent: row.is_subagent,
+                        is_sidebar_visible: row.is_sidebar_visible,
+                        resolved: true,
+                        header: None,
+                    });
+                }
+                if let Some(header) = parse_session_header(&path) {
+                    let is_sidebar_visible = session_header_matches_workspace(&header, workspace);
+                    if !is_sidebar_visible {
+                        self.save_visibility_cache(&SessionSidebarVisibilityRow {
+                            session_file: path.to_string_lossy().into_owned(),
+                            bucket_name: bucket_name.clone(),
+                            modified_at_ms: before.modified_at_ms,
+                            size_bytes: before.size_bytes,
+                            is_subagent: false,
+                            is_sidebar_visible: false,
+                        });
+                    }
+                    return Some(SidebarFileClassification {
+                        is_subagent: false,
+                        is_sidebar_visible,
+                        resolved: true,
+                        header: is_sidebar_visible.then_some(header),
+                    });
+                }
+            } else if before.size_bytes > row.size_bytes {
+                if let Ok(found) = scan_subagent_marker_tail(&path, row.size_bytes as u64) {
+                    let after = sidebar_file_metadata(&path)?;
+                    if after.size_bytes == before.size_bytes
+                        && after.modified_at_ms == before.modified_at_ms
+                    {
+                        if found || row.is_subagent {
+                            self.save_visibility_cache(&SessionSidebarVisibilityRow {
+                                session_file: path.to_string_lossy().into_owned(),
+                                bucket_name: bucket_name.clone(),
+                                modified_at_ms: after.modified_at_ms,
+                                size_bytes: after.size_bytes,
+                                is_subagent: true,
+                                is_sidebar_visible: false,
+                            });
+                            return Some(SidebarFileClassification {
+                                is_subagent: true,
+                                is_sidebar_visible: false,
+                                resolved: true,
+                                header: None,
+                            });
+                        }
+                        if let Some(header) = parse_session_header(&path) {
+                            let is_sidebar_visible =
+                                session_header_matches_workspace(&header, workspace);
+                            self.save_visibility_cache(&SessionSidebarVisibilityRow {
+                                session_file: path.to_string_lossy().into_owned(),
+                                bucket_name,
+                                modified_at_ms: after.modified_at_ms,
+                                size_bytes: after.size_bytes,
+                                is_subagent: false,
+                                is_sidebar_visible,
+                            });
+                            return Some(SidebarFileClassification {
+                                is_subagent: false,
+                                is_sidebar_visible,
+                                resolved: true,
+                                header: is_sidebar_visible.then_some(header),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        let scan = scan_session_sidebar_visibility(&path).ok()?;
+        let after = sidebar_file_metadata(&path)?;
+        let header = scan.header;
+        let is_sidebar_visible = !scan.is_subagent
+            && header
+                .as_ref()
+                .is_some_and(|header| session_header_matches_workspace(header, workspace));
+        if !sidebar_file_metadata_matches(before, after) {
+            return Some(SidebarFileClassification {
+                is_subagent: scan.is_subagent,
+                is_sidebar_visible,
+                resolved: false,
+                header: is_sidebar_visible.then_some(header).flatten(),
+            });
+        }
+        self.save_visibility_cache(&SessionSidebarVisibilityRow {
+            session_file: path.to_string_lossy().into_owned(),
+            bucket_name,
+            modified_at_ms: after.modified_at_ms,
+            size_bytes: after.size_bytes,
+            is_subagent: scan.is_subagent,
+            is_sidebar_visible,
+        });
+        Some(SidebarFileClassification {
+            is_subagent: scan.is_subagent,
+            is_sidebar_visible,
+            resolved: true,
+            header: is_sidebar_visible.then_some(header).flatten(),
+        })
     }
 
     /// Session file path for a workspace session in Pi's persisted bucket.
@@ -604,13 +796,25 @@ impl HostDataPlane {
         if !bucket.is_dir() {
             return Ok(Vec::new());
         }
-        let mut sessions = Vec::new();
-        for file in std::fs::read_dir(bucket)
+        let bucket_name = bucket
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned)
+            .ok_or_else(|| HostDataError::Io("invalid session bucket name".to_owned()))?;
+        let files = std::fs::read_dir(&bucket)
             .map_err(|error| HostDataError::Io(error.to_string()))?
             .filter_map(Result::ok)
-        {
-            let path = file.path();
-            if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("jsonl"))
+            .collect::<Vec<_>>();
+        let mut sessions = Vec::new();
+        for path in files {
+            let Some(classification) =
+                self.classify_sidebar_file(&path, Some(&bucket_name), &workspace)
+            else {
+                continue;
+            };
+            if !should_project_sidebar_file(&classification) {
                 continue;
             }
             if let Some(summary) = parse_session_summary(&path, workspace_id, &workspace)? {
@@ -635,16 +839,28 @@ impl HostDataPlane {
         if query.len() < 2 || !bucket.is_dir() {
             return Ok(Vec::new());
         }
-        let mut results = Vec::new();
-        for file in std::fs::read_dir(bucket)
+        let bucket_name = bucket
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned)
+            .ok_or_else(|| HostDataError::Io("invalid session bucket name".to_owned()))?;
+        let files = std::fs::read_dir(&bucket)
             .map_err(|error| HostDataError::Io(error.to_string()))?
             .filter_map(Result::ok)
-        {
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("jsonl"))
+            .collect::<Vec<_>>();
+        let mut results = Vec::new();
+        for path in files {
             if results.len() >= MAX_RESULTS {
                 return Ok(results);
             }
-            let path = file.path();
-            if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
+            let Some(classification) =
+                self.classify_sidebar_file(&path, Some(&bucket_name), &workspace)
+            else {
+                continue;
+            };
+            if !should_project_sidebar_file(&classification) {
                 continue;
             }
             if let Some(result) = search_session_file(&path, &workspace, &query)? {
@@ -889,6 +1105,215 @@ pub(crate) struct SessionHeader {
     pub name: Option<String>,
     pub first_message: Option<String>,
     pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SidebarFileMetadata {
+    modified_at_ms: i64,
+    size_bytes: i64,
+}
+
+struct SidebarFileClassification {
+    is_subagent: bool,
+    is_sidebar_visible: bool,
+    resolved: bool,
+    header: Option<SessionHeader>,
+}
+
+struct SidebarScan {
+    is_subagent: bool,
+    header: Option<SessionHeader>,
+}
+
+pub(crate) type WorkspaceSessionBucketResult = (
+    Option<String>,
+    Vec<serde_json::Value>,
+    Option<usize>,
+    Option<usize>,
+);
+
+fn cache_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn sidebar_file_metadata_matches(left: SidebarFileMetadata, right: SidebarFileMetadata) -> bool {
+    left.modified_at_ms == right.modified_at_ms && left.size_bytes == right.size_bytes
+}
+
+fn sidebar_file_metadata(path: &Path) -> Option<SidebarFileMetadata> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let modified_at_ms = metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis()
+        .try_into()
+        .ok()?;
+    let size_bytes = metadata.len().try_into().ok()?;
+    Some(SidebarFileMetadata {
+        modified_at_ms,
+        size_bytes,
+    })
+}
+
+fn session_header_matches_workspace(header: &SessionHeader, workspace: &Path) -> bool {
+    header
+        .cwd
+        .as_deref()
+        .and_then(|cwd| Path::new(cwd).canonicalize().ok())
+        .is_some_and(|cwd| cwd == workspace)
+}
+
+fn should_project_sidebar_file(classification: &SidebarFileClassification) -> bool {
+    classification.resolved && classification.is_sidebar_visible && !classification.is_subagent
+}
+
+fn session_summary_value(path: &Path, header: &SessionHeader) -> serde_json::Value {
+    let metadata = std::fs::metadata(path).ok();
+    let modified = metadata.as_ref().and_then(|value| {
+        value
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_millis())
+    });
+    let created = metadata.as_ref().and_then(|value| {
+        value
+            .created()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_millis())
+    });
+    serde_json::json!({
+        "id": header.id,
+        "timestamp": header.timestamp,
+        "name": header.name,
+        "firstMessage": header.first_message,
+        "cwd": header.cwd,
+        "file": path.file_name().map(|name| name.to_string_lossy().into_owned()),
+        "filePath": path.to_string_lossy(),
+        "mtime": modified,
+        "ctime": created,
+    })
+}
+
+fn scan_subagent_marker_tail(path: &Path, from_offset: u64) -> Result<bool, HostDataError> {
+    let mut file =
+        std::fs::File::open(path).map_err(|error| HostDataError::Io(error.to_string()))?;
+    file.seek(SeekFrom::Start(from_offset))
+        .map_err(|error| HostDataError::Io(error.to_string()))?;
+    for line in BufReader::new(file).lines() {
+        let line = line.map_err(|error| HostDataError::Io(error.to_string()))?;
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if entry.get("type").and_then(serde_json::Value::as_str) == Some("custom")
+            && entry.get("customType").and_then(serde_json::Value::as_str)
+                == Some("pi-subagents_launch_metadata")
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn scan_session_sidebar_visibility(path: &Path) -> Result<SidebarScan, HostDataError> {
+    let file = std::fs::File::open(path).map_err(|error| HostDataError::Io(error.to_string()))?;
+    let mut header: Option<(String, String, Option<String>)> = None;
+    let mut name: Option<String> = None;
+    let mut first_message: Option<String> = None;
+    let mut user_messages = 0usize;
+    let mut line_count = 0usize;
+    let mut is_subagent = false;
+    for line in BufReader::new(file).lines() {
+        let line = line.map_err(|error| HostDataError::Io(error.to_string()))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        line_count += 1;
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        match entry.get("type").and_then(serde_json::Value::as_str) {
+            Some("session") => {
+                header = Some((
+                    entry
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    entry
+                        .get("timestamp")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    entry
+                        .get("cwd")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
+                ));
+            }
+            Some("session_info") if name.is_none() => {
+                name = entry
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
+            }
+            Some("message") => {
+                if entry
+                    .pointer("/message/role")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("user")
+                {
+                    user_messages += 1;
+                    if first_message.is_none() {
+                        first_message =
+                            entry
+                                .pointer("/message/content")
+                                .and_then(|content| match content {
+                                    serde_json::Value::String(text) => {
+                                        Some(text.chars().take(120).collect::<String>())
+                                    }
+                                    serde_json::Value::Array(blocks) => blocks
+                                        .iter()
+                                        .find(|block| {
+                                            block.get("type").and_then(serde_json::Value::as_str)
+                                                == Some("text")
+                                        })
+                                        .and_then(|block| block.get("text"))
+                                        .and_then(serde_json::Value::as_str)
+                                        .map(|text| text.chars().take(120).collect::<String>()),
+                                    _ => None,
+                                });
+                    }
+                }
+            }
+            Some("custom")
+                if entry.get("customType").and_then(serde_json::Value::as_str)
+                    == Some("pi-subagents_launch_metadata") =>
+            {
+                is_subagent = true;
+            }
+            _ => {}
+        }
+    }
+    let header = header.and_then(|(id, timestamp, cwd)| {
+        if id.is_empty() || (user_messages == 0 && line_count <= 4) {
+            return None;
+        }
+        Some(SessionHeader {
+            id,
+            timestamp,
+            name,
+            first_message,
+            cwd,
+        })
+    });
+    Ok(SidebarScan {
+        is_subagent,
+        header,
+    })
 }
 
 pub(crate) fn parse_session_header(path: &Path) -> Option<SessionHeader> {
@@ -1357,11 +1782,48 @@ fn safe_join(root: &Path, relative_path: &str) -> Result<PathBuf, HostDataError>
 
 #[cfg(test)]
 mod tests {
-    use super::{FileKind, HostDataError, HostDataPlane};
+    use super::{
+        should_project_sidebar_file, FileKind, HostDataError, HostDataPlane,
+        SidebarFileClassification,
+    };
     use crate::metadata_store::MetadataStore;
     use std::fs;
+    use std::io::Write;
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn subagent_marker() -> String {
+        r#"{"type":"custom","customType":"pi-subagents_launch_metadata","data":{"version":1,"name":"worker","sessionMode":"lineage-only"}}"#.to_owned()
+    }
+
+    fn session_fixture(id: &str, cwd: &str, parent_session: Option<&str>, message: &str) -> String {
+        let mut header = serde_json::json!({
+            "type": "session",
+            "id": id,
+            "timestamp": "2026-09-12T00:00:00.000Z",
+            "cwd": cwd,
+        });
+        if let Some(parent_session) = parent_session {
+            header["parentSession"] = serde_json::Value::String(parent_session.to_owned());
+        }
+        [
+            header,
+            serde_json::json!({ "type": "session_info", "name": id }),
+            serde_json::json!({
+                "type": "message",
+                "message": { "role": "user", "content": message },
+            }),
+        ]
+        .into_iter()
+        .map(|entry| entry.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+            + "\n"
+    }
+
+    fn write_session_fixture(bucket: &std::path::Path, filename: &str, content: impl AsRef<[u8]>) {
+        fs::write(bucket.join(filename), content).unwrap();
+    }
 
     fn test_data(workspace: &std::path::Path) -> (HostDataPlane, String) {
         let db = std::env::temp_dir().join(format!("picot-host-data-db-{}", uuid::Uuid::new_v4()));
@@ -1605,6 +2067,212 @@ mod tests {
     }
 
     #[test]
+    fn persisted_bucket_reads_classified_visible_and_hidden_sessions() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let other_workspace = temp.path().join("other-workspace");
+        let sessions = temp.path().join("sessions");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&other_workspace).unwrap();
+        let (data, workspace_id) = test_data(&workspace);
+        let data = data.with_session_root(sessions.clone());
+        let bucket = data
+            .session_bucket_for_workspace(&workspace_id)
+            .expect("persisted session bucket");
+        fs::create_dir_all(&bucket).unwrap();
+        let cwd = workspace.to_string_lossy();
+
+        write_session_fixture(
+            &bucket,
+            "main.jsonl",
+            session_fixture("main", &cwd, None, "main session"),
+        );
+        write_session_fixture(
+            &bucket,
+            "other-workspace.jsonl",
+            session_fixture(
+                "other-workspace",
+                &other_workspace.to_string_lossy(),
+                None,
+                "must not leak",
+            ),
+        );
+        write_session_fixture(
+            &bucket,
+            "human-fork.jsonl",
+            session_fixture(
+                "human-fork",
+                &cwd,
+                Some("/sessions/parent.jsonl"),
+                "need refactor",
+            ),
+        );
+        write_session_fixture(
+            &bucket,
+            "lineage-child.jsonl",
+            session_fixture(
+                "lineage-child",
+                &cwd,
+                Some("/sessions/parent.jsonl"),
+                "need refactor",
+            ) + &subagent_marker(),
+        );
+        let mut long_child = session_fixture(
+            "fork-child",
+            &cwd,
+            Some("/sessions/parent.jsonl"),
+            "need refactor",
+        );
+        for index in 0..200 {
+            long_child.push_str(
+                &serde_json::json!({
+                    "type": "message",
+                    "id": format!("copied-{index}"),
+                    "message": { "role": "assistant", "content": "copied transcript" },
+                })
+                .to_string(),
+            );
+            long_child.push('\n');
+        }
+        long_child.push_str(&subagent_marker());
+        long_child.push('\n');
+        write_session_fixture(&bucket, "fork-child.jsonl", long_child);
+        write_session_fixture(
+            &bucket,
+            "standalone-child.jsonl",
+            session_fixture("standalone-child", &cwd, None, "need refactor") + &subagent_marker(),
+        );
+
+        let (_, cold_sessions, cold_count, cold_hidden) =
+            data.read_workspace_session_bucket(&workspace_id, true);
+        assert!(cold_sessions.is_empty());
+        assert_eq!(cold_count, None);
+        assert_eq!(cold_hidden, None);
+
+        let (_, sessions, visible_count, hidden_count) =
+            data.read_workspace_session_bucket(&workspace_id, false);
+        let mut ids = sessions
+            .iter()
+            .map(|row| row["id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        assert_eq!(ids, vec!["human-fork", "main"]);
+        assert_eq!(visible_count, Some(2));
+        assert_eq!(hidden_count, Some(3));
+
+        let (_, cached_sessions, cached_count, cached_hidden) =
+            data.read_workspace_session_bucket(&workspace_id, true);
+        assert!(cached_sessions.is_empty());
+        assert_eq!(cached_count, Some(2));
+        assert_eq!(cached_hidden, None);
+
+        let search_results = data.search_sessions(&workspace_id, "refactor").unwrap();
+        assert_eq!(search_results.len(), 1);
+        assert_eq!(search_results[0].session_id, "human-fork");
+
+        let mut listed_ids = data
+            .list_sessions(&workspace_id)
+            .unwrap()
+            .into_iter()
+            .map(|session| session.id)
+            .collect::<Vec<_>>();
+        listed_ids.sort();
+        assert_eq!(listed_ids, vec!["human-fork", "main"]);
+    }
+
+    #[test]
+    fn cache_pruning_is_deferred_until_full_bucket_projection() {
+        use crate::metadata_store::SessionSidebarVisibilityRow;
+
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let sessions = temp.path().join("sessions");
+        fs::create_dir_all(&workspace).unwrap();
+        let (data, workspace_id) = test_data(&workspace);
+        let data = data.with_session_root(sessions);
+        let bucket = data
+            .session_bucket_for_workspace(&workspace_id)
+            .expect("persisted session bucket");
+        fs::create_dir_all(&bucket).unwrap();
+        let stale_file = bucket.join("stale.jsonl");
+        data.metadata
+            .lock()
+            .unwrap()
+            .upsert_session_sidebar_visibility(&SessionSidebarVisibilityRow {
+                session_file: stale_file.to_string_lossy().into_owned(),
+                bucket_name: "--test-bucket--".to_owned(),
+                modified_at_ms: 1,
+                size_bytes: 1,
+                is_subagent: false,
+                is_sidebar_visible: true,
+            })
+            .unwrap();
+
+        let (_, _, count, hidden_count) = data.read_workspace_session_bucket(&workspace_id, true);
+        assert_eq!(count, Some(0));
+        assert_eq!(hidden_count, None);
+        assert!(data.visibility_cache(&stale_file).unwrap().is_some());
+
+        assert!(data.list_sessions(&workspace_id).unwrap().is_empty());
+        assert!(data.visibility_cache(&stale_file).unwrap().is_some());
+        assert!(data
+            .search_sessions(&workspace_id, "stale")
+            .unwrap()
+            .is_empty());
+        assert!(data.visibility_cache(&stale_file).unwrap().is_some());
+
+        data.read_workspace_session_bucket(&workspace_id, false);
+        assert!(data.visibility_cache(&stale_file).unwrap().is_none());
+    }
+
+    #[test]
+    fn append_only_tail_scan_hides_a_pre_marker_visible_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        let (data, workspace_id) = test_data(&workspace);
+        let data = data.with_session_root(temp.path().join("sessions"));
+        let bucket = data
+            .session_bucket_for_workspace(&workspace_id)
+            .expect("persisted session bucket");
+        fs::create_dir_all(&bucket).unwrap();
+        let file = bucket.join("grown.jsonl");
+        write_session_fixture(
+            &bucket,
+            "grown.jsonl",
+            session_fixture("grown", &workspace.to_string_lossy(), None, "main"),
+        );
+
+        let (_, _, first_count, first_hidden) =
+            data.read_workspace_session_bucket(&workspace_id, false);
+        assert_eq!(first_count, Some(1));
+        assert_eq!(first_hidden, Some(0));
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&file)
+            .unwrap()
+            .write_all(format!("{}\n", subagent_marker()).as_bytes())
+            .unwrap();
+
+        let (_, sessions, second_count, second_hidden) =
+            data.read_workspace_session_bucket(&workspace_id, false);
+        assert!(sessions.is_empty());
+        assert_eq!(second_count, Some(0));
+        assert_eq!(second_hidden, Some(1));
+    }
+
+    #[test]
+    fn unresolved_sidebar_classifications_are_not_projected() {
+        let classification = SidebarFileClassification {
+            is_subagent: false,
+            is_sidebar_visible: true,
+            resolved: false,
+            header: None,
+        };
+        assert!(!should_project_sidebar_file(&classification));
+    }
+
+    #[test]
     fn persisted_bucket_reads_once_and_missing_directory_is_empty() {
         let temp = tempfile::tempdir().unwrap();
         let workspace = temp.path().join("workspace");
@@ -1622,7 +2290,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             data.read_workspace_session_bucket(&workspace_id, true),
-            (Some(bucket_name.clone()), Vec::new(), 0),
+            (Some(bucket_name.clone()), Vec::new(), Some(0), Some(0)),
         );
 
         let bucket = sessions.join(&bucket_name);
@@ -1635,9 +2303,11 @@ mod tests {
             ),
         )
         .unwrap();
-        let (dir_name, sessions, count) = data.read_workspace_session_bucket(&workspace_id, false);
+        let (dir_name, sessions, count, hidden_count) =
+            data.read_workspace_session_bucket(&workspace_id, false);
         assert_eq!(dir_name, Some(bucket_name));
-        assert_eq!(count, 1);
+        assert_eq!(count, Some(1));
+        assert_eq!(hidden_count, Some(0));
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0]["id"], "saved");
     }

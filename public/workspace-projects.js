@@ -167,8 +167,11 @@ export function mergeRegistryWorkspaces(
       folderName: row.displayName || folderName(path),
       dirName: previousRow?.dirName ?? null,
       sessions: carriedSessions,
-      sessionCount:
-        typeof previousRow?.sessionCount === "number" ? previousRow.sessionCount : undefined,
+      sessionCount: typeof previousRow?.sessionCount === "number" ? previousRow.sessionCount : null,
+      hiddenSubagentCount:
+        typeof previousRow?.hiddenSubagentCount === "number"
+          ? previousRow.hiddenSubagentCount
+          : null,
       runningInstances: instances,
       isProvisional: false,
       source: "registry",

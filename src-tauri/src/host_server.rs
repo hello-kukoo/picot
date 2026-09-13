@@ -3,7 +3,9 @@
 use crate::git_service::GitService;
 use crate::host_capability::HostCapabilityStore;
 use crate::host_control::{ControlHandler, HostEventSink, ProgressSink, VerifiedClientContext};
-use crate::host_data::{HostDataError, HostDataPlane};
+use crate::host_data::{
+    HostDataError, HostDataPlane, SessionSearchResult, WorkspaceSessionBucketResult,
+};
 use crate::host_router::{HostClientContext, HostRouter, RoutedAction, PROTOCOL_VERSION};
 use crate::metadata_store::SharedMetadataStore;
 use crate::native_pi_manager::NativePiManager;
@@ -667,10 +669,7 @@ async fn compat_sessions(
     Query(query): Query<WorkspaceQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let workspace_id = compat_owner_workspace(&state, &headers, query.workspace_id.as_deref())?;
-    let sessions = state
-        .data
-        .list_sessions(&workspace_id)
-        .map_err(host_data_error_response)?;
+    let sessions = list_sessions_blocking(state.data.clone(), workspace_id).await?;
     Ok(Json(json!({ "success": true, "sessions": sessions })))
 }
 
@@ -680,10 +679,7 @@ async fn compat_search(
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let workspace_id = compat_owner_workspace(&state, &headers, query.workspace_id.as_deref())?;
-    let results = state
-        .data
-        .search_sessions(&workspace_id, &query.q)
-        .map_err(host_data_error_response)?;
+    let results = search_sessions_blocking(state.data.clone(), workspace_id, query.q).await?;
     Ok(Json(json!({ "success": true, "results": results })))
 }
 
@@ -865,14 +861,15 @@ async fn compat_workspace_sessions(
         .workspace_root(&workspace_id)
         .map_err(host_data_error_response)?;
     let count_only = query.mode.as_deref() == Some("count");
-    let (dir_name, sessions, session_count) = state
-        .data
-        .read_workspace_session_bucket(&workspace_id, count_only);
+    let (dir_name, sessions, session_count, hidden_subagent_count) =
+        read_workspace_session_bucket_blocking(state.data.clone(), workspace_id, count_only)
+            .await?;
     Ok(Json(json!({
         "path": root,
         "dirName": dir_name,
         "sessions": sessions,
         "sessionCount": session_count,
+        "hiddenSubagentCount": hidden_subagent_count,
     })))
 }
 
@@ -1170,6 +1167,41 @@ fn host_data_error_response(error: HostDataError) -> (StatusCode, Json<Value>) {
         StatusCode::BAD_REQUEST
     };
     api_error(status, code)
+}
+
+async fn read_workspace_session_bucket_blocking(
+    data: HostDataPlane,
+    workspace_id: String,
+    count_only: bool,
+) -> Result<WorkspaceSessionBucketResult, (StatusCode, Json<Value>)> {
+    tokio::task::spawn_blocking(move || {
+        data.read_workspace_session_bucket(&workspace_id, count_only)
+    })
+    .await
+    .map_err(|_| host_data_error_response(HostDataError::Io("session scan failed".to_owned())))
+}
+
+async fn list_sessions_blocking(
+    data: HostDataPlane,
+    workspace_id: String,
+) -> Result<Vec<crate::host_data::SessionSummary>, (StatusCode, Json<Value>)> {
+    tokio::task::spawn_blocking(move || data.list_sessions(&workspace_id))
+        .await
+        .map_err(|_| {
+            host_data_error_response(HostDataError::Io("session list scan failed".to_owned()))
+        })?
+        .map_err(host_data_error_response)
+}
+
+async fn search_sessions_blocking(
+    data: HostDataPlane,
+    workspace_id: String,
+    query: String,
+) -> Result<Vec<SessionSearchResult>, (StatusCode, Json<Value>)> {
+    tokio::task::spawn_blocking(move || data.search_sessions(&workspace_id, &query))
+        .await
+        .map_err(|_| host_data_error_response(HostDataError::Io("search scan failed".to_owned())))?
+        .map_err(host_data_error_response)
 }
 
 /// Host-origin entry for production existing-shell windows. Route parameters
@@ -2601,9 +2633,14 @@ async fn dispatch(
                         .get("countOnly")
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
-                    let (dir_name, sessions, session_count) = state
-                        .data
-                        .read_workspace_session_bucket(workspace_id, count_only);
+                    let (dir_name, sessions, session_count, hidden_subagent_count) =
+                        read_workspace_session_bucket_blocking(
+                            state.data.clone(),
+                            workspace_id.to_owned(),
+                            count_only,
+                        )
+                        .await
+                        .map_err(|_| ("session_scan_failed", "Session scan failed".to_owned()))?;
                     Ok(json!({
                         "type": "data_response",
                         "requestId": request_id,
@@ -2613,6 +2650,7 @@ async fn dispatch(
                         "dirName": dir_name,
                         "sessions": sessions,
                         "sessionCount": session_count,
+                        "hiddenSubagentCount": hidden_subagent_count,
                     }))
                 }
                 Some("read_session_messages") => {
@@ -2672,10 +2710,15 @@ async fn dispatch(
                         .get("workspaceId")
                         .and_then(Value::as_str)
                         .ok_or(("invalid_workspace", "workspaceId is required".into()))?;
-                    let sessions = state
-                        .data
-                        .list_sessions(workspace_id)
-                        .map_err(host_data_error)?;
+                    let sessions =
+                        list_sessions_blocking(state.data.clone(), workspace_id.to_owned())
+                            .await
+                            .map_err(|_| {
+                                (
+                                    "session_list_scan_failed",
+                                    "Session list scan failed".to_owned(),
+                                )
+                            })?;
                     Ok(json!({
                         "type": "data_response",
                         "requestId": request_id,
@@ -2688,11 +2731,18 @@ async fn dispatch(
                         .get("workspaceId")
                         .and_then(Value::as_str)
                         .ok_or(("invalid_workspace", "workspaceId is required".into()))?;
-                    let query = frame.get("query").and_then(Value::as_str).unwrap_or("");
-                    let results = state
-                        .data
-                        .search_sessions(workspace_id, query)
-                        .map_err(host_data_error)?;
+                    let query = frame
+                        .get("query")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned();
+                    let results = search_sessions_blocking(
+                        state.data.clone(),
+                        workspace_id.to_owned(),
+                        query,
+                    )
+                    .await
+                    .map_err(|_| ("search_scan_failed", "Session search failed".to_owned()))?;
                     Ok(json!({
                         "type": "data_response",
                         "requestId": request_id,
@@ -3791,6 +3841,7 @@ mod tests {
         assert_eq!(sessions[0]["name"], "History probe");
         assert_eq!(sessions[0]["firstMessage"], "hello history");
         assert_eq!(response["sessionCount"], 1);
+        assert_eq!(response["hiddenSubagentCount"], 0);
 
         harness
             .socket
@@ -3816,6 +3867,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(count_only["sessionCount"], 1);
+        assert_eq!(count_only["hiddenSubagentCount"], Value::Null);
         assert_eq!(count_only["sessions"], json!([]));
         let _ = harness.socket.close(None).await;
         host.stop();

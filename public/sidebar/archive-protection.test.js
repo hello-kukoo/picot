@@ -31,8 +31,14 @@ beforeEach(async () => {
             deleteDisabledActive: "Cannot delete the active session",
             deleteDisabledStreaming: "Cannot delete a streaming session",
             deleteDisabledRunning: "Cannot delete a running session",
-            deleteWorkspaceSessions: "Delete all sessions",
-            deleteWorkspaceConfirm: "Delete {count} sessions permanently?",
+            deleteWorkspaceMainSessions: "Delete all main sessions",
+            deleteWorkspaceMainSessionsConfirm:
+              "Delete {count} main sessions permanently? Hidden subagent sessions will be kept.",
+            noMainSessionsToDelete:
+              "No main sessions to delete; hidden subagent sessions were kept.",
+            deletedMainSessionsSubagentsKept:
+              "Deleted {count} main sessions. {hiddenCount} hidden subagent sessions were kept.",
+            sessionCountPending: "Session count will be calculated after opening this workspace.",
             deleteWorkspaceNamePrompt: "Type workspace name to confirm:",
             deleteWorkspaceNameLabel: "Workspace name",
             deleteWorkspaceNameWarning: "Workspace name does not match.",

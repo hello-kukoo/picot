@@ -31,6 +31,7 @@ beforeEach(async () => {
             emptySession: "Empty session",
             openProject: "Open project",
             untitled: "Untitled",
+            sessionCountPending: "Session count will be calculated after opening this workspace.",
           },
           workspace: {
             focus: "Enter focus mode",
@@ -206,6 +207,20 @@ describe("buildSidebarWorkspaceGroup", () => {
     expect(group.querySelector(".workspace-name").textContent).toBe("alpha");
     expect(group.querySelector(".workspace-count").textContent).toBe("3");
     expect(header.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  test("renders an unknown count as an accessible em dash", () => {
+    setupDom();
+    const { group } = buildSidebarWorkspaceGroup({
+      workspaceId: "ws:unknown",
+      folderName: "unknown",
+      sessionCount: null,
+    });
+    const count = group.querySelector(".workspace-count");
+    expect(count.textContent).toBe("—");
+    expect(count.getAttribute("aria-label")).toBe(
+      "Session count will be calculated after opening this workspace.",
+    );
   });
 
   test("defaults to folded and toggles via click", () => {

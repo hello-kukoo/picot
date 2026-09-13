@@ -71,7 +71,13 @@ function localeStub() {
         removeFromList: "Remove from list",
         removedFromList: "Removed from the list; directory and session files were kept.",
         openInFinder: "Open in Finder",
-        deleteWorkspaceSessions: "Delete all sessions",
+        deleteWorkspaceMainSessions: "Delete all main sessions",
+        deleteWorkspaceMainSessionsConfirm:
+          "Delete {count} main sessions permanently? Hidden subagent sessions will be kept. This cannot be undone.",
+        noMainSessionsToDelete: "No main sessions to delete; hidden subagent sessions were kept.",
+        deletedMainSessionsSubagentsKept:
+          "Deleted {count} main sessions. {hiddenCount} hidden subagent sessions were kept.",
+        sessionCountPending: "Session count will be calculated after opening this workspace.",
         workspaceActions: "Workspace actions",
         showMore: "Show more",
         showLess: "Show less",
@@ -206,7 +212,7 @@ describe("SessionSidebar context menu", () => {
     expect(menu).toContain("Unpin workspace");
     expect(menu).toContain("Open in Finder");
     expect(menu).toContain("Remove from list");
-    expect(menu).toContain("Delete all sessions");
+    expect(menu).toContain("Delete all main sessions");
 
     // Second item opens Finder with the whole row object.
     document.querySelector(".sidebar-context-menu .context-menu-item:nth-child(2)").click();
@@ -229,7 +235,7 @@ describe("SessionSidebar context menu", () => {
     const menu = document.querySelector(".sidebar-context-menu").textContent;
     expect(menu).not.toContain("Pin workspace");
     expect(menu).not.toContain("Remove from list");
-    expect(menu).toContain("Delete all sessions");
+    expect(menu).toContain("Delete all main sessions");
   });
 
   test("pin action goes through the broker", async () => {

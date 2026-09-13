@@ -50,8 +50,14 @@ beforeEach(async () => {
             pinWorkspace: "Pin workspace",
             unpinWorkspace: "Unpin workspace",
             openInFinder: "Open in Finder",
-            deleteWorkspaceSessions: "Delete all sessions",
-            deleteWorkspaceConfirm: "Delete {count} sessions permanently?",
+            deleteWorkspaceMainSessions: "Delete all main sessions",
+            deleteWorkspaceMainSessionsConfirm:
+              "Delete {count} main sessions permanently? Hidden subagent sessions will be kept.",
+            noMainSessionsToDelete:
+              "No main sessions to delete; hidden subagent sessions were kept.",
+            deletedMainSessionsSubagentsKept:
+              "Deleted {count} main sessions. {hiddenCount} hidden subagent sessions were kept.",
+            sessionCountPending: "Session count will be calculated after opening this workspace.",
             deleteWorkspaceNamePrompt: "Type workspace name to confirm:",
             deleteWorkspaceNameWarning: "Workspace name does not match.",
             deleteWorkspaceNameLabel: "Workspace name",
@@ -234,6 +240,159 @@ describe("SessionSidebar workspace deletion", () => {
     return operation;
   });
 
+  test("cold registry workspaces force-load visible main sessions before confirmation", async () => {
+    const fetchMock = deleteBatchFetch({ deleted: 2, errors: [], running: [] });
+    global.fetch = fetchMock;
+    const sidebar = makeSidebar();
+    const workspace = {
+      source: "registry",
+      path: "/work/cold",
+      folderName: "cold",
+      sessions: [],
+    };
+    const ensure = vi
+      .spyOn(sidebar, "ensureWorkspaceSessions")
+      .mockImplementation(async (project, options) => {
+        expect(options).toEqual({ force: true });
+        project.sessions = [
+          { filePath: "/s/main-a.jsonl", name: "Main A" },
+          { filePath: "/s/main-b.jsonl", name: "Main B" },
+        ];
+        project.sessionCount = 2;
+        project.hiddenSubagentCount = 3;
+      });
+
+    const operation = sidebar.deleteWorkspaceSessions(workspace);
+    await vi.waitFor(() => {
+      expect(document.querySelector(".sidebar-confirm-dialog")).not.toBeNull();
+    });
+    expect(document.querySelector(".sidebar-confirm-message").textContent).toContain(
+      "2 main sessions",
+    );
+    const input = document.querySelector(".workspace-delete-confirm-input");
+    input.value = "cold";
+    document.querySelector(".sidebar-confirm-yes").click();
+    await operation;
+
+    expect(ensure).toHaveBeenCalledWith(workspace, { force: true });
+    expect(fetchMock.lastPayload).toEqual({
+      filePaths: ["/s/main-a.jsonl", "/s/main-b.jsonl"],
+    });
+  });
+
+  test("waits for an in-flight registry load before force-loading delete paths", async () => {
+    const fetchMock = deleteBatchFetch({ deleted: 1, errors: [], running: [] });
+    global.fetch = fetchMock;
+    const sidebar = makeSidebar();
+    const workspace = {
+      source: "registry",
+      registryId: "workspace-id",
+      workspaceId: "ws:workspace-id",
+      path: "/work/racing",
+      folderName: "racing",
+      sessions: [{ filePath: "/s/stale.jsonl", name: "Stale" }],
+    };
+    sidebar.projects = [workspace];
+    let releaseInitialLoad;
+    sidebar.transport.workspaceSessions = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseInitialLoad = resolve;
+          }),
+      )
+      .mockResolvedValue({
+        dirName: "--bucket--",
+        sessions: [{ filePath: "/s/fresh.jsonl", name: "Fresh" }],
+        sessionCount: 1,
+        hiddenSubagentCount: 0,
+      });
+    sidebar.refresh = vi.fn(async () => {
+      sidebar.projects = [workspace];
+    });
+
+    const initialLoad = sidebar.ensureWorkspaceSessions(workspace);
+    await vi.waitFor(() => expect(sidebar._registryBusyRows.has(workspace.workspaceId)).toBe(true));
+    const deletion = sidebar.deleteWorkspaceSessions(workspace);
+    expect(document.querySelector(".sidebar-confirm-dialog")).toBeNull();
+
+    releaseInitialLoad({
+      dirName: "--bucket--",
+      sessions: [{ filePath: "/s/stale.jsonl", name: "Stale" }],
+      sessionCount: 1,
+      hiddenSubagentCount: 0,
+    });
+    await initialLoad;
+    await vi.waitFor(() => {
+      expect(document.querySelector(".sidebar-confirm-dialog")).not.toBeNull();
+    });
+    const dialog = document.querySelector(".sidebar-confirm-dialog");
+    dialog.querySelector(".workspace-delete-confirm-input").value = "racing";
+    dialog.querySelector(".sidebar-confirm-yes").click();
+    await deletion;
+
+    expect(fetchMock.lastPayload).toEqual({ filePaths: ["/s/fresh.jsonl"] });
+  });
+
+  test("reports when only hidden subagent sessions remain", async () => {
+    const notice = vi.fn();
+    const sidebar = makeSidebar({ notice });
+    const workspace = {
+      source: "registry",
+      path: "/work/hidden-only",
+      folderName: "hidden-only",
+      sessions: [],
+    };
+    vi.spyOn(sidebar, "ensureWorkspaceSessions").mockImplementation(async (project) => {
+      project.sessions = [];
+      project.hiddenSubagentCount = 2;
+    });
+
+    await sidebar.deleteWorkspaceSessions(workspace);
+
+    expect(document.querySelector(".sidebar-confirm-dialog")).toBeNull();
+    expect(sidebar.transport.sessionDeleteBatch).not.toHaveBeenCalled();
+    expect(notice).toHaveBeenCalledWith(
+      "No main sessions to delete; hidden subagent sessions were kept.",
+    );
+  });
+
+  test("reports retained hidden subagent sessions after main-session deletion", async () => {
+    const fetchMock = deleteBatchFetch({ deleted: 2, errors: [], running: [] });
+    global.fetch = fetchMock;
+    const notice = vi.fn();
+    const sidebar = makeSidebar({ notice });
+    const workspace = {
+      source: "registry",
+      path: "/work/retained",
+      folderName: "retained",
+      sessions: [{ filePath: "/s/main-a.jsonl" }, { filePath: "/s/main-b.jsonl" }],
+    };
+    vi.spyOn(sidebar, "ensureWorkspaceSessions").mockImplementation(async (project) => {
+      project.sessions = workspace.sessions;
+      project.sessionCount = 2;
+      project.hiddenSubagentCount = 2;
+    });
+    sidebar.refresh = vi.fn(async () => {
+      sidebar.projects = [workspace];
+    });
+
+    const operation = sidebar.deleteWorkspaceSessions(workspace);
+    await vi.waitFor(() => {
+      expect(document.querySelector(".sidebar-confirm-dialog")).not.toBeNull();
+    });
+    const dialog = document.querySelector(".sidebar-confirm-dialog");
+    const input = dialog.querySelector(".workspace-delete-confirm-input");
+    input.value = "retained";
+    dialog.querySelector(".sidebar-confirm-yes").click();
+    await operation;
+
+    expect(notice).toHaveBeenCalledWith(
+      "Deleted 2 main sessions. 2 hidden subagent sessions were kept.",
+    );
+  });
+
   test("workspace context menu renders the delete-all entry", () => {
     const sidebar = makeSidebar();
     // Cookie pin store is retired; empty registry pins keep the menu lean.
@@ -244,6 +403,6 @@ describe("SessionSidebar workspace deletion", () => {
     sidebar.showWorkspaceContextMenu(event, WORKSPACE);
 
     const items = [...document.querySelectorAll(".context-menu-item")].map((b) => b.textContent);
-    expect(items).toContain("Delete all sessions");
+    expect(items).toContain("Delete all main sessions");
   });
 });

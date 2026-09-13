@@ -207,7 +207,9 @@ export function buildSidebarWorkspaceGroup({
 
   const countEl = document.createElement("span");
   countEl.className = "project-count workspace-count";
-  countEl.textContent = String(sessionCount);
+  const countKnown = typeof sessionCount === "number";
+  countEl.textContent = countKnown ? String(sessionCount) : "—";
+  if (!countKnown) countEl.setAttribute("aria-label", t("sidebar.sessionCountPending"));
   header.appendChild(countEl);
 
   if (onContextMenu) {
