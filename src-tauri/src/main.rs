@@ -1,6 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod acp_launch;
+mod acp_manager;
 mod appimage_env;
+mod child_supervision;
 mod git_pi_runner;
 mod git_service;
 mod host_data;
@@ -16,6 +19,7 @@ mod pi_launch;
 mod pi_rpc_bridge;
 mod pi_tls;
 mod remote_auth;
+mod remote_workspace;
 mod runtime_coordinator;
 mod session_ui_profile_store;
 mod settings_store;
@@ -37,6 +41,7 @@ use remote_auth::RemoteAuth;
 use runtime_coordinator::RuntimeTarget;
 use serde_json::Value;
 use skill_source_registry::SkillSourceRegistry;
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
@@ -132,6 +137,28 @@ async fn open_folder_as_workspace(
         .to_path_buf();
     open_workspace_at_path(&app, Some(&window), &path, None)?;
     Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+/// Open a workspace that lives on a remote host. There is no local checkout to
+/// pick, so the anchor directory is created for the user (see
+/// `remote_workspace`), its `sshRemote` binding written, and the window opened
+/// there — read/write/edit/bash then run over SSH from the first message.
+#[tauri::command]
+async fn open_remote_workspace(
+    app: AppHandle,
+    window: WebviewWindow,
+    connection: remote_workspace::RemoteWorkspaceRequest,
+    password: Option<String>,
+) -> Result<String, String> {
+    let root = remote_workspace::remotes_root()?;
+    let anchor = remote_workspace::prepare_remote_anchor(&connection, &root)?;
+    // Deliberately not part of the binding: a password stays in memory and is
+    // injected into the workspace's pi process at spawn (native_pi_manager).
+    if let Some(password) = password.as_deref() {
+        remote_workspace::stash_password(&anchor, password.trim());
+    }
+    open_workspace_at_path(&app, Some(&window), &anchor, None)?;
+    Ok(anchor.to_string_lossy().into_owned())
 }
 
 /// Open a brand-new session in the given workspace (identified by its
@@ -250,6 +277,20 @@ async fn ensure_agent_inbox_session(app: AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let _ = spawn_fresh_runtime(&runtimes, &launcher.launch, &cwd, workspace_id)?;
+    Ok(())
+}
+
+/// Retry native startup from the bootstrap error window after a failed launch.
+/// If startup already succeeded, just close the bootstrap window.
+#[tauri::command]
+fn retry_startup(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
+    if app.try_state::<HostServer>().is_some() {
+        let _ = window.close();
+        return Ok(());
+    }
+    let static_dir = find_static_dir(&app);
+    setup_native_runtime(&app, static_dir)?;
+    let _ = window.close();
     Ok(())
 }
 
@@ -630,7 +671,7 @@ fn resolve_static_dir(
         .unwrap_or_else(|| PathBuf::from("public"))
 }
 
-fn find_static_dir(app: &tauri::App) -> PathBuf {
+fn find_static_dir(app: &AppHandle) -> PathBuf {
     resolve_static_dir(
         app.path().resource_dir().ok(),
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -793,6 +834,18 @@ fn extract_session_cwd(session_path: &Path) -> Option<String> {
     None
 }
 
+fn choose_latest_existing_boot_target(
+    session_cwds_newest_first: impl IntoIterator<Item = (String, String)>,
+) -> Option<(String, String)> {
+    for (cwd, session_path) in session_cwds_newest_first {
+        if Path::new(&cwd).is_dir() {
+            return Some((cwd, session_path));
+        }
+        log::info!("[picot-native] startup skipped missing workspace {cwd} from {session_path}");
+    }
+    None
+}
+
 fn find_latest_session_boot_target() -> Option<(String, String)> {
     let sessions_root = dirs::home_dir()?.join(".pi/agent/sessions");
     if !sessions_root.exists() {
@@ -803,38 +856,34 @@ fn find_latest_session_boot_target() -> Option<(String, String)> {
         return None;
     }
 
-    let latest = list_session_files(&sessions_root)
+    let mut ranked: Vec<(std::time::SystemTime, PathBuf)> = list_session_files(&sessions_root)
         .into_iter()
         .filter_map(|path| {
             let mtime = fs::metadata(&path).ok()?.modified().ok()?;
             Some((mtime, path))
         })
-        .max_by_key(|(mtime, _)| *mtime)?;
-    let session_path = latest.1;
-    let cwd = extract_session_cwd(&session_path)?;
-    Some((cwd, session_path.to_string_lossy().to_string()))
+        .collect();
+    ranked.sort_by_key(|(mtime, _)| Reverse(*mtime));
+    let candidates = ranked.into_iter().filter_map(|(_, session_path)| {
+        let cwd = extract_session_cwd(&session_path)?;
+        Some((cwd, session_path.to_string_lossy().into_owned()))
+    });
+    choose_latest_existing_boot_target(candidates)
 }
 
 fn select_fresh_startup_target(
     home_cwd: String,
     latest_session: Option<(String, String)>,
 ) -> (String, Option<String>) {
-    // Only adopt the latest workspace when it still exists on disk (v3
-    // 306f161): a moved/deleted directory (e.g. OneDrive relocation) would
-    // otherwise abort pi's spawn with ERROR_DIRECTORY (os error 267).
     let cwd = latest_session
-        .map(|(session_cwd, _session_path)| session_cwd)
-        .filter(|cwd| PathBuf::from(cwd).is_dir())
+        .and_then(|(session_cwd, _session_path)| {
+            Path::new(&session_cwd).is_dir().then_some(session_cwd)
+        })
         .unwrap_or(home_cwd);
     (cwd, None)
 }
 
-/** Windows ERROR_DIRECTORY from a spawn with an invalid working directory. */
-fn is_invalid_working_directory_error(error: &str) -> bool {
-    error.contains("(os error 267)")
-}
-
-fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(), String> {
+fn setup_native_runtime(app: &AppHandle, static_dir: PathBuf) -> Result<(), String> {
     let home_cwd = dirs::home_dir()
         .unwrap_or_default()
         .to_string_lossy()
@@ -867,14 +916,14 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
             runtimes.clone(),
             remote_auth,
             std::collections::HashMap::from([(target.workspace_id.clone(), PathBuf::from(&cwd))]),
-            Some(app.handle().clone()),
+            Some(app.clone()),
             Some(Arc::clone(&metadata)),
         )
         .await?;
         runtimes.spawn(target.clone(), launch)?;
         Ok::<HostServer, String>(host)
     })?;
-    if let Err(error) = open_native_workspace_window(app.handle(), host.origin(), &target) {
+    if let Err(error) = open_native_workspace_window(app, host.origin(), &target) {
         runtimes.stop_all();
         return Err(error);
     }
@@ -907,6 +956,13 @@ fn main() {
         eprintln!("[picot] failed to sync login-shell environment: {error}");
     }
 
+    // Runtimes left behind by a Picot that was killed outright: no teardown of
+    // ours ran for those, so this is the only chance to collect them.
+    let swept = child_supervision::sweep_orphans();
+    if swept > 0 {
+        log::info!("[picot-native] cleaned up {swept} orphaned pi runtime(s) from a previous run");
+    }
+
     #[cfg(target_os = "macos")]
     disable_press_and_hold_accents();
 
@@ -931,10 +987,12 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             open_folder_as_workspace,
+            open_remote_workspace,
             open_new_session_in_workspace,
             open_session_in_project,
             show_task_completion_notification,
             ensure_agent_inbox_session,
+            retry_startup,
             check_beta_update,
             install_beta_update
         ])
@@ -946,24 +1004,17 @@ fn main() {
                 .build(),
         )
         .setup(|app| {
-            let static_dir = find_static_dir(app);
-            if let Err(error) = setup_native_runtime(app, static_dir) {
+            let handle = app.handle().clone();
+            let static_dir = find_static_dir(&handle);
+            if let Err(error) = setup_native_runtime(&handle, static_dir) {
                 log::error!("[picot-native] startup failed: {error}");
-                // v3 306f161: point at the real failing component. A cwd
-                // rejection is transient (next launch falls back to home via
-                // select_fresh_startup_target), unlike a corrupted install.
-                let cwd_hint = if is_invalid_working_directory_error(&error) {
-                    "\n\nThe configured workspace directory may have been moved or deleted; Picot will start from your home folder on the next launch."
-                } else {
-                    ""
-                };
-                if let Err(window_error) = open_bootstrap_window(&app.handle().clone(), &error) {
+                if let Err(window_error) = open_bootstrap_window(&handle, &error) {
                     log::error!(
                         "[picot-native] failed to open bootstrap window after startup error: {window_error}"
                     );
                     app.dialog()
                         .message(format!(
-                            "Picot could not start the embedded pi runtime.\n\n{error}{cwd_hint}\n\nThe Picot installation may be incomplete or corrupted. Please reinstall Picot and try again."
+                            "Picot could not start the embedded pi runtime.\n\n{error}\n\nThe Picot installation may be incomplete or corrupted. Please reinstall Picot and try again."
                         ))
                         .title("Picot startup failed")
                         .kind(MessageDialogKind::Error)
@@ -1024,18 +1075,58 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle: &tauri::AppHandle, event| {
+            if let tauri::RunEvent::Ready = event {
+                install_termination_handlers(app_handle.clone());
+            }
             if let tauri::RunEvent::Exit = event {
                 if let Some(manager) = app_handle.try_state::<NativePiManagerState>() {
                     manager.stop_all();
                 }
+                child_supervision::clear_registry();
             }
         });
 }
 
+/// Tear runtimes down on the signals that otherwise skip `RunEvent::Exit`
+/// entirely: Ctrl-C under `tauri dev`, a logout or shutdown (SIGTERM), and a
+/// closing terminal (SIGHUP). Nothing can be done about SIGKILL — that case is
+/// what the startup sweep exists for.
+#[cfg(unix)]
+fn install_termination_handlers(app_handle: tauri::AppHandle) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static INSTALLED: AtomicBool = AtomicBool::new(false);
+    if INSTALLED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    for signal in [
+        tokio::signal::unix::SignalKind::terminate(),
+        tokio::signal::unix::SignalKind::interrupt(),
+        tokio::signal::unix::SignalKind::hangup(),
+    ] {
+        let app_handle = app_handle.clone();
+        tauri::async_runtime::spawn(async move {
+            let Ok(mut stream) = tokio::signal::unix::signal(signal) else {
+                return;
+            };
+            if stream.recv().await.is_none() {
+                return;
+            }
+            if let Some(manager) = app_handle.try_state::<NativePiManagerState>() {
+                manager.stop_all();
+            }
+            child_supervision::clear_registry();
+            app_handle.exit(0);
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn install_termination_handlers(_app_handle: tauri::AppHandle) {}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        is_invalid_working_directory_error, resolve_static_dir, select_fresh_startup_target,
+        choose_latest_existing_boot_target, resolve_static_dir, select_fresh_startup_target,
         session_dir_name, set_press_and_hold_enabled,
     };
     use std::fs;
@@ -1096,50 +1187,52 @@ mod tests {
     }
 
     #[test]
-    fn keeps_an_existing_latest_workspace_but_never_resumes_its_session_on_app_start() {
-        let home = unique_temp_dir("startup-home");
-        let workspace = unique_temp_dir("startup-workspace");
-        std::fs::create_dir_all(&home).unwrap();
-        std::fs::create_dir_all(&workspace).unwrap();
-
+    fn keeps_the_latest_workspace_but_never_resumes_its_session_on_app_start() {
+        let workspace = unique_temp_dir("startup-ws");
+        fs::create_dir_all(&workspace).unwrap();
+        let cwd = workspace.to_string_lossy().into_owned();
         let selected = select_fresh_startup_target(
-            home.to_string_lossy().into_owned(),
-            Some((
-                workspace.to_string_lossy().into_owned(),
-                "/sessions/old-session.jsonl".to_string(),
-            )),
+            "/home/user".to_string(),
+            Some((cwd.clone(), "/sessions/old-session.jsonl".to_string())),
         );
-
-        assert_eq!(selected, (workspace.to_string_lossy().into_owned(), None));
-        let _ = std::fs::remove_dir_all(home);
-        let _ = std::fs::remove_dir_all(workspace);
+        assert_eq!(selected, (cwd, None));
+        let _ = fs::remove_dir_all(workspace);
     }
 
     #[test]
-    fn falls_back_to_home_when_latest_workspace_no_longer_exists() {
-        let home = unique_temp_dir("startup-home");
-        std::fs::create_dir_all(&home).unwrap();
-        let missing_workspace = home.join("deleted-workspace");
-
+    fn falls_back_to_home_when_latest_session_workspace_is_gone() {
         let selected = select_fresh_startup_target(
-            home.to_string_lossy().into_owned(),
+            "/home/user".to_string(),
             Some((
-                missing_workspace.to_string_lossy().into_owned(),
+                "/definitely-missing-picot-workspace/does-not-exist".to_string(),
                 "/sessions/old-session.jsonl".to_string(),
             )),
         );
-
-        assert_eq!(selected, (home.to_string_lossy().into_owned(), None));
-        let _ = std::fs::remove_dir_all(home);
+        assert_eq!(selected, ("/home/user".to_string(), None));
     }
 
     #[test]
-    fn detects_windows_invalid_working_directory_spawn_error() {
-        assert!(is_invalid_working_directory_error(
-            "Cannot start embedded Pi native RPC process: 目录名称无效。 (os error 267)"
-        ));
-        assert!(!is_invalid_working_directory_error(
-            "Cannot start embedded Pi native RPC process: Access is denied. (os error 5)"
-        ));
+    fn skips_deleted_workspace_and_uses_next_existing_session() {
+        let gone = unique_temp_dir("gone-ws");
+        let live = unique_temp_dir("live-ws");
+        fs::create_dir_all(&live).unwrap();
+        let picked = choose_latest_existing_boot_target(vec![
+            (
+                gone.to_string_lossy().into_owned(),
+                "newer-missing.jsonl".to_string(),
+            ),
+            (
+                live.to_string_lossy().into_owned(),
+                "older-live.jsonl".to_string(),
+            ),
+        ]);
+        assert_eq!(
+            picked,
+            Some((
+                live.to_string_lossy().into_owned(),
+                "older-live.jsonl".to_string()
+            ))
+        );
+        let _ = fs::remove_dir_all(live);
     }
 }

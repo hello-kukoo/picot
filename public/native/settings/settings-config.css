@@ -192,7 +192,7 @@
   padding: var(--space-2);
   margin-top: var(--space-2);
   font-size: var(--font-size-sm);
-  border: 1px dashed;
+  border: 1px dashed var(--border);
   border-color: var(--accent);
 }
 

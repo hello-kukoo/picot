@@ -1,6 +1,10 @@
 import { t } from "../../i18n.js";
 import { createIcon } from "../../icons.js";
-import { buildSidebarSection, buildSidebarWorkspaceGroup } from "../../sidebar-workspace-group.js";
+import {
+  buildSidebarSection,
+  buildSidebarWorkspaceGroup,
+  createRemoteBadge,
+} from "../../sidebar-workspace-group.js";
 import { isSuperAgentProjectPath } from "../../super-agent/session.js";
 import { isSuperAgentEnabled } from "../../super-agent/settings.js";
 import { bindDialogEscape } from "../../ui/dialog-escape.js";
@@ -1044,6 +1048,7 @@ export class SessionSidebar {
       pinnedGroups.push({
         workspacePin: true,
         unavailable: sessions.length === 0,
+        isRemote: sessions.some((s) => s.isRemote),
         workspace: {
           path: ws.path,
           folderName: workspaceFolderName(ws.path, sessions[0]?.projectName),
@@ -1065,6 +1070,7 @@ export class SessionSidebar {
         pinnedGroups.push({
           workspacePin: false,
           unavailable: false,
+          isRemote: Boolean(session.isRemote),
           workspace: {
             path: session.projectPath,
             folderName: workspaceFolderName(session.projectPath, session.projectName),
@@ -1094,6 +1100,7 @@ export class SessionSidebar {
             workspaceId,
             folderName: ws?.folderName || t("sidebar.unavailable"),
             workspacePath: ws?.path || "",
+            isRemote: Boolean(pinned.isRemote),
             sessionCount: pinned.sessions.length,
             expanded: true,
             onNewChat: canCreateSession
@@ -1175,10 +1182,12 @@ export class SessionSidebar {
           path,
           name: session.projectName || path,
           isCurrent: Boolean(session.isCurrentWorkspace),
+          isRemote: false,
           sessions: [],
         });
         order.push(path);
       }
+      byPath.get(path).isRemote ||= Boolean(session.isRemote);
       byPath.get(path).sessions.push(session);
     }
     return order.map((path) => byPath.get(path));
@@ -1227,6 +1236,10 @@ export class SessionSidebar {
         console.error("[Sidebar] Failed to start new chat:", error);
       });
     });
+
+    if (project.isRemote) {
+      header.querySelector(".folder-icon")?.replaceWith(createRemoteBadge());
+    }
 
     const moreActionsEl = header.querySelector(".workspace-more-actions-btn");
     if (moreActionsEl) {
