@@ -43,6 +43,7 @@ export function setupMcpPage({ masterEl, detailEl, tabs, navItem, configGateway 
       const name = selected().name;
       if (!groupEntries().some((e) => e.name === name)) selections.delete(activeTab);
     }
+    ensureSelection();
     render();
   }
 
@@ -75,6 +76,14 @@ export function setupMcpPage({ masterEl, detailEl, tabs, navItem, configGateway 
 
   function selected() {
     return selections.get(activeTab) ?? null;
+  }
+
+  /** An empty detail pane reads as a broken grey page; default to the
+   * first master row whenever a tab has no selection. */
+  function ensureSelection() {
+    if (selected()) return;
+    const first = groupEntries()[0];
+    if (first) selections.set(activeTab, { name: first.name });
   }
 
   function setStatus(text) {
@@ -470,6 +479,7 @@ export function setupMcpPage({ masterEl, detailEl, tabs, navItem, configGateway 
       if (!tab || tab === activeTab) return;
       activeTab = tab;
       mode = "view";
+      ensureSelection();
       render();
     });
   }

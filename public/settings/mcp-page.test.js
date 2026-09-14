@@ -140,6 +140,21 @@ describe("mcp-page", () => {
     vi.restoreAllMocks();
   });
 
+  it("auto-selects the first master row on load and on tab switch", async () => {
+    const { page, detailEl, masterEl, tabs } = mount(makeGateway(LIST));
+    await page.activate();
+    // Default tab auto-selects its first entry without any click.
+    expect(detailEl.textContent).toContain("grep");
+    expect(
+      masterEl.querySelector(".pkg-manager-sidebar-row").classList.contains("is-selected"),
+    ).toBe(true);
+
+    clickTab(tabs, "piGlobal");
+    expect(detailEl.textContent).toContain("context7"); // first pi-global entry
+    clickTab(tabs, "project");
+    expect(detailEl.textContent).toContain("repoTool"); // first project entry
+  });
+
   it("renders three tabs, switches active tab, and unhides nav when installed", async () => {
     const { page, masterEl, tabs, navItem } = mount(makeGateway(LIST));
     await page.activate();
