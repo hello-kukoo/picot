@@ -2148,7 +2148,10 @@ mod tests {
         let (_, cached_sessions, cached_count, cached_hidden) =
             data.read_workspace_session_bucket(&workspace_id, true);
         assert!(cached_sessions.is_empty());
-        assert_eq!(cached_count, Some(2));
+        // Count-only reads always return the raw .jsonl entry count, warm or
+        // cold: no session-count cache, no visibility classification
+        // (ARCHITECTURE.md, sidebar session discovery).
+        assert_eq!(cached_count, Some(6));
         assert_eq!(cached_hidden, None);
 
         let search_results = data.search_sessions(&workspace_id, "refactor").unwrap();
