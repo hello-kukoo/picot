@@ -1083,7 +1083,9 @@ messagesElement.addEventListener("messagefork", async (event) => {
         entryId = forkMessages?.response?.data?.messages?.[index]?.entryId ?? null;
       }
       if (!entryId) {
-        showError(new Error(t("errors.treeNavigateFailed", { error: "Invalid entry ID for forking" })));
+        showError(
+          new Error(t("errors.treeNavigateFailed", { error: "Invalid entry ID for forking" })),
+        );
         return;
       }
     }
