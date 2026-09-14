@@ -280,6 +280,42 @@ describe("picot config skills operations", () => {
   });
 });
 
+describe("picot config package skill operations", () => {
+  it("mutates a package skill through the config command bridge", async () => {
+    const { home, handlePicotConfig } = await loadConfigWithTempHome();
+    const packageRoot = join(home, ".pi", "agent", "npm", "node_modules", "demo-pkg");
+    const skillDir = join(packageRoot, "skills", "demo-skill");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(packageRoot, "package.json"),
+      JSON.stringify({ name: "demo-pkg", version: "1.0.0" }),
+    );
+    writeFileSync(
+      join(skillDir, "SKILL.md"),
+      "---\nname: demo-skill\ndescription: Demo skill\n---\n",
+    );
+    writeFileSync(
+      join(home, ".pi", "agent", "settings.json"),
+      JSON.stringify({ packages: ["npm:demo-pkg"] }),
+    );
+
+    const result = await handlePicotConfig(
+      "set_package_skill_enabled",
+      {
+        scope: "global",
+        target: { packageIdentity: "npm:demo-pkg", relativePath: "skills/demo-skill" },
+        enabled: false,
+      },
+      {},
+    );
+
+    expect(result).toMatchObject({ ok: true, data: { runtimeRestartRequired: true } });
+    expect(JSON.parse(readFileSync(join(home, ".pi", "agent", "settings.json"), "utf8"))).toEqual({
+      packages: [{ source: "npm:demo-pkg", skills: ["-skills/demo-skill"] }],
+    });
+  });
+});
+
 describe("picot config models operations", () => {
   it("saves models.json even when registry refresh does not finish", async () => {
     const { home, handlePicotConfig } = await loadConfigWithTempHome();

@@ -447,6 +447,10 @@ pub(crate) fn inspect_pi_list_output(
         }
 
         let source = trimmed.strip_prefix('-').map(str::trim).unwrap_or(trimmed);
+        let source = source
+            .strip_suffix(" (filtered)")
+            .map(str::trim)
+            .unwrap_or(source);
         if source.is_empty() {
             continue;
         }
@@ -1422,6 +1426,44 @@ mod tests {
         );
         assert_eq!(records[0].counts.extensions, 1);
         assert_eq!(records[1].counts.skills, 1);
+    }
+
+    #[test]
+    fn parses_filtered_pi_list_sources_and_disabled_state() {
+        let root = tempdir().unwrap();
+        let paths = locations(root.path());
+        let disabled_source = "git:github.com/jonjonrankin/pi-caveman";
+        let active_source = "git:github.com/example/active-package";
+        write_json(
+            &paths.global_settings,
+            json!({
+                "packages": [
+                    {
+                        "source": disabled_source,
+                        "extensions": [],
+                        "skills": [],
+                        "prompts": [],
+                        "themes": []
+                    },
+                    {
+                        "source": active_source,
+                        "extensions": ["extensions/main.ts"],
+                        "skills": [],
+                        "prompts": [],
+                        "themes": []
+                    }
+                ]
+            }),
+        );
+        let output = format!(
+            "User packages:\n  {disabled_source} (filtered)\n  {active_source} (filtered)\n"
+        );
+
+        let records = inspect_pi_list_output(&output, &paths).unwrap();
+        assert_eq!(records[0].source, disabled_source);
+        assert!(records[0].disabled);
+        assert_eq!(records[1].source, active_source);
+        assert!(!records[1].disabled);
     }
 
     #[test]

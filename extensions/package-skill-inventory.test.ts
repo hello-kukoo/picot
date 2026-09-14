@@ -1,7 +1,7 @@
 // ABOUTME: Behavior-locked tests for package skill source parsing, identity, precedence, and roots.
 // ABOUTME: Validates npm/git/local resolution, project precedence, autoload:false inheritance, and trust gating.
 
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -10,6 +10,7 @@ import {
   type ConfiguredPackageEntry,
   collectPackageSkillCandidates,
   dedupeConfiguredPackages,
+  mutatePackageSkillEnabled,
   packageIdentity,
   parsePackageSource,
   type ResolvedPackage,
@@ -392,6 +393,19 @@ describe("settings packages[] forms", () => {
     expect(inv.packages.map((p) => p.identity)).toContain("npm:foo");
   });
 
+  it.each([
+    ["string", "npm:foo"],
+    ["object", { source: "npm:foo" }],
+  ])("enables all candidates when a package has no skills filter (%s form)", (_form, packageEntry) => {
+    const o = opts({ scope: "global" });
+    makeInstalledNpm(o.agentDir, "foo");
+    writeSettings(o.agentDir, [packageEntry]);
+    const inv = buildPackageSkillInventory(o);
+    const card = inv.packages.find((p) => p.identity === "npm:foo");
+    expect(card?.candidates.length).toBeGreaterThan(0);
+    expect(card?.candidates.every((candidate) => candidate.enabled)).toBe(true);
+  });
+
   it("reports a diagnostic for malformed settings JSON without aborting", () => {
     const o = opts({ scope: "global" });
     mkdirSync(o.agentDir, { recursive: true });
@@ -440,6 +454,92 @@ describe("packages without skills are omitted", () => {
     writeSettings(o.agentDir, ["npm:pkg"]);
     const inv = buildPackageSkillInventory(o);
     expect(inv.packages.find((p) => p.identity === "npm:pkg")).toBeUndefined();
+  });
+
+  it("round-trips package skill enablement through settings.json", async () => {
+    const o = opts();
+    makeInstalledNpm(o.agentDir, "foo");
+    writeSettings(o.agentDir, ["npm:foo"]);
+    const result = await mutatePackageSkillEnabled({
+      ...o,
+      packageIdentity: "npm:foo",
+      relativePath: "skills/foo",
+      enabled: false,
+    });
+    const settings = JSON.parse(readFileSync(join(o.agentDir, "settings.json"), "utf8"));
+    expect(settings.packages).toEqual([{ source: "npm:foo", skills: ["-skills/foo"] }]);
+    expect(result.inventory.packages[0]?.candidates[0]?.enabled).toBe(false);
+    await mutatePackageSkillEnabled({
+      ...o,
+      packageIdentity: "npm:foo",
+      relativePath: "./skills/foo/",
+      enabled: true,
+    });
+    const updated = JSON.parse(readFileSync(join(o.agentDir, "settings.json"), "utf8"));
+    expect(updated.packages[0].skills).toBeUndefined();
+  });
+
+  it("writes project-scope mutations to the project settings file", async () => {
+    const o = opts({ scope: "project", projectTrusted: true });
+    makeInstalledNpm(o.agentDir, "foo");
+    writeSettings(o.agentDir, ["npm:foo"]);
+    writeSettings(join(o.cwd, ".pi"), [{ source: "npm:foo", autoload: false }]);
+    await mutatePackageSkillEnabled({
+      ...o,
+      packageIdentity: "npm:foo",
+      relativePath: "skills/foo",
+      enabled: false,
+    });
+    const projectSettings = JSON.parse(readFileSync(join(o.cwd, ".pi", "settings.json"), "utf8"));
+    const globalSettings = JSON.parse(readFileSync(join(o.agentDir, "settings.json"), "utf8"));
+    expect(projectSettings.packages[0].skills).toEqual(["-skills/foo"]);
+    expect(globalSettings.packages).toEqual(["npm:foo"]);
+  });
+
+  it("uses the global baseline when enabling a project delta skill", async () => {
+    const o = opts({ scope: "project", projectTrusted: true });
+    makeInstalledNpm(o.agentDir, "foo");
+    writeSettings(o.agentDir, [{ source: "npm:foo", skills: ["-skills/foo"] }]);
+    writeSettings(join(o.cwd, ".pi"), [{ source: "npm:foo", autoload: false }]);
+
+    const result = await mutatePackageSkillEnabled({
+      ...o,
+      packageIdentity: "npm:foo",
+      relativePath: "skills/foo",
+      enabled: true,
+    });
+
+    const projectSettings = JSON.parse(readFileSync(join(o.cwd, ".pi", "settings.json"), "utf8"));
+    expect(projectSettings.packages[0].skills).toEqual(["+skills/foo"]);
+    expect(result.inventory.packages[0]?.candidates[0]?.enabled).toBe(true);
+  });
+
+  it("preserves broad exclusions when enabling one skill", async () => {
+    const o = opts();
+    makeInstalledNpm(o.agentDir, "foo");
+    writeSettings(o.agentDir, [{ source: "npm:foo", skills: ["!skills/**"] }]);
+    await mutatePackageSkillEnabled({
+      ...o,
+      packageIdentity: "npm:foo",
+      relativePath: "skills/foo",
+      enabled: true,
+    });
+    const settings = JSON.parse(readFileSync(join(o.agentDir, "settings.json"), "utf8"));
+    expect(settings.packages[0].skills).toEqual(["!skills/**", "+skills/foo"]);
+  });
+
+  it("keeps an explicit empty filter when enabling one skill", async () => {
+    const o = opts();
+    makeInstalledNpm(o.agentDir, "foo");
+    writeSettings(o.agentDir, [{ source: "npm:foo", skills: [] }]);
+    await mutatePackageSkillEnabled({
+      ...o,
+      packageIdentity: "npm:foo",
+      relativePath: "skills/foo",
+      enabled: true,
+    });
+    const settings = JSON.parse(readFileSync(join(o.agentDir, "settings.json"), "utf8"));
+    expect(settings.packages[0].skills).toEqual(["!**/*", "+skills/foo"]);
   });
 
   it("retains a package that contributes skills", () => {

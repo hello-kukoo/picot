@@ -172,6 +172,27 @@ Normal and Focus share `public/sidebar/session-tree-model.js`: missing parents a
 
 Settings → Models/Configuration 的 catalog、API key、models.json、OAuth 操作不再走静态 `host_models` 读盘路径，而是通过 `extensions/picot-bridge.ts` 注册的 `/picot-config` 命令在 Pi 进程内执行：WebView 以 `runtime_request(prompt)` 发起，结果经 `ctx.ui.notify` 的 `__picotConfig` 帧按 request id 回关（`public/settings/config-gateway.js`）。模型 catalog 与认证状态读 Pi live `modelRegistry`，因此 shell 环境变量凭证（如 `ANTHROPIC_API_KEY`）能正确显示。Codex OAuth 走同一通道：login/logout 以 `oauth_logout`/`start_oauth_login` op 触发，事件以 `__picotOauth` 帧流式返回，前端在 runtimeEvent 分发前按 M3 互斥优先消费（`public/settings/oauth-gateway.js`）。Settings 的 skills inventory/mutation、默认 thinking level 也走 bridge。Settings → MCP 页（三层页签，pi-mcp-adapter 检测到才显示）同样走 bridge：`mcp_list_servers`/`mcp_save_server`/`mcp_delete_server`/`mcp_toggle_server` 四个 op（`extensions/mcp-settings.ts`）读写 adapter 的分层 mcp.json，只写 pi-owned 层（pi-global 与项目 `.pi/mcp.json`），enable/disable 复刻 adapter 的项目层覆盖语义（含 `.mcp.json` 下层判定、无变化跳写、空条目删除）。host 侧旧的静态 catalog、OAuth、skills inventory 路由已删除；`host_models.rs` 仅保留 ModelCache 与 settings.json IO。
 
+### Settings → Skills → Packages
+
+Pi 的 package skill 配置属于 `settings.json` 的 `packages[]` entry，而非独立的 skill enabled 表。entry 可为 source 字符串，或带 resource filter 的对象：
+
+```json
+{
+  "packages": [
+    {
+      "source": "npm:example",
+      "skills": ["!skills/**", "+skills/foo", "-skills/bar"]
+    }
+  ]
+}
+```
+
+`skills` 未定义表示该 package 的 skills 按默认规则加载；空数组 `[]` 表示不加载该 resource type。普通 pattern 选择匹配资源，`!pattern` 从集合排除，`+path` 强制精确包含，`-path` 强制精确排除且有最终优先级。pattern 相对 package root 匹配 skill directory/`SKILL.md`。因此单个开关写入精确 `+relativePath` 或 `-relativePath`，不应将 UI 的 enabled state 持久化为另一套配置格式。
+
+global `~/.pi/agent/settings.json` 与 trusted project `<workspace>/.pi/settings.json` 均可声明 package。project 普通 entry 按 identity 覆盖 global entry；匹配 global source 的 project `autoload:false` entry 是 delta：继承 global source/installed root，并以 project resource filter 覆盖 effective state。未受信任项目不得读取或写入 project package settings。
+
+Picot 的 Packages tab 由 `public/settings/package-skills-tab.js` 渲染；它经 `/picot-config` 的 `list_package_skill_inventory` 取得 `extensions/package-skill-inventory.ts` 解析出的 effective package candidates 和 enabled state。单项切换发送 `set_package_skill_enabled`，bridge (`extensions/picot-config.ts`) 在同一 scope 的 settings 文件上使用 settings lock 与 atomic write 更新 `packages[].skills`，随后返回重算后的 inventory。该修改只影响后续 Pi resource discovery，响应携带 `runtimeRestartRequired: true`；当前 runtime 不热重载 skills，用户须新建 session 或重启 Pi 后生效。
+
 ## 兼容路由（P8 删除候选）
 
 `/api/*` compatibility routes maintain existing shell behavior on host origin. Each route uses owner capability authorization. Runtime traffic must use `/v2/*` and `/v2/ws`; retained HTTP routes are explicit compatibility or retirement responses, never Pi-origin forwarding.

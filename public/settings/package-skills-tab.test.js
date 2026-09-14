@@ -1,5 +1,5 @@
-// ABOUTME: jsdom tests for the read-only Packages skills tab module.
-// ABOUTME: Verifies load, scope switching, card expansion, trust gating, and no-mutation contract.
+// ABOUTME: jsdom tests for the Packages skills tab module.
+// ABOUTME: Verifies loading, scope switching, trust gating, and package skill mutations.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setupPackageSkillsTab } from "./package-skills-tab.js";
@@ -48,6 +48,7 @@ function makeCandidate(overrides = {}) {
     name: "alpha",
     description: "alpha skill",
     diagnostics: [],
+    enabled: true,
     ...overrides,
   };
 }
@@ -222,21 +223,114 @@ describe("setupPackageSkillsTab — trust gating", () => {
   });
 });
 
-describe("setupPackageSkillsTab — no mutation contract", () => {
-  it("never sends any mutation/toggle/install/delete/filter RPC", async () => {
-    const { rpcCommand, tab } = setup();
+describe("setupPackageSkillsTab — switch state", () => {
+  it("renders trusted global package skills checked and interactive", async () => {
+    document.body.innerHTML = '<div id="container"></div>';
+    const container = document.getElementById("container");
+    const candidate = makeCandidate({ enabled: true });
+    const card = makeCard({ scope: "global", candidates: [candidate] });
+    const tab = setupPackageSkillsTab({
+      container,
+      rpcCommand: rpcReturning(makeInventory({ scope: "global", trusted: true, packages: [card] })),
+    });
     await tab.activate();
+    container.querySelector(".skills-expand").click();
+    const toggle = container.querySelector('[data-skill-toggle="npm:pkg::skills/a"]');
+    expect(toggle.checked).toBe(true);
+    expect(toggle.disabled).toBe(false);
+  });
+});
+
+describe("setupPackageSkillsTab — mutations", () => {
+  it("toggles a package skill through the package filter RPC", async () => {
+    document.body.innerHTML = '<div id="container"></div>';
+    const container = document.getElementById("container");
+    const candidate = makeCandidate({ enabled: true });
+    const card = makeCard({ candidates: [candidate] });
+    const updated = makeInventory({
+      packages: [{ ...card, candidates: [{ ...candidate, enabled: false }] }],
+    });
+    const showSuccess = vi.fn();
+    const rpcCommand = vi.fn(async (cmd) => {
+      if (cmd.type === "list_package_skill_inventory") {
+        return { success: true, data: makeInventory({ packages: [card] }) };
+      }
+      expect(cmd).toEqual({
+        type: "set_package_skill_enabled",
+        scope: "global",
+        target: { packageIdentity: "npm:pkg", relativePath: "skills/a" },
+        enabled: false,
+      });
+      return { success: true, data: { inventory: updated } };
+    });
+    const tab = setupPackageSkillsTab({ container, rpcCommand, showSuccess });
+    await tab.activate();
+    container.querySelector(".skills-expand").click();
+    const toggle = container.querySelector('[data-skill-toggle="npm:pkg::skills/a"]');
+    expect(toggle.checked).toBe(true);
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(rpcCommand).toHaveBeenCalledWith({
+      type: "set_package_skill_enabled",
+      scope: "global",
+      target: { packageIdentity: "npm:pkg", relativePath: "skills/a" },
+      enabled: false,
+    });
+    expect(container.querySelector('[data-skill-toggle="npm:pkg::skills/a"]').checked).toBe(false);
+    expect(showSuccess).toHaveBeenCalledWith("settings.skills.savedRestartRequired");
+  });
+
+  it("reports partial failures after enabling all skills", async () => {
+    document.body.innerHTML = '<div id="container"></div>';
+    const container = document.getElementById("container");
+    const candidates = ["a", "b", "c", "d"].map((name) =>
+      makeCandidate({ name, relativePath: `skills/${name}` }),
+    );
+    const card = makeCard({ candidates });
+    const showError = vi.fn();
+    const finalInventory = makeInventory({
+      packages: [
+        {
+          ...card,
+          candidates: candidates.map((candidate, index) => ({
+            ...candidate,
+            enabled: index !== 1,
+          })),
+        },
+      ],
+    });
+    const rpcCommand = vi.fn(async (cmd) => {
+      if (cmd.type === "list_package_skill_inventory") {
+        return { success: true, data: finalInventory };
+      }
+      if (cmd.target.relativePath === "skills/b") throw new Error("b failed");
+      return { success: true, data: { inventory: finalInventory } };
+    });
+    const tab = setupPackageSkillsTab({
+      container,
+      rpcCommand,
+      showError,
+    });
+    await tab.activate();
+    const enableAll = container.querySelector(".skills-group-enable-all input");
+    enableAll.checked = false;
+    enableAll.dispatchEvent(new Event("change"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(showError).toHaveBeenCalledWith("settings.packageSkills.bulkFailure");
+    expect(container.querySelector(".skills-skill-description") || container).toBeTruthy();
+  });
+
+  it("keeps project package switches disabled when untrusted", async () => {
+    document.body.innerHTML = '<div id="container"></div>';
+    const container = document.getElementById("container");
+    const card = makeCard({ scope: "project", candidates: [makeCandidate()] });
+    const rpcCommand = rpcReturning(
+      makeInventory({ scope: "project", trusted: false, packages: [card] }),
+    );
+    const tab = setupPackageSkillsTab({ container, rpcCommand });
     await tab.setScope("project");
-    await tab.refresh();
-    for (const call of rpcCommand.mock.calls) {
-      expect(call[0].type).toBe("list_package_skill_inventory");
-    }
-    // No mutation/toggle/install/delete/filter editor exists. Package
-    // candidates render a disabled placeholder switch (enable/disable is not
-    // implemented); assert there is no ENABLED checkbox a user could act on.
-    const { container } = setup();
-    expect(container.querySelector('input[type="checkbox"]:not([disabled])')).toBeNull();
-    expect(container.querySelector("button.package-skills-toggle")).toBeNull();
+    expect(container.querySelectorAll('input[type="checkbox"]:not([disabled])')).toHaveLength(0);
   });
 });
 

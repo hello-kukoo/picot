@@ -105,6 +105,35 @@ describe("Installed package manager", () => {
     );
   });
 
+  it("renders disabled packages off with a muted master-list dot", async () => {
+    const root = createRoot();
+    const source = "git:github.com/jonjonrankin/pi-caveman";
+    const transport = {
+      listPiPackages: vi.fn().mockResolvedValue([
+        {
+          source,
+          scope: "global",
+          packageName: "pi-caveman",
+          disabled: true,
+          installedPath: "/Users/test/.pi/agent/git/github.com/jonjonrankin/pi-caveman",
+          counts: {},
+          resources: [],
+        },
+      ]),
+      checkPiPackageUpdates: vi.fn().mockResolvedValue([]),
+    };
+    const manager = setupPackageManager({ root, transport, nativeAvailable: () => true, t });
+    await manager.load();
+
+    const dot = root.querySelector(".pkg-manager-status-dot");
+    const toggle = root.querySelector(".pkg-manager-toggle");
+    expect(dot.classList.contains("is-disabled")).toBe(true);
+    expect(toggle.classList.contains("is-on")).toBe(false);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+
+    expect(manager.getPackages()[0].disabled).toBe(true);
+  });
+
   it("uses scoped disable and project remove operations", async () => {
     const root = createRoot();
     const transport = {

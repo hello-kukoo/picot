@@ -11,6 +11,7 @@ import { createIcon } from "../icons.js";
  * @property {string} relativePath
  * @property {string} name
  * @property {string} description
+ * @property {boolean} enabled
  * @property {Array<{path?:string;message:string}>} diagnostics
  *
  * @typedef {Object} PackageSkillCard
@@ -35,6 +36,7 @@ function el(tag, props = {}, children = []) {
   for (const [key, value] of Object.entries(props)) {
     if (key === "class") node.className = value;
     else if (key === "text") node.textContent = value;
+    else if (key === "checked" || key === "disabled") node[key] = Boolean(value);
     else if (key === "title") node.title = value;
     else if (key === "dataset") {
       for (const [dk, dv] of Object.entries(value)) node.dataset[dk] = dv;
@@ -59,9 +61,11 @@ function el(tag, props = {}, children = []) {
  * @param {Object} opts
  * @param {HTMLElement} opts.container
  * @param {(cmd:Object)=>Promise<Object>} opts.rpcCommand
+ * @param {(message:string)=>void} [opts.showSuccess]
+ * @param {(message:string)=>void} [opts.showError]
  * @returns {{activate:()=>Promise<void>,setScope:(scope:"global"|"project")=>Promise<void>,refresh:()=>Promise<void>,destroy:()=>void}}
  */
-export function setupPackageSkillsTab({ container, rpcCommand }) {
+export function setupPackageSkillsTab({ container, rpcCommand, showSuccess, showError }) {
   let scope = "global";
   /** @type {PackageSkillInventory|null} */
   let inventory = null;
@@ -71,6 +75,7 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
   const expandedCards = new Set();
   let loadSeq = 0;
   let errorMessage = null;
+  const pendingTargets = new Set();
   const unsubscribeLocale = onLocaleChange(() => render());
 
   function renderLoading() {
@@ -171,27 +176,102 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
     return tabs;
   }
 
-  // A disabled placeholder switch: package candidates are read-only Bundled
-  // skills today, so neither a package nor an individual skill can be toggled
-  // here. The control is rendered to match the Discovered tab's layout, with a
-  // visible "Enable all" affordance on package headers, but stays disabled
-  // until enable/disable is implemented.
-  function renderDisabledSwitch(ariaLabel) {
-    const input = el("input", {
+  async function setEnabled(
+    card,
+    candidate,
+    enabled,
+    { notify = true, rejectOnFailure = false, sequence = true } = {},
+  ) {
+    const targetId = `${card.identity}::${candidate.relativePath}`;
+    const mutationScope = card.scope;
+    const seq = sequence ? ++loadSeq : loadSeq;
+    pendingTargets.add(targetId);
+    render();
+    let response;
+    try {
+      response = await rpcCommand({
+        type: "set_package_skill_enabled",
+        scope: mutationScope,
+        target: { packageIdentity: card.identity, relativePath: candidate.relativePath },
+        enabled,
+      });
+    } catch (e) {
+      pendingTargets.delete(targetId);
+      if (sequence && seq !== loadSeq) return;
+      errorMessage = e instanceof Error ? e.message : t("settings.packageSkills.loadFailed");
+      showError?.(errorMessage);
+      render();
+      if (rejectOnFailure) throw e;
+      return null;
+    }
+    pendingTargets.delete(targetId);
+    if (sequence && seq !== loadSeq) return;
+    if (!response?.success) {
+      errorMessage = response?.error || t("settings.packageSkills.loadFailed");
+      showError?.(errorMessage);
+      render();
+      if (rejectOnFailure) throw new Error(errorMessage);
+      return null;
+    }
+    errorMessage = null;
+    inventory = response.data.inventory;
+    if (notify) showSuccess?.(t("settings.skills.savedRestartRequired"));
+    render();
+    return response;
+  }
+
+  function renderSwitch(card, candidate) {
+    const targetId = `${card.identity}::${candidate.relativePath}`;
+    return el("input", {
       type: "checkbox",
       class: "skills-switch",
-      disabled: true,
-      aria: { label: ariaLabel },
+      checked: candidate.enabled,
+      disabled: pendingTargets.has(targetId) || (card.scope === "project" && !inventory?.trusted),
+      dataset: { skillToggle: targetId },
+      aria: { label: `${t("settings.skills.enableSkill")}: ${candidate.name}` },
+      onChange: (event) => void setEnabled(card, candidate, event.currentTarget.checked),
     });
-    return input;
+  }
+
+  async function setAllEnabled(card, enabled) {
+    const results = await Promise.allSettled(
+      card.candidates.map((candidate) =>
+        setEnabled(card, candidate, enabled, {
+          notify: false,
+          rejectOnFailure: true,
+          sequence: false,
+        }),
+      ),
+    );
+    const failures = results.filter((result) => result.status === "rejected");
+    await load(card.scope);
+    if (failures.length > 0) {
+      errorMessage = t("settings.packageSkills.bulkFailure", {
+        failed: failures.length,
+        total: card.candidates.length,
+      });
+      showError?.(errorMessage);
+      render();
+      return;
+    }
+    showSuccess?.(t("settings.skills.savedRestartRequired"));
   }
 
   function renderEnableAllAffordance(card) {
-    // Visible "Enable all" label + a disabled switch, mirroring a group card's
-    // header control. Disabled because enable/disable is not yet wired.
+    const enabled =
+      card.candidates.length > 0 && card.candidates.every((candidate) => candidate.enabled);
     return el("div", { class: "skills-group-enable-all" }, [
       el("span", { class: "skills-enable-all-label", text: t("settings.packageSkills.enableAll") }),
-      renderDisabledSwitch(`${t("settings.packageSkills.enableAll")}: ${card.source}`),
+      el("input", {
+        type: "checkbox",
+        class: "skills-switch",
+        checked: enabled,
+        disabled: card.scope === "project" && !inventory?.trusted,
+        aria: { label: `${t("settings.packageSkills.enableAll")}: ${card.source}` },
+        onChange: (event) => {
+          void setAllEnabled(card, event.currentTarget.checked);
+        },
+      }),
     ]);
   }
 
@@ -258,7 +338,7 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
         id: `skills-group-list-${card.id}`,
         class: "skills-group-listing",
       },
-      expanded && installed ? card.candidates.map((cand) => renderCandidate(cand)) : [],
+      expanded && installed ? card.candidates.map((cand) => renderCandidate(card, cand)) : [],
     );
 
     return el(
@@ -272,9 +352,10 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
   }
 
   /**
+   * @param {PackageSkillCard} card
    * @param {PackageSkillCandidate} candidate
    */
-  function renderCandidate(candidate) {
+  function renderCandidate(card, candidate) {
     return el("div", { class: "skills-skill-row", dataset: { candidate: candidate.name } }, [
       el("div", { class: "skills-skill-info" }, [
         el("div", { class: "skills-skill-name", text: candidate.name }),
@@ -293,7 +374,7 @@ export function setupPackageSkillsTab({ container, rpcCommand }) {
           el("div", { class: "package-skills-diagnostic", text: d.message }),
         ),
       ]),
-      renderDisabledSwitch(`${t("settings.skills.enableSkill")}: ${candidate.name}`),
+      renderSwitch(card, candidate),
     ]);
   }
 

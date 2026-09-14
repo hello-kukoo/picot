@@ -3647,6 +3647,15 @@ const SKILL_HOST_COMMANDS = new Map([
       }),
   ],
   [
+    "set_package_skill_enabled",
+    (cmd) =>
+      bridgeData("set_package_skill_enabled", {
+        scope: cmd.scope,
+        target: cmd.target,
+        enabled: cmd.enabled,
+      }),
+  ],
+  [
     "set_default_thinking_level",
     (cmd) => bridgeData("set_default_thinking_level", { level: cmd.level }),
   ],
@@ -6501,6 +6510,8 @@ const skillsPage = setupSkillsPage({
 const packageSkillsPage = setupPackageSkillsTab({
   container: document.getElementById("settings-package-skills"),
   rpcCommand,
+  showSuccess: (msg) => showSettingsSaveSuccess(skillsSaveMessageEl, msg),
+  showError: (msg) => showSettingsSaveError(skillsSaveMessageEl, msg),
 });
 const skillsInstallPage = setupSkillsInstallTab({
   container: document.getElementById("settings-install-skills"),

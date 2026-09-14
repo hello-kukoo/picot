@@ -1,5 +1,5 @@
-// ABOUTME: Resolves configured Pi package skill sources (npm/git/local) into installed roots and identity.
-// ABOUTME: Read-only: parses settings.json packages[], dedupes by identity, and resolves install roots — never installs.
+// ABOUTME: Resolves configured Pi package skills and persists their enablement filters.
+// ABOUTME: Mirrors Pi package resource matching while keeping inventory and mutation paths explicit.
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -18,8 +18,11 @@ import {
   matchesAnyExact,
   matchesAnyPattern,
   overridesOf,
+  readSettingsObject,
   type SkillDiagnostic,
   type SkillScope,
+  withSettingsLock,
+  writeSettingsAtomically,
 } from "./skill-inventory.ts";
 
 // ── Public types ──────────────────────────────────────────────────────
@@ -31,6 +34,7 @@ export type PackageSkillCandidate = {
   canonicalPath: string;
   relativePath: string;
   name: string;
+  enabled: boolean;
   description: string;
   diagnostics: SkillDiagnostic[];
 };
@@ -51,6 +55,17 @@ export type PackageSkillInventory = {
   trusted: boolean;
   packages: PackageSkillCard[];
   diagnostics: SkillDiagnostic[];
+};
+
+export type MutatePackageSkillEnabledOptions = BuildSkillInventoryOptions & {
+  packageIdentity: string;
+  relativePath: string;
+  enabled: boolean;
+};
+
+export type PackageSkillMutationResult = {
+  inventory: PackageSkillInventory;
+  runtimeRestartRequired: true;
 };
 
 // Internal resolution types (Task 2 produces source/identity/root only;
@@ -82,6 +97,10 @@ export type ConfiguredPackageEntry = {
   source: string;
   /** True when the entry is an `autoload:false` delta; false otherwise. */
   autoload: boolean;
+  skills?: string[];
+  extensions?: string[];
+  prompts?: string[];
+  themes?: string[];
 };
 
 /**
@@ -93,6 +112,18 @@ export type ConfiguredPackageEntry = {
 export type ResolvedPackage = {
   parsed: ParsedPackageSource;
   identity: string;
+  filters?: {
+    skills?: string[];
+    extensions?: string[];
+    prompts?: string[];
+    themes?: string[];
+  };
+  baseFilters?: {
+    skills?: string[];
+    extensions?: string[];
+    prompts?: string[];
+    themes?: string[];
+  };
   /** Display/effective scope of this entry. */
   scope: SkillScope;
   /** Scope of the settings file that contributed the effective source. */
@@ -484,9 +515,27 @@ function readSettingsPackagesWithDiags(
       continue;
     }
     if (raw !== null && typeof raw === "object") {
-      const obj = raw as { source?: unknown; autoload?: unknown };
+      const obj = raw as {
+        source?: unknown;
+        autoload?: unknown;
+        skills?: unknown;
+        extensions?: unknown;
+        prompts?: unknown;
+        themes?: unknown;
+      };
       if (typeof obj.source === "string") {
-        entries.push({ source: obj.source, autoload: obj.autoload === false });
+        const readPatterns = (value: unknown) =>
+          Array.isArray(value)
+            ? value.filter((entry): entry is string => typeof entry === "string")
+            : undefined;
+        entries.push({
+          source: obj.source,
+          autoload: obj.autoload === false,
+          skills: readPatterns(obj.skills),
+          extensions: readPatterns(obj.extensions),
+          prompts: readPatterns(obj.prompts),
+          themes: readPatterns(obj.themes),
+        });
         continue;
       }
     }
@@ -553,6 +602,12 @@ export function dedupeConfiguredPackages(
     return {
       parsed,
       identity,
+      filters: {
+        skills: entry.skills,
+        extensions: entry.extensions,
+        prompts: entry.prompts,
+        themes: entry.themes,
+      },
       scope,
       sourceScope: scope,
       source: entry.source,
@@ -575,9 +630,16 @@ export function dedupeConfiguredPackages(
     const matchingGlobal = globalByIdentity.get(proj.identity);
     if (proj.autoload && matchingGlobal) {
       // autoload:false project delta: inherit the global source/root, keep
-      // project provenance for display.
+      // project provenance for display, and apply project delta patterns.
       result.push({
         ...matchingGlobal,
+        baseFilters: matchingGlobal.filters,
+        filters: {
+          skills: proj.filters?.skills,
+          extensions: proj.filters?.extensions,
+          prompts: proj.filters?.prompts,
+          themes: proj.filters?.themes,
+        },
         scope: "project",
         sourceScope: "global",
         source: proj.source,
@@ -724,6 +786,7 @@ export function collectPackageSkillCandidates(
       canonicalPath: s.canonicalPath,
       relativePath: relativePath || ".",
       name: s.name,
+      enabled: true,
       description: s.description,
       diagnostics: candidateDiags,
     };
@@ -736,6 +799,36 @@ export function collectPackageSkillCandidates(
  * `+` force-include adds back, `-` force-exclude removes (final precedence),
  * `!` excludes from the full set. Mirrors Pi's applyPatterns.
  */
+function packageSkillEnabled(
+  relativePath: string,
+  packageRoot: string,
+  patterns: string[] | undefined,
+  autoloadDelta: boolean,
+  baselineEnabled = true,
+): boolean {
+  if (patterns === undefined) return autoloadDelta ? baselineEnabled : true;
+  if (patterns.length === 0) return autoloadDelta ? baselineEnabled : false;
+  const skillFile = resolve(packageRoot, relativePath, "SKILL.md");
+  const ctx = buildMatchContext(skillFile, packageRoot);
+  if (autoloadDelta) {
+    let enabled = baselineEnabled;
+    for (const pattern of patterns) {
+      const target = pattern.replace(/^[+!-]/, "");
+      const exact = pattern.startsWith("+") || pattern.startsWith("-");
+      const matches = exact ? matchesAnyExact(ctx, [target]) : matchesAnyPattern(ctx, [target]);
+      if (matches) enabled = !pattern.startsWith("-") && !pattern.startsWith("!");
+    }
+    return enabled;
+  }
+  const includes = patterns.filter((entry) => !isOverridePattern(entry));
+  const { excl, finc, fexc } = overridesOf(patterns);
+  let enabled = includes.length === 0 || matchesAnyPattern(ctx, includes);
+  if (excl.length > 0 && matchesAnyPattern(ctx, excl)) enabled = false;
+  if (finc.length > 0 && matchesAnyExact(ctx, finc)) enabled = true;
+  if (fexc.length > 0 && matchesAnyExact(ctx, fexc)) enabled = false;
+  return enabled;
+}
+
 function applyManifestOverrides(
   collected: DiscoveredSkill[],
   overrideEntries: string[],
@@ -808,8 +901,27 @@ export function buildPackageSkillInventory(
     if (!r.installedRoot) {
       cardDiags.push({ message: "package is not installed" });
     }
-    const version = readPackageVersion(r.installedRoot);
-    const candidates = r.installedRoot ? collectPackageSkillCandidates(r, cardDiags) : [];
+    const installedRoot = r.installedRoot;
+    const version = readPackageVersion(installedRoot);
+    const candidates = installedRoot
+      ? collectPackageSkillCandidates(r, cardDiags).map((candidate) => ({
+          ...candidate,
+          enabled: packageSkillEnabled(
+            candidate.relativePath,
+            installedRoot,
+            r.filters?.skills,
+            r.autoload,
+            r.baseFilters
+              ? packageSkillEnabled(
+                  candidate.relativePath,
+                  installedRoot,
+                  r.baseFilters.skills,
+                  false,
+                )
+              : false,
+          ),
+        }))
+      : [];
     return {
       id: r.identity,
       source: r.source,
@@ -830,6 +942,143 @@ export function buildPackageSkillInventory(
 }
 
 /** Read the version from a package's package.json, if present. */
+export async function mutatePackageSkillEnabled(
+  opts: MutatePackageSkillEnabledOptions,
+): Promise<PackageSkillMutationResult> {
+  if (opts.scope === "project" && !opts.projectTrusted) {
+    throw new Error("Project is not trusted; cannot mutate project skills");
+  }
+  if (!opts.relativePath || opts.relativePath.includes("\\") || opts.relativePath.startsWith("/")) {
+    throw new Error("Invalid package skill path");
+  }
+  const settingsPath =
+    opts.scope === "global"
+      ? join(opts.agentDir, "settings.json")
+      : join(opts.cwd, CONFIG_DIR_NAME, "settings.json");
+  await withSettingsLock(settingsPath, () => {
+    const settings = readSettingsObject(settingsPath);
+    const packages = Array.isArray(settings.packages) ? [...settings.packages] : [];
+    const packageIndex = packages.findIndex((entry) => {
+      const source =
+        typeof entry === "string"
+          ? entry
+          : entry && typeof entry === "object"
+            ? entry.source
+            : undefined;
+      return (
+        typeof source === "string" &&
+        packageIdentity(parsePackageSource(source)) === opts.packageIdentity
+      );
+    });
+    if (packageIndex < 0) throw new Error("Unknown package skill target");
+    const raw = packages[packageIndex];
+    const pkg: Record<string, unknown> =
+      typeof raw === "string" ? { source: raw } : { ...(raw as Record<string, unknown>) };
+    const current = Array.isArray(pkg.skills)
+      ? pkg.skills.filter((entry): entry is string => typeof entry === "string")
+      : undefined;
+    const rule = normalizeExactPackagePattern(opts.relativePath);
+    const matchingExactRule = (entry: string) => {
+      if (entry.startsWith("!")) return false;
+      const target = entry.startsWith("+") || entry.startsWith("-") ? entry.slice(1) : entry;
+      return normalizeExactPackagePattern(target) === rule;
+    };
+    const parsedSource = parsePackageSource(String(pkg.source));
+    const candidateRoots = [
+      resolveInstalledPackageRoot(parsedSource, opts.scope, opts),
+      ...(opts.scope === "project"
+        ? [resolveInstalledPackageRoot(parsedSource, "global", opts)]
+        : []),
+    ];
+    const packageRoot = candidateRoots.find(
+      (root, index) =>
+        candidateRoots.indexOf(root) === index && existsSync(root) && statSync(root).isDirectory(),
+    );
+    if (!packageRoot) throw new Error("Unknown package skill target");
+    const isProjectDelta =
+      opts.scope === "project" && raw !== null && typeof raw === "object" && raw.autoload === false;
+    let baselineEnabled = true;
+    if (isProjectDelta) {
+      const globalEntries = readSettingsPackagesWithDiags(join(opts.agentDir, "settings.json"), []);
+      const globalEntry = globalEntries.find(
+        (entry) => packageIdentity(parsePackageSource(entry.source)) === opts.packageIdentity,
+      );
+      baselineEnabled = packageSkillEnabled(rule, packageRoot, globalEntry?.skills, false);
+    }
+    const currentEnabled =
+      current === undefined
+        ? baselineEnabled
+        : packageSkillEnabled(rule, packageRoot, current, isProjectDelta, baselineEnabled);
+    if (currentEnabled === opts.enabled) return;
+
+    const withoutTarget = (current ?? []).filter((entry) => !matchingExactRule(entry));
+    if (isProjectDelta) {
+      const remainsEnabled = packageSkillEnabled(
+        rule,
+        packageRoot,
+        withoutTarget,
+        true,
+        baselineEnabled,
+      );
+      if (remainsEnabled === opts.enabled) {
+        if (withoutTarget.length === 0) delete pkg.skills;
+        else pkg.skills = withoutTarget;
+      } else {
+        pkg.skills = [...withoutTarget, `${opts.enabled ? "+" : "-"}${rule}`];
+      }
+    } else if (opts.enabled) {
+      if (current === undefined) {
+        // No package filter means Pi already enables every skill.
+        delete pkg.skills;
+      } else if (current.length === 0) {
+        // An explicit empty array disables the whole resource type. Preserve
+        // that baseline and force-enable only this exact skill.
+        pkg.skills = ["!**/*", `+${rule}`];
+      } else {
+        const remainsEnabled = packageSkillEnabled(rule, packageRoot, withoutTarget, false);
+        if (remainsEnabled) {
+          pkg.skills = withoutTarget;
+        } else if (withoutTarget.length === 0) {
+          // Removing the only opposing exact rule restores the default.
+          delete pkg.skills;
+        } else {
+          // Preserve broad exclusions and force-include this exact skill.
+          pkg.skills = [...withoutTarget, `+${rule}`];
+        }
+      }
+    } else {
+      if (current === undefined) {
+        // The default package state is all enabled; add one exact exclusion.
+        pkg.skills = [`-${rule}`];
+      } else if (current.length === 0) {
+        return;
+      } else {
+        const remainsEnabled = packageSkillEnabled(rule, packageRoot, withoutTarget, false);
+        if (remainsEnabled) {
+          pkg.skills = [...withoutTarget, `-${rule}`];
+        } else if (withoutTarget.length === 0) {
+          pkg.skills = [];
+        } else {
+          pkg.skills = withoutTarget;
+        }
+      }
+    }
+    packages[packageIndex] = pkg;
+    writeSettingsAtomically(settingsPath, { ...settings, packages });
+  });
+  return {
+    inventory: buildPackageSkillInventory(opts),
+    runtimeRestartRequired: true,
+  };
+}
+
+function normalizeExactPackagePattern(pattern: string): string {
+  return toPosixPath(pattern)
+    .replace(/^[+!-]/, "")
+    .replace(/^\.\//, "")
+    .replace(/\/+$/, "");
+}
+
 function readPackageVersion(installedRoot?: string): string | undefined {
   if (!installedRoot) return undefined;
   const pkgJson = join(installedRoot, "package.json");

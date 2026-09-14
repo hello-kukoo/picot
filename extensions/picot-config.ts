@@ -33,7 +33,7 @@ import {
   createOAuthLoginOperationManager,
   type OAuthOperationEvent,
 } from "./oauth-login-operations";
-import { buildPackageSkillInventory } from "./package-skill-inventory";
+import { buildPackageSkillInventory, mutatePackageSkillEnabled } from "./package-skill-inventory";
 import { writePasteOffloadFile } from "./paste-offload";
 import { createPiOAuthLoginAdapter } from "./pi-oauth-login-adapter";
 import { generateTitleForSession } from "./session-title";
@@ -163,6 +163,29 @@ type SkillInventoryMutation = {
   target?: unknown;
   enabled?: unknown;
 };
+
+type PackageSkillMutation = {
+  scope?: unknown;
+  target?: unknown;
+  enabled?: unknown;
+};
+
+function parsePackageSkillTarget(value: unknown): {
+  packageIdentity: string;
+  relativePath: string;
+} {
+  if (!value || typeof value !== "object") throw new Error("Invalid package skill mutation");
+  const target = value as { packageIdentity?: unknown; relativePath?: unknown };
+  if (
+    typeof target.packageIdentity !== "string" ||
+    !target.packageIdentity ||
+    typeof target.relativePath !== "string" ||
+    !target.relativePath
+  ) {
+    throw new Error("Invalid package skill mutation");
+  }
+  return { packageIdentity: target.packageIdentity, relativePath: target.relativePath };
+}
 
 type ApiKeyCredential = { type: "api_key"; key: string };
 
@@ -1217,6 +1240,21 @@ export async function handlePicotConfig(
         const result = await mutateSkillEnabled({
           ...skillInventoryOptions(scope, ctx),
           target,
+          enabled: mutation.enabled,
+        });
+        return { ok: true, data: result };
+      }
+
+      case "set_package_skill_enabled": {
+        const mutation = params as PackageSkillMutation;
+        const scope = parseSkillScope(mutation.scope);
+        const target = parsePackageSkillTarget(mutation.target);
+        if (typeof mutation.enabled !== "boolean") {
+          throw new Error("Invalid package skill mutation");
+        }
+        const result = await mutatePackageSkillEnabled({
+          ...skillInventoryOptions(scope, ctx),
+          ...target,
           enabled: mutation.enabled,
         });
         return { ok: true, data: result };

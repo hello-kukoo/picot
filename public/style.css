@@ -9590,10 +9590,9 @@ body.file-preview-resizing {
   font-size: var(--font-size-sm);
 }
 
-/* Skills page: package "Enable all" affordance (disabled placeholder) and
-   shared candidate-path line. The enable-all group spans the group header's
-   trailing columns (status + switch) so it lines up with the Discovered tab's
-   right-aligned switch. */
+/* Skills page: package "Enable all" affordance and shared candidate-path
+   line. The enable-all group spans the group header's trailing columns so it
+   lines up with the Discovered tab's right-aligned switch. */
 .skills-group-enable-all {
   grid-column: 3 / -1;
   display: flex;

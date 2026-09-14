@@ -162,8 +162,8 @@ impl HostDataPlane {
             .then(|| session_root.join(bucket))
     }
 
-    /// Read one persisted workspace bucket once. Count-only never opens JSONL
-    /// content; a cold or changed bucket therefore reports an unknown count.
+    /// Read one persisted workspace bucket once. Count-only only enumerates
+    /// JSONL directory entries and never opens their content.
     pub fn read_workspace_session_bucket(
         &self,
         workspace_id: &str,
@@ -192,24 +192,9 @@ impl HostDataPlane {
             .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("jsonl"))
             .collect::<Vec<_>>();
         if count_only {
-            let mut visible_count = 0;
-            for path in &jsonl_files {
-                let Some(metadata) = sidebar_file_metadata(path) else {
-                    return (bucket_name, Vec::new(), None, None);
-                };
-                let Ok(Some(row)) = self.visibility_cache(path) else {
-                    return (bucket_name, Vec::new(), None, None);
-                };
-                if row.modified_at_ms != metadata.modified_at_ms
-                    || row.size_bytes != metadata.size_bytes
-                {
-                    return (bucket_name, Vec::new(), None, None);
-                }
-                if row.is_sidebar_visible {
-                    visible_count += 1;
-                }
-            }
-            return (bucket_name, Vec::new(), Some(visible_count), None);
+            // Count mode is deliberately independent of the classification cache:
+            // cold-start badges must be exact without opening any JSONL content.
+            return (bucket_name, Vec::new(), Some(jsonl_files.len()), None);
         }
 
         let retained_paths = jsonl_files
@@ -2146,7 +2131,7 @@ mod tests {
         let (_, cold_sessions, cold_count, cold_hidden) =
             data.read_workspace_session_bucket(&workspace_id, true);
         assert!(cold_sessions.is_empty());
-        assert_eq!(cold_count, None);
+        assert_eq!(cold_count, Some(6));
         assert_eq!(cold_hidden, None);
 
         let (_, sessions, visible_count, hidden_count) =

@@ -808,8 +808,8 @@
     },
     "packageSkills": {
       "title": "包技能",
-      "description": "已配置 Pi 包中的内置 skill 候选。这些是只读候选；生效的启用/禁用状态由 Pi 计算且不在此展示。",
-      "bundledCandidates": "内置候选",
+      "description": "管理已配置 Pi 包中的 skill。更改会写入 packages[].skills，并在新建会话或重启 Pi 后生效。",
+      "bundledCandidates": "包内技能",
       "refresh": "刷新",
       "global": "全局",
       "project": "当前项目",
@@ -823,7 +823,8 @@
       "canonicalPath": "规范路径",
       "candidateCount": "{count} 个候选",
       "scopeSummary": "{count} 个包",
-      "enableAll": "全部启用"
+      "enableAll": "全部启用",
+      "bulkFailure": "共 {total} 项技能中 {failed} 项更新失败。"
     },
     "providers": {
       "addTitle": "添加提供商",

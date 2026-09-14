@@ -808,8 +808,8 @@
     },
     "packageSkills": {
       "title": "Packages skills",
-      "description": "Bundled skill candidates from configured Pi packages. These are read-only candidates; effective enable/disable state is computed by Pi and is not shown here.",
-      "bundledCandidates": "Bundled candidates",
+      "description": "Manage skills from configured Pi packages. Changes are written to packages[].skills and take effect in a new session or after restarting Pi.",
+      "bundledCandidates": "Package skills",
       "refresh": "Refresh",
       "global": "Global",
       "project": "Current project",
@@ -823,7 +823,8 @@
       "canonicalPath": "Canonical path",
       "candidateCount": "{count} candidates",
       "scopeSummary": "{count} packages",
-      "enableAll": "Enable all"
+      "enableAll": "Enable all",
+      "bulkFailure": "Failed to update {failed} of {total} skills."
     },
     "providers": {
       "addTitle": "Add provider",
