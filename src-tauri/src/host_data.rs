@@ -2463,7 +2463,8 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn isolated_workspace(label: &str) -> (std::path::PathBuf, HostDataPlane, std::path::PathBuf) {        let nonce = SystemTime::now()
+    fn isolated_workspace(label: &str) -> (std::path::PathBuf, HostDataPlane, std::path::PathBuf) {
+        let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();

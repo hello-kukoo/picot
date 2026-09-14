@@ -175,7 +175,9 @@ impl HostRouter {
                     target,
                 })
             }
-            "runtime_request" | "runtime_snapshot_request" | "runtime_capabilities_request"
+            "runtime_request"
+            | "runtime_snapshot_request"
+            | "runtime_capabilities_request"
             | "runtime_rebind_session_request" => {
                 if frame_type == "runtime_request" {
                     validate_runtime_request(frame)?;

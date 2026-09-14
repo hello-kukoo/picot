@@ -903,7 +903,10 @@ mod tests {
         // bind_session_id is a no-op once the session id is already formal;
         // only rebind_session_id can move an instance from one real session
         // id to another, which is what a fork does in place.
-        assert_eq!(manager.bind_session_id(&original, "session-b").unwrap(), original);
+        assert_eq!(
+            manager.bind_session_id(&original, "session-b").unwrap(),
+            original
+        );
 
         let forked = manager.rebind_session_id(&original, "session-b").unwrap();
         let binding = events.recv().await.unwrap();
@@ -918,7 +921,10 @@ mod tests {
         // exact desync that broke a client's event subscription when only
         // the frontend, not the registry, learned about the new session id.
         assert_eq!(manager.target_for_session_id("session-a"), None);
-        assert_eq!(manager.target_for_session_id("session-b"), Some(forked.clone()));
+        assert_eq!(
+            manager.target_for_session_id("session-b"),
+            Some(forked.clone())
+        );
 
         fake.write_frame(json!({ "type": "agent_start" }))
             .await

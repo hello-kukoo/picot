@@ -28,13 +28,7 @@ function setup({ enabled = true }: { enabled?: boolean } = {}) {
     theme: { name: "test" },
     // The stub `custom` mirrors pi's RPC mode: it never invokes the factory,
     // so a test that sees the factory run proves the patch took effect.
-<<<<<<< HEAD
     custom: async (..._args: unknown[]) => undefined,
-||||||| 9b583bd
-    custom: async () => undefined,
-=======
-    custom: async (..._args: unknown[]) => undefined,
->>>>>>> upstream/main
     notify: (message: string) => notifications.push(message),
   };
   const ctx = { ui };
