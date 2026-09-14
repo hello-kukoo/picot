@@ -63,6 +63,7 @@ const LIST = {
       piGlobal: [
         {
           name: "context7",
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: MCP ${VAR} placeholder data
           entry: { command: "npx", args: ["-y", "@upstash/context7-mcp"], env: { K: "${V}" } },
           sourceFile: "/home/u/.pi/agent/mcp.json",
           editable: true,
@@ -202,6 +203,7 @@ describe("mcp-page", () => {
     expect(payload.scope).toBe("piGlobal");
     expect(payload.name).toBe("context7");
     expect(payload.entry.command).toBe("npx");
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: MCP ${VAR} placeholder data
     expect(payload.entry.env).toEqual({ K: "${V}" });
   });
 
