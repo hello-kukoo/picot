@@ -142,7 +142,27 @@ describe("listMcpServers", () => {
     expect(result.groups.piGlobal).toEqual([]);
   });
 
-  it("reports adapter not installed from settings.json packages", () => {
+  it("reports adapter availability from string and filtered package entries", () => {
+    writeJson(join(agentDir, "settings.json"), { packages: ["npm:pi-mcp-adapter"] });
+    expect(listMcpServers(agentDir, projectDir).installed).toBe(true);
+
+    writeJson(join(agentDir, "settings.json"), {
+      packages: [{ source: "npm:pi-mcp-adapter", skills: ["-skills/mcp-scripting"] }],
+    });
+    expect(listMcpServers(agentDir, projectDir).installed).toBe(true);
+
+    writeJson(join(agentDir, "settings.json"), {
+      packages: [{ source: "npm:pi-mcp-adapter", extensions: [] }],
+    });
+    expect(listMcpServers(agentDir, projectDir).installed).toBe(false);
+
+    writeJson(join(agentDir, "settings.json"), {
+      packages: [{ source: "git:github.com/example/pi-mcp-adapter.git" }],
+    });
+    expect(listMcpServers(agentDir, projectDir).installed).toBe(true);
+  });
+
+  it("does not treat unrelated packages as the adapter", () => {
     writeJson(join(agentDir, "settings.json"), { packages: ["npm:pi-lens"] });
     expect(listMcpServers(agentDir, projectDir).installed).toBe(false);
   });

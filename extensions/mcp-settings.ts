@@ -177,14 +177,32 @@ function mergeLayers(
 
 function isAdapterInstalled(agentDir: string): boolean {
   const { doc } = readMcpLayer(path.join(agentDir, "settings.json"));
-  if (!doc) return false;
-  const packages = doc.packages;
-  if (!Array.isArray(packages)) return false;
-  return packages.some(
-    (spec) =>
-      typeof spec === "string" &&
-      (spec === "npm:pi-mcp-adapter" || spec.endsWith("/pi-mcp-adapter")),
-  );
+  if (!doc || !Array.isArray(doc.packages)) return false;
+
+  return doc.packages.some((spec) => {
+    const source =
+      typeof spec === "string"
+        ? spec
+        : spec && typeof spec === "object" && typeof spec.source === "string"
+          ? spec.source
+          : undefined;
+    if (!source) return false;
+
+    const isAdapterSource =
+      source === "npm:pi-mcp-adapter" ||
+      source.startsWith("npm:pi-mcp-adapter@") ||
+      source.replace(/\.git$/, "").endsWith("/pi-mcp-adapter");
+    if (!isAdapterSource) return false;
+
+    // An empty resource filter keeps the package installed but disables this
+    // extension, so the MCP settings page has no runtime adapter to manage.
+    return !(
+      spec &&
+      typeof spec === "object" &&
+      Array.isArray(spec.extensions) &&
+      spec.extensions.length === 0
+    );
+  });
 }
 
 function toListEntries(
