@@ -21,6 +21,7 @@ import {
   formatSessionTime,
   getSessionDisplayTitle,
 } from "./build-session-item.js";
+import { buildFlattenedSessionTree } from "./session-tree-model.js";
 
 function readJsonArray(key) {
   try {
@@ -67,6 +68,7 @@ export class SessionSidebar {
     this.onRegisterWorkspace = options.onRegisterWorkspace || null;
     this.onSessionNotice = options.onSessionNotice || null;
     this.getLiveInstances = options.getLiveInstances || null;
+    this.getFocusWorkspacePath = options.getFocusWorkspacePath || null;
     this.isFocusActive = options.isFocusActive || null;
     this.onFocusRefresh = options.onFocusRefresh || null;
     this.onWorkspaceFocus = options.onWorkspaceFocus || null;
@@ -93,6 +95,8 @@ export class SessionSidebar {
     this._registryWarmupScheduled = false;
     this._registrySessionLoadGeneration = 0;
     this._refreshPromise = null;
+    this._refreshQueue = Promise.resolve();
+    this._queuedRefreshes = new Map();
     this._refreshRegistryAvailable = null;
     this._refreshScopeKey = null;
     // A fresh native runtime exists before Pi persists its first JSONL. Keep
@@ -103,6 +107,7 @@ export class SessionSidebar {
     this._projectRowCache = new Map();
     this._pinnedSectionCache = null;
     this._registryPins = null;
+    this.statusItemsByPath = new Map();
     this.streamingFiles = new Set();
     this.projectVisibleSessionCounts = new Map();
     this.contextMenu = null;
@@ -184,11 +189,21 @@ export class SessionSidebar {
     });
   }
 
+  rebuildStatusIndex() {
+    this.statusItemsByPath = new Map();
+    for (const item of this.container.querySelectorAll(".session-item[data-file-path]")) {
+      const filePath = item.dataset.filePath;
+      if (!filePath) continue;
+      const items = this.statusItemsByPath.get(filePath) || new Set();
+      items.add(item);
+      this.statusItemsByPath.set(filePath, items);
+    }
+  }
+
   applyStatusToItem(filePath) {
-    const items = this.container.querySelectorAll(
-      `.session-item[data-file-path="${CSS.escape(filePath)}"]`,
-    );
+    const items = this.statusItemsByPath?.get(filePath) || [];
     items.forEach((el) => {
+      if (!el.isConnected) return;
       el.classList.toggle("unread", this.unread.has(filePath));
       el.classList.toggle("streaming", this.streamingFiles.has(filePath));
       el.classList.toggle("mirror-live", this.streamingFiles.has(filePath));
@@ -445,12 +460,14 @@ export class SessionSidebar {
     // workspace expands (setWorkspaceExpanded), never at startup.
     const warm = async () => {
       const registryRows = this.projects.filter((project) => project.source === "registry");
-      await Promise.all(
+      await Promise.allSettled(
         registryRows.map((project) => this.ensureWorkspaceSessions(project, { countOnly: true })),
       );
+      this.applyProvisionalSession();
+      this.render();
     };
     if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
-      window.requestIdleCallback(() => warm());
+      window.requestIdleCallback(() => warm(), { timeout: 800 });
     } else {
       setTimeout(() => warm(), 800);
     }
@@ -485,8 +502,6 @@ export class SessionSidebar {
         project.sessionCount = typeof data?.sessionCount === "number" ? data.sessionCount : null;
         project.hiddenSubagentCount =
           typeof data?.hiddenSubagentCount === "number" ? data.hiddenSubagentCount : null;
-        this.applyProvisionalSession();
-        this.render();
       } catch (error) {
         console.error("[Sidebar] workspace count refresh failed:", error);
       } finally {
@@ -551,7 +566,28 @@ export class SessionSidebar {
    * Selecting an existing session is not a data refresh: it only changes the
    * active row and loads chat history in the main surface.
    */
-  refresh({ workspacePath = null } = {}) {
+  refresh(options = {}) {
+    const targetKey = workspacePathKey(options.workspacePath);
+    const registryAvailable = this.isRegistryAvailable();
+    if (
+      this._refreshPromise &&
+      this._refreshRegistryAvailable === registryAvailable &&
+      this._refreshScopeKey === targetKey
+    ) {
+      return this._refreshPromise;
+    }
+    const queued = this._queuedRefreshes.get(targetKey);
+    if (queued) return queued;
+    const refreshPromise = this._refreshQueue.then(() => {
+      this._queuedRefreshes.delete(targetKey);
+      return this._startRefresh(options);
+    });
+    this._queuedRefreshes.set(targetKey, refreshPromise);
+    this._refreshQueue = refreshPromise.catch(() => {});
+    return refreshPromise;
+  }
+
+  _startRefresh({ workspacePath = null } = {}) {
     const targetKey = workspacePathKey(workspacePath);
     const registryAvailable = this.isRegistryAvailable();
     // Coalesce before changing the request generation. Otherwise a second
@@ -565,12 +601,16 @@ export class SessionSidebar {
       return this._refreshPromise;
     }
     this._registrySessionLoadGeneration += 1;
+    const focusWorkspacePath = workspacePathKey(this.getFocusWorkspacePath?.());
+    const shouldRefreshProject = (project) =>
+      this.isWorkspaceExpanded(project) ||
+      (focusWorkspacePath && workspacePathKey(project.path) === focusWorkspacePath);
     this._registryBusyRows.clear();
     this._registryCountBusyRows.clear();
     for (const project of this.projects) {
       if (
         project.source === "registry" &&
-        this.isWorkspaceExpanded(project) &&
+        shouldRefreshProject(project) &&
         (!targetKey || workspacePathKey(project.path) === targetKey)
       ) {
         this.workspaceSessionsCache.delete(workspacePathKey(project.path));
@@ -585,7 +625,7 @@ export class SessionSidebar {
         const targets = (projects || []).filter(
           (project) =>
             project.source === "registry" &&
-            this.isWorkspaceExpanded(project) &&
+            shouldRefreshProject(project) &&
             (!targetKey || workspacePathKey(project.path) === targetKey),
         );
         await Promise.all(targets.map((project) => this.ensureWorkspaceSessions(project)));
@@ -860,6 +900,7 @@ export class SessionSidebar {
     group.appendChild(sessionsDiv);
     // Insert at top of container
     this.container.insertBefore(group, this.container.firstChild);
+    this.rebuildStatusIndex();
   }
 
   highlightMatch(text, query) {
@@ -1124,9 +1165,22 @@ export class SessionSidebar {
   // only confirmed deletions are removed after the session list reloads.
   async deleteWorkspaceSessions(workspace) {
     if (!workspace) return;
-    const loading = this.ensureWorkspaceSessions(workspace, { force: true });
-    if (workspace.source === "registry") await loading;
-    const filePaths = (workspace.sessions || [])
+    const inFlight = this._registryBusyPromises.get(workspace.workspaceId);
+    if (inFlight) await inFlight;
+    const currentWorkspace =
+      this.projects.find(
+        (project) => workspacePathKey(project.path) === workspacePathKey(workspace.path),
+      ) || workspace;
+    const workspaceKey = workspacePathKey(currentWorkspace.path);
+    if (
+      currentWorkspace.source === "registry" &&
+      (inFlight ||
+        (!this.workspaceSessionsCache.has(workspaceKey) &&
+          (!Array.isArray(currentWorkspace.sessions) || currentWorkspace.sessions.length === 0)))
+    ) {
+      await this.ensureWorkspaceSessions(currentWorkspace, { force: true });
+    }
+    const filePaths = (currentWorkspace.sessions || [])
       .map((session) => session?.filePath)
       .filter(
         (filePath) =>
@@ -1139,9 +1193,9 @@ export class SessionSidebar {
       return;
     }
     const workspaceName =
-      workspace?.folderName ||
-      basenameLocalPath(workspace?.path) ||
-      workspace?.path ||
+      currentWorkspace?.folderName ||
+      basenameLocalPath(currentWorkspace?.path) ||
+      currentWorkspace?.path ||
       t("sidebar.unavailable");
     const ok = await this.confirmWorkspaceDeletion(workspaceName, filePaths.length);
     if (!ok) return;
@@ -1162,18 +1216,30 @@ export class SessionSidebar {
     // Batch deletes must invalidate this workspace's cache or the reload
     // below would restore the deleted sessions from it (ghost entries).
     this.invalidateWorkspaceSessions(workspace?.path);
-    await this.refresh({ workspacePath: workspace.path });
+    await this.refresh({ workspacePath: currentWorkspace.path });
     const refreshedWorkspace = this.projects.find(
-      (project) => workspacePathKey(project.path) === workspacePathKey(workspace.path),
+      (project) => workspacePathKey(project.path) === workspacePathKey(currentWorkspace.path),
     );
-    if (refreshedWorkspace?.source === "registry") {
+    let hiddenSubagentCount = Math.max(
+      currentWorkspace.hiddenSubagentCount || 0,
+      refreshedWorkspace?.hiddenSubagentCount || 0,
+    );
+    if (
+      data.deleted > 0 &&
+      refreshedWorkspace?.source === "registry" &&
+      typeof refreshedWorkspace.hiddenSubagentCount !== "number"
+    ) {
       await this.ensureWorkspaceSessions(refreshedWorkspace, { force: true });
+      hiddenSubagentCount = Math.max(
+        hiddenSubagentCount,
+        refreshedWorkspace.hiddenSubagentCount || 0,
+      );
     }
-    if (data.deleted > 0 && refreshedWorkspace?.hiddenSubagentCount > 0) {
+    if (data.deleted > 0 && hiddenSubagentCount > 0) {
       this.onSessionNotice?.(
         t("sidebar.deletedMainSessionsSubagentsKept", {
           count: data.deleted,
-          hiddenCount: refreshedWorkspace.hiddenSubagentCount,
+          hiddenCount: hiddenSubagentCount,
         }),
       );
     }
@@ -1375,7 +1441,14 @@ export class SessionSidebar {
   // ═══════════════════════════════════════
 
   buildSessionItem(session, project, options = {}) {
-    const { showDeleteButton = false, deletionBlockedReason = null, onDelete = null } = options;
+    const {
+      showDeleteButton = false,
+      deletionBlockedReason = null,
+      onDelete = null,
+      treeDepth = 0,
+      treeIsLast = true,
+      treeAncestorChain = null,
+    } = options;
     const isProvisional = session?.provisional === true;
     const onSelect =
       !isProvisional && this.onSessionSelect
@@ -1393,6 +1466,9 @@ export class SessionSidebar {
       deletionBlockedReason: deletionBlockedReason ?? this.deletionBlockedReason(session.filePath),
       projectSearchText: this.getProjectSearchText(project),
       formattedTime: this.formatTime(session.mtime ?? session.timestamp),
+      treeDepth,
+      treeIsLast,
+      treeAncestorChain,
       onSelect,
       onDelete: isProvisional ? null : onDelete || ((filePath) => this.deleteSession(filePath)),
       onRename: isProvisional
@@ -1579,20 +1655,26 @@ export class SessionSidebar {
               }
 
               const pinnedSessions = pinned.sessions;
+              const pinnedRows = buildFlattenedSessionTree(pinnedSessions);
               const pinnedVisibleCount = this.getProjectVisibleSessionCount(
                 workspace,
-                pinnedSessions.length,
+                pinnedRows.length,
               );
-              const pinnedToRender = pinnedSessions.slice(0, pinnedVisibleCount);
-              for (const session of pinnedToRender) {
+              const pinnedToRender = pinnedRows.slice(0, pinnedVisibleCount);
+              for (const row of pinnedToRender) {
                 container.appendChild(
-                  this.buildSessionItem(session, workspace, { showDeleteButton: true }),
+                  this.buildSessionItem(row.session, workspace, {
+                    showDeleteButton: true,
+                    treeDepth: row.depth,
+                    treeIsLast: row.isLast,
+                    treeAncestorChain: row.ancestorChain,
+                  }),
                 );
               }
               const pinnedToggle = this.buildProjectSessionsToggleRow(
                 workspace,
                 pinnedToRender.length,
-                pinnedSessions.length,
+                pinnedRows.length,
               );
               if (pinnedToggle) container.appendChild(pinnedToggle);
             },
@@ -1614,9 +1696,10 @@ export class SessionSidebar {
    */
   projectRowNode(project) {
     const visibleSessions = project.sessions || [];
+    const visibleRows = buildFlattenedSessionTree(visibleSessions);
     // Pagination ("show more") mutates only the visible slice; include it in
     // the signature so those clicks still rebuild/reuse the correct DOM.
-    const visibleCount = this.getProjectVisibleSessionCount(project, visibleSessions.length);
+    const visibleCount = this.getProjectVisibleSessionCount(project, visibleRows.length);
     const signature = JSON.stringify([
       project.workspaceId,
       project.folderName || "",
@@ -1625,15 +1708,18 @@ export class SessionSidebar {
       visibleCount,
       project.sessionCount ?? null,
       project.hiddenSubagentCount ?? null,
-      (project.sessions || []).map((session) => [
-        session.filePath,
-        session.name ?? null,
-        Number(session.mtime) || 0,
-        Boolean(session.isRunning),
-        session.port ?? null,
-        this.unread.has(session.filePath),
-        this.streamingFiles?.has(session.filePath) || false,
-        session.filePath === this.activeSessionFile,
+      visibleRows.map((row) => [
+        row.session.filePath,
+        row.session.name ?? null,
+        row.session.parentSession ?? null,
+        Number(row.session.mtime) || 0,
+        row.depth,
+        row.ancestorKey,
+        Boolean(row.session.isRunning),
+        row.session.port ?? null,
+        this.unread.has(row.session.filePath),
+        this.streamingFiles?.has(row.session.filePath) || false,
+        row.session.filePath === this.activeSessionFile,
       ]),
       this.searchQuery ? "searching" : "browse",
       project.workspaceId === "" ? String(Math.random()) : "stable", // live rows always rebuild
@@ -1641,9 +1727,7 @@ export class SessionSidebar {
     const cached = this._projectRowCache.get(project.workspaceId);
     if (cached && cached.signature === signature) return cached;
 
-    const sessionsToRender = this.searchQuery
-      ? visibleSessions
-      : visibleSessions.slice(0, visibleCount);
+    const sessionsToRender = this.searchQuery ? visibleRows : visibleRows.slice(0, visibleCount);
     const projectActive = Array.isArray(project.sessions)
       ? project.sessions.some((s) => s?.filePath === this.activeSessionFile)
       : false;
@@ -1674,16 +1758,21 @@ export class SessionSidebar {
           ? () => this.onWorkspaceFocus?.(project)
           : null,
       renderSessions: (sessionsDiv) => {
-        for (const session of sessionsToRender) {
+        for (const row of sessionsToRender) {
           sessionsDiv.appendChild(
-            this.buildSessionItem(session, project, { showDeleteButton: true }),
+            this.buildSessionItem(row.session, project, {
+              showDeleteButton: true,
+              treeDepth: row.depth,
+              treeIsLast: row.isLast,
+              treeAncestorChain: row.ancestorChain,
+            }),
           );
         }
         if (!this.searchQuery) {
           const toggleRow = this.buildProjectSessionsToggleRow(
             project,
             sessionsToRender.length,
-            visibleSessions.length,
+            visibleRows.length,
           );
           if (toggleRow) sessionsDiv.appendChild(toggleRow);
         }
@@ -1742,6 +1831,7 @@ export class SessionSidebar {
     }
 
     if (this.searchQuery) this.applySearch();
+    this.rebuildStatusIndex();
   }
 
   renderEmptyState({ append = false } = {}) {

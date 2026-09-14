@@ -64,6 +64,7 @@ async function makeSidebar({
   transportResponses = {},
   fetchRoutes = {},
   isCurrentWorkspace,
+  getFocusWorkspacePath,
   onWorkspaceFocus,
   onRegisterWorkspace,
 } = {}) {
@@ -81,6 +82,7 @@ async function makeSidebar({
     transport,
     onSessionNotice: (message) => notices.push(message),
     isCurrentWorkspace: isCurrentWorkspace ?? (() => false),
+    getFocusWorkspacePath,
     onWorkspaceFocus,
     onRegisterWorkspace,
   });
@@ -292,6 +294,34 @@ describe("registry-backed sidebar loading", () => {
       "/work/alpha",
       "/work/beta",
     ]);
+  });
+
+  test("scoped refresh reloads the Focus workspace when its normal row is collapsed", async () => {
+    const sessionsPayload = [{ filePath: "/sessions/focus.jsonl", name: "Focus" }];
+    const { sidebar } = await makeSidebar({
+      rows: REGISTRY_ROWS,
+      getFocusWorkspacePath: () => "/work/alpha",
+      fetchRoutes: {
+        instances: [],
+        workspaceSessions: (url) => {
+          if (url.searchParams.get("path") === "/work/alpha") {
+            return { path: "/work/alpha", dirName: "-work-alpha", sessions: sessionsPayload };
+          }
+          return { path: "/work/beta", dirName: "-work-beta", sessions: [] };
+        },
+      },
+    });
+    await sidebar.loadSessions();
+    expect(sidebar.isWorkspaceExpanded(sidebar.projects[0])).toBe(false);
+
+    await sidebar.refresh({ workspacePath: "/work/alpha" });
+
+    const fullLoads = globalThis.fetch.mock.calls.filter(([url]) => {
+      const route = String(url);
+      return route.startsWith("/api/workspace-sessions") && !route.includes("countOnly=1");
+    });
+    expect(fullLoads).toHaveLength(1);
+    expect(sidebar.projects[0].sessions).toEqual(sessionsPayload);
   });
 });
 
@@ -736,6 +766,56 @@ describe("registry cache invalidation wiring", () => {
 });
 
 describe("startup loading", () => {
+  test("gives idle warmup an 800ms deadline", async () => {
+    const previousIdleCallback = window.requestIdleCallback;
+    const requestIdleCallback = vi.fn();
+    window.requestIdleCallback = requestIdleCallback;
+    try {
+      const { sidebar } = await makeSidebar({ rows: REGISTRY_ROWS });
+      await sidebar.loadSessions({ quiet: true });
+
+      expect(requestIdleCallback).toHaveBeenCalledWith(expect.any(Function), { timeout: 800 });
+    } finally {
+      if (previousIdleCallback) window.requestIdleCallback = previousIdleCallback;
+      else delete window.requestIdleCallback;
+    }
+  });
+
+  test("warms a registry row added after refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      const rows = [...REGISTRY_ROWS];
+      const { sidebar } = await makeSidebar({
+        rows,
+        fetchRoutes: {
+          instances: [],
+          workspaceSessions: (url) => ({
+            sessionCount: url.searchParams.get("path") === "/work/gamma" ? 7 : 1,
+            sessions: [],
+          }),
+        },
+      });
+      await sidebar.loadSessions({ quiet: true });
+      await vi.advanceTimersByTimeAsync(900);
+
+      rows.push({
+        workspaceId: "uuid-3",
+        canonicalPath: "/work/gamma",
+        displayName: "gamma",
+        pinned: false,
+        lastOpenedAt: null,
+      });
+      await sidebar.refresh();
+      await vi.advanceTimersByTimeAsync(900);
+
+      expect(sidebar.projects.find((project) => project.path === "/work/gamma")?.sessionCount).toBe(
+        7,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("warms readdir-only counts and never scans full session lists", async () => {
     vi.useFakeTimers();
     try {

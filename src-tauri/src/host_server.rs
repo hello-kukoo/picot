@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Semaphore};
 use tower::ServiceBuilder;
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -48,6 +48,7 @@ const MAX_HTTP_BODY_BYTES: usize = HTTP_DEFAULT_BODY_BYTES;
 // so the transport limit only needs headroom for the encoded form.
 const MAX_PASTE_BODY_BYTES: usize = crate::paste_offload::MAX_PASTE_BYTES * 6 + 64 * 1024;
 const MAX_WS_MESSAGE_BYTES: usize = WS_PHYSICAL_FRAME_BYTES;
+const MAX_CONCURRENT_SESSION_SCANS: usize = 2;
 
 /// D4/LAN preference gate for the mobile entry. Stored in the shared
 /// metadata store so the Settings toggle, the bind decision, and the pairing
@@ -132,6 +133,7 @@ struct HostState {
     runtimes: NativePiManager,
     auth: Arc<Mutex<RemoteAuth>>,
     data: HostDataPlane,
+    session_scan_permits: Arc<Semaphore>,
     index_html: Mutex<String>,
     control_handler: Mutex<Option<ControlHandler>>,
     git_service: Mutex<Option<Arc<GitService>>>,
@@ -218,6 +220,7 @@ impl HostServer {
             runtimes,
             auth,
             data,
+            session_scan_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_SESSION_SCANS)),
             index_html: Mutex::new(String::new()),
             control_handler: Mutex::new(None),
             git_service: Mutex::new(None),
@@ -669,7 +672,12 @@ async fn compat_sessions(
     Query(query): Query<WorkspaceQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let workspace_id = compat_owner_workspace(&state, &headers, query.workspace_id.as_deref())?;
-    let sessions = list_sessions_blocking(state.data.clone(), workspace_id).await?;
+    let sessions = list_sessions_blocking(
+        state.data.clone(),
+        Arc::clone(&state.session_scan_permits),
+        workspace_id,
+    )
+    .await?;
     Ok(Json(json!({ "success": true, "sessions": sessions })))
 }
 
@@ -679,7 +687,13 @@ async fn compat_search(
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let workspace_id = compat_owner_workspace(&state, &headers, query.workspace_id.as_deref())?;
-    let results = search_sessions_blocking(state.data.clone(), workspace_id, query.q).await?;
+    let results = search_sessions_blocking(
+        state.data.clone(),
+        Arc::clone(&state.session_scan_permits),
+        workspace_id,
+        query.q,
+    )
+    .await?;
     Ok(Json(json!({ "success": true, "results": results })))
 }
 
@@ -862,8 +876,13 @@ async fn compat_workspace_sessions(
         .map_err(host_data_error_response)?;
     let count_only = query.mode.as_deref() == Some("count");
     let (dir_name, sessions, session_count, hidden_subagent_count) =
-        read_workspace_session_bucket_blocking(state.data.clone(), workspace_id, count_only)
-            .await?;
+        read_workspace_session_bucket_blocking(
+            state.data.clone(),
+            Arc::clone(&state.session_scan_permits),
+            workspace_id,
+            count_only,
+        )
+        .await?;
     Ok(Json(json!({
         "path": root,
         "dirName": dir_name,
@@ -1171,10 +1190,15 @@ fn host_data_error_response(error: HostDataError) -> (StatusCode, Json<Value>) {
 
 async fn read_workspace_session_bucket_blocking(
     data: HostDataPlane,
+    session_scan_permits: Arc<Semaphore>,
     workspace_id: String,
     count_only: bool,
 ) -> Result<WorkspaceSessionBucketResult, (StatusCode, Json<Value>)> {
+    let permit = session_scan_permits.acquire_owned().await.map_err(|_| {
+        host_data_error_response(HostDataError::Io("session scan queue closed".to_owned()))
+    })?;
     tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         data.read_workspace_session_bucket(&workspace_id, count_only)
     })
     .await
@@ -1183,25 +1207,39 @@ async fn read_workspace_session_bucket_blocking(
 
 async fn list_sessions_blocking(
     data: HostDataPlane,
+    session_scan_permits: Arc<Semaphore>,
     workspace_id: String,
 ) -> Result<Vec<crate::host_data::SessionSummary>, (StatusCode, Json<Value>)> {
-    tokio::task::spawn_blocking(move || data.list_sessions(&workspace_id))
-        .await
-        .map_err(|_| {
-            host_data_error_response(HostDataError::Io("session list scan failed".to_owned()))
-        })?
-        .map_err(host_data_error_response)
+    let permit = session_scan_permits.acquire_owned().await.map_err(|_| {
+        host_data_error_response(HostDataError::Io("session scan queue closed".to_owned()))
+    })?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        data.list_sessions(&workspace_id)
+    })
+    .await
+    .map_err(|_| {
+        host_data_error_response(HostDataError::Io("session list scan failed".to_owned()))
+    })?
+    .map_err(host_data_error_response)
 }
 
 async fn search_sessions_blocking(
     data: HostDataPlane,
+    session_scan_permits: Arc<Semaphore>,
     workspace_id: String,
     query: String,
 ) -> Result<Vec<SessionSearchResult>, (StatusCode, Json<Value>)> {
-    tokio::task::spawn_blocking(move || data.search_sessions(&workspace_id, &query))
-        .await
-        .map_err(|_| host_data_error_response(HostDataError::Io("search scan failed".to_owned())))?
-        .map_err(host_data_error_response)
+    let permit = session_scan_permits.acquire_owned().await.map_err(|_| {
+        host_data_error_response(HostDataError::Io("session scan queue closed".to_owned()))
+    })?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        data.search_sessions(&workspace_id, &query)
+    })
+    .await
+    .map_err(|_| host_data_error_response(HostDataError::Io("search scan failed".to_owned())))?
+    .map_err(host_data_error_response)
 }
 
 /// Host-origin entry for production existing-shell windows. Route parameters
@@ -2636,6 +2674,7 @@ async fn dispatch(
                     let (dir_name, sessions, session_count, hidden_subagent_count) =
                         read_workspace_session_bucket_blocking(
                             state.data.clone(),
+                            Arc::clone(&state.session_scan_permits),
                             workspace_id.to_owned(),
                             count_only,
                         )
@@ -2710,15 +2749,18 @@ async fn dispatch(
                         .get("workspaceId")
                         .and_then(Value::as_str)
                         .ok_or(("invalid_workspace", "workspaceId is required".into()))?;
-                    let sessions =
-                        list_sessions_blocking(state.data.clone(), workspace_id.to_owned())
-                            .await
-                            .map_err(|_| {
-                                (
-                                    "session_list_scan_failed",
-                                    "Session list scan failed".to_owned(),
-                                )
-                            })?;
+                    let sessions = list_sessions_blocking(
+                        state.data.clone(),
+                        Arc::clone(&state.session_scan_permits),
+                        workspace_id.to_owned(),
+                    )
+                    .await
+                    .map_err(|_| {
+                        (
+                            "session_list_scan_failed",
+                            "Session list scan failed".to_owned(),
+                        )
+                    })?;
                     Ok(json!({
                         "type": "data_response",
                         "requestId": request_id,
@@ -2738,6 +2780,7 @@ async fn dispatch(
                         .to_owned();
                     let results = search_sessions_blocking(
                         state.data.clone(),
+                        Arc::clone(&state.session_scan_permits),
                         workspace_id.to_owned(),
                         query,
                     )

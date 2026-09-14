@@ -3,6 +3,7 @@
 import { t } from "../i18n.js";
 import { createIcon } from "../icons.js";
 import { formatSessionTime } from "./build-session-item.js";
+import { buildFlattenedSessionTree } from "./session-tree-model.js";
 
 const INITIAL_LIMIT = 5;
 const STEP = 10;
@@ -45,6 +46,7 @@ export class WorkspaceFocusSidebar {
     this.onSessionSelect = options.onSessionSelect || null;
     this.onDelete = options.onDelete || null;
     this.onRename = options.onRename || null;
+    this.registerStatusItem = options.registerStatusItem || null;
     this.initialLimit = INITIAL_LIMIT;
     this.step = STEP;
     // Default to fully expanded so the active session is never hidden, even
@@ -61,6 +63,15 @@ export class WorkspaceFocusSidebar {
   }
 
   render() {
+    if (!this.root) {
+      this._createRoot();
+    }
+    this._updateCard();
+    this._updateSessions();
+    this._updateToggle();
+  }
+
+  _createRoot() {
     const root = document.createElement("div");
     root.className = "workspace-focus-sidebar";
 
@@ -90,61 +101,119 @@ export class WorkspaceFocusSidebar {
     newTask.addEventListener("click", () => this.onNewTask?.(this.project));
     root.appendChild(newTask);
 
-    const sessions = Array.isArray(this.project?.sessions) ? this.project.sessions : [];
     const list = document.createElement("div");
     list.className = "focus-session-list";
-    const visible = sessions.slice(0, this.visibleCount);
-    for (const session of visible) {
-      const item = this.buildSessionItem({
-        session,
-        project: this.project,
-        isActive: session.filePath === this.activeSessionFile,
-        isUnread: this.unread.has(session.filePath),
-        isStreaming: this.streaming.has(session.filePath),
-        formattedTime: formatSessionTime(session.mtime ?? session.timestamp),
-        showPinButton: false,
-        showDeleteButton: true,
-        onSelect: (s, p) => this.onSessionSelect?.(s, p),
-        onDelete: (filePath) => this.onDelete?.(filePath),
-        onRename: (filePath, targetSession, item) => this.onRename?.(filePath, targetSession, item),
-        createIcon: this.createIcon,
-      });
-      list.appendChild(item);
-    }
     root.appendChild(list);
 
+    this.root = root;
+    this.card = root.querySelector(".workspace-focus-card");
+    this.sessionList = root.querySelector(".focus-session-list");
+    this.toggleRow = null;
+    this.sessionNodes = new Map();
+    this.container.replaceChildren(root);
+    this._updateSessions();
+    this._updateToggle();
+  }
+
+  _updateCard() {
+    const next = this._buildCard();
+    this.card.replaceChildren(...next.childNodes);
+  }
+
+  _updateSessions() {
+    const sessions = Array.isArray(this.project?.sessions) ? this.project.sessions : [];
+    const rows = buildFlattenedSessionTree(sessions).slice(0, this.visibleCount);
+    const nextNodes = new Map();
+    for (const row of rows) {
+      const { session } = row;
+      const key = session.filePath;
+      const signature = JSON.stringify([
+        key,
+        session.name ?? null,
+        session.firstMessage ?? null,
+        session.mtime ?? null,
+        session.lastActivityAt ?? null,
+        row.depth,
+        row.isLast,
+        row.ancestorKey,
+        session.filePath === this.activeSessionFile,
+        this.unread.has(key),
+        this.streaming.has(key),
+      ]);
+      const cached = this.sessionNodes.get(key);
+      const item = cached?.signature === signature ? cached.item : this._buildSessionItem(row);
+      if (cached && cached.item !== item) cached.item.remove();
+      nextNodes.set(key, { signature, item });
+      this.sessionList.appendChild(item);
+    }
+    for (const [key, cached] of this.sessionNodes) {
+      if (!nextNodes.has(key)) cached.item.remove();
+    }
+    this.sessionNodes = nextNodes;
+  }
+
+  _buildSessionItem(row) {
+    const { session } = row;
+    const item = this.buildSessionItem({
+      session,
+      project: this.project,
+      isActive: session.filePath === this.activeSessionFile,
+      isUnread: this.unread.has(session.filePath),
+      isStreaming: this.streaming.has(session.filePath),
+      treeDepth: row.depth,
+      treeIsLast: row.isLast,
+      treeAncestorChain: row.ancestorChain,
+      formattedTime: formatSessionTime(session.mtime ?? session.timestamp),
+      showPinButton: false,
+      showDeleteButton: true,
+      onSelect: (s, p) => this.onSessionSelect?.(s, p),
+      onDelete: (filePath) => this.onDelete?.(filePath),
+      onRename: (filePath, targetSession, targetItem) =>
+        this.onRename?.(filePath, targetSession, targetItem),
+      createIcon: this.createIcon,
+    });
+    this.registerStatusItem?.(session.filePath, item);
+    return item;
+  }
+
+  _updateToggle() {
+    const sessions = Array.isArray(this.project?.sessions) ? this.project.sessions : [];
     const total = sessions.length;
     const hasMore = this.visibleCount < total;
     const canShowLess = this.visibleCount > this.initialLimit && total > this.initialLimit;
-    if (hasMore || canShowLess) {
-      const toggleRow = document.createElement("div");
-      toggleRow.className = "focus-sessions-toggle-row";
-      if (hasMore) {
-        const showMore = document.createElement("button");
-        showMore.type = "button";
-        showMore.className = "focus-sessions-toggle";
-        showMore.textContent = t("workspace.showMore");
-        showMore.addEventListener("click", () => {
-          this.visibleCount += this.step;
-          this.render();
-        });
-        toggleRow.appendChild(showMore);
-      }
-      if (canShowLess) {
-        const showLess = document.createElement("button");
-        showLess.type = "button";
-        showLess.className = "focus-sessions-toggle focus-sessions-toggle-less";
-        showLess.textContent = t("sidebar.showLess");
-        showLess.addEventListener("click", () => {
-          this.visibleCount = this.initialLimit;
-          this.render();
-        });
-        toggleRow.appendChild(showLess);
-      }
-      root.appendChild(toggleRow);
+    if (!hasMore && !canShowLess) {
+      this.toggleRow?.remove();
+      this.toggleRow = null;
+      return;
     }
-
-    this.container.replaceChildren(root);
+    if (!this.toggleRow) {
+      this.toggleRow = document.createElement("div");
+      this.toggleRow.className = "focus-sessions-toggle-row";
+      this.root.appendChild(this.toggleRow);
+    }
+    this.toggleRow.replaceChildren();
+    if (hasMore) {
+      const showMore = document.createElement("button");
+      showMore.type = "button";
+      showMore.className = "focus-sessions-toggle";
+      showMore.textContent = t("workspace.showMore");
+      showMore.addEventListener("click", () => {
+        this.visibleCount += this.step;
+        this.render();
+      });
+      this.toggleRow.appendChild(showMore);
+    }
+    if (canShowLess) {
+      const showLess = document.createElement("button");
+      showLess.type = "button";
+      showLess.className = "focus-sessions-toggle focus-sessions-toggle-less";
+      showLess.textContent = t("sidebar.showLess");
+      showLess.addEventListener("click", () => {
+        this.visibleCount = this.initialLimit;
+        this.render();
+      });
+      this.toggleRow.appendChild(showLess);
+    }
   }
 
   _buildCard() {

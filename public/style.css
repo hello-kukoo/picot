@@ -7991,7 +7991,9 @@ body.file-preview-resizing {
    list markers overflow the ol box and get clipped by the preview's left
    edge (the 28px gutter strip), cutting numbers in half. Mirrors the
    .message-content ol restoration rule. */
+/* biome-ignore lint/style/noDescendingSpecificity: chat-message lists and file-preview lists live in disjoint DOM scopes; the lower specificity here never loses to the message rule. */
 .file-markdown-preview ul,
+/* biome-ignore lint/style/noDescendingSpecificity: same disjoint-scope rationale as the ul selector above. */
 .file-markdown-preview ol {
   padding-left: var(--space-5);
 }

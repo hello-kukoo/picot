@@ -1,6 +1,7 @@
 // ABOUTME: Shared DOM builder for a single session row.
 // ABOUTME: Consumed by normal and Focus sidebars for session row rendering.
 import { t } from "../i18n.js";
+import { formatTreePrefix } from "./session-tree-model.js";
 
 export function getSessionDisplayTitle(session) {
   return session?.name || session?.firstMessage || t("sidebar.emptySession");
@@ -42,6 +43,9 @@ export function buildSessionItem({
   deletionBlockedReason = null,
   projectSearchText = "",
   formattedTime = "",
+  treeDepth = 0,
+  treeIsLast = true,
+  treeAncestorChain = null,
   onSelect = null,
   onDelete = null,
   onRename = null,
@@ -60,6 +64,12 @@ export function buildSessionItem({
   if (isStreaming) item.classList.add("streaming");
 
   const title = getSessionDisplayTitle(session);
+  if (treeDepth > 0) {
+    const prefix = document.createElement("span");
+    prefix.className = "session-tree-prefix";
+    prefix.textContent = formatTreePrefix(treeAncestorChain, treeIsLast);
+    item.appendChild(prefix);
+  }
   const titleRow = document.createElement("div");
   titleRow.className = "session-title-row";
   const titleElement = document.createElement("div");
