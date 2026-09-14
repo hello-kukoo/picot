@@ -81,10 +81,16 @@ describe("settings page split", () => {
       "appearance",
       "models",
       "skills",
+      "mcp",
       "extensions",
       "configuration",
       "usage",
     ]);
+
+    // The MCP entry ships hidden: pi-mcp-adapter detection unhides it at
+    // runtime, so the static DOM must carry the hidden class by default.
+    const mcpItem = document.querySelector('[data-settings-tab="mcp"]');
+    expect(mcpItem?.classList.contains("hidden")).toBe(true);
 
     // The Super Agent / Agent Inbox surface was removed with its runtime scope:
     // a disabled placeholder tab is still a dead control, so it must be gone.

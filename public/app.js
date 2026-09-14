@@ -66,7 +66,10 @@ import {
 } from "./preferences-client.js";
 import { QuickChatDialog } from "./quick-chat-dialog.js";
 import { resolvePreparedRuntimeTarget } from "./session/in-place-runtime-target.js";
-import { shouldRefreshSidebarForNewSession } from "./session/new-session-refresh.js";
+import {
+  shouldRefreshSidebarForNewSession,
+  shouldShowProvisionalSession,
+} from "./session/new-session-refresh.js";
 import { getOnboardingState } from "./session/onboarding.js";
 import {
   confirmDeferredFileBrowserWorkspace,
@@ -80,6 +83,7 @@ import { SessionUiStateStore } from "./session-ui-state.js";
 import { ConfigGateway, consumeConfigResponseFrame } from "./settings/config-gateway.js";
 import { createConfigReadiness } from "./settings/config-readiness.js";
 import { setupExtensionsTabShell } from "./settings/extensions-tab-shell.js";
+import { setupMcpPage } from "./settings/mcp-page.js";
 import { setupMobileAccess } from "./settings/mobile-access.js";
 import { setupModelsPage } from "./settings/models-page.js";
 import { createOauthGateway } from "./settings/oauth-gateway.js";
@@ -233,7 +237,7 @@ function focusSidebarEl() {
   return document.getElementById("sidebar");
 }
 
-function enterFocus(project) {
+async function enterFocus(project) {
   if (!project) return;
   // Switching focus directly between two workspaces is rare (the focus button
   // is only shown for the active workspace), but guard against it so the prior
@@ -270,7 +274,10 @@ function enterFocus(project) {
 
   const focusCardInfo = {
     path: project.path,
-    count: Array.isArray(project.sessions) ? project.sessions.length : 0,
+    count:
+      typeof project.sessionCount === "number"
+        ? project.sessionCount
+        : (project.sessions?.length ?? 0),
   };
   const focusSidebar = new WorkspaceFocusSidebar(sessionList, {
     project,
@@ -280,6 +287,11 @@ function enterFocus(project) {
     streaming: sidebar.streamingFiles,
     buildSessionItem,
     createIcon,
+    registerStatusItem: (filePath, item) => {
+      const items = sidebar.statusItemsByPath.get(filePath) || new Set();
+      items.add(item);
+      sidebar.statusItemsByPath.set(filePath, items);
+    },
     onBack: () => exitFocus(),
     onNewTask: (p) => {
       handleNewProjectChat(p);
@@ -290,6 +302,14 @@ function enterFocus(project) {
   });
   currentFocusSidebar = focusSidebar;
   focusSidebar.render();
+  sidebar.rebuildStatusIndex();
+
+  // Focus owns a complete session list, even when its normal workspace row was
+  // collapsed and therefore had no history loaded yet.
+  if (project.source === "registry") {
+    await sidebar.ensureWorkspaceSessions(project);
+    if (currentFocusProject?.path === project.path) refreshFocusView();
+  }
 
   // Persist focus in the URL so a same-workspace port navigation carries it.
   try {
@@ -311,12 +331,17 @@ function enterFocus(project) {
         if (currentFocusProject?.path !== project.path) return;
         currentFocusSidebar.setProjectState({
           cardInfo: {
+            ...(currentFocusSidebar.cardInfo || {}),
             path: project.path,
-            count: Array.isArray(project.sessions) ? project.sessions.length : 0,
+            count:
+              typeof project.sessionCount === "number"
+                ? project.sessionCount
+                : (project.sessions?.length ?? 0),
             repository,
           },
         });
         currentFocusSidebar.render();
+        sidebar.rebuildStatusIndex();
       },
     );
   }
@@ -365,14 +390,19 @@ function refreshFocusView() {
   currentFocusSidebar.setProjectState({
     project,
     cardInfo: {
+      ...(currentFocusSidebar.cardInfo || {}),
       path: project.path,
-      count: Array.isArray(project.sessions) ? project.sessions.length : 0,
+      count:
+        typeof project.sessionCount === "number"
+          ? project.sessionCount
+          : (project.sessions?.length ?? 0),
     },
     activeSessionFile: sidebar.activeSessionFile,
     unread: sidebar.unread,
     streaming: sidebar.streamingFiles,
   });
   currentFocusSidebar.render();
+  sidebar.rebuildStatusIndex();
 }
 
 // Fetches the git repository name for the Focus workspace info card; returns
@@ -627,6 +657,7 @@ const sidebar = new SessionSidebar(
       }
     },
     isFocusActive: () => currentFocusProject !== null,
+    getFocusWorkspacePath: () => currentFocusProject?.path || null,
     onFocusRefresh: () => refreshFocusView(),
   },
 );
@@ -5712,6 +5743,9 @@ let packageManager = null;
 
 function selectSettingsTab(tabKey = "general") {
   const targetTabKey = tabKey === "auth" ? "configuration" : tabKey;
+  // The MCP nav item stays hidden until the pi-mcp-adapter package is
+  // detected; refreshAvailability caches after the first check.
+  void mcpPage.refreshAvailability();
   settingsNavItems.forEach((item) => {
     item.classList.toggle("active", item.dataset.settingsTab === targetTabKey);
   });
@@ -5734,6 +5768,9 @@ function selectSettingsTab(tabKey = "general") {
   }
   if (targetTabKey === "skills") {
     void skillsPage.activate();
+  }
+  if (targetTabKey === "mcp") {
+    void mcpPage.activate();
   }
   if (targetTabKey === "usage") {
     void document.getElementById("settings-cost-dashboard")?.ensureLoaded();
@@ -6482,6 +6519,14 @@ const packageBrowse = setupPackageBrowse({
   renderPackageInstallFailure,
   setExtensionActionButton,
 });
+
+const mcpPage = setupMcpPage({
+  masterEl: document.getElementById("mcp-master"),
+  detailEl: document.getElementById("mcp-detail"),
+  tabs: document.querySelectorAll("[data-mcp-tab]"),
+  navItem: document.querySelector('[data-settings-tab="mcp"]'),
+  configGateway,
+});
 packageManager = setupPackageManager({
   root: document,
   transport,
@@ -6694,7 +6739,7 @@ function refreshInitialSidebar() {
   if (initialSidebarRefreshStarted) return;
   initialSidebarRefreshStarted = true;
   const runtimeTarget = wsClient.getRuntimeTarget();
-  if (runtimeTarget) {
+  if (shouldShowProvisionalSession({ runtimeTarget })) {
     sidebar.setProvisionalSession({
       workspaceId: runtimeTarget.workspaceId,
       sessionId: runtimeTarget.sessionId,
@@ -6706,7 +6751,7 @@ function refreshInitialSidebar() {
     // provisional row until after the registry request completes.
     if (!runtimeTarget) {
       const lateRuntimeTarget = wsClient.getRuntimeTarget();
-      if (lateRuntimeTarget) {
+      if (shouldShowProvisionalSession({ runtimeTarget: lateRuntimeTarget })) {
         sidebar.setProvisionalSession({
           workspaceId: lateRuntimeTarget.workspaceId,
           sessionId: lateRuntimeTarget.sessionId,

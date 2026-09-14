@@ -1002,6 +1002,13 @@
           Skills
         </button>
         <button
+          class="settings-nav-item hidden"
+          data-settings-tab="mcp"
+          data-i18n="settings.mcp.title"
+        >
+          MCP
+        </button>
+        <button
           class="settings-nav-item"
           data-settings-tab="extensions"
           data-i18n="settings.extensions"
@@ -1925,6 +1932,58 @@
               class="settings-save-message hidden"
               hidden
             ></div>
+          </div>
+        </div>
+
+        <div class="settings-tab" data-settings-panel="mcp">
+          <div class="settings-header">
+            <h3 data-i18n="settings.mcp.title">MCP</h3>
+          </div>
+          <div class="settings-body">
+            <div
+              class="extensions-page-tabs"
+              role="tablist"
+              data-i18n-aria-label="settings.mcp.sectionsAriaLabel"
+              aria-label="MCP layers"
+            >
+              <button
+                type="button"
+                class="extensions-page-tab"
+                role="tab"
+                data-mcp-tab="sharedGlobal"
+                aria-selected="true"
+                data-i18n="settings.mcp.groups.sharedGlobal"
+              >
+                Shared (global)
+              </button>
+              <button
+                type="button"
+                class="extensions-page-tab"
+                role="tab"
+                data-mcp-tab="piGlobal"
+                aria-selected="false"
+                data-i18n="settings.mcp.groups.piGlobal"
+              >
+                Pi (global)
+              </button>
+              <button
+                type="button"
+                class="extensions-page-tab"
+                role="tab"
+                data-mcp-tab="project"
+                aria-selected="false"
+                data-i18n="settings.mcp.groups.project"
+              >
+                Project
+              </button>
+            </div>
+            <p class="settings-help" data-i18n="settings.mcp.effectHint">
+              Changes apply to new sessions (or after /reload).
+            </p>
+            <div class="pkg-manager-layout">
+              <div id="mcp-master" class="pkg-manager-groups"></div>
+              <div id="mcp-detail" class="pkg-manager-detail" aria-live="polite"></div>
+            </div>
           </div>
         </div>
 

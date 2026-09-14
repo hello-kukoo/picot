@@ -28,6 +28,7 @@ import {
   resolveProviderId,
   testProviderConnectivity,
 } from "./custom-provider-probe";
+import { deleteMcpServer, listMcpServers, saveMcpServer, toggleMcpServer } from "./mcp-settings";
 import {
   createOAuthLoginOperationManager,
   type OAuthOperationEvent,
@@ -286,6 +287,11 @@ function parseSkillTarget(value: unknown): SkillTarget {
     throw new Error("Invalid skill inventory mutation");
   }
   return { kind: target.kind, id: target.id };
+}
+
+/** The MCP ops are project-layer aware: empty string means "no project cwd". */
+function mcpCwd(ctx: ConfigContext): string {
+  return typeof ctx.cwd === "string" && ctx.cwd ? ctx.cwd : "";
 }
 
 function skillInventoryOptions(scope: SkillScope, ctx: ConfigContext) {
@@ -1254,6 +1260,18 @@ export async function handlePicotConfig(
 
       case "get_default_auto_compaction":
         return { ok: true, data: getDefaultAutoCompaction(params.scope, ctx) };
+
+      case "mcp_list_servers":
+        return { ok: true, data: listMcpServers(PI_AGENT_ROOT, mcpCwd(ctx)) };
+
+      case "mcp_save_server":
+        return { ok: true, data: saveMcpServer(params, PI_AGENT_ROOT, mcpCwd(ctx)) };
+
+      case "mcp_delete_server":
+        return { ok: true, data: deleteMcpServer(params, PI_AGENT_ROOT, mcpCwd(ctx)) };
+
+      case "mcp_toggle_server":
+        return { ok: true, data: toggleMcpServer(params, PI_AGENT_ROOT, mcpCwd(ctx)) };
 
       case "set_default_auto_compaction":
         return {
