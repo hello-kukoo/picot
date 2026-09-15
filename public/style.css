@@ -114,6 +114,123 @@ body {
   min-height: 0;
 }
 
+/* ── Landing (native cold start; revealed by landing.js) ───────────────
+   Visual spec: docs/superpowers/specs/2026-09-11-landing-page-prototype.html
+   (approved). Single centered column right of the sidebar, slightly above
+   vertical center; consumes the shared theme tokens so every theme works. */
+.landing {
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding-bottom: 12vh;
+  min-width: 0;
+  position: relative;
+}
+/* macOS overlay title bar: the landing has no chat header, so it owns a
+   control-free drag strip along the top edge of the landing area. */
+.landing-drag-strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  -webkit-app-region: drag;
+}
+body.landing-mode .workspace {
+  display: none;
+}
+body.landing-mode #landing {
+  display: flex;
+}
+.landing-logo {
+  width: 112px;
+  height: 112px;
+  /* design-token-ignore: approved prototype visual spec fixes the 28px squircle radius; no theme radius token matches */
+  border-radius: 28px;
+  background: var(--bg-glass);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.landing-logo img {
+  width: 64px;
+  height: 64px;
+}
+/* White glyph on dark themes, near-black glyph on light themes; CSS-only so
+   a theme switch redraws the landing logo with no JS. */
+#landing-logo-img {
+  content: url("icons/logo-dark.svg");
+}
+:root[data-theme="night"] #landing-logo-img,
+:root[data-theme="midnight"] #landing-logo-img,
+:root[data-theme="dawn"] #landing-logo-img {
+  content: url("icons/logo.svg");
+}
+.landing-name {
+  margin-top: var(--space-6);
+  /* design-token-ignore: approved prototype visual spec fixes the 56px brand wordmark; largest theme token is 24px */
+  font-size: 56px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: var(--text-primary);
+}
+.landing-hint {
+  margin-top: var(--space-4);
+  font-size: var(--font-size-lg);
+  color: var(--text-secondary);
+  text-align: center;
+  max-width: 420px;
+}
+.landing-actions {
+  margin-top: var(--space-8);
+  display: flex;
+  gap: var(--space-3);
+}
+.landing-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 40px;
+  padding: 0 var(--space-6);
+  border-radius: var(--radius-md);
+  background: var(--bg-glass-hover);
+  border: 1px solid var(--border-bright);
+  color: var(--text-primary);
+  font-size: var(--font-size-md);
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background var(--duration) var(--ease),
+    border-color var(--duration) var(--ease);
+}
+.landing-btn:hover {
+  background: var(--bg-glass-active);
+  border-color: var(--border-hover);
+}
+.landing-btn:active {
+  transform: translateY(1px);
+}
+.landing-notice {
+  margin-top: var(--space-6);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  max-width: 560px;
+  text-align: center;
+}
+/* Landing settings: only the General and Appearance tabs are meaningful
+   without a workspace binding or a live Pi; runtime-bound tabs and the
+   mobile-pairing section stay hidden. */
+body.landing-mode
+.settings-nav-item:not([data-settings-tab="general"]):not([data-settings-tab="appearance"]) {
+  display: none;
+}
+body.landing-mode #setting-mobile-section {
+  display: none;
+}
+
 /* ═══════════════════════════════════════════════════════
    Sidebar — smoked glass panel
    ═══════════════════════════════════════════════════════ */
@@ -7519,8 +7636,11 @@ html.macos-overlay .settings-content {
 /* Forced preview themes (Appearance page) scope-swap the Picot variables the
    panel subtree consumes, so code editors and markdown previews render in the
    canonical dark (night) or light (clean) palette regardless of the active
-   Picot theme. System mode sets no attribute and inherits the theme. */
-[data-preview-theme="dark"] .file-preview-panel {
+   Picot theme. System mode sets no attribute and inherits the theme.
+   `.preview-themed` is toggled by FilePreviewPanel per active content: Side
+   Chat renders as a transient tab in this panel but is a chat surface — it
+   keeps the app theme instead of the forced preview palette. */
+[data-preview-theme="dark"] .file-preview-panel.preview-themed {
   --bg-solid: #212121;
   --bg-glass: rgba(255, 255, 255, 0.04);
   --bg-glass-hover: rgba(255, 255, 255, 0.06);
@@ -7536,7 +7656,7 @@ html.macos-overlay .settings-content {
   --border-bright: rgba(255, 255, 255, 0.14);
 }
 
-[data-preview-theme="light"] .file-preview-panel {
+[data-preview-theme="light"] .file-preview-panel.preview-themed {
   --bg-solid: #ffffff;
   --bg-glass: rgba(0, 0, 0, 0.03);
   --bg-glass-hover: rgba(0, 0, 0, 0.06);

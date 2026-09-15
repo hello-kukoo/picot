@@ -5,7 +5,20 @@
 // files; a second failure means it's a real bug, so we stop retrying.
 const RELOAD_GUARD_KEY = "picot:bootstrap-reload-attempted";
 
-const entry = "./app.js";
+import { readInjectedCapability } from "./app/host-origin.js";
+
+// Route discriminator, decided BEFORE any app module loads: app.js constructs
+// the chat object graph (MessageRenderer, ConfigGateway, terminal, …) at
+// import time and cannot run on a route without a workspace session. Native
+// `/` is the landing route and boots landing.js instead; every canonical
+// workspace route and all non-native/browser routes keep app.js. The
+// capability global is only read here, never consumed — the WebSocket client
+// consumes it later for the authenticated hello.
+const native = Boolean(readInjectedCapability());
+const pathname = globalThis.location?.pathname || "";
+const landingEntry = "./landing.js";
+const appEntry = "./app.js";
+const entry = native && (pathname === "/" || pathname === "") ? landingEntry : appEntry;
 
 import(entry)
   .then(() => sessionStorage.removeItem(RELOAD_GUARD_KEY))

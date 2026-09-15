@@ -648,6 +648,11 @@ export class FilePreviewPanel {
   }
 
   _renderTabBar() {
+    // Forced preview theme (Appearance) repaints preview surfaces only:
+    // transient chat tabs (Side Chat) live inside this panel but follow the
+    // app theme, so the palette swap is gated on a class toggled here from
+    // the same state machine that owns content activation.
+    this.panel?.classList.toggle("preview-themed", this.activeContent?.kind !== "transient");
     if (!this.tabBar) return;
     this.tabBar.replaceChildren();
     this.tabBar.setAttribute("role", "tablist");

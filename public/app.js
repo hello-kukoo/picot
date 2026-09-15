@@ -3871,22 +3871,6 @@ async function filterConfiguredModels(models) {
 
 async function fetchModelInfo() {
   try {
-    // Populate models from the host-wide cache first so the dropdown renders
-    // instantly on cold start. The active Pi's get_state call below still
-    // runs in parallel; whichever returns models first wins. The cache is
-    // warmed by the host after the first session registers and is shared
-    // across all windows, Side Chats, and Quick Chats.
-    try {
-      const cached = await transport.getCachedModels();
-      if (Array.isArray(cached?.models) && cached.models.length > 0) {
-        availableModels = await filterConfiguredModels(cached.models);
-        hasLoadedAvailableModels = true;
-        didAutoOpenEmptyModelsDropdown = false;
-      }
-    } catch (_cacheErr) {
-      // Cache miss or host not ready — fall through to the live query below.
-    }
-
     const [modelsResult, stateResult] = await Promise.all([
       rpcCommand({ type: "get_available_models" }, null, true),
       rpcCommand({ type: "get_state" }, null, true),

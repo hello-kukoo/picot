@@ -184,10 +184,6 @@ export class WsTransport {
     return this._control("list_installed_apps", {});
   }
 
-  getCachedModels() {
-    return this._control("get_cached_models", {});
-  }
-
   exportSession(sessionId) {
     return this._control("session_export", { sessionId });
   }

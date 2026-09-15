@@ -85,7 +85,7 @@ beforeEach(async () => {
 function makeRuntime() {
   return new EphemeralChatRuntime({
     descriptor: { instanceId: "inst-1", generation: 1, kind: "side-chat" },
-    transport: { sendEphemeral: vi.fn(() => "ep-1"), getCachedModels: vi.fn(async () => null) },
+    transport: { sendEphemeral: vi.fn(() => "ep-1") },
   });
 }
 

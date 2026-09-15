@@ -523,6 +523,62 @@ fn open_external_core(url: &str) -> Result<(), String> {
 
 // ─── Window helpers ───────────────────────────────────────────────────────────
 
+fn open_native_window(
+    app: &AppHandle,
+    label: &str,
+    url: &str,
+    owner_registry: Arc<WindowOwnerRegistry>,
+    owner: window_owner::OwnerId,
+    capability: &str,
+) -> Result<(), String> {
+    let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))
+        .map_err(|error| format!("Failed to load window icon: {error}"))?;
+    let init_script = window_owner::capability_initialization_script(capability);
+    let nav_owner = owner;
+    let parsed_url: tauri::Url = url
+        .parse()
+        .map_err(|error| format!("Invalid native Host URL: {error}"))?;
+    let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::External(parsed_url))
+        .title("Picot")
+        .inner_size(1300.0, 860.0)
+        .min_inner_size(800.0, 600.0)
+        .icon(icon)
+        .map_err(|error| error.to_string())?
+        .initialization_script(init_script)
+        .on_navigation(move |url| owner_registry.authorize_navigation(&nav_owner, url))
+        .on_new_window(|_url, _features| tauri::webview::NewWindowResponse::Deny);
+
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .decorations(true)
+        .title_bar_style(TitleBarStyle::Overlay)
+        .hidden_title(true);
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.decorations(true);
+    builder.build().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// The cold-start window: host-origin `/`, owner `native-landing`. The label
+/// never changes (Tauri labels are immutable); the owner record carries the
+/// workspace state.
+fn open_native_landing_window(
+    app: &AppHandle,
+    host_origin: &str,
+    owner_registry: Arc<WindowOwnerRegistry>,
+    owner: window_owner::OwnerId,
+    capability: &str,
+) -> Result<(), String> {
+    open_native_window(
+        app,
+        "native-landing",
+        &format!("{host_origin}/"),
+        owner_registry,
+        owner,
+        capability,
+    )
+}
+
 fn open_native_workspace_window(
     app: &AppHandle,
     host_origin: &str,
@@ -536,36 +592,7 @@ fn open_native_workspace_window(
         "{}/workspaces/{}/sessions/{}",
         host_origin, target.workspace_id, target.session_id
     );
-    let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))
-        .map_err(|error| format!("Failed to load window icon: {error}"))?;
-    let init_script = window_owner::capability_initialization_script(capability);
-    let nav_owner = owner;
-    let builder = WebviewWindowBuilder::new(
-        app,
-        &label,
-        WebviewUrl::External(
-            url.parse()
-                .map_err(|error| format!("Invalid native Host URL: {error}"))?,
-        ),
-    )
-    .title("Picot")
-    .inner_size(1300.0, 860.0)
-    .min_inner_size(800.0, 600.0)
-    .icon(icon)
-    .map_err(|error| error.to_string())?
-    .initialization_script(init_script)
-    .on_navigation(move |url| owner_registry.authorize_navigation(&nav_owner, url))
-    .on_new_window(|_url, _features| tauri::webview::NewWindowResponse::Deny);
-
-    #[cfg(target_os = "macos")]
-    let builder = builder
-        .decorations(true)
-        .title_bar_style(TitleBarStyle::Overlay)
-        .hidden_title(true);
-    #[cfg(not(target_os = "macos"))]
-    let builder = builder.decorations(true);
-    builder.build().map_err(|error| error.to_string())?;
-    Ok(())
+    open_native_window(app, &label, &url, owner_registry, owner, capability)
 }
 
 fn canonical_if_exists(dir: PathBuf) -> Option<PathBuf> {
@@ -671,11 +698,11 @@ fn find_static_dir(app: &tauri::App) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        cancel_should_stop_target, default_native_startup_workspace,
-        find_existing_runtime_for_prepare, image_mime_from_path, navigate_tree_message,
-        persisted_session_id_for_workspace, resolve_static_dir,
-        should_stop_owner_runtimes_on_transition, side_chat_startup_rpc_commands,
-        touch_registered_workspace,
+        cancel_should_stop_target, find_existing_runtime_for_prepare, image_mime_from_path,
+        navigate_tree_message, new_session_menu_enabled, persisted_session_id_for_workspace,
+        quick_chat_snapshot, resolve_static_dir, should_stop_owner_runtimes_on_transition,
+        side_chat_startup_rpc_commands, skill_scope_context, touch_registered_workspace,
+        workspace_snapshot_for,
     };
     use crate::metadata_store::{MetadataStore, SharedMetadataStore};
     use serde_json::json;
@@ -809,25 +836,82 @@ mod tests {
     }
 
     #[test]
-    fn native_cold_start_always_selects_default_workspace() {
-        let (metadata, temp) = shared_test_metadata("native-startup");
-        let default = temp.join(".pi/tmp");
-        let project = temp.join("project");
-        fs::create_dir_all(&default).unwrap();
-        fs::create_dir_all(&project).unwrap();
-        let default_row = metadata.lock().unwrap().add_workspace(&default).unwrap().0;
-        let project_row = metadata.lock().unwrap().add_workspace(&project).unwrap().0;
-        metadata
-            .lock()
-            .unwrap()
-            .set_workspace_pinned(&project_row.workspace_id, true)
-            .unwrap();
+    fn new_session_menu_enable_truth_table() {
+        // No focused owner-bound window (startup default): disabled.
+        assert!(!new_session_menu_enabled(None));
+        // Focused owner without a workspace binding (landing pre-transition):
+        // disabled.
+        assert!(!new_session_menu_enabled(Some(false)));
+        // Focused owner bound to a workspace — including a transitioned
+        // landing window whose label is still `native-landing`: enabled.
+        assert!(new_session_menu_enabled(Some(true)));
+    }
 
-        let selected = default_native_startup_workspace(&metadata, &default).unwrap();
+    #[test]
+    fn landing_owner_rejects_workspace_snapshot_but_admits_quick_chat() {
+        use crate::window_owner::{OwnerWorkspaceSnapshot, TemporaryKind, WindowOwnerRegistry};
+        use std::sync::{Arc, Mutex as StdMutex};
+        let registry = Arc::new(WindowOwnerRegistry::default());
+        let (owner, _) = registry
+            .create_owner_with_workspace(
+                "native-landing".to_string(),
+                PathBuf::from("/home"),
+                0,
+                "http://127.0.0.1:3001".to_string(),
+                None,
+                TemporaryKind::Landing,
+            )
+            .unwrap();
+        // Side Chat / workspace scope: rejected — the placeholder home root is
+        // never a workspace scope.
+        assert!(workspace_snapshot_for(&registry, &owner).is_err());
+        // Quick Chat: the explicit landing exception — admitted with an empty
+        // workspace id; the spawn path supplies its own temp cwd.
+        let (wid, _root, generation) = quick_chat_snapshot(&registry, &owner).unwrap();
+        assert!(wid.is_empty());
+        assert_eq!(generation, 0);
+        // A registered owner is admitted by both.
+        let (owner2, _) = registry
+            .create_owner_with_workspace(
+                "native-workspace-x".to_string(),
+                PathBuf::from("/workspace"),
+                3001,
+                "http://127.0.0.1:3001".to_string(),
+                Some("wid-x".to_string()),
+                TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
         assert_eq!(
-            selected,
-            (default_row.workspace_id, default.canonicalize().unwrap())
+            workspace_snapshot_for(&registry, &owner2).unwrap(),
+            ("wid-x".to_string(), PathBuf::from("/workspace"), 0)
         );
+        assert_eq!(
+            quick_chat_snapshot(&registry, &owner2).unwrap(),
+            ("wid-x".to_string(), PathBuf::from("/workspace"), 0)
+        );
+        // An unknown owner is rejected by both.
+        let unknown = registry
+            .create_owner_with_workspace(
+                "gone".to_string(),
+                PathBuf::from("/gone"),
+                3001,
+                "http://127.0.0.1:3001".to_string(),
+                None,
+                TemporaryKind::Landing,
+            )
+            .unwrap()
+            .0;
+        registry.revoke_owner(&unknown);
+        assert!(workspace_snapshot_for(&registry, &unknown).is_err());
+        assert!(quick_chat_snapshot(&registry, &unknown).is_err());
+        // Project-scoped skills reject the landing owner; global scope is
+        // admitted (it never reads the workspace).
+        assert!(skill_scope_context(&registry, &owner, "project").is_err());
+        assert!(skill_scope_context(&registry, &owner, "global").is_ok());
+        // Silence unused-import lint for the shared helper type alias in
+        // non-test builds.
+        let _ = StdMutex::new(());
+        let _ = OwnerWorkspaceSnapshot::NoWorkspace;
     }
 
     #[test]
@@ -1030,55 +1114,12 @@ fn extract_session_cwd(session_path: &PathBuf) -> Option<String> {
     None
 }
 
-/// Native cold starts always run a fresh main chat in this workspace. Other
-/// registered rows belong to sidebar history only and never choose startup.
-fn default_workspace_path() -> Result<PathBuf, String> {
-    dirs::home_dir()
-        .map(|home| home.join(".pi/tmp"))
-        .ok_or_else(|| "Cannot resolve home directory".to_string())
-}
-
-/// Ensure the fixed cold-start workspace exists in the registry, returning
-/// its row rather than deriving startup choice from registry sort order.
-fn ensure_default_workspace(
-    metadata: &SharedMetadataStore,
-    path: &std::path::Path,
-) -> Result<(), String> {
-    std::fs::create_dir_all(path).map_err(|error| {
-        format!(
-            "Cannot create default workspace {}: {error}",
-            path.display()
-        )
-    })?;
-    metadata
-        .lock()
-        .map_err(|_| "Metadata store lock poisoned".to_string())?
-        .add_workspace(path)
-        .map_err(|error| {
-            format!(
-                "Cannot register default workspace {}: {error}",
-                path.display()
-            )
-        })?;
-    Ok(())
-}
-
-fn default_native_startup_workspace(
-    metadata: &SharedMetadataStore,
-    default_path: &std::path::Path,
-) -> Result<(String, PathBuf), String> {
-    let canonical = default_path.canonicalize().map_err(|error| {
-        format!(
-            "Cannot resolve default workspace {}: {error}",
-            default_path.display()
-        )
-    })?;
-    let workspace_id = metadata
-        .lock()
-        .map_err(|_| "Metadata store lock poisoned".to_string())?
-        .workspace_id_for_canonical_root(&canonical)
-        .map_err(|error| error.to_string())?;
-    Ok((workspace_id, canonical))
+/// Canonical home directory for the landing owner record. It is an
+/// owner-record placeholder only — never a workspace identity, workspace
+/// scope, or authorization input.
+fn canonical_home_dir() -> Result<PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "Cannot resolve home directory".to_string())?;
+    fs::canonicalize(&home).map_err(|error| format!("Cannot canonicalize home directory: {error}"))
 }
 
 fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(), String> {
@@ -1088,14 +1129,8 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
         .map_err(|error| format!("Cannot resolve Picot app data directory: {error}"))?
         .join("picot.sqlite3");
     let shared_metadata = Arc::new(Mutex::new(MetadataStore::open(&metadata_path)?));
-    let default_path = default_workspace_path()?;
-    ensure_default_workspace(&shared_metadata, &default_path)?;
-    let (workspace_id, cwd_path) =
-        default_native_startup_workspace(&shared_metadata, &default_path)?;
-    let cwd = cwd_path.to_string_lossy().to_string();
-    let session_path: Option<String> = None;
-    let session_id = format!("native-session-{}", uuid::Uuid::new_v4().simple());
-    let launch = pi_launch::native_launch_spec(&static_dir, &cwd, session_path.as_deref())?;
+    // Cold start creates NO default workspace, NO session target, and NO Pi
+    // runtime. The registry is untouched; the landing page is the first view.
     let runtimes = NativePiManager::new(256);
     let remote_auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&shared_metadata))));
     let ephemeral_registry = Arc::new(EphemeralRegistry::default());
@@ -1128,16 +1163,22 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
         remote_auth,
         Arc::clone(&shared_metadata),
     ))?;
-    host.runtime_started()?;
+    // No host.runtime_started() here: that is the OAuth generation bump tied to
+    // a runtime existing, and the landing has none.
     host.set_terminal_manager(terminal_manager.clone());
     let owner_registry = Arc::new(WindowOwnerRegistry::default());
+    // Landing owner: no registered workspace, no runtime. The canonical home
+    // path is an owner-record placeholder only — never a workspace identity,
+    // workspace scope, or authorization input. The label stays `native-landing`
+    // for the window's whole life; the owner record carries the truth.
+    let home = canonical_home_dir()?;
     let (owner, capability) = owner_registry.create_owner_with_workspace(
-        format!("native-workspace-{workspace_id}"),
-        PathBuf::from(&cwd),
+        "native-landing".to_string(),
+        home,
         0,
         host.origin().to_string(),
-        Some(workspace_id.clone()),
-        window_owner::TemporaryKind::DefaultStartup,
+        None,
+        window_owner::TemporaryKind::Landing,
     )?;
     host.set_owner_registry(owner_registry.clone());
     let host_events = host.event_sink();
@@ -1171,57 +1212,17 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
     );
     host.set_control_handler(control_handler);
     host.set_git_service(git_service.clone());
-    let target = RuntimeTarget::with_owner(
-        workspace_id,
-        session_id,
-        format!("instance-{}", uuid::Uuid::new_v4().simple()),
-        owner.as_str(),
-        0,
-    );
-    runtimes.spawn(target.clone(), launch)?;
-    // Warm the host-wide model cache so the dropdown renders instantly on
-    // cold start; the live path stays the runtime get_available_models request.
-    let model_cache = Arc::new(host_models::ModelCache::new());
-    app.manage(model_cache.clone());
-    {
-        let runtimes = runtimes.clone();
-        let target = target.clone();
-        let model_cache = model_cache.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Ok(reply) = runtimes
-                .request(
-                    &target,
-                    json!({ "type": "get_available_models" }),
-                    None,
-                    std::time::Duration::from_secs(15),
-                )
-                .await
-            {
-                if let Some(models) = host_models::models_from_runtime_reply(&reply) {
-                    model_cache.store(models);
-                }
-            }
-        });
-    }
-    if let Err(error) = open_native_workspace_window(
+    open_native_landing_window(
         app.handle(),
         host.origin(),
-        &target,
         owner_registry.clone(),
         owner.clone(),
         &capability,
-    ) {
-        runtimes.stop_all();
-        host.runtime_stopped()?;
-        return Err(error);
-    }
-    log::info!(
-        "[picot-native] started workspace_id={} session_id={} instance_id={} origin={}",
-        target.workspace_id,
-        target.session_id,
-        target.instance_id,
-        host.origin()
-    );
+    )?;
+    // Startup default is disabled (the first window is the landing); recompute
+    // once now that the window exists. No-op wherever no menu bar is installed.
+    update_new_session_menu_state(app.handle());
+    log::info!("[picot-native] landing ready origin={}", host.origin());
     app.manage(runtimes);
     app.manage(host);
     app.manage(owner_registry);
@@ -1313,12 +1314,8 @@ async fn dispatch_git_host_operation(
     static_dir: &std::path::Path,
     host_events: &HostEventSink,
 ) -> Result<Value, String> {
-    let Some((root, _)) = owner_registry.current_workspace(owner) else {
-        return Err("no workspace".to_string());
-    };
-    let generation = owner_registry
-        .current_workspace_generation(owner)
-        .ok_or("no workspace")?;
+    // Git is workspace-scoped: Registered-only, never a landing placeholder.
+    let (_wid, root, generation) = registered_workspace(owner_registry, owner)?;
     let emit = |value: Value| {
         host_events.send_owner_event(owner, value);
     };
@@ -1635,9 +1632,40 @@ fn require_native_owner(ctx: &VerifiedClientContext) -> Result<(), String> {
     workspace_controls::require_native_owner(ctx).map(|_| ())
 }
 
+/// The owner's registered workspace (id, canonical root, generation), or an
+/// error for landing/temporary owners. Workspace-scoped host operations are
+/// Registered-only; a placeholder root is never a scope.
+fn registered_workspace(
+    owner_registry: &WindowOwnerRegistry,
+    owner: &window_owner::OwnerId,
+) -> Result<(String, PathBuf, u64), String> {
+    match owner_registry.owner_current_workspace(owner) {
+        window_owner::OwnerWorkspaceSnapshot::Registered {
+            wid,
+            root,
+            generation,
+        } => Ok((wid, root, generation)),
+        _ => Err("workspace is not available".to_string()),
+    }
+}
+
 /// Resolve the current registered workspace (id, canonical root, generation)
-/// for one native owner. Ephemeral chats spawn inside this workspace scope.
+/// for one native owner. Workspace-scoped host operations are Registered-only:
+/// a Landing/temporary owner has no workspace authority, and its placeholder
+/// root is never a scope. Side Chat and every workspace-scoped control route
+/// through here.
 fn workspace_snapshot_for(
+    owner_registry: &Arc<WindowOwnerRegistry>,
+    owner: &window_owner::OwnerId,
+) -> Result<(String, PathBuf, u64), String> {
+    registered_workspace(owner_registry, owner)
+}
+
+/// Quick Chat admission: allowed for registered owners and for
+/// landing/temporary owners — its throwaway cwd comes from
+/// `create_quick_chat_temp_dir`, never from the owner root. Only an unknown
+/// owner is rejected.
+fn quick_chat_snapshot(
     owner_registry: &Arc<WindowOwnerRegistry>,
     owner: &window_owner::OwnerId,
 ) -> Result<(String, PathBuf, u64), String> {
@@ -1651,7 +1679,7 @@ fn workspace_snapshot_for(
             root, generation, ..
         } => Ok((String::new(), root, generation)),
         window_owner::OwnerWorkspaceSnapshot::NoWorkspace => {
-            Err("ephemeral chats require a registered workspace".to_string())
+            Err("ephemeral chats require a native owner".to_string())
         }
     }
 }
@@ -1673,16 +1701,22 @@ fn normalize_default_thinking_level(level: &str) -> String {
 
 /// Resolve the scope context for skill operations: the cwd the rules apply to
 /// plus whether the project is trusted (trust.json is Pi's saved decision).
+/// Project scope is workspace-scoped: Registered-only, never a landing
+/// placeholder root. Global scope never reads the workspace, so a landing
+/// owner's placeholder root is harmless there.
 fn skill_scope_context(
     owner_registry: &Arc<WindowOwnerRegistry>,
     owner: &window_owner::OwnerId,
     scope: &str,
 ) -> Result<(PathBuf, bool), String> {
-    let cwd = match owner_registry.owner_current_workspace(owner) {
-        window_owner::OwnerWorkspaceSnapshot::Registered { root, .. }
-        | window_owner::OwnerWorkspaceSnapshot::Temporary { root, .. } => root,
-        window_owner::OwnerWorkspaceSnapshot::NoWorkspace => {
-            return Err("skill surfaces require a registered workspace".to_string());
+    let snapshot = owner_registry.owner_current_workspace(owner);
+    let cwd = match (&snapshot, scope) {
+        (window_owner::OwnerWorkspaceSnapshot::Registered { root, .. }, _) => root.clone(),
+        (window_owner::OwnerWorkspaceSnapshot::Temporary { root, .. }, s) if s != "project" => {
+            root.clone()
+        }
+        _ => {
+            return Err("project-scoped skills require a registered workspace".to_string());
         }
     };
     if scope != "project" {
@@ -1740,9 +1774,8 @@ fn current_owner_session(
     owner: &window_owner::OwnerId,
     expected_session: Option<&str>,
 ) -> Result<String, String> {
-    let (workspace, _) = owner_registry
-        .current_workspace(owner)
-        .ok_or("workspace is not available")?;
+    // File/data scope is workspace-scoped: Registered-only.
+    let (_, workspace, _) = registered_workspace(owner_registry, owner)?;
     // Native mode has no broker port routing: the expected session file path
     // is the identity, validated against the owner's workspace boundary.
     let expected = expected_session.ok_or("expectedSessionId is required")?;
@@ -2043,12 +2076,13 @@ fn install_control_handler(
                         let window_label = owner_registry
                             .label_for_owner(&owner)
                             .ok_or("verified window owner required")?;
-                        let (workspace_root, workspace_port) = owner_registry
+                        // Skill sources are project-scoped config: Registered-only.
+                        let (_, workspace_root, generation) =
+                            registered_workspace(&owner_registry, &owner)?;
+                        let workspace_port = owner_registry
                             .current_workspace(&owner)
-                            .ok_or("workspace is not available")?;
-                        let generation = owner_registry
-                            .current_workspace_generation(&owner)
-                            .ok_or("workspace is not available")?;
+                            .map(|(_, port)| port)
+                            .unwrap_or(0);
                         let selected = pick_folder_core(&app).await;
                         let Some(path) = selected else {
                             return Ok(Value::Null);
@@ -2120,9 +2154,8 @@ fn install_control_handler(
                             .owner_id
                             .as_ref()
                             .ok_or("verified window owner required")?;
-                        let (workspace, _) = owner_registry
-                            .current_workspace(owner)
-                            .ok_or("workspace is not available")?;
+                        // Project-scoped package surface: Registered-only.
+                        let (_, workspace, _) = registered_workspace(&owner_registry, owner)?;
                         let locations = package_manager::locations_for_workspace(Some(&workspace))?;
                         let output = run_bundled_pi_command(
                             &static_dir,
@@ -2139,9 +2172,8 @@ fn install_control_handler(
                             .owner_id
                             .as_ref()
                             .ok_or("verified window owner required")?;
-                        let (workspace, _) = owner_registry
-                            .current_workspace(owner)
-                            .ok_or("workspace is not available")?;
+                        // Project-scoped package surface: Registered-only.
+                        let (_, workspace, _) = registered_workspace(&owner_registry, owner)?;
                         let locations = package_manager::locations_for_workspace(Some(&workspace))?;
                         let output = run_bundled_pi_command(
                             &static_dir,
@@ -2153,15 +2185,6 @@ fn install_control_handler(
                         let updates =
                             package_manager::check_available_updates(&packages, &locations).await;
                         serde_json::to_value(updates).map_err(|error| error.to_string())
-                    }
-                    "get_cached_models" => {
-                        // Host-wide cache warmed after the primary session
-                        // registers; the dropdown's live path is the runtime
-                        // get_available_models request.
-                        Ok(app
-                            .try_state::<Arc<host_models::ModelCache>>()
-                            .map(|cache| cache.load().unwrap_or(json!({ "models": [] })))
-                            .unwrap_or(json!({ "models": [] })))
                     }
                     "list_skill_inventory" => {
                         require_native_owner(&ctx)?;
@@ -2261,9 +2284,8 @@ fn install_control_handler(
                             .ok_or("verified window owner required")?;
                         let file_path = arg_str("filePath").ok_or("filePath is required")?;
                         let name = arg_str("name").ok_or("name is required")?;
-                        owner_registry
-                            .current_workspace(owner)
-                            .ok_or("workspace is not available")?;
+                        // Session files are workspace-scoped data: Registered-only.
+                        registered_workspace(&owner_registry, owner)?;
                         let canonical =
                             fs::canonicalize(&file_path).map_err(|_| "Session is unavailable")?;
                         let data = host_data::HostDataPlane::new(metadata.clone())
@@ -2314,9 +2336,8 @@ fn install_control_handler(
                             .filter_map(Value::as_str)
                             .map(str::to_owned)
                             .collect::<Vec<_>>();
-                        owner_registry
-                            .current_workspace(owner)
-                            .ok_or("workspace is not available")?;
+                        // Session files are workspace-scoped data: Registered-only.
+                        registered_workspace(&owner_registry, owner)?;
                         let data = host_data::HostDataPlane::new(metadata.clone())
                             .with_session_root(
                                 dirs::home_dir()
@@ -2406,12 +2427,8 @@ fn install_control_handler(
                         }
                         let local = arg_bool("local").unwrap_or(false);
                         let workspace = if local {
-                            Some(
-                                owner_registry
-                                    .current_workspace(owner)
-                                    .ok_or("workspace is not available")?
-                                    .0,
-                            )
+                            // Local package scope is project-scoped: Registered-only.
+                            Some(registered_workspace(&owner_registry, owner)?.1)
                         } else {
                             None
                         };
@@ -2436,10 +2453,8 @@ fn install_control_handler(
                             .ok_or("verified window owner required")?;
                         let scope = arg_str("scope").unwrap_or_default();
                         let disabled = arg_bool("disabled").ok_or("disabled is required")?;
-                        let workspace = owner_registry
-                            .current_workspace(owner)
-                            .ok_or("workspace is not available")?
-                            .0;
+                        // Project-scoped package settings: Registered-only.
+                        let workspace = registered_workspace(&owner_registry, owner)?.1;
                         let locations = package_manager::locations_for_workspace(Some(&workspace))?;
                         let source = arg_str("source").unwrap_or_default();
                         let changed = package_manager::set_package_disabled(
@@ -2460,9 +2475,8 @@ fn install_control_handler(
                         if owner_registry.workspace_transition_in_progress(owner) {
                             return Err("workspace transition is in progress".to_string());
                         }
-                        let (workspace_cwd, _) = owner_registry
-                            .current_workspace(owner)
-                            .ok_or("workspace is not available")?;
+                        // A runtime restart is workspace-scoped: Registered-only.
+                        let (_, workspace_cwd, _) = registered_workspace(&owner_registry, owner)?;
                         let old_target = runtimes
                             .running_targets()
                             .into_iter()
@@ -2530,8 +2544,17 @@ fn install_control_handler(
                             "quick-chat" => EphemeralKind::QuickChat,
                             _ => return Err("invalid ephemeral kind".to_string()),
                         };
-                        let (workspace_id, root, generation) =
-                            workspace_snapshot_for(&owner_registry, owner)?;
+                        // Side Chat shares the owner's registered workspace.
+                        // Quick Chat is the explicit landing exception: its cwd
+                        // is a throwaway temp dir, never the owner root.
+                        let (workspace_id, root, generation) = match kind {
+                            EphemeralKind::SideChat => {
+                                workspace_snapshot_for(&owner_registry, owner)?
+                            }
+                            EphemeralKind::QuickChat => {
+                                quick_chat_snapshot(&owner_registry, owner)?
+                            }
+                        };
                         let descriptor = ephemeral_hub.create(
                             &runtimes,
                             owner,
@@ -2549,7 +2572,7 @@ fn install_control_handler(
                             .as_ref()
                             .ok_or("ephemeral chats require a native owner")?;
                         let (workspace_id, _root, generation) =
-                            workspace_snapshot_for(&owner_registry, owner)?;
+                            quick_chat_snapshot(&owner_registry, owner)?;
                         let descriptor = ephemeral_hub.replace_quick(
                             &runtimes,
                             owner,
@@ -2636,11 +2659,16 @@ fn install_control_handler(
                             .map_err(|_| "metadata store unavailable".to_string())?
                             .workspace_id_for_canonical_root(&canonical_target)
                             .map_err(|_| "workspace is not registered".to_string())?;
-                        let current_cwd = owner_registry
-                            .current_workspace(&owner)
-                            .map(|(cwd, _)| cwd)
-                            .ok_or("owner has no workspace")?;
-                        let same_cwd = canonical_target == current_cwd;
+                        // Landing is never same-workspace: only a Registered
+                        // binding whose wid matches the target classifies as
+                        // same, so a Landing owner (placeholder home root)
+                        // always starts a cross transition — even when its
+                        // placeholder is itself a registered workspace.
+                        let same_cwd = matches!(
+                            owner_registry.owner_current_workspace(&owner),
+                            window_owner::OwnerWorkspaceSnapshot::Registered { ref wid, .. }
+                                if *wid == workspace_id
+                        );
 
                         // A persisted session owns a stable header ID. Reuse
                         // its exact live runtime when present; spawning another
@@ -2820,6 +2848,9 @@ fn install_control_handler(
                             target_workspace_id,
                             window_owner::TemporaryKind::DefaultStartup,
                         )?;
+                        // The landing window's binding may have just flipped
+                        // without any focus change: recompute the menu state.
+                        update_new_session_menu_state(&app);
                         if let Some(skill_sources) = app.try_state::<SkillSourceRegistryState>() {
                             skill_sources.revoke_workspace(&owner, prior_generation);
                         }
@@ -3064,26 +3095,13 @@ fn handle_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) 
         });
 }
 
-/// Final idempotent cleanup when a workspace window is destroyed: kill the
-/// workspace process, unregister its broker routes, run generation-checked
-/// ephemeral cleanup, drop any pending close, and revoke the owner.
+/// Final idempotent cleanup when a native window is destroyed: kill the
+/// owner's runtime, run generation-checked ephemeral cleanup, drop any pending
+/// close, and revoke the owner. Keyed on the owner registry record — never the
+/// window label — so a landing window that transitioned into a workspace gets
+/// the same cleanup as a workspace window despite its immutable label.
 fn handle_window_destroyed(window: &tauri::Window) {
     let label = window.label();
-    if let Some(workspace_id) = label.strip_prefix("native-workspace-") {
-        if let Some(manager) = window.try_state::<NativePiManagerState>() {
-            if let Some(registry) = window.try_state::<OwnerRegistryState>() {
-                if let Some(owner) = registry.owner_for_label(label) {
-                    manager.stop_for_owner(owner.as_str());
-                    registry.revoke_owner(&owner);
-                }
-            }
-            manager.stop_for_window_destroy(workspace_id);
-        }
-        return;
-    }
-    // Native-only startup labels every window `native-workspace-{workspace_id}`;
-    // the native branch above owns full destroy cleanup.
-
     let Some(registry) = window.try_state::<OwnerRegistryState>() else {
         return;
     };
@@ -3091,6 +3109,16 @@ fn handle_window_destroyed(window: &tauri::Window) {
     let Some(owner) = registry.owner_for_label(label) else {
         return;
     };
+    if let Some(manager) = window.try_state::<NativePiManagerState>() {
+        // Unconditional: a no-op when no runtime was ever spawned (landing
+        // pre-transition), and what kills the Pi subprocess of a landing
+        // window that already transitioned into a workspace.
+        manager.stop_for_owner(owner.as_str());
+        if let Some(workspace_id) = registry.owner_current_workspace(&owner).workspace_id() {
+            let workspace_id = workspace_id.clone();
+            manager.stop_for_window_destroy(&workspace_id);
+        }
+    }
     if let Some(ephemeral) = window.try_state::<EphemeralRegistryState>() {
         for lease in ephemeral.owner_cleanup(&owner) {
             // Native ephemeral runtimes were already stopped by the native
@@ -3123,6 +3151,71 @@ fn handle_window_destroyed(window: &tauri::Window) {
 // Windows/Linux draw in-window menus instead, so the builder stays menu-less
 // there exactly as upstream does.
 const MENU_NEW_SESSION_ID: &str = "picot-new-session";
+const MENU_ADD_PROJECT_ID: &str = "picot-add-project";
+
+/// File → New Session is enabled exactly when the focused window's owner is
+/// bound to a workspace, read from the owner registry — never from the label.
+/// `None` means no focused owner-bound window (menu disabled). Pure for unit
+/// testing; the truth table is asserted in startup_tests.
+fn new_session_menu_enabled(focused_owner_has_workspace: Option<bool>) -> bool {
+    focused_owner_has_workspace.unwrap_or(false)
+}
+
+/// The focused webview window's owner workspace binding, if any window is
+/// focused and owns a registry record.
+fn focused_owner_has_workspace(app: &AppHandle) -> Option<bool> {
+    let focused = app
+        .webview_windows()
+        .into_values()
+        .find(|window| window.is_focused().unwrap_or(false))?;
+    let registry = app.try_state::<OwnerRegistryState>()?;
+    let owner = registry.owner_for_label(focused.label())?;
+    Some(registry.owner_has_workspace(&owner))
+}
+
+/// Find a menu item by id, descending into submenus. Tauri's `Menu::get`
+/// only matches top-level entries, and the File items live one level down —
+/// the New Session enable-state recompute must walk the submenus itself.
+fn find_menu_item(
+    items: Vec<tauri::menu::MenuItemKind<tauri::Wry>>,
+    id: &str,
+) -> Option<tauri::menu::MenuItem<tauri::Wry>> {
+    for item in items {
+        match item {
+            tauri::menu::MenuItemKind::MenuItem(mi) => {
+                if mi.id().0 == id {
+                    return Some(mi);
+                }
+            }
+            tauri::menu::MenuItemKind::Submenu(sub) => {
+                if let Ok(sub_items) = sub.items() {
+                    if let Some(found) = find_menu_item(sub_items, id) {
+                        return Some(found);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Recompute the New Session menu item from the focused owner's binding.
+/// Runs on window focus events and after workspace transition commits (a
+/// transition inside the landing window changes binding without any focus
+/// change). No-op wherever no menu bar is installed.
+fn update_new_session_menu_state(app: &AppHandle) {
+    let Some(menu) = app.menu() else {
+        return;
+    };
+    let bound = focused_owner_has_workspace(app);
+    let enabled = new_session_menu_enabled(bound);
+    if let Ok(items) = menu.items() {
+        if let Some(item) = find_menu_item(items, MENU_NEW_SESSION_ID) {
+            let _ = item.set_enabled(enabled);
+        }
+    }
+}
 
 #[cfg(target_os = "macos")]
 fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
@@ -3130,8 +3223,17 @@ fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         app,
         MENU_NEW_SESSION_ID,
         "New Session",
-        true,
+        // Startup default: disabled — the first window is the landing.
+        new_session_menu_enabled(None),
         Some("CmdOrCtrl+N"),
+    )?;
+    let add_project = MenuItem::with_id(
+        app,
+        MENU_ADD_PROJECT_ID,
+        "Add a Project",
+        true,
+        // Deliberately no accelerator.
+        None::<&str>,
     )?;
     let file = Submenu::with_items(
         app,
@@ -3139,6 +3241,7 @@ fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         true,
         &[
             &new_session,
+            &add_project,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::close_window(app, None)?,
         ],
@@ -3223,19 +3326,43 @@ fn main() {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder.menu(build_app_menu).on_menu_event(|app, event| {
-        if event.id().as_ref() == MENU_NEW_SESSION_ID {
-            // v3's session creation is owned by the web UI over the host WS
-            // (upstream instead spawned a runtime from Rust). The menu just
-            // re-dispatches the accelerator into the focused workspace window
-            // so the existing Cmd+N handler in app.js runs the real flow.
-            let focused = app.webview_windows().into_values().find(|window| {
-                window.label().starts_with("native-workspace-") && window.is_focused().unwrap_or(false)
-            });
-            if let Some(window) = focused {
-                let _ = window.eval(
-                    "document.dispatchEvent(new KeyboardEvent('keydown', {key: 'n', metaKey: true, bubbles: true, cancelable: true}))",
-                );
+        match event.id().as_ref() {
+            MENU_NEW_SESSION_ID => {
+                // Re-keyed on the owner record: the menu dispatches Cmd+N only
+                // when the focused window's owner is bound to a workspace, so
+                // a transitioned landing window qualifies despite its label.
+                let Some(window) = app
+                    .webview_windows()
+                    .into_values()
+                    .find(|window| window.is_focused().unwrap_or(false))
+                else {
+                    return;
+                };
+                let Some(registry) = app.try_state::<OwnerRegistryState>() else {
+                    return;
+                };
+                let bound = registry
+                    .owner_for_label(window.label())
+                    .map(|owner| registry.owner_has_workspace(&owner))
+                    .unwrap_or(false);
+                if bound {
+                    let _ = window.eval(
+                        "document.dispatchEvent(new KeyboardEvent('keydown', {key: 'n', metaKey: true, bubbles: true, cancelable: true}))",
+                    );
+                }
             }
+            MENU_ADD_PROJECT_ID => {
+                // Available no matter which window kind is focused; the web
+                // side runs the real picker/register flow.
+                if let Some(window) = app
+                    .webview_windows()
+                    .into_values()
+                    .find(|window| window.is_focused().unwrap_or(false))
+                {
+                    let _ = window.eval("document.getElementById(\"add-project-btn\")?.click();");
+                }
+            }
+            _ => {}
         }
     });
     builder
@@ -3265,6 +3392,11 @@ fn main() {
             }
             tauri::WindowEvent::Destroyed => {
                 handle_window_destroyed(window);
+            }
+            tauri::WindowEvent::Focused(true) => {
+                // Menu state tracks the focused owner's binding; a landing
+                // window's focus also evaluates (its binding can change).
+                update_new_session_menu_state(window.app_handle());
             }
             _ => {}
         })

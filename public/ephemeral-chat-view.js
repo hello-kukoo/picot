@@ -434,23 +434,9 @@ export class EphemeralChatView {
     this._modelDropdown.classList.add("open");
     this._modelMenu.classList.remove("hidden");
     try {
-      // Prefer the host-wide cache so the menu renders instantly without
-      // waiting for this ephemeral Pi to respond. Fall back to the live
-      // query if the cache is cold. Both paths run sequentially to preserve
-      // the runtime's pending-request setup order: the cache is a fast
-      // read, and if it misses, the live query takes over.
-      let models = [];
-      if (typeof this.runtime.transport?.getCachedModels === "function") {
-        try {
-          const cached = await this.runtime.transport.getCachedModels();
-          if (Array.isArray(cached?.models)) models = cached.models;
-        } catch {
-          // cache unavailable — fall through to the live query
-        }
-      }
-      if (models.length === 0) {
-        models = await this.runtime.getAvailableModels();
-      }
+      // Live query against this ephemeral Pi: there is no host-side model
+      // cache (the landing cold start removed it — no runtime to warm it).
+      let models = await this.runtime.getAvailableModels();
       if (this._loadModelCatalog) {
         try {
           models = filterModelsByCatalogVisibility(models, await this._loadModelCatalog());

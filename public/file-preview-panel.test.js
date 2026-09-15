@@ -793,6 +793,29 @@ describe("FilePreviewPanel transient tabs", () => {
     p.destroy();
   });
 
+  test("side chat activation drops preview-themed so the forced preview palette never repaints the chat", async () => {
+    const p = createPanel();
+    p.registerTransientTab({
+      id: "sc1",
+      title: "Side Chat",
+      status: "ready",
+      contentElement: document.createElement("div"),
+      onActivate: () => {},
+      onDeactivate: () => {},
+      onRequestClose: () => {},
+    });
+    // File content active: the forced preview theme applies to the panel.
+    await p.openFile("/test/workspace/main.js");
+    expect(panel.classList.contains("preview-themed")).toBe(true);
+    // Side Chat is a chat surface: it follows the app theme instead.
+    p.activateContent({ kind: "transient", id: "sc1" });
+    expect(panel.classList.contains("preview-themed")).toBe(false);
+    // Back to a file tab: the forced preview palette applies again.
+    await p.openFile("/test/workspace/main.js");
+    expect(panel.classList.contains("preview-themed")).toBe(true);
+    p.destroy();
+  });
+
   test("the transient close button calls onRequestClose", () => {
     const p = createPanel();
     let requested = false;

@@ -72,6 +72,11 @@ export class SessionSidebar {
     this.isFocusActive = options.isFocusActive || null;
     this.onFocusRefresh = options.onFocusRefresh || null;
     this.onWorkspaceFocus = options.onWorkspaceFocus || null;
+    // Explicit focus-enable seam. Landing passes `() => source === "registry"`
+    // to enable Focus for every registered row (there is no active session or
+    // current workspace); callers that omit it keep the classic
+    // active-session-or-current-workspace gating.
+    this.canFocusWorkspace = options.canFocusWorkspace || null;
     this.isCurrentWorkspace = options.isCurrentWorkspace || null;
     this.activeSessionFile = null;
     this.projects = [];
@@ -1614,6 +1619,10 @@ export class SessionSidebar {
             Array.isArray(pinned.sessions) &&
             pinned.sessions.some((s) => s?.filePath === this.activeSessionFile);
           const pinnedCurrent = !pinned.unavailable && this.isCurrentWorkspace?.(workspace);
+          const focusEnabled = this._workspaceFocusEnabled(
+            workspace,
+            pinnedActive || pinnedCurrent,
+          );
           const { group } = buildSidebarWorkspaceGroup({
             workspaceId,
             folderName,
@@ -1636,9 +1645,8 @@ export class SessionSidebar {
               !pinned.unavailable && workspace
                 ? (event) => this.showWorkspaceContextMenu(event, workspace)
                 : null,
-            focusEnabled: (pinnedActive || pinnedCurrent) && !!this.onWorkspaceFocus,
-            onFocus:
-              pinnedActive || pinnedCurrent ? () => this.onWorkspaceFocus?.(workspace) : null,
+            focusEnabled,
+            onFocus: focusEnabled ? () => this.onWorkspaceFocus?.(workspace) : null,
             renderSessions: (container) => {
               if (pinned.unavailable) {
                 const unavailable = document.createElement("div");
@@ -1731,6 +1739,10 @@ export class SessionSidebar {
     const projectActive = Array.isArray(project.sessions)
       ? project.sessions.some((s) => s?.filePath === this.activeSessionFile)
       : false;
+    const focusEnabled = this._workspaceFocusEnabled(
+      project,
+      projectActive || this.isCurrentWorkspace?.(project),
+    );
     const { group } = buildSidebarWorkspaceGroup({
       workspaceId: project.workspaceId,
       folderName:
@@ -1751,12 +1763,8 @@ export class SessionSidebar {
       onNewChat: this.onNewChat ? () => this.onNewChat(project) : null,
       onContextMenu: (event) => this.showWorkspaceContextMenu(event, project),
       onMoreActions: (event) => this.showWorkspaceContextMenu(event, project),
-      focusEnabled:
-        (projectActive || this.isCurrentWorkspace?.(project)) && !!this.onWorkspaceFocus,
-      onFocus:
-        projectActive || this.isCurrentWorkspace?.(project)
-          ? () => this.onWorkspaceFocus?.(project)
-          : null,
+      focusEnabled,
+      onFocus: focusEnabled ? () => this.onWorkspaceFocus?.(project) : null,
       renderSessions: (sessionsDiv) => {
         for (const row of sessionsToRender) {
           sessionsDiv.appendChild(
@@ -1782,6 +1790,16 @@ export class SessionSidebar {
     const entry = { signature, group };
     this._projectRowCache.set(project.workspaceId, entry);
     return entry;
+  }
+
+  /**
+   * Whether the Focus entry renders for this workspace row. The explicit
+   * `canFocusWorkspace` seam wins when provided; otherwise the classic
+   * active-session-or-current-workspace predicate applies.
+   */
+  _workspaceFocusEnabled(project, activeOrCurrent) {
+    if (this.canFocusWorkspace) return Boolean(this.canFocusWorkspace(project));
+    return Boolean(activeOrCurrent) && !!this.onWorkspaceFocus;
   }
 
   render() {

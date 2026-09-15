@@ -27,6 +27,9 @@ pub type WorkspaceId = String;
 pub enum TemporaryKind {
     DefaultStartup,
     QuickChat,
+    /// Cold-start landing owner: no workspace binding, placeholder home cwd,
+    /// no runtime. Its first workspace entry is always a cross transition.
+    Landing,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -43,6 +46,17 @@ pub enum OwnerWorkspaceSnapshot {
         temporary_kind: TemporaryKind,
     },
     NoWorkspace,
+}
+
+impl OwnerWorkspaceSnapshot {
+    /// The workspace binding carried by this snapshot, if any. The label is
+    /// never a state signal; this accessor is the one source of truth.
+    pub fn workspace_id(&self) -> Option<&WorkspaceId> {
+        match self {
+            Self::Registered { wid, .. } => Some(wid),
+            _ => None,
+        }
+    }
 }
 
 /// Shared registry of window owners, their capabilities, and navigation permits.
@@ -208,17 +222,23 @@ impl WindowOwnerRegistry {
             .owners
             .get(owner)
             .ok_or_else(|| "unknown owner".to_string())?;
-        let generation = if canonical_cwd == owner_record.canonical_cwd {
-            // Session navigation within one workspace only changes the WebView
-            // origin. Keep every runtime in the workspace authorized under the
-            // same generation so an active background turn keeps its events.
-            owner_record.workspace_generation
-        } else if let Some(transition) = owner_record.transition.as_ref() {
-            transition.generation
-        } else {
-            state.next_generation += 1;
-            state.next_generation
-        };
+        let generation =
+            if canonical_cwd == owner_record.canonical_cwd && owner_record.workspace_id.is_some() {
+                // Session navigation within one registered workspace only changes
+                // the WebView origin. Keep every runtime in the workspace
+                // authorized under the same generation so an active background
+                // turn keeps its events. A Landing/temporary owner never takes
+                // this branch: its placeholder home is not a workspace binding,
+                // so its first workspace entry is always a cross transition
+                // ("Landing is never same-workspace"), even when the placeholder
+                // path is itself a registered workspace.
+                owner_record.workspace_generation
+            } else if let Some(transition) = owner_record.transition.as_ref() {
+                transition.generation
+            } else {
+                state.next_generation += 1;
+                state.next_generation
+            };
         let record = state
             .owners
             .get_mut(owner)
@@ -362,6 +382,12 @@ impl WindowOwnerRegistry {
         record.pending = None;
         record.transition = None;
         Ok(())
+    }
+
+    /// True iff the owner record currently carries a workspace binding.
+    /// Menu/Cmd+N gate key — never the window label.
+    pub fn owner_has_workspace(&self, owner: &OwnerId) -> bool {
+        self.owner_current_workspace(owner).workspace_id().is_some()
     }
 
     /// Return one coherent owner/workspace view. All fields come from one lock
@@ -774,7 +800,18 @@ mod tests {
     #[test]
     fn prepared_pending_origin_is_authorized_within_ttl() {
         let reg = WindowOwnerRegistry::default();
-        let (owner, _) = new_owner(&reg, "w1", 3001);
+        // Same-cwd retention applies to workspace-bound owners — the shape of
+        // every real same-workspace navigation.
+        let (owner, _) = reg
+            .create_owner_with_workspace(
+                "w1".to_string(),
+                PathBuf::from("/workspace"),
+                3001,
+                "http://127.0.0.1:3001".to_string(),
+                Some("wid-1".to_string()),
+                TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
         let gen = reg
             .prepare_navigation(
                 &owner,
@@ -927,7 +964,17 @@ mod tests {
     #[test]
     fn same_workspace_navigation_preserves_runtime_generation() {
         let reg = WindowOwnerRegistry::default();
-        let (owner, _) = new_owner(&reg, "same-workspace", 3001);
+        // Real same-workspace navigation always runs on a registered owner.
+        let (owner, _) = reg
+            .create_owner_with_workspace(
+                "same-workspace".to_string(),
+                PathBuf::from("/workspace"),
+                3001,
+                "http://127.0.0.1:3001".to_string(),
+                Some("wid-1".to_string()),
+                TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
         let generation = reg
             .prepare_navigation(
                 &owner,
@@ -1104,5 +1151,108 @@ mod tests {
         let reg = WindowOwnerRegistry::default();
         let (owner, _) = new_owner(&reg, "w1", 3001);
         assert!(reg.cancel_workspace_transition(&owner, 42).is_ok());
+    }
+
+    // ── Landing owner matrix ────────────────────────────────────────────
+
+    fn landing_owner(reg: &WindowOwnerRegistry, home: &std::path::Path) -> (OwnerId, String) {
+        reg.create_owner_with_workspace(
+            "native-landing".to_string(),
+            home.to_path_buf(),
+            0,
+            "http://127.0.0.1:3001".to_string(),
+            None,
+            TemporaryKind::Landing,
+        )
+        .expect("landing owner created")
+    }
+
+    #[test]
+    fn landing_owner_is_an_unbound_temporary_record() {
+        let reg = WindowOwnerRegistry::default();
+        let (owner, _) = landing_owner(&reg, std::path::Path::new("/home"));
+        assert_eq!(
+            reg.owner_current_workspace(&owner),
+            OwnerWorkspaceSnapshot::Temporary {
+                root: PathBuf::from("/home"),
+                generation: 0,
+                temporary_kind: TemporaryKind::Landing,
+            }
+        );
+        // Menu/Cmd+N gate: unbound before the first transition.
+        assert!(!reg.owner_has_workspace(&owner));
+        assert_eq!(reg.owner_current_workspace(&owner).workspace_id(), None);
+    }
+
+    #[test]
+    fn landing_first_transition_is_cross_even_when_home_is_the_target() {
+        let reg = WindowOwnerRegistry::default();
+        let (owner, _) = landing_owner(&reg, std::path::Path::new("/home"));
+
+        // The placeholder home is itself a registered workspace target: the
+        // transition must still be cross — begin_workspace_transition always
+        // increments, and prepare_navigation must reuse the transition
+        // generation instead of retaining generation 0 via cwd equality.
+        let gen = reg
+            .begin_workspace_transition(&owner, PathBuf::from("/home"), 3002)
+            .unwrap();
+        assert_eq!(gen, 1, "landing entry always increments the generation");
+        reg.prepare_navigation(
+            &owner,
+            3002,
+            PathBuf::from("/home"),
+            "http://127.0.0.1:3002/workspaces/home-wid/sessions/s1".to_string(),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        // Commit at the transition generation must not mismatch.
+        reg.commit_workspace_transition_with_workspace(
+            &owner,
+            gen,
+            "http://127.0.0.1:3002".to_string(),
+            Some("home-wid".to_string()),
+            TemporaryKind::DefaultStartup,
+        )
+        .expect("commit at the transition generation");
+        assert_eq!(
+            reg.owner_current_workspace(&owner),
+            OwnerWorkspaceSnapshot::Registered {
+                wid: "home-wid".to_string(),
+                root: PathBuf::from("/home"),
+                generation: gen,
+            }
+        );
+        // The label never changed; the binding did.
+        assert_eq!(
+            reg.label_for_owner(&owner).as_deref(),
+            Some("native-landing")
+        );
+        assert!(reg.owner_has_workspace(&owner));
+    }
+
+    #[test]
+    fn registered_owner_keeps_same_workspace_generation_on_cwd_match() {
+        // The retention shortcut still applies to registered owners only.
+        let reg = WindowOwnerRegistry::default();
+        let (owner, _) = reg
+            .create_owner_with_workspace(
+                "registered".to_string(),
+                PathBuf::from("/workspace"),
+                3001,
+                "http://127.0.0.1:3001".to_string(),
+                Some("wid-1".to_string()),
+                TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        let gen = reg
+            .prepare_navigation(
+                &owner,
+                3002,
+                PathBuf::from("/workspace"),
+                "http://127.0.0.1:3002/workspaces/wid-1/sessions/s1".to_string(),
+                Duration::from_secs(5),
+            )
+            .unwrap();
+        assert_eq!(gen, 0, "same registered workspace retains its generation");
     }
 }

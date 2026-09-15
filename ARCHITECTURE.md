@@ -43,16 +43,18 @@ fn native_runtime_enabled(app) -> bool {
 ```
 
 1. 检查 `PICOT_RUNTIME=native`（debug 构建限定）
-2. 固定选择并注册 `~/.pi/tmp` 作为 cold-start runtime workspace；registry 的排序、pin、最近打开记录不得影响它。每次启动生成新 session id 且不传 session path，故主聊天不会恢复任何历史
+2. **冷启动进 landing**：不注册默认工作区、不预创建 session、不派生 Pi 进程，registry 在启动期零改动（2026-09-03「冷启动一律以 ~/.pi/tmp 为 workspace」决策已废弃）。owner 以 `TemporaryKind::Landing` 创建（label `native-landing`；canonical home 仅作 owner 记录占位，永不为 workspace 身份、scope 或授权输入）
 3. 创建 `NativePiManager` + `HostServer`（loopback:0 绑定）
-4. 通过 `pi_launch::native_launch_spec_for` 组装启动输入（binary/args/env/extensions）
-5. `manager.spawn(target, spec)` 派生 pi 进程
-6. WebView 加载 `origin/workspaces/:wid/sessions/:sid` 进入 existing shell
+4. 打开 landing 窗口加载 `{origin}/`；WebView 在 bootstrap 期分叉加载 `landing.js`（仅构造 transport、sidebar 四 seam、transition controller、landing notice 与 landing 版 Quick Chat，不建任何 chat-lifecycle 对象）。首次进入工作区必为跨工作区原地切换（prepare → commit → navigate，overlay 换屏）；workspace 的 `same`/`cross` 分类按 owner 的 Registered 绑定派生，Landing owner 永不 same（即使占位 home 本身是已注册工作区）
+5. landing owner 首次 commit 后重绑为 Registered owner；窗口销毁清理、New Session 菜单状态与 Cmd+N 派发一律按 owner 注册表记录判定，不按 label 前缀（label 终身不变，非状态信号）
+6. workspace 权威性为 Registered-only：Git、terminal、文件/数据 scope、项目级 config/skills 与 Side Chat 拒绝 Landing/Temporary owner；Quick Chat 是唯一 landing 例外（自带一次性 temp cwd，显式准入路径单独测试）
+7. 用户自 landing 经 sidebar 进入工作区：session 行选择 / 工作区 `+ New Chat`（零会话工作区唯一入口）/ 添加项目后导航 / Focus 四条 seam 全部路由到 `enterWorkspace`
 
 ## 网络路径
 
 | 路径 | 协议 | 授权 | 用途 |
 | --- | --- | --- | --- |
+| `/` | HTTP GET | desktop capability init script（owner 感知由 `/v2/ws` hello 承担） | native 冷启动 landing 页；非 native 浏览器行为不变 |
 | `/v2/ws` | WebSocket v2 | desktop capability（hello 握手） | 前端 ↔ 运行时通信 |
 | `/v2/bootstrap` | HTTP GET | desktop capability（header） | 获取 RuntimeTarget |
 | `/workspaces/:wid/:sid` | HTTP GET | 路由参数校验 + bootstrap 鉴权 | existing shell 入口 |

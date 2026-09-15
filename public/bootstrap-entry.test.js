@@ -1,12 +1,61 @@
-// ABOUTME: Locks the production browser entry to the canonical main application.
-// ABOUTME: Prevents retired native entry selection from returning during cleanup.
-
+// ABOUTME: Locks the browser bootstrap dispatch: native `/` boots landing.js,
+// ABOUTME: every canonical workspace route and non-native route boots app.js.
 import { readFileSync } from "node:fs";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 
 const bootstrapEntry = readFileSync("public/bootstrap-entry.js", "utf8");
 
-test("always loads the canonical app entry", () => {
-  expect(bootstrapEntry).toContain('const entry = "./app.js";');
+const loaded = vi.hoisted(() => ({ entries: [], capability: null }));
+
+async function boot(pathname, capability) {
+  // vi.doMock (not vi.mock): each boot re-registers the stubs so the module
+  // factories re-run and record exactly which entry this boot imported.
+  vi.resetModules();
+  loaded.entries.length = 0;
+  loaded.capability = capability;
+  vi.doMock("./app/host-origin.js", () => ({
+    readInjectedCapability: () => loaded.capability,
+  }));
+  vi.doMock("./landing.js", () => {
+    loaded.entries.push("landing");
+    return {};
+  });
+  vi.doMock("./app.js", () => {
+    loaded.entries.push("app");
+    return {};
+  });
+  window.history.replaceState({}, "", pathname);
+  await import("./bootstrap-entry.js");
+  // The entry import resolves asynchronously; under full-suite load one
+  // macrotask is not always enough, so poll instead of sleeping once.
+  await vi.waitFor(() => expect(loaded.entries).toHaveLength(1));
+  vi.doUnmock("./app/host-origin.js");
+  vi.doUnmock("./landing.js");
+  vi.doUnmock("./app.js");
+  return loaded.entries;
+}
+
+test("source keeps the canonical app entry and never revives retired entries", () => {
+  expect(bootstrapEntry).toContain('"./app.js"');
   expect(bootstrapEntry).not.toContain("./native/app.js");
+});
+
+test("reads but never consumes the capability global", () => {
+  // WebSocketClient consumes the injected capability later for the
+  // authenticated hello; consuming it here would leave every native window
+  // unauthenticated and the sidebar permanently empty.
+  expect(bootstrapEntry).toContain("readInjectedCapability");
+  expect(bootstrapEntry).not.toContain("consumeInjectedCapability");
+});
+
+test("native / boots the landing entry", async () => {
+  expect(await boot("/", "native-capability")).toEqual(["landing"]);
+});
+
+test("non-native / keeps the browser app entry", async () => {
+  expect(await boot("/", null)).toEqual(["app"]);
+});
+
+test("native canonical workspace routes keep the app entry", async () => {
+  expect(await boot("/workspaces/wid/sessions/sid", "native-capability")).toEqual(["app"]);
 });

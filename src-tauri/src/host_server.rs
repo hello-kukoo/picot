@@ -1729,9 +1729,15 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                                 .ok()
                                 .and_then(|registry| registry.clone())
                                 .and_then(|registry| {
-                                    registry
-                                        .current_workspace(owner)
-                                        .map(|(root, _)| root)
+                                    // Terminals are workspace-scoped: Registered-only;
+                                    // a landing placeholder root never hosts a PTY.
+                                    match registry.owner_current_workspace(owner) {
+                                        crate::window_owner::OwnerWorkspaceSnapshot::Registered {
+                                            root,
+                                            ..
+                                        } => Some(root),
+                                        _ => None,
+                                    }
                                 });
                             match root {
                                 Some(root) => {
@@ -2349,8 +2355,14 @@ async fn dispatch(
             frame,
         } => {
             let context = context.ok_or(("unauthenticated", "Authentication required".into()))?;
-            if context.kind != crate::host_router::ClientKind::Desktop
-                || !current_registered_context(state, context)
+            // Control operations are owner-scoped: the capability proves the
+            // desktop identity, and every op re-derives its authority from the
+            // live registry (native-owner registry ops, Registered-only
+            // workspace ops, Quick Chat admission). The landing owner is
+            // unbound by design, so requiring a Registered snapshot here would
+            // lock the whole control surface behind the very state landing
+            // exists to move past.
+            if context.kind != crate::host_router::ClientKind::Desktop || context.owner_id.is_none()
             {
                 return Err((
                     "stale_generation",
@@ -2625,14 +2637,19 @@ async fn dispatch(
                 .ok_or(("invalid_workspace", "workspaceId is required".into()))?;
             let operation = frame.get("operation").and_then(Value::as_str).unwrap_or("");
             let authorized = context.is_some_and(|ctx| {
-                ctx.kind == crate::host_router::ClientKind::Desktop
-                    && current_registered_context(state, ctx)
-                    && (ctx.workspace_id.as_deref() == Some(workspace_id)
-                        // Sidebar registry rows are owner-scoped and may load
-                        // history for another registered workspace. Data reads
-                        // still resolve roots through MetadataStore; only the
-                        // current desktop owner may request this operation.
-                        || operation == "workspace_sessions")
+                if ctx.kind != crate::host_router::ClientKind::Desktop || ctx.owner_id.is_none() {
+                    return false;
+                }
+                // Sidebar registry rows are owner-scoped and may load session
+                // history for any registered workspace — including from the
+                // landing page, whose owner has no workspace binding yet.
+                // Data reads still resolve roots through MetadataStore; only
+                // the current desktop owner may request this operation.
+                if operation == "workspace_sessions" {
+                    return true;
+                }
+                current_registered_context(state, ctx)
+                    && ctx.workspace_id.as_deref() == Some(workspace_id)
             });
             if !authorized {
                 return Err(("unauthorized_target", "Workspace is not authorized".into()));

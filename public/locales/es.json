@@ -466,6 +466,9 @@
     "searchNext": "Coincidencia siguiente",
     "searchClose": "Cerrar barra de búsqueda"
   },
+  "landing": {
+    "hint": "Selecciona una sesión en la barra lateral para empezar, o pulsa el + de un espacio de trabajo para iniciar una nueva."
+  },
   "sidebar": {
     "loadingSessions": "Cargando sesiones...",
     "failedToLoadSessions": "Error al cargar sesiones.",

@@ -2,7 +2,7 @@
 
 ## Status
 
-v3, 2026-09-14. All decisions approved by Dr. Lin in a grilling session
+v3.1, 2026-09-15. All decisions approved by Dr. Lin in a grilling session
 (2026-09-14, Q1–Q10). Visual prototype approved by Dr. Lin on 2026-09-14:
 
 - `2026-09-11-landing-page-prototype.html` (night, default)
@@ -69,7 +69,44 @@ right of the left sidebar; the sidebar stays fully functional.
 | 10 | Zero-session workspaces (v2) | **Copy change, not new interaction.** Zero-session workspaces are entered via their existing `+ New Chat` button; the hint copy names both paths. Workspace-title rows keep their current expand/collapse behaviour. |
 | 11 | Add a Project copy (v2) | Reuse `sidebar.addProject` (all four locales already translated). `landing.addProject` is not created. |
 
-## Visual design (per approved prototype)
+## Implementation deviations (recorded 2026-09-15, post-implementation review)
+
+Found in the critical review of the working-tree implementation (after the
+v3 revision below). All are accepted deviations; each supersedes the
+corresponding v2 text where noted.
+
+1. **Entry architecture** — v2 said "app.js branches into landing mode".
+   Actual: `bootstrap-entry.js` discriminates the route BEFORE any app
+   module loads: native `/` boots `landing.js` directly and **app.js never
+   loads on the landing page** (app.js constructs the chat object graph at
+   import time and cannot run without a workspace session). landing.js
+   constructs its own transport + sidebar + Quick Chat + transition
+   controller. The v2 "Frontend: landing mode" section's branching model is
+   superseded by this entry split; everything else there (seams,
+   enterWorkspace contract, forbidden objects) holds.
+2. **Landing Settings = General + Appearance tabs** (v2 was silent). Only
+   owner-less preference surfaces are offered (theme, language, appearance
+   cookie+DB dual-track, updates); runtime-bound rows (agent/thinking/
+   auto-compact/pi-version) and workspace-bound tabs stay hidden. Dr. Lin's
+   post-review revision extended this from General-only to
+   General+Appearance.
+3. **Host model cache deleted** (v2 was silent): `ModelCache`, the
+   `get_cached_models` control op, `models_from_runtime_reply`, and all
+   frontend call sites (`transport.getCachedModels`, `fetchModelInfo`
+   cache-first block, ephemeral view cache block) are removed. Consequence:
+   model dropdowns (workspace, Side/Quick Chat) live-query their runtime —
+   no instant cold render. Accepted trade-off of "no runtime at startup".
+4. **Justified additions** (v2 silent, all reviewed): macOS drag strip on
+   the landing area (no chat header otherwise owns window dragging);
+   Quick Chat dialog roots reparent to `<body>` at landing; Focus as a
+   fourth enterWorkspace seam; same-cwd generation retention now requires
+   a Registered binding (placeholder-home edge, unit-tested).
+5. **Review round fixes**: `getLanguagePreference` import bug (landing
+   Settings language selector threw ReferenceError; found in review, fixed
+   by Dr. Lin's other agent and verified); the `dispatch` control gate was
+   re-keyed to Desktop-kind + owner presence with per-op authority — the
+   root cause of the "settings/main window/add project all broken"
+   outage Dr. Lin reported.
 
 Single centered column, vertical position slightly above center
 (`padding-bottom: 12vh`):
@@ -240,7 +277,7 @@ this lands.
 - **Landing transition handler** (`landing.js`): the only way landing
   enters a workspace.
 
-  ```
+  ```text
   enterWorkspace(path, { sessionPath?, forceNewSession? })
     → transport.prepareWorkspaceTarget(path, {…})
     → transport.commitWorkspaceTransition(generation)

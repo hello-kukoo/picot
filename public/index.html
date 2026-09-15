@@ -247,6 +247,23 @@
       <!-- Sidebar overlay for mobile -->
       <div class="sidebar-overlay" id="sidebar-overlay"></div>
 
+      <!-- Landing (native cold start only; revealed by landing.js) -->
+      <div class="landing hidden" id="landing" aria-hidden="true">
+        <div class="landing-drag-strip" aria-hidden="true"></div>
+        <div class="landing-logo">
+          <img id="landing-logo-img" alt="Picot logo" />
+        </div>
+        <div class="landing-name">Picot</div>
+        <p class="landing-hint" data-i18n="landing.hint"></p>
+        <div class="landing-actions">
+          <button type="button" class="landing-btn" id="landing-add-project-btn">
+            <span class="landing-btn-icon" id="landing-add-project-icon"></span>
+            <span data-i18n="sidebar.addProject">Add project</span>
+          </button>
+        </div>
+        <div class="landing-notice hidden" id="landing-notice" role="status"></div>
+      </div>
+
       <!-- Workspace -->
       <div class="workspace">
         <!-- Header -->

@@ -1,0 +1,329 @@
+// ABOUTME: Verifies the landing bootstrap: seam routing into enterWorkspace,
+// ABOUTME: the prepare→commit→navigate contract with no chat-lifecycle objects,
+// ABOUTME: locale-following copy, and Quick Chat entry visibility.
+import { readFileSync } from "node:fs";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+
+const landingSource = readFileSync("public/landing.js", "utf8");
+const landingCodeOnly = landingSource
+  .replace(/\/\*[\s\S]*?\*\//g, "")
+  .split("\n")
+  .map((line) => line.replace(/^\s*\/\/.*$/, ""))
+  .join("\n");
+
+const harness = vi.hoisted(() => ({
+  transport: null,
+  sidebarInstance: null,
+  wsClient: null,
+}));
+
+vi.mock("./app/websocket-client.js", () => ({
+  resolveWebSocketUrl: () => "ws://127.0.0.1:0/v2/ws",
+  WebSocketClient: class extends EventTarget {
+    connect() {}
+  },
+}));
+
+vi.mock("./app/transport.js", () => ({
+  initTransport: ({ wsClient }) => {
+    harness.wsClient = wsClient;
+    return harness.transport;
+  },
+}));
+
+vi.mock("./sidebar/index.js", () => ({
+  SessionSidebar: class {
+    constructor(_container, onSessionSelect, onNewChat, options) {
+      harness.sidebarInstance = {
+        onSessionSelect,
+        onNewChat,
+        onRegisterWorkspace: options.onRegisterWorkspace,
+        onWorkspaceFocus: options.onWorkspaceFocus,
+        canFocusWorkspace: options.canFocusWorkspace,
+        isCurrentWorkspace: options.isCurrentWorkspace,
+        expandedWorkspaces: new Set(),
+        searchQuery: "",
+        projects: [],
+        _registryPins: null,
+        render: () => {},
+        refresh: () => harness.refreshCalls.push(1),
+        addProjectViaPicker: () => harness.pickerCalls.push(1),
+      };
+    }
+  },
+}));
+
+function makeTransportStub() {
+  return {
+    capabilities: { native: true },
+    runtimeInstances: async () => ({ instances: [] }),
+    prepareWorkspaceTarget: async (targetCwd, options) => {
+      harness.prepares.push({ targetCwd, options });
+      const generation = 100 + harness.prepares.length;
+      harness.generations.push(generation);
+      return {
+        classification: "cross",
+        transitionGeneration: generation,
+        // Same document origin: landing's navigate guard rejects cross-origin
+        // targets, exactly like production where every workspace route shares
+        // the host origin.
+        targetOrigin: `${harness.origin}/workspaces/wid/sessions/sid-${harness.prepares.length}`,
+        targetWorkspaceId: "wid",
+        targetSessionId: `sid-${harness.prepares.length}`,
+      };
+    },
+    commitWorkspaceTransition: async (generation) => {
+      harness.commits.push(generation);
+      return { targetOrigin: "http://127.0.0.1:9", workspaceGeneration: generation };
+    },
+    cancelWorkspaceTransition: async () => {},
+  };
+}
+
+const booted = { value: null };
+const navigation = { calls: [] };
+
+/** jsdom's location.assign is an own non-configurable value property, but
+ * `window.location` itself is configurable: swap the whole object once and
+ * record every assign target. */
+function trackNavigation() {
+  if (!navigation.patched) {
+    const real = { ...window.location };
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...real, assign: (url) => navigation.calls.push(String(url)) },
+    });
+    navigation.patched = true;
+  }
+  navigation.calls.length = 0;
+  return navigation.calls;
+}
+
+function installDom() {
+  document.body.innerHTML = `
+    <div class="app-layout">
+      <div class="sidebar" id="sidebar">
+        <button id="add-project-btn"></button>
+        <button id="quick-chat-btn" class="hidden"></button>
+        <button id="refresh-sessions-btn"></button>
+        <div class="session-list" id="session-list"></div>
+        <button id="settings-btn"></button>
+      </div>
+      <div class="workspace"><div class="main">
+        <div id="quick-chat-dialog-root"></div>
+        <div id="quick-chat-chip-root"></div>
+      </div></div>
+      <div class="landing hidden" id="landing" aria-hidden="true">
+        <div class="landing-logo"><img id="landing-logo-img" alt="" /></div>
+        <div class="landing-name">Picot</div>
+        <p class="landing-hint" data-i18n="landing.hint"></p>
+        <button type="button" class="landing-btn" id="landing-add-project-btn">
+          <span class="landing-btn-icon" id="landing-add-project-icon"></span>
+          <span data-i18n="sidebar.addProject"></span>
+        </button>
+        <div class="landing-notice hidden" id="landing-notice" role="status"></div>
+      </div>
+    </div>`;
+}
+
+async function bootLanding() {
+  installDom();
+  harness.origin = window.location.origin;
+  harness.transport = makeTransportStub();
+  harness.prepares = [];
+  harness.generations = [];
+  harness.commits = [];
+  harness.refreshCalls = [];
+  harness.pickerCalls = [];
+  document.cookie = "picot-language=en; Max-Age=600; path=/";
+  // vitest does not serve /locales/*.json as JSON; feed i18n the real locale
+  // files from disk so t() and applyTranslations behave like production.
+  const realFetch = globalThis.fetch.bind(globalThis);
+  vi.stubGlobal("fetch", async (input) => {
+    const match = String(input).match(/locales\/([a-z]{2})\.json/);
+    if (match) {
+      const body = readFileSync(`public/locales/${match[1]}.json`, "utf8");
+      return { ok: true, json: async () => JSON.parse(body) };
+    }
+    return realFetch(input);
+  });
+  booted.value = await import("./landing.js");
+  return booted.value;
+}
+
+beforeEach(() => {
+  vi.resetModules();
+  document.cookie = "picot-language=; Max-Age=0; path=/";
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  document.body.innerHTML = "";
+});
+
+test("landing source never references chat-lifecycle objects", () => {
+  const forbidden = [
+    "MessageRenderer",
+    "ToolCardRenderer",
+    "ConfigGateway",
+    "createOauthGateway",
+    "TerminalPanel",
+    "terminalPanel",
+    "GitPanel",
+    "gitPanel",
+    "filePreviewPanel",
+    "SideChatManager",
+    "sideChatManager",
+    "resetUiForNewSession",
+    "fetchDiskHistory",
+    "rpcCommand",
+    "model-dropdown",
+  ];
+  for (const symbol of forbidden) {
+    expect(landingCodeOnly, `landing.js must not reference ${symbol}`).not.toContain(symbol);
+  }
+});
+
+test("boot reveals the landing and hides the workspace chrome", async () => {
+  await bootLanding();
+  expect(document.body.classList.contains("landing-mode")).toBe(true);
+  const landing = document.getElementById("landing");
+  expect(landing.classList.contains("hidden")).toBe(false);
+  expect(landing.getAttribute("aria-hidden")).toBe("false");
+});
+
+test("settings button opens the panel restricted to the General tab", async () => {
+  installDom();
+  document.body.insertAdjacentHTML(
+    "beforeend",
+    `
+    <div class="settings-panel hidden" id="settings-panel">
+      <div class="settings-nav">
+        <div class="settings-nav-item active" data-settings-tab="general">General</div>
+        <div class="settings-nav-item" data-settings-tab="appearance">Appearance</div>
+        <div class="settings-nav-item" data-settings-tab="models">Models</div>
+        <div class="settings-nav-item" data-settings-tab="skills">Skills</div>
+      </div>
+      <div class="settings-tab active" data-settings-panel="general">
+        <select id="settings-language-select"></select>
+      </div>
+      <div class="settings-tab" data-settings-panel="appearance">
+        <div class="theme-grid" id="theme-grid"></div>
+      </div>
+      <div class="settings-tab" data-settings-panel="models"></div>
+    </div>`,
+  );
+  harness.transport = makeTransportStub();
+  harness.prepares = [];
+  harness.generations = [];
+  harness.commits = [];
+  harness.refreshCalls = [];
+  harness.pickerCalls = [];
+  document.cookie = "picot-language=en; Max-Age=600; path=/";
+  await import("./landing.js");
+
+  document.getElementById("settings-btn").click();
+  const panel = document.getElementById("settings-panel");
+  expect(panel.classList.contains("hidden")).toBe(false);
+  // Runtime- and workspace-bound tabs stay hidden; General and Appearance show.
+  const navItems = [...panel.querySelectorAll(".settings-nav-item[data-settings-tab]")];
+  expect(
+    navItems.find((item) => item.dataset.settingsTab === "general").classList.contains("hidden"),
+  ).toBe(false);
+  expect(
+    navItems.find((item) => item.dataset.settingsTab === "appearance").classList.contains("hidden"),
+  ).toBe(false);
+  expect(
+    navItems.find((item) => item.dataset.settingsTab === "models").classList.contains("hidden"),
+  ).toBe(true);
+  // Clicking the Appearance nav switches panels and renders the theme grid
+  // from the shared theme registry.
+  navItems.find((item) => item.dataset.settingsTab === "appearance").click();
+  expect(
+    panel
+      .querySelector('.settings-tab[data-settings-panel="appearance"]')
+      .classList.contains("active"),
+  ).toBe(true);
+  expect(panel.querySelectorAll("#theme-grid .theme-swatch").length).toBeGreaterThan(0);
+});
+
+test("session-row seam routes prepare → commit → navigate", async () => {
+  await bootLanding();
+  const assigns = trackNavigation();
+  const ok = await harness.sidebarInstance.onSessionSelect(
+    { filePath: "/tmp/s.jsonl", cwd: "/tmp/ws" },
+    { path: "/tmp/ws" },
+  );
+  expect(ok).toBe(true);
+  expect(harness.prepares).toHaveLength(1);
+  expect(harness.prepares[0]).toEqual({
+    targetCwd: "/tmp/ws",
+    options: { sessionPath: "/tmp/s.jsonl", forceNewSession: false, reuseExisting: false },
+  });
+  expect(harness.commits).toEqual(harness.generations);
+  expect(assigns).toHaveLength(1);
+  const navigated = new URL(assigns[0]);
+  expect(navigated.pathname).toBe("/workspaces/wid/sessions/sid-1");
+  expect(navigated.searchParams.has("focusWorkspaceId")).toBe(false);
+});
+
+test("new-chat and post-add seams force a new session", async () => {
+  await bootLanding();
+  trackNavigation();
+  await harness.sidebarInstance.onNewChat({ path: "/tmp/zero" });
+  expect(harness.prepares[0].options).toEqual({
+    sessionPath: null,
+    forceNewSession: true,
+    reuseExisting: false,
+  });
+  const launched = await harness.sidebarInstance.onRegisterWorkspace("/tmp/added");
+  expect(launched).toBe(true);
+  expect(harness.prepares[1].options.forceNewSession).toBe(true);
+});
+
+test("focus seam carries focusWorkspaceId for the selected workspace", async () => {
+  await bootLanding();
+  const assigns = trackNavigation();
+  expect(harness.sidebarInstance.canFocusWorkspace({ source: "registry" })).toBe(true);
+  expect(harness.sidebarInstance.canFocusWorkspace({ source: "live" })).toBe(false);
+  await harness.sidebarInstance.onWorkspaceFocus({ path: "/tmp/focus" });
+  expect(harness.prepares[0].targetCwd).toBe("/tmp/focus");
+  const navigated = new URL(assigns[0]);
+  expect(navigated.searchParams.get("focusWorkspaceId")).toBe("workspace:/tmp/focus");
+});
+
+test("hint and button labels follow the active locale", async () => {
+  await bootLanding();
+  const en = JSON.parse(readFileSync("public/locales/en.json", "utf8"));
+  expect(document.querySelector(".landing-hint").textContent).toBe(en.landing.hint);
+  const { setLocale } = await import("./i18n.js");
+  await setLocale("zh");
+  const zh = JSON.parse(readFileSync("public/locales/zh.json", "utf8"));
+  expect(document.querySelector(".landing-hint").textContent).toBe(zh.landing.hint);
+  expect(
+    document.querySelector("#landing-add-project-btn [data-i18n='sidebar.addProject']").textContent,
+  ).toBe(zh.sidebar.addProject);
+  await setLocale("en");
+});
+
+test("quick chat button unhides after host capabilities arrive", async () => {
+  await bootLanding();
+  const button = document.getElementById("quick-chat-btn");
+  expect(button.classList.contains("hidden")).toBe(true);
+  harness.wsClient.dispatchEvent(new Event("hostCapabilities"));
+  expect(button.classList.contains("hidden")).toBe(false);
+});
+
+test("errors render into the landing notice, never a chat renderer", async () => {
+  await bootLanding();
+  harness.transport.prepareWorkspaceTarget = async () => {
+    throw new Error("spawn failed");
+  };
+  trackNavigation();
+  const ok = await harness.sidebarInstance.onNewChat({ path: "/tmp/broken" });
+  expect(ok).toBe(false);
+  const notice = document.getElementById("landing-notice");
+  expect(notice.classList.contains("hidden")).toBe(false);
+  expect(notice.textContent).toContain("spawn failed");
+});

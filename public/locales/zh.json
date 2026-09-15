@@ -466,6 +466,9 @@
     "searchNext": "下一个匹配",
     "searchClose": "关闭查找栏"
   },
+  "landing": {
+    "hint": "从侧栏选择一个会话开始，或点击工作区的 + 开始新会话。"
+  },
   "sidebar": {
     "loadingSessions": "正在加载会话...",
     "failedToLoadSessions": "加载会话失败。",

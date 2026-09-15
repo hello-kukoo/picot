@@ -466,6 +466,9 @@
     "searchNext": "Next match",
     "searchClose": "Close find bar"
   },
+  "landing": {
+    "hint": "Select a session from the sidebar to begin, or click a workspace's + to start a new session."
+  },
   "sidebar": {
     "loadingSessions": "Loading sessions...",
     "failedToLoadSessions": "Failed to load sessions.",
