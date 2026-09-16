@@ -1080,114 +1080,6 @@
                 ></select>
               </div>
             </div>
-            <div class="settings-section">
-              <div class="settings-section-title" data-i18n="settings.agent">
-                Agent
-              </div>
-              <div class="settings-row" id="setting-auto-compact">
-                <span class="settings-label" data-i18n="settings.autoCompaction"
-                  >Auto-compaction</span
-                >
-                <button
-                  class="settings-toggle"
-                  id="toggle-auto-compact"
-                ></button>
-              </div>
-              <div class="settings-row" id="setting-thinking">
-                <span class="settings-label settings-label-stack">
-                  <span
-                    class="settings-label-main"
-                    data-i18n="settings.thinkingEffort"
-                    >Thinking effort</span
-                  >
-                  <span
-                    class="settings-label-sub"
-                    data-i18n="settings.reasoningDepth"
-                    >Reasoning depth</span
-                  >
-                </span>
-                <div
-                  class="thinking-effort"
-                  id="thinking-effort"
-                  role="radiogroup"
-                  aria-label="Thinking effort"
-                >
-                  <div class="thinking-effort-ends">
-                    <span>Faster</span>
-                    <span class="thinking-effort-name" id="thinking-effort-name"
-                      >off</span
-                    >
-                    <span>Smarter</span>
-                  </div>
-                  <div class="thinking-effort-track" id="thinking-effort-steps">
-                    <span
-                      class="thinking-effort-thumb"
-                      id="thinking-effort-marker"
-                      aria-hidden="true"
-                    ></span>
-                    <!-- biome-ignore lint/a11y/useSemanticElements: ARIA radiogroup dot; native radio cannot anchor the sliding thumb marker -->
-                    <button
-                      type="button"
-                      class="thinking-effort-dot"
-                      data-level="off"
-                      role="radio"
-                      aria-checked="true"
-                      aria-label="off"
-                      title="off"
-                    ></button>
-                    <!-- biome-ignore lint/a11y/useSemanticElements: ARIA radiogroup dot; native radio cannot anchor the sliding thumb marker -->
-                    <button
-                      type="button"
-                      class="thinking-effort-dot"
-                      data-level="minimal"
-                      role="radio"
-                      aria-checked="false"
-                      aria-label="minimal"
-                      title="minimal"
-                    ></button>
-                    <!-- biome-ignore lint/a11y/useSemanticElements: ARIA radiogroup dot; native radio cannot anchor the sliding thumb marker -->
-                    <button
-                      type="button"
-                      class="thinking-effort-dot"
-                      data-level="low"
-                      role="radio"
-                      aria-checked="false"
-                      aria-label="low"
-                      title="low"
-                    ></button>
-                    <!-- biome-ignore lint/a11y/useSemanticElements: ARIA radiogroup dot; native radio cannot anchor the sliding thumb marker -->
-                    <button
-                      type="button"
-                      class="thinking-effort-dot"
-                      data-level="medium"
-                      role="radio"
-                      aria-checked="false"
-                      aria-label="medium"
-                      title="medium"
-                    ></button>
-                    <!-- biome-ignore lint/a11y/useSemanticElements: ARIA radiogroup dot; native radio cannot anchor the sliding thumb marker -->
-                    <button
-                      type="button"
-                      class="thinking-effort-dot"
-                      data-level="high"
-                      role="radio"
-                      aria-checked="false"
-                      aria-label="high"
-                      title="high"
-                    ></button>
-                  </div>
-                </div>
-              </div>
-              <div class="settings-row">
-                <span class="settings-label" data-i18n="settings.showThinking"
-                  >Show thinking</span
-                >
-                <button
-                  class="settings-toggle on"
-                  id="toggle-show-thinking"
-                ></button>
-              </div>
-            </div>
             <div class="settings-section" id="setting-updater-section">
               <div class="settings-section-title" data-i18n="settings.updates">
                 Updates
@@ -2024,6 +1916,114 @@
             <h3 data-i18n="settings.configuration">Advanced Configuration</h3>
           </div>
           <div class="settings-body">
+            <div class="settings-section">
+              <div class="settings-section-title" data-i18n="settings.agent">
+                Agent
+              </div>
+              <div class="settings-row" id="setting-auto-compact">
+                <span class="settings-label" data-i18n="settings.autoCompaction"
+                  >Auto-compaction</span
+                >
+                <button
+                  class="settings-toggle"
+                  id="toggle-auto-compact"
+                ></button>
+              </div>
+              <div class="settings-row" id="setting-thinking">
+                <span class="settings-label settings-label-stack">
+                  <span
+                    class="settings-label-main"
+                    data-i18n="settings.thinkingEffort"
+                    >Thinking effort</span
+                  >
+                  <span
+                    class="settings-label-sub"
+                    data-i18n="settings.reasoningDepth"
+                    >Reasoning depth</span
+                  >
+                </span>
+                <div
+                  class="thinking-effort"
+                  id="thinking-effort"
+                  role="radiogroup"
+                  aria-label="Thinking effort"
+                >
+                  <div class="thinking-effort-ends">
+                    <span>Faster</span>
+                    <span class="thinking-effort-name" id="thinking-effort-name"
+                      >off</span
+                    >
+                    <span>Smarter</span>
+                  </div>
+                  <div class="thinking-effort-track" id="thinking-effort-steps">
+                    <span
+                      class="thinking-effort-thumb"
+                      id="thinking-effort-marker"
+                      aria-hidden="true"
+                    ></span>
+                    <!-- biome-ignore lint/a11y/useSemanticElements: ARIA radiogroup dot; native radio cannot anchor the sliding thumb marker -->
+                    <button
+                      type="button"
+                      class="thinking-effort-dot"
+                      data-level="off"
+                      role="radio"
+                      aria-checked="true"
+                      aria-label="off"
+                      title="off"
+                    ></button>
+                    <!-- biome-ignore lint/a11y/useSemanticElements: ARIA radiogroup dot; native radio cannot anchor the sliding thumb marker -->
+                    <button
+                      type="button"
+                      class="thinking-effort-dot"
+                      data-level="minimal"
+                      role="radio"
+                      aria-checked="false"
+                      aria-label="minimal"
+                      title="minimal"
+                    ></button>
+                    <!-- biome-ignore lint/a11y/useSemanticElements: ARIA radiogroup dot; native radio cannot anchor the sliding thumb marker -->
+                    <button
+                      type="button"
+                      class="thinking-effort-dot"
+                      data-level="low"
+                      role="radio"
+                      aria-checked="false"
+                      aria-label="low"
+                      title="low"
+                    ></button>
+                    <!-- biome-ignore lint/a11y/useSemanticElements: ARIA radiogroup dot; native radio cannot anchor the sliding thumb marker -->
+                    <button
+                      type="button"
+                      class="thinking-effort-dot"
+                      data-level="medium"
+                      role="radio"
+                      aria-checked="false"
+                      aria-label="medium"
+                      title="medium"
+                    ></button>
+                    <!-- biome-ignore lint/a11y/useSemanticElements: ARIA radiogroup dot; native radio cannot anchor the sliding thumb marker -->
+                    <button
+                      type="button"
+                      class="thinking-effort-dot"
+                      data-level="high"
+                      role="radio"
+                      aria-checked="false"
+                      aria-label="high"
+                      title="high"
+                    ></button>
+                  </div>
+                </div>
+              </div>
+              <div class="settings-row">
+                <span class="settings-label" data-i18n="settings.showThinking"
+                  >Show thinking</span
+                >
+                <button
+                  class="settings-toggle on"
+                  id="toggle-show-thinking"
+                ></button>
+              </div>
+            </div>
             <div class="settings-section">
               <div class="settings-section-title" data-i18n="settings.agent">
                 Agent

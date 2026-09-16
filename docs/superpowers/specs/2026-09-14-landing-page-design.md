@@ -84,12 +84,26 @@ corresponding v2 text where noted.
    controller. The v2 "Frontend: landing mode" section's branching model is
    superseded by this entry split; everything else there (seams,
    enterWorkspace contract, forbidden objects) holds.
-2. **Landing Settings = General + Appearance tabs** (v2 was silent). Only
-   owner-less preference surfaces are offered (theme, language, appearance
-   cookie+DB dual-track, updates); runtime-bound rows (agent/thinking/
-   auto-compact/pi-version) and workspace-bound tabs stay hidden. Dr. Lin's
-   post-review revision extended this from General-only to
-   General+Appearance.
+2. **Landing Settings = visible tabs are exactly the functional ones**
+   (v2 was silent; settled 2026-09-15 after three hands-on review rounds).
+   Visible and functional at landing: **General, Appearance, Usage, Skills,
+   Extensions**. The Pi-bound tabs (models, mcp, configuration) are
+   **hidden entirely** — everything visible works, nothing visible is dead.
+   Supporting changes: the agent controls (auto-compaction, thinking
+   default, show-thinking) moved from General into the Configuration page
+   (they ride the config bridge; show-thinking is already cookie/DB
+   dual-tracked — `reconcileAgentPreferences`); the `cost_dashboard` data op
+   is admitted for any authenticated desktop owner (global session scan,
+   same rationale as `workspace_sessions`; frames may carry no workspaceId
+   at landing); discovered-skills inventory switched from the config bridge
+   to host control ops (single path, works at landing) while the
+   package-skills sub-tab stays bridge-bound (host port drifted: no
+   project-delta semantics) and is hidden at landing; the three package
+   ops (list/check/set-disabled) accept a landing owner with global-only
+   locations (`locations_for_workspace(None)`); project package scope
+   errors with "requires an open workspace" at landing. Evolution:
+   General-only → +Appearance → all tabs with notices → functional-only
+   (general/appearance/usage) → +skills/extensions (final).
 3. **Host model cache deleted** (v2 was silent): `ModelCache`, the
    `get_cached_models` control op, `models_from_runtime_reply`, and all
    frontend call sites (`transport.getCachedModels`, `fetchModelInfo`

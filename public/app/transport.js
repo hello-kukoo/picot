@@ -164,6 +164,16 @@ export class WsTransport {
     return this._control("pick_skill_source", {}, { timeoutMs: NO_TIMEOUT });
   }
 
+  // Discovered-skills inventory rides host control ops (no Pi runtime):
+  // the host scans the same agent/project settings files the bridge reads.
+  listSkillInventory(scope) {
+    return this._control("list_skill_inventory", { scope });
+  }
+
+  setSkillEnabled(scope, target, enabled) {
+    return this._control("set_skill_enabled", { scope, target, enabled });
+  }
+
   scanSkillInstallSource(sourceId) {
     return this._control("skill_scan_install_source", { sourceId }, { timeoutMs: NO_TIMEOUT });
   }

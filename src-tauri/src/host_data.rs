@@ -625,7 +625,10 @@ impl HostDataPlane {
         params: &crate::cost_compat::CostRangeParams,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<serde_json::Value, HostDataError> {
-        let workspace = self.workspace_root(workspace_id)?;
+        // The landing page requests the dashboard without a workspace target;
+        // `current_root` only feeds the scope=current filter, so an empty root
+        // degrades that filter to no matches instead of failing scope=all.
+        let workspace = self.workspace_root(workspace_id).unwrap_or_default();
         match &self.session_root {
             Some(session_root) => crate::cost_compat::scan_compat_cost_dashboard(
                 session_root,

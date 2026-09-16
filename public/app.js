@@ -3632,20 +3632,16 @@ const bridgeData = (op, params) =>
   });
 const SKILL_HOST_COMMANDS = new Map([
   ["list_skills", () => listSkillsViaRuntime()],
-  ["list_skill_inventory", (cmd) => bridgeData("list_skill_inventory", { scope: cmd.scope })],
+  // Discovered-skills inventory: host control ops (no Pi runtime needed,
+  // works at landing). The package-skills entries below stay on the bridge —
+  // their inventory/mutation carries project-delta semantics that only the
+  // bridge implementation has (the host port drifted).
+  ["list_skill_inventory", (cmd) => transport.listSkillInventory(cmd.scope)],
   [
     "list_package_skill_inventory",
     (cmd) => bridgeData("list_package_skill_inventory", { scope: cmd.scope }),
   ],
-  [
-    "set_skill_enabled",
-    (cmd) =>
-      bridgeData("set_skill_enabled", {
-        scope: cmd.scope,
-        target: cmd.target,
-        enabled: cmd.enabled,
-      }),
-  ],
+  ["set_skill_enabled", (cmd) => transport.setSkillEnabled(cmd.scope, cmd.target, cmd.enabled)],
   [
     "set_package_skill_enabled",
     (cmd) =>

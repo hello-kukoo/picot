@@ -778,13 +778,17 @@ test("/picot-config reads wait for a foreground snapshot before dispatching", as
       socket.sent.filter(
         (frame) =>
           frame.type === "runtime_request" &&
-          String(frame.command?.message || "").includes("list_skill_inventory"),
+          String(frame.command?.message || "").includes("list_package_skill_inventory"),
       );
 
-    // A user-initiated Skills read queues behind the gate: no snapshot has
-    // proven the runtime live yet, so nothing dispatches.
+    // A user-initiated package-skills read queues behind the gate: no
+    // snapshot has proven the runtime live yet, so nothing dispatches.
+    // (Discovered-skills inventory rides host control ops since the
+    // landing single-path switch; the packages sub-tab is the bridge
+    // consumer this gate still protects.)
     document.getElementById("settings-btn").click();
     document.querySelector('[data-settings-tab="skills"]').click();
+    document.querySelector('[data-skills-page-tab="packages"]').click();
     expect(configFrames()).toHaveLength(0);
 
     // Deliver the first foreground snapshot: the gate opens and exactly the

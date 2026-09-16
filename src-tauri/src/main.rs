@@ -2154,13 +2154,21 @@ fn install_control_handler(
                             .owner_id
                             .as_ref()
                             .ok_or("verified window owner required")?;
-                        // Project-scoped package surface: Registered-only.
-                        let (_, workspace, _) = registered_workspace(&owner_registry, owner)?;
-                        let locations = package_manager::locations_for_workspace(Some(&workspace))?;
+                        // Project package locations resolve from the owner's
+                        // live binding; a landing owner degrades to
+                        // global-only locations (no project root in the set).
+                        let workspace = match owner_registry.owner_current_workspace(owner) {
+                            window_owner::OwnerWorkspaceSnapshot::Registered { root, .. } => {
+                                Some(root)
+                            }
+                            _ => None,
+                        };
+                        let locations =
+                            package_manager::locations_for_workspace(workspace.as_deref())?;
                         let output = run_bundled_pi_command(
                             &static_dir,
                             &["list".to_string(), "--approve".to_string()],
-                            Some(&workspace),
+                            workspace.as_deref(),
                         )?;
                         let packages =
                             package_manager::inspect_pi_list_output(&output, &locations)?;
@@ -2172,13 +2180,19 @@ fn install_control_handler(
                             .owner_id
                             .as_ref()
                             .ok_or("verified window owner required")?;
-                        // Project-scoped package surface: Registered-only.
-                        let (_, workspace, _) = registered_workspace(&owner_registry, owner)?;
-                        let locations = package_manager::locations_for_workspace(Some(&workspace))?;
+                        // Same landing degradation as list_pi_packages.
+                        let workspace = match owner_registry.owner_current_workspace(owner) {
+                            window_owner::OwnerWorkspaceSnapshot::Registered { root, .. } => {
+                                Some(root)
+                            }
+                            _ => None,
+                        };
+                        let locations =
+                            package_manager::locations_for_workspace(workspace.as_deref())?;
                         let output = run_bundled_pi_command(
                             &static_dir,
                             &["list".to_string(), "--approve".to_string()],
-                            Some(&workspace),
+                            workspace.as_deref(),
                         )?;
                         let packages =
                             package_manager::inspect_pi_list_output(&output, &locations)?;
@@ -2453,9 +2467,21 @@ fn install_control_handler(
                             .ok_or("verified window owner required")?;
                         let scope = arg_str("scope").unwrap_or_default();
                         let disabled = arg_bool("disabled").ok_or("disabled is required")?;
-                        // Project-scoped package settings: Registered-only.
-                        let workspace = registered_workspace(&owner_registry, owner)?.1;
-                        let locations = package_manager::locations_for_workspace(Some(&workspace))?;
+                        // Global package settings work everywhere; the project
+                        // layer requires the owner's live workspace binding.
+                        let workspace = match owner_registry.owner_current_workspace(owner) {
+                            window_owner::OwnerWorkspaceSnapshot::Registered { root, .. } => {
+                                Some(root)
+                            }
+                            _ => None,
+                        };
+                        if scope == "project" && workspace.is_none() {
+                            return Err(
+                                "project package scope requires an open workspace".to_string()
+                            );
+                        }
+                        let locations =
+                            package_manager::locations_for_workspace(workspace.as_deref())?;
                         let source = arg_str("source").unwrap_or_default();
                         let changed = package_manager::set_package_disabled(
                             &locations,

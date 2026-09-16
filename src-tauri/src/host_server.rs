@@ -2631,29 +2631,35 @@ async fn dispatch(
         RoutedAction::Data {
             request_id, frame, ..
         } => {
-            let workspace_id = frame
-                .get("workspaceId")
-                .and_then(Value::as_str)
-                .ok_or(("invalid_workspace", "workspaceId is required".into()))?;
             let operation = frame.get("operation").and_then(Value::as_str).unwrap_or("");
             let authorized = context.is_some_and(|ctx| {
                 if ctx.kind != crate::host_router::ClientKind::Desktop || ctx.owner_id.is_none() {
                     return false;
                 }
-                // Sidebar registry rows are owner-scoped and may load session
-                // history for any registered workspace — including from the
-                // landing page, whose owner has no workspace binding yet.
-                // Data reads still resolve roots through MetadataStore; only
-                // the current desktop owner may request this operation.
-                if operation == "workspace_sessions" {
+                // Sidebar registry rows and the cost dashboard are
+                // owner-scoped surfaces over the GLOBAL session tree —
+                // including from the landing page, whose owner has no
+                // workspace binding and whose cost frames carry no workspace
+                // target at all. Data reads still resolve roots through
+                // MetadataStore; only the current desktop owner may request
+                // these operations.
+                if operation == "workspace_sessions" || operation == "cost_dashboard" {
                     return true;
                 }
                 current_registered_context(state, ctx)
-                    && ctx.workspace_id.as_deref() == Some(workspace_id)
+                    && ctx.workspace_id.as_deref()
+                        == frame.get("workspaceId").and_then(Value::as_str)
             });
             if !authorized {
                 return Err(("unauthorized_target", "Workspace is not authorized".into()));
             }
+            // Owner-scoped global ops send no workspaceId; every wid-matched
+            // op was gated against a real binding above, so the empty default
+            // is unreachable for them.
+            let workspace_id = frame
+                .get("workspaceId")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             match Some(operation) {
                 Some("file_mentions") => {
                     let query = frame.get("query").and_then(Value::as_str).unwrap_or("");
@@ -2811,10 +2817,6 @@ async fn dispatch(
                     }))
                 }
                 Some("cost_dashboard") => {
-                    let workspace_id = frame
-                        .get("workspaceId")
-                        .and_then(Value::as_str)
-                        .ok_or(("invalid_workspace", "workspaceId is required".into()))?;
                     // Same P4-parity payload as the /api/cost-dashboard facade:
                     // range/granularity/scope/models shape the aggregation and
                     // the compat keys land at the top level of the frame, which
@@ -3598,6 +3600,143 @@ mod tests {
             },
             temp,
         )
+    }
+
+    /// Landing-owner variant of `desktop_harness`: the owner carries NO
+    /// workspace binding (TemporaryKind::Landing, like the cold-start
+    /// window), so wid-matched data ops must be rejected while owner-scoped
+    /// global ops (cost dashboard) are admitted.
+    async fn landing_harness(label: &str) -> (HostServer, DesktopHarness, PathBuf) {
+        use tokio_tungstenite::tungstenite::Message;
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-landing-{label}-{nonce}"));
+        let session_root = temp.join("sessions");
+        fs::create_dir_all(&session_root).unwrap();
+        let public = temp.join("public");
+        fs::create_dir_all(&public).unwrap();
+        fs::write(public.join("index.html"), "Picot").unwrap();
+        let metadata = Arc::new(Mutex::new(
+            MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
+        ));
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
+        let registry = Arc::new(crate::window_owner::WindowOwnerRegistry::default());
+        let host = HostServer::start_with_session_root(
+            public,
+            NativePiManager::new(8),
+            auth,
+            metadata,
+            Some(session_root),
+        )
+        .await
+        .expect("host server starts");
+        let home = temp.join("home");
+        fs::create_dir_all(&home).unwrap();
+        let (owner, capability) = registry
+            .create_owner_with_workspace(
+                format!("{label}-landing"),
+                home,
+                0,
+                host.origin().into(),
+                None,
+                crate::window_owner::TemporaryKind::Landing,
+            )
+            .unwrap();
+        host.set_owner_registry(registry);
+        let (mut socket, _) = tokio_tungstenite::connect_async(
+            host.origin().replacen("http://", "ws://", 1) + "/v2/ws",
+        )
+        .await
+        .unwrap();
+        socket
+            .send(Message::Text(
+                json!({
+                    "type": "hello", "protocolVersion": 2, "clientType": "desktop",
+                    "clientId": format!("{label}-client"), "desktopCapability": capability
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let ack: Value =
+            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(ack["type"], "hello_ack");
+        (
+            host,
+            DesktopHarness {
+                socket,
+                workspace_id: String::new(),
+                owner_id: owner.as_str().to_string(),
+            },
+            temp,
+        )
+    }
+
+    #[tokio::test]
+    async fn cost_dashboard_admitted_and_workspace_ops_rejected_for_landing_owner() {
+        use tokio_tungstenite::tungstenite::Message;
+        let (host, mut harness, temp) = landing_harness("cost-gate").await;
+
+        // The landing page sends cost_dashboard with NO workspaceId at all.
+        harness
+            .socket
+            .send(Message::Text(
+                json!({
+                    "type": "data_request", "protocolVersion": 2, "requestId": "landing-cost",
+                    "operation": "cost_dashboard",
+                    "range": "7d", "granularity": "day", "scope": "all"
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let reply: Value = serde_json::from_str(
+            harness
+                .socket
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .to_text()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            reply["type"], "data_response",
+            "cost_dashboard must be admitted for an unbound landing owner: {reply}"
+        );
+        assert_eq!(reply["operation"], "cost_dashboard");
+
+        // A workspace-contained data op stays rejected for the same owner.
+        harness
+            .socket
+            .send(Message::Text(
+                json!({
+                    "type": "data_request", "protocolVersion": 2, "requestId": "landing-file",
+                    "operation": "file_mentions", "workspaceId": "ws-any", "query": "re"
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let reply: Value = serde_json::from_str(
+            harness
+                .socket
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .to_text()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(reply["type"], "error");
+        assert_eq!(reply["error"]["code"], "unauthorized_target");
+
+        host.stop();
+        let _ = fs::remove_dir_all(temp);
     }
 
     #[tokio::test]

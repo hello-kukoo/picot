@@ -220,16 +220,8 @@ body.landing-mode #landing {
   max-width: 560px;
   text-align: center;
 }
-/* Landing settings: only the General and Appearance tabs are meaningful
-   without a workspace binding or a live Pi; runtime-bound tabs and the
-   mobile-pairing section stay hidden. */
-body.landing-mode
-.settings-nav-item:not([data-settings-tab="general"]):not([data-settings-tab="appearance"]) {
-  display: none;
-}
-body.landing-mode #setting-mobile-section {
-  display: none;
-}
+/* Every settings surface visible at landing is functional; Pi-bound tabs are
+   hidden entirely by landing.js. */
 
 /* ═══════════════════════════════════════════════════════
    Sidebar — smoked glass panel
