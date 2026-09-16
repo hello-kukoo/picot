@@ -3,7 +3,8 @@
 **Status:** Approved by Dr. Lin on 2026-09-13 (grilling Q1–Q3 + grouping
 amendment). Reworked 2026-09-13 after implementation review (P1×2, P2×3,
 UI alignment); second pass same day (UI refinements + gateway-reject
-handling + command-type validation). Implemented; spec tracks code.
+handling + command-type validation); follow-up added default first-row
+selection on page open and tab switch. Implemented; spec tracks code.
 **Date:** 2026-09-13
 
 ## Goal
@@ -95,6 +96,9 @@ only when the adapter extension is installed.
   placeholders literal. The「新会话生效（或 /reload）」hint
   renders once under the tab strip as the tab description, not per
   detail.
+- Selection: after a successful list load, and when switching tabs, if the
+  active tab has no valid remembered selection, select its first master row
+  automatically. Tabs with no entries retain the empty state.
 - Project tab empty state when no workspace is active.
 
 ### i18n / CSS
@@ -105,18 +109,19 @@ layout inherited from the extensions page classes.
 
 ## Verification
 
-- `extensions/mcp-settings.test.ts` (21): shared merge + per-entry
+- `extensions/mcp-settings.test.ts` (22): shared merge + per-entry
   sourceFile, project two-file merge + per-entry editability,
   effectiveDisabled cross-layer, JSONC, `mcp-servers` variant (read +
   write-back without dual-key), 2-space write format, array-command
   round-trip, invalid command type rejection, toggle matrix
   (flag/remove/false/skip-write, shared-project lower-check),
   malformed-file degradation, adapter detection.
-- `public/settings/mcp-page.test.js` (9): tabs + switching, shared
-  read-only + source path, pi-global edit + add (button at master bottom,
-  dashed), project mixed editability, array-command passthrough, single
-  switch, action row (save+delete; add form has no delete), gateway
-  rejection → error status, nav availability.
+- `public/settings/mcp-page.test.js` (10): default first-row selection on
+  load and tab switch, tabs + switching, shared read-only + source path,
+  pi-global edit + add (button at master bottom, dashed), project mixed
+  editability, array-command passthrough, single switch, action row
+  (save+delete; add form has no delete), gateway rejection → error status,
+  nav availability.
 - `bun run check`, focused vitest, `bun run test`, `bun run
   build:extensions`.
 - `ARCHITECTURE.md`: bridge ops line gains the MCP ops (landed with this
