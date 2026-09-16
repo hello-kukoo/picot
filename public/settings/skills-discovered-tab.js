@@ -105,9 +105,18 @@ function el(tag, props = {}, children = []) {
  * @param {(cmd:Object)=>Promise<Object>} opts.rpcCommand
  * @param {(msg:string)=>void} [opts.showSuccess]
  * @param {(msg:string)=>void} [opts.showError]
+ * @param {Array<"global"|"project">} [opts.scopes] Rendered scope tabs;
+ *   the landing page passes `["global"]` — project-scoped skills need a
+ *   registered workspace, so the tab is absent there instead of erroring.
  */
-export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, showError }) {
-  let scope = "global";
+export function setupDiscoveredSkillsTab({
+  container,
+  rpcCommand,
+  showSuccess,
+  showError,
+  scopes = ["global", "project"],
+}) {
+  let scope = scopes.includes("global") ? "global" : scopes[0];
   /** @type {SkillInventory|null} */
   let inventory = null;
   let hasActivated = false;
@@ -216,7 +225,7 @@ export function setupDiscoveredSkillsTab({ container, rpcCommand, showSuccess, s
       role: "group",
       aria: { label: t("settings.skills.title") },
     });
-    for (const s of ["global", "project"]) {
+    for (const s of scopes) {
       const count = scopeCounts[s];
       const active = s === scope;
       tabs.appendChild(

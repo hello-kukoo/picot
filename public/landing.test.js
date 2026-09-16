@@ -108,12 +108,21 @@ function installDom() {
         <button id="refresh-sessions-btn"></button>
         <div class="session-list" id="session-list"></div>
         <button id="settings-btn"></button>
+        <button id="toggle-mobile-access"></button>
+        <div id="mobile-access-details"></div>
+        <div id="mobile-access-pairing">
+          <button id="mobile-pair-btn"></button>
+          <canvas id="mobile-qr-canvas"></canvas>
+          <span id="mobile-pair-token"></span>
+          <span id="mobile-restart-hint"></span>
+        </div>
       </div>
       <div class="workspace"><div class="main">
         <div id="quick-chat-dialog-root"></div>
         <div id="quick-chat-chip-root"></div>
       </div></div>
       <div class="landing hidden" id="landing" aria-hidden="true">
+        <div class="landing-drag-strip" aria-hidden="true"></div>
         <div class="landing-logo"><img id="landing-logo-img" alt="" /></div>
         <div class="landing-name">Picot</div>
         <p class="landing-hint" data-i18n="landing.hint"></p>
@@ -122,6 +131,27 @@ function installDom() {
           <span data-i18n="sidebar.addProject"></span>
         </button>
         <div class="landing-notice hidden" id="landing-notice" role="status"></div>
+      </div>
+      <div id="settings-skills-save-message"></div>
+      <button data-skills-page-tab="discovered">Discovered</button>
+      <button data-skills-page-tab="install">Install</button>
+      <button data-skills-page-tab="packages">Packages</button>
+      <div id="settings-skills"></div>
+      <div id="settings-install-skills"></div>
+      <div id="settings-package-skills"></div>
+      <button data-extensions-tab="installed">Installed</button>
+      <button data-extensions-tab="community">Community</button>
+      <div id="extensions-installed">
+        <div id="pkg-manager-groups"></div>
+        <div id="pkg-manager-detail"></div>
+        <div id="pkg-manager-footer"></div>
+      </div>
+      <div id="extensions-community">
+        <div id="pkg-browse-list"></div>
+        <input id="pkg-browse-search" />
+        <div id="pkg-browse-pills"></div>
+        <div id="pkg-browse-count"></div>
+        <div id="pkg-browse-sort"></div>
       </div>
     </div>`;
 }
@@ -177,7 +207,6 @@ test("landing source never references chat-lifecycle objects", () => {
     "sideChatManager",
     "resetUiForNewSession",
     "fetchDiskHistory",
-    "rpcCommand",
     "model-dropdown",
   ];
   for (const symbol of forbidden) {
@@ -193,26 +222,37 @@ test("boot reveals the landing and hides the workspace chrome", async () => {
   expect(landing.getAttribute("aria-hidden")).toBe("false");
 });
 
-test("settings button opens the panel restricted to the General tab", async () => {
+test("landing settings show only functional tabs; usage works, Pi-bound tabs hidden", async () => {
   installDom();
   document.body.insertAdjacentHTML(
     "beforeend",
     `
-    <div class="settings-panel hidden" id="settings-panel">
-      <div class="settings-nav">
-        <div class="settings-nav-item active" data-settings-tab="general">General</div>
-        <div class="settings-nav-item" data-settings-tab="appearance">Appearance</div>
-        <div class="settings-nav-item" data-settings-tab="models">Models</div>
-        <div class="settings-nav-item" data-settings-tab="skills">Skills</div>
-      </div>
-      <div class="settings-tab active" data-settings-panel="general">
-        <select id="settings-language-select"></select>
-      </div>
-      <div class="settings-tab" data-settings-panel="appearance">
-        <div class="theme-grid" id="theme-grid"></div>
-      </div>
-      <div class="settings-tab" data-settings-panel="models"></div>
-    </div>`,
+<div class="settings-panel hidden" id="settings-panel">
+<div class="settings-nav">
+<button class="settings-nav-back" id="settings-close" type="button"><span class="settings-nav-back-icon" aria-hidden="true"></span></button>
+<div class="settings-nav-item active" data-settings-tab="general">General</div>
+<div class="settings-nav-item" data-settings-tab="appearance">Appearance</div>
+<div class="settings-nav-item" data-settings-tab="usage">Usage</div>
+<div class="settings-nav-item" data-settings-tab="models">Models</div>
+<div class="settings-nav-item" data-settings-tab="skills">Skills</div>
+<div class="settings-nav-item" data-settings-tab="mcp">MCP</div>
+<div class="settings-nav-item" data-settings-tab="extensions">Extensions</div>
+<div class="settings-nav-item" data-settings-tab="configuration">Advanced</div>
+</div>
+<div class="settings-tab active" data-settings-panel="general">
+<select id="settings-language-select"></select>
+<div class="settings-row" id="setting-pi-version">
+<span id="setting-pi-version-value"></span>
+</div>
+</div>
+<div class="settings-tab" data-settings-panel="appearance">
+<div class="theme-grid" id="theme-grid"></div>
+</div>
+<div class="settings-tab" data-settings-panel="usage">
+<cost-dashboard id="settings-cost-dashboard" defer-load></cost-dashboard>
+</div>
+<div class="settings-tab" data-settings-panel="models"></div>
+</div>`,
   );
   harness.transport = makeTransportStub();
   harness.prepares = [];
@@ -221,24 +261,48 @@ test("settings button opens the panel restricted to the General tab", async () =
   harness.refreshCalls = [];
   harness.pickerCalls = [];
   document.cookie = "picot-language=en; Max-Age=600; path=/";
+  // This test asserts localized copy: feed i18n the real locale files.
+  const realFetch = globalThis.fetch.bind(globalThis);
+  vi.stubGlobal("fetch", async (input) => {
+    const match = String(input).match(/locales\/([a-z]{2})\.json/);
+    if (match) {
+      const body = readFileSync(`public/locales/${match[1]}.json`, "utf8");
+      return { ok: true, json: async () => JSON.parse(body) };
+    }
+    return realFetch(input);
+  });
   await import("./landing.js");
 
   document.getElementById("settings-btn").click();
   const panel = document.getElementById("settings-panel");
   expect(panel.classList.contains("hidden")).toBe(false);
-  // Runtime- and workspace-bound tabs stay hidden; General and Appearance show.
   const navItems = [...panel.querySelectorAll(".settings-nav-item[data-settings-tab]")];
+  const hidden = (tab) =>
+    navItems.find((item) => item.dataset.settingsTab === tab).classList.contains("hidden");
+  // Everything visible at landing works; Pi-bound tabs are hidden entirely.
+  expect(hidden("general")).toBe(false);
+  expect(hidden("appearance")).toBe(false);
+  expect(hidden("usage")).toBe(false);
+  expect(hidden("skills")).toBe(false);
+  expect(hidden("extensions")).toBe(false);
+  expect(hidden("models")).toBe(true);
+  expect(hidden("mcp")).toBe(true);
+  expect(hidden("configuration")).toBe(true);
+  // Usage activates and lazy-loads the cost dashboard element.
+  const ensureLoaded = vi.fn();
+  document.getElementById("settings-cost-dashboard").ensureLoaded = ensureLoaded;
+  navItems.find((item) => item.dataset.settingsTab === "usage").click();
   expect(
-    navItems.find((item) => item.dataset.settingsTab === "general").classList.contains("hidden"),
-  ).toBe(false);
-  expect(
-    navItems.find((item) => item.dataset.settingsTab === "appearance").classList.contains("hidden"),
-  ).toBe(false);
-  expect(
-    navItems.find((item) => item.dataset.settingsTab === "models").classList.contains("hidden"),
+    panel.querySelector('.settings-tab[data-settings-panel="usage"]').classList.contains("active"),
   ).toBe(true);
-  // Clicking the Appearance nav switches panels and renders the theme grid
-  // from the shared theme registry.
+  expect(ensureLoaded).toHaveBeenCalled();
+  // The pi-version row stays visible: its value rides a host control op.
+  expect(document.getElementById("setting-pi-version").classList.contains("hidden")).toBe(false);
+  expect(document.querySelector("#settings-close .settings-nav-back-icon svg")).not.toBeNull();
+  // The back button returns to the landing view.
+  document.getElementById("settings-close").click();
+  expect(panel.classList.contains("hidden")).toBe(true);
+  // Appearance stays fully functional.
   navItems.find((item) => item.dataset.settingsTab === "appearance").click();
   expect(
     panel

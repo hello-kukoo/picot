@@ -35,7 +35,9 @@ pub struct DiscoveredRoot {
     pub source: &'static str,
 }
 
-/// Minimal frontmatter reader: flat `key: value` lines inside a `---` block.
+/// Minimal frontmatter reader: `key: value` lines inside a `---` block,
+/// with YAML block-scalar support for `description` (`>`, `|`, and `-`/`+`
+/// chomping indicators) so multi-line skill descriptions unfold correctly.
 fn parse_frontmatter(content: &str) -> (Option<String>, Option<String>) {
     let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
     if !normalized.starts_with("---") {
@@ -47,16 +49,74 @@ fn parse_frontmatter(content: &str) -> (Option<String>, Option<String>) {
     let block = &normalized[4..3 + end];
     let mut name = None;
     let mut description = None;
-    for line in block.lines() {
+    let mut lines = block.lines().peekable();
+    while let Some(line) = lines.next() {
         let Some((key, value)) = line.split_once(':') else {
             continue;
         };
-        let value = value
-            .trim()
-            .trim_matches('"')
-            .trim_matches('\'')
-            .to_string();
-        match key.trim() {
+        let key = key.trim();
+        let trimmed = value.trim();
+        // A block scalar indicator (or an empty value) means the content is
+        // the following, more-indented lines. `|` keeps line breaks; `>`
+        // folds them into spaces; trailing `-` strips the final newline.
+        let is_block_indicator = trimmed.is_empty()
+            || trimmed
+                .chars()
+                .all(|c| c == '>' || c == '|' || c == '-' || c == '+');
+        let value = if is_block_indicator && !trimmed.starts_with('"') {
+            let folded = trimmed.starts_with('>');
+            let chomp_strip = trimmed.contains('-');
+            let base_indent = line.chars().take_while(|c| c.is_whitespace()).count();
+            let mut content_lines: Vec<String> = Vec::new();
+            while let Some(next) = lines.peek() {
+                let is_blank = next.trim().is_empty();
+                let indent = next.chars().take_while(|c| c.is_whitespace()).count();
+                if !is_blank && indent <= base_indent {
+                    break;
+                }
+                content_lines.push(next.to_string());
+                lines.next();
+            }
+            let mut text = if folded {
+                // YAML folding: single newlines become spaces; blank lines
+                // survive as paragraph breaks.
+                let mut out = String::new();
+                let mut pending_breaks = 0usize;
+                for content_line in &content_lines {
+                    if content_line.trim().is_empty() {
+                        pending_breaks += 1;
+                        continue;
+                    }
+                    if !out.is_empty() {
+                        if pending_breaks == 0 {
+                            // A single fold break joins lines with a space.
+                            out.push(' ');
+                        } else {
+                            // Blank lines survive as paragraph breaks.
+                            for _ in 0..pending_breaks {
+                                out.push('\n');
+                            }
+                        }
+                    }
+                    pending_breaks = 0;
+                    out.push_str(content_line.trim());
+                }
+                out
+            } else {
+                content_lines
+                    .iter()
+                    .map(|l| l.trim_start().to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            if !chomp_strip {
+                text.push('\n');
+            }
+            text.trim().to_string()
+        } else {
+            trimmed.trim_matches('"').trim_matches('\'').to_string()
+        };
+        match key {
             "name" => name = Some(value),
             "description" => description = Some(value),
             _ => {}
@@ -1217,6 +1277,35 @@ fn package_card(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_frontmatter_unfolds_block_scalar_descriptions() {
+        // Folded (>) with strip chomping: lines join with spaces.
+        let folded = parse_frontmatter(
+            "---\nname: tty7\ndescription: >-\n  Drive the tty7 terminal\n  workbench from the shell.\n---\nbody",
+        );
+        assert_eq!(folded.0.as_deref(), Some("tty7"));
+        assert_eq!(
+            folded.1.as_deref(),
+            Some("Drive the tty7 terminal workbench from the shell."),
+        );
+
+        // Literal (|): line breaks are kept.
+        let literal = parse_frontmatter(
+            "---\nname: humanizer-zh\ndescription: |\n  去除 AI 痕迹。\n  综合指南。\n---\nbody",
+        );
+        assert_eq!(literal.1.as_deref(), Some("去除 AI 痕迹。\n综合指南。"),);
+
+        // Flat one-line value still works (quotes stripped as before).
+        let flat = parse_frontmatter("---\nname: x\ndescription: \"one line\"\n---\nbody");
+        assert_eq!(flat.1.as_deref(), Some("one line"));
+
+        // A following non-indented key stops the block scalar.
+        let bounded = parse_frontmatter(
+            "---\nname: y\ndescription: >\n  folded text\nallowed-tools: Read\n---\nbody",
+        );
+        assert_eq!(bounded.1.as_deref(), Some("folded text"));
+    }
 
     fn write_skill(dir: &Path, name: &str, description: &str) {
         std::fs::create_dir_all(dir).unwrap();
