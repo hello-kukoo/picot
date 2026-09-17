@@ -62,6 +62,24 @@ export class DialogHandler {
     this.showDialog(dialog, timeout, id);
   }
 
+  showLocalConfirm({ title, message } = {}) {
+    this.clearCurrentDialog();
+    return new Promise((resolve) => {
+      const dialog = this._createDialog(title || t("dialogs.confirm"), message);
+      const actions = this._createActions(["no", "yes"]);
+      const finish = (confirmed) => {
+        this.clearCurrentDialog();
+        resolve(confirmed);
+      };
+      actions.querySelector(".dialog-yes").addEventListener("click", () => finish(true));
+      actions.querySelector(".dialog-no").addEventListener("click", () => finish(false));
+      dialog.appendChild(actions);
+      this.currentDialog = dialog;
+      this.container?.replaceChildren(dialog);
+      this.container?.classList.remove("hidden");
+    });
+  }
+
   showInput(request) {
     this.clearCurrentDialog();
     const { id, title, placeholder, timeout } = request;

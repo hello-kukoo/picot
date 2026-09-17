@@ -245,6 +245,24 @@
     "submit": "Submit",
     "save": "Save"
   },
+  "questionnaire": {
+    "title": "Questions",
+    "submit": "Submit answers",
+    "abandon": "Abandon",
+    "abandonConfirmTitle": "Abandon questionnaire?",
+    "abandonConfirmBody": "The agent will receive a decline. Continue?",
+    "multiSelectHint": "Select any number of options.",
+    "customAnswerPlaceholder": "Type something."
+  },
+  "todoMirror": {
+    "title": { "todos": "Todos" },
+    "showAll": "Show all {count} more",
+    "collapse": "Collapse",
+    "clear": "Clear",
+    "clearConfirmTitle": "Clear todos?",
+    "clearConfirmBody": "Ask the agent to clear the todo list?",
+    "clearPrompt": "Please clear the todo list by calling the todo tool with {\"action\":\"clear\"}."
+  },
   "extensions": {
     "loadingPackages": "Loading packages...",
     "failedToLoadPackages": "Failed to load packages",
@@ -501,7 +519,7 @@
     "renameErrorServer": "Could not rename session. Try again.",
     "renameRetry": "Retry",
     "newChat": "New chat in {path}",
-    "openProject": "Open project",
+    "openProject": "+ Add project",
     "justNow": "Just now",
     "minutesAgo": "{minutes}m ago",
     "hoursAgo": "{hours}h ago",
@@ -553,7 +571,6 @@
     "deleteDisabledActive": "Cannot delete the active session",
     "deleteDisabledStreaming": "Cannot delete a streaming session",
     "deleteDisabledRunning": "Cannot delete a running session",
-    "emptyRegistryTitle": "No projects yet",
     "emptyRegistryHint": "Add a project to see its sessions here.",
     "workspaceMissingRemoved": "Directory missing — removed from the list. Session files were kept.",
     "addProject": "Add project",
@@ -1068,13 +1085,7 @@
   },
   "migrated": {
     "native": {
-      "features": {
-        "rpivTodoMirror": {
-          "textcontent": {
-            "todos": "Todos"
-          }
-        }
-      }
+      "features": {}
     },
     "index": {
       "ariaLabel": {

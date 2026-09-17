@@ -245,6 +245,24 @@
     "submit": "送信",
     "save": "保存"
   },
+  "questionnaire": {
+    "title": "質問",
+    "submit": "回答を送信",
+    "abandon": "中止",
+    "abandonConfirmTitle": "質問を中止しますか？",
+    "abandonConfirmBody": "エージェントには拒否として送信されます。続行しますか？",
+    "multiSelectHint": "複数の選択肢を選べます。",
+    "customAnswerPlaceholder": "入力してください。"
+  },
+  "todoMirror": {
+    "title": { "todos": "Todos" },
+    "showAll": "残り {count} 件を表示",
+    "collapse": "折りたたむ",
+    "clear": "クリア",
+    "clearConfirmTitle": "Todosをクリアしますか？",
+    "clearConfirmBody": "エージェントにTodosのクリアを依頼しますか？",
+    "clearPrompt": "todoツールに {\"action\":\"clear\"} を渡してTodosをクリアしてください。"
+  },
   "extensions": {
     "loadingPackages": "パッケージを読み込み中...",
     "failedToLoadPackages": "パッケージの読み込みに失敗しました",
@@ -501,7 +519,7 @@
     "renameErrorServer": "セッション名を変更できませんでした。再試行してください。",
     "renameRetry": "再試行",
     "newChat": "{path}で新しいチャット",
-    "openProject": "プロジェクトを開く",
+    "openProject": "+ プロジェクトを追加",
     "justNow": "たった今",
     "minutesAgo": "{minutes}分前",
     "hoursAgo": "{hours}時間前",
@@ -553,7 +571,6 @@
     "deleteDisabledActive": "アクティブなセッションは削除できません",
     "deleteDisabledStreaming": "ストリーミング中のセッションは削除できません",
     "deleteDisabledRunning": "実行中のセッションは削除できません",
-    "emptyRegistryTitle": "プロジェクトはまだありません",
     "emptyRegistryHint": "プロジェクトを追加すると、ここにセッションが表示されます。",
     "workspaceMissingRemoved": "ディレクトリが見つからないため一覧から削除しました。セッションファイルは残っています。",
     "addProject": "プロジェクトを追加",
@@ -1079,13 +1096,7 @@
       }
     },
     "native": {
-      "features": {
-        "rpivTodoMirror": {
-          "textcontent": {
-            "todos": "タスク"
-          }
-        }
-      }
+      "features": {}
     },
     "ui": {
       "imageLightbox": {

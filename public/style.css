@@ -5406,6 +5406,30 @@ body.hide-thinking .thinking-block {
   cursor: not-allowed;
 }
 
+.widget-mirror-panel {
+  position: relative;
+  margin: var(--space-2) auto;
+  width: min(760px, calc(100% - var(--space-8)));
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-glass);
+  color: var(--text-primary);
+}
+.widget-mirror-panel.hidden,
+.widget-mirror-runtime-hidden {
+  display: none;
+}
+.widget-mirror-panel__title {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 650;
+}
+.widget-mirror-panel__body {
+  margin: var(--space-2) 0 0;
+  white-space: pre-wrap;
+}
+
 /* ═══════════════════════════════════════════════════════
    Dialogs — glass sheet
    ═══════════════════════════════════════════════════════ */

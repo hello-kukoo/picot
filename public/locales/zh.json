@@ -245,6 +245,24 @@
     "submit": "提交",
     "save": "保存"
   },
+  "questionnaire": {
+    "title": "问题",
+    "submit": "提交答案",
+    "abandon": "放弃",
+    "abandonConfirmTitle": "放弃问卷？",
+    "abandonConfirmBody": "代理将收到拒答。继续吗？",
+    "multiSelectHint": "可选择多个选项。",
+    "customAnswerPlaceholder": "输入其他内容。"
+  },
+  "todoMirror": {
+    "title": { "todos": "待办" },
+    "showAll": "显示其余 {count} 项",
+    "collapse": "收起",
+    "clear": "清除",
+    "clearConfirmTitle": "清除待办？",
+    "clearConfirmBody": "让代理清除待办列表？",
+    "clearPrompt": "请调用 todo 工具并传入 {\"action\":\"clear\"} 来清除待办列表。"
+  },
   "extensions": {
     "loadingPackages": "正在加载包...",
     "failedToLoadPackages": "加载包失败",
@@ -501,7 +519,7 @@
     "renameErrorServer": "无法重命名会话，请重试。",
     "renameRetry": "重试",
     "newChat": "在 {path} 中新建聊天",
-    "openProject": "打开项目",
+    "openProject": "+ 添加项目",
     "justNow": "刚刚",
     "minutesAgo": "{minutes}分钟前",
     "hoursAgo": "{hours}小时前",
@@ -553,7 +571,6 @@
     "deleteDisabledActive": "无法删除当前会话",
     "deleteDisabledStreaming": "无法删除正在流式输出的会话",
     "deleteDisabledRunning": "无法删除正在运行的会话",
-    "emptyRegistryTitle": "还没有项目",
     "emptyRegistryHint": "添加一个项目后，这里会显示它的会话。",
     "workspaceMissingRemoved": "目录不存在，已从列表移除；会话文件已保留。",
     "addProject": "添加项目",
@@ -1068,13 +1085,7 @@
   },
   "migrated": {
     "native": {
-      "features": {
-        "rpivTodoMirror": {
-          "textcontent": {
-            "todos": "待办"
-          }
-        }
-      }
+      "features": {}
     },
     "index": {
       "ariaLabel": {

@@ -1,9 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { setMessages } from "../i18n.js";
 import {
   isRpivTodoCommandNotify,
   isRpivTodoDetails,
-  isRpivTodoWidgetRequest,
   RpivTodoMirrorPanel,
   replayRpivTodoFromMessages,
 } from "./rpiv-todo-mirror.js";
@@ -12,12 +11,11 @@ describe("rpiv todo mirror", () => {
   beforeEach(() => {
     localStorage.clear();
     setMessages({
-      migrated: {
-        native: {
-          features: {
-            rpivTodoMirror: { textcontent: { todos: "Todos" } },
-          },
-        },
+      todoMirror: {
+        title: { todos: "Todos" },
+        showAll: "Show all {count} more",
+        collapse: "Collapse",
+        clear: "Clear",
       },
     });
   });
@@ -55,9 +53,7 @@ describe("rpiv todo mirror", () => {
     expect(state).toEqual({ tasks: [{ id: 1, subject: "Done", status: "completed" }], nextId: 2 });
   });
 
-  it("detects rpiv-todo extension UI requests", () => {
-    expect(isRpivTodoWidgetRequest({ method: "setWidget", widgetKey: "rpiv-todos" })).toBe(true);
-    expect(isRpivTodoWidgetRequest({ method: "setWidget", widgetKey: "other" })).toBe(false);
+  it("detects rpiv-todo command notifications", () => {
     expect(isRpivTodoCommandNotify("3/3 completed\n── Completed ──\n  ✓ #1 Done")).toBe(true);
     expect(isRpivTodoCommandNotify("regular message")).toBe(false);
   });
@@ -119,7 +115,7 @@ describe("rpiv todo mirror", () => {
     expect(element.querySelector(".rpiv-todo-panel__list").textContent).toContain("Build panel");
   });
 
-  it("clear() removes the sticky is-hover-expanded class", () => {
+  it("clear() resets expanded state", () => {
     document.body.innerHTML = '<div class="input-area"><form></form></div>';
     const panel = new RpivTodoMirrorPanel({
       container: document.querySelector(".input-area"),
@@ -130,32 +126,54 @@ describe("rpiv todo mirror", () => {
         nextId: 2,
       },
     });
-    panel.expand();
-    expect(panel.element.classList.contains("is-hover-expanded")).toBe(true);
+    panel.toggleExpanded();
+    expect(panel.element.classList.contains("is-collapsed")).toBe(false);
     panel.clear();
-    expect(panel.element.classList.contains("is-hover-expanded")).toBe(false);
+    expect(panel.element.classList.contains("is-collapsed")).toBe(true);
     expect(panel.element.classList.contains("hidden")).toBe(true);
   });
 
-  it("expand() auto-collapses after a short window", () => {
-    vi.useFakeTimers();
-    try {
-      document.body.innerHTML = '<div class="input-area"><form></form></div>';
-      const panel = new RpivTodoMirrorPanel({
-        container: document.querySelector(".input-area"),
-      });
-      panel.applyToolResult({
-        details: {
-          tasks: [{ id: 1, subject: "X", status: "pending" }],
-          nextId: 2,
-        },
-      });
-      panel.expand();
-      expect(panel.element.classList.contains("is-hover-expanded")).toBe(true);
-      vi.advanceTimersByTime(3500);
-      expect(panel.element.classList.contains("is-hover-expanded")).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
+  it("places clear beside the show-more action and hides it while collapsed", () => {
+    document.body.innerHTML = '<div class="input-area"><form></form></div>';
+    const panel = new RpivTodoMirrorPanel({
+      container: document.querySelector(".input-area"),
+      onClear: () => {},
+    });
+    panel.applyToolResult({
+      details: {
+        tasks: Array.from({ length: 6 }, (_, index) => ({
+          id: index + 1,
+          subject: `Task ${index + 1}`,
+          status: "pending",
+        })),
+        nextId: 7,
+      },
+    });
+    const element = panel.element;
+    const clear = element.querySelector(".rpiv-todo-panel__clear");
+    const more = element.querySelector(".rpiv-todo-panel__more");
+    expect(clear.parentElement).toBe(more.parentElement);
+    expect(element.classList.contains("is-collapsed")).toBe(true);
+    panel.toggleExpanded();
+    expect(element.classList.contains("is-collapsed")).toBe(false);
+    expect(clear.parentElement).toBe(more.parentElement);
+  });
+
+  it("toggleExpanded() reveals all tasks", () => {
+    document.body.innerHTML = '<div class="input-area"><form></form></div>';
+    const panel = new RpivTodoMirrorPanel({ container: document.querySelector(".input-area") });
+    panel.applyToolResult({
+      details: {
+        tasks: Array.from({ length: 6 }, (_, index) => ({
+          id: index + 1,
+          subject: `Task ${index + 1}`,
+          status: "pending",
+        })),
+        nextId: 7,
+      },
+    });
+    expect(panel.element.querySelectorAll(".rpiv-todo-panel__task")).toHaveLength(5);
+    panel.toggleExpanded();
+    expect(panel.element.querySelectorAll(".rpiv-todo-panel__task")).toHaveLength(6);
   });
 });

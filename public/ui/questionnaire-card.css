@@ -1,0 +1,146 @@
+/* ABOUTME: Styles the blocking questionnaire overlay above ordinary dialogs. */
+/* ABOUTME: Keeps all questions reviewable while preserving the app's glass-surface language. */
+
+#questionnaire-container {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  pointer-events: none;
+}
+
+.questionnaire-card-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  background: rgb(0 0 0 / 35%);
+  pointer-events: auto;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.questionnaire-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: min(760px, 100%);
+  max-height: min(88vh, 900px);
+  overflow: auto;
+  padding: var(--space-6);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-lg);
+  background: var(--bg-frosted);
+  box-shadow: var(--shadow-lg), var(--shadow-inset);
+}
+
+.questionnaire-title {
+  margin: 0;
+  font-size: var(--font-size-xl);
+}
+.questionnaire-questions {
+  display: grid;
+  gap: var(--space-5);
+}
+.questionnaire-question {
+  display: grid;
+  gap: var(--space-2);
+}
+.questionnaire-question-title,
+.questionnaire-question-label {
+  margin: 0;
+}
+.questionnaire-question-title {
+  font-size: var(--font-size-lg);
+}
+.questionnaire-question-description,
+.questionnaire-option-description,
+.questionnaire-multi-hint {
+  color: var(--text-secondary);
+}
+.questionnaire-question-description,
+.questionnaire-multi-hint {
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+.questionnaire-options {
+  display: grid;
+  gap: var(--space-2);
+}
+.questionnaire-option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-glass);
+  cursor: pointer;
+}
+.questionnaire-option:hover,
+.questionnaire-option.is-selected {
+  border-color: var(--accent);
+  background: var(--bg-glass-hover);
+}
+.questionnaire-option.is-selected {
+  border-color: var(--accent);
+  background: var(--accent-glow);
+}
+.questionnaire-option input {
+  flex: 0 0 auto;
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+.questionnaire-option-body {
+  display: grid;
+  gap: var(--space-0-5);
+  min-width: 0;
+  flex: 1 1 180px;
+}
+.questionnaire-option-label {
+  color: var(--text-primary);
+}
+.questionnaire-option-description {
+  font-size: var(--font-size-sm);
+  line-height: 1.4;
+}
+.questionnaire-preview,
+.questionnaire-option-preview {
+  padding: var(--space-3);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-glass);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+.questionnaire-option-preview {
+  flex: 1 0 100%;
+  margin-left: 22px;
+}
+.questionnaire-custom-answer {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-glass);
+  color: var(--text-primary);
+  font: inherit;
+}
+.questionnaire-custom-answer:focus {
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.questionnaire-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.questionnaire-actions button {
+  min-height: var(--control-height-md);
+  padding: 0 var(--space-4);
+}

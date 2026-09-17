@@ -137,15 +137,13 @@ import { initImageLightbox } from "./ui/image-lightbox.js";
 import { setupMessagesInsets } from "./ui/layout-insets.js";
 import { MessageRenderer } from "./ui/message-renderer.js";
 import { createProcessDetailsGroup, summarizeProcessGroup } from "./ui/process-group.js";
+import { QuestionnaireCard } from "./ui/questionnaire-card.js";
 import { setupResizablePanel } from "./ui/resizable-panel.js";
-import {
-  isRpivTodoCommandNotify,
-  isRpivTodoWidgetRequest,
-  RpivTodoMirrorPanel,
-} from "./ui/rpiv-todo-mirror.js";
+import { isRpivTodoCommandNotify, RpivTodoMirrorPanel } from "./ui/rpiv-todo-mirror.js";
 import { setupSessionSearchDialog } from "./ui/session-search-dialog.js";
 import { setupSkillSlashCommand } from "./ui/skill-slash-command.js";
 import { ToolCardRenderer } from "./ui/tool-card.js";
+import { createWidgetMirrorRegistry, runtimeIdForTarget } from "./ui/widget-mirror-registry.js";
 import { WindowCloseCoordinator } from "./window-close-coordinator.js";
 import {
   openFolderAsWorkspace,
@@ -628,6 +626,12 @@ const dialogHandler = new DialogHandler({
   notificationContainer: document.getElementById("messages"),
   send: (message) => wsClient.send(message),
 });
+const questionnaireCard = new QuestionnaireCard({
+  container: document.getElementById("questionnaire-container"),
+  send: (message) => wsClient.send(message),
+  wsClient,
+  confirmAbandon: ({ title, message }) => dialogHandler.showLocalConfirm({ title, message }),
+});
 
 function clearConversationRenderers() {
   messageRenderer.clear();
@@ -805,10 +809,33 @@ setupMessagesInsets({
   inputArea: inputAreaEl,
 });
 
-// Mirror the rpiv-todo extension's `todo` tool reducer onto a native panel
-// above the composer. The panel is empty (and display:none) when no todo
-// snapshot has been seen.
-const todoMirrorPanel = new RpivTodoMirrorPanel({ container: inputAreaEl });
+// Ambient extension widgets are mirrored into panels owned by their Pi runtime.
+const widgetMirrorRegistry = createWidgetMirrorRegistry({ container: inputAreaEl });
+widgetMirrorRegistry.registerRenderer({
+  widgetKey: "rpiv-todos",
+  toolNames: ["todo"],
+  matchesNotify: (message) => {
+    const text = String(message ?? "");
+    return isRpivTodoCommandNotify(text);
+  },
+  replay: (panel, messages) => panel.hydrateFromMessages(messages),
+  createPanel: ({ container, widgetPlacement }) =>
+    new RpivTodoMirrorPanel({ container, widgetPlacement, onClear: requestTodoClear }),
+});
+
+async function requestTodoClear() {
+  const confirmed = await dialogHandler.showLocalConfirm({
+    title: t("todoMirror.clearConfirmTitle"),
+    message: t("todoMirror.clearConfirmBody"),
+  });
+  if (!confirmed) return;
+  const command = {
+    type: "prompt",
+    message: t("todoMirror.clearPrompt"),
+  };
+  if (state?.isStreaming) command.streamingBehavior = "followUp";
+  wsClient.send(command);
+}
 
 // State tracking
 let currentStreamingElement = null;
@@ -2618,13 +2645,15 @@ function handleRPCEvent(event) {
     event?.sessionFile ||
     (eventBelongsToCurrentRuntime ? mirrorActiveSessionFile : eventTarget?.sessionId) ||
     null;
+  const eventRuntimeId = runtimeIdForTarget(eventTarget || currentTarget);
   if (!eventBelongsToCurrentRuntime) {
-    handleBackgroundRPCEvent(eventSessionFile, event);
+    handleBackgroundRPCEvent(eventSessionFile, event, eventRuntimeId);
     return;
   }
 
   // While user previews a different session, suppress live rendering so
   // history view is not overwritten by another runtime's output.
+  widgetMirrorRegistry.handleRuntimeChange(eventRuntimeId);
 
   switch (event.type) {
     case "agent_start":
@@ -2683,7 +2712,7 @@ function handleRPCEvent(event) {
       handleAutoRetryEnd(event);
       break;
     case "extension_ui_request":
-      handleExtensionUIRequest(event);
+      handleExtensionUIRequest(event, eventRuntimeId);
       break;
     case "extension_error":
       messageRenderer.renderError(t("errors.extensionError", { error: event.error }));
@@ -2706,7 +2735,7 @@ function handleSessionNameEvent(event) {
   if (activeItem) activeItem.textContent = event.name;
 }
 
-function handleBackgroundRPCEvent(sessionFile, event) {
+function handleBackgroundRPCEvent(sessionFile, event, runtimeId) {
   switch (event.type) {
     case "agent_start":
       sidebar.setStreaming(sessionFile, true);
@@ -2718,6 +2747,18 @@ function handleBackgroundRPCEvent(sessionFile, event) {
     }
     case "message_end":
       sidebar.markUnread(sessionFile);
+      break;
+    case "tool_execution_end":
+      if (!event.isError) {
+        widgetMirrorRegistry.handleToolResult(event.toolName, event.result, runtimeId);
+      }
+      break;
+    case "extension_ui_request":
+      if (event.method === "setWidget") {
+        widgetMirrorRegistry.handleWidgetRequest(event, runtimeId);
+      } else if (event.method === "notify") {
+        widgetMirrorRegistry.handleCommandNotify(event.message, runtimeId);
+      }
       break;
   }
 }
@@ -3157,6 +3198,7 @@ function handleMessageEnd(message, eventSessionFile = null, entryId = null) {
 
 function handleToolExecutionStart(event) {
   const { toolCallId, toolName, args } = event;
+  questionnaireCard.handleToolExecutionStart(event);
 
   state.addToolExecution(toolCallId, {
     toolName,
@@ -3181,6 +3223,7 @@ function handleToolExecutionUpdate(event) {
 }
 
 function handleToolExecutionEnd(event) {
+  questionnaireCard.handleToolExecutionEnd(event);
   const { toolCallId, result, isError } = event;
   const output = formatToolOutput(result);
 
@@ -3196,14 +3239,20 @@ function handleToolExecutionEnd(event) {
   // successful in-workspace writes for the turn-end file chips row (it
   // already gates on success + workspace containment).
   void filePreviewFollow.onToolEnd(event).catch(() => {});
-  // rpiv-todo emits `todo` tool results whose `details` carry the reducer
-  // snapshot. Mirror the latest snapshot onto the floating panel.
-  if (event.toolName === "todo" && !isError && result?.details) {
-    todoMirrorPanel.applyToolResult(result);
+  if (!isError) {
+    widgetMirrorRegistry.handleToolResult(
+      event.toolName,
+      result,
+      runtimeIdForTarget(event.__target || wsClient.getRuntimeTarget()),
+    );
   }
 }
 
-function handleExtensionUIRequest(event) {
+function handleExtensionUIRequest(
+  event,
+  runtimeId = runtimeIdForTarget(event?.__target || wsClient.getRuntimeTarget()),
+) {
+  if (questionnaireCard.handleExtensionUIRequest(event)) return;
   switch (event.method) {
     case "select":
       dialogHandler.showSelect(event);
@@ -3218,29 +3267,14 @@ function handleExtensionUIRequest(event) {
       dialogHandler.showEditor(event);
       break;
     case "notify":
-      // rpiv-todo's /todos command emits a centered notify transcript
-      // listing each status section. The floating panel already mirrors the
-      // same state natively, so expand it instead of rendering a duplicate
-      // toast — both would otherwise flash the same content for 5 seconds.
-      // When nothing is mirrored (the panel stays hidden, e.g. "No todos
-      // yet"), fall through and render the message so /todos is never a
-      // silent no-op.
-      if (isRpivTodoCommandNotify(event.message) && todoMirrorPanel.hasVisibleTasks) {
-        todoMirrorPanel.expand();
-        break;
-      }
+      // Suppress /todos only when the matching runtime has visible mirrored state.
+      if (widgetMirrorRegistry.handleCommandNotify(event.message, runtimeId)) break;
       dialogHandler.showNotification(event);
       break;
-    // `setStatus` and `setWidget` are informational labels/widgets Pi
-    // extensions push (e.g. plannotator progress). They have no browser-side
-    // surface, so acknowledge them silently instead of logging unknown-method
-    // warnings. The rpiv-todo
-    // extension is the exception — its `setWidget` with widgetKey="rpiv-todos"
-    // asks the host UI to surface the mirror, so expand it instead.
     case "setStatus":
       break;
     case "setWidget":
-      if (isRpivTodoWidgetRequest(event)) todoMirrorPanel.expand();
+      widgetMirrorRegistry.handleWidgetRequest(event, runtimeId);
       break;
     default:
       console.warn("[App] Unknown extension UI method:", event.method);
@@ -4564,6 +4598,7 @@ function snapshotReportedProfile(reported) {
 }
 
 async function resetUiForNewSession() {
+  questionnaireCard.handleSessionSwitch();
   pendingNewSessionPreviousFile = mirrorActiveSessionFile || sidebar.activeSessionFile || null;
   state.reset();
   clearConversationRenderers();
@@ -4698,9 +4733,10 @@ async function handleSessionSelectImpl(session, project) {
   // Drop the previous session's todo snapshot before any async work. The
   // history load below is the only path that re-hydrates the panel, and if
   // it fails or short-circuits (missing dirName/file, fetch error, no
-  // entries) we don't want the prior turn's list still pinned in the
-  // composer. clear() also drops the sticky is-hover-expanded class.
-  todoMirrorPanel.clear();
+  // entries) we don't want the prior turn's list still pinned in the composer.
+  // Clear the previous runtime's ambient panels before loading the new history.
+  widgetMirrorRegistry.handleSessionSwitch([]);
+  questionnaireCard.handleSessionSwitch();
   // Pending write-tool paths belong to the previous session's run; don't
   // let a stale toolCallId surface another session's file.
   filePreviewFollow.clear();
@@ -4855,6 +4891,14 @@ function handleMirrorSync(data) {
   // that previous session instead of the one they're now viewing.
   const receivedSessionFile = data.sessionFile || data.stats?.sessionFile || null;
   const currentTarget = wsClient.getRuntimeTarget();
+  const snapshotRuntimeId = runtimeIdForTarget(
+    currentTarget || {
+      workspaceId: data.runtimeWorkspaceId || data.workspaceId,
+      sessionId: data.runtimeSessionId || data.sessionId,
+      instanceId: data.runtimeInstanceId || data.instanceId,
+    },
+  );
+  widgetMirrorRegistry.handleRuntimeChange(snapshotRuntimeId);
   const snapshotBelongsToCurrentRuntime =
     data.runtimeWorkspaceId === currentTarget?.workspaceId &&
     data.runtimeSessionId === currentTarget?.sessionId &&
@@ -4956,6 +5000,7 @@ function handleMirrorSync(data) {
     sessionId: authoritativeSessionId,
     instanceId: data.instanceId,
   });
+  widgetMirrorRegistry.handleRuntimeChange(runtimeIdForTarget(wsClient.getRuntimeTarget()));
   // Refresh the file tree whenever the mirror-synced workspace differs from
   // the one currently shown. The select path defers its load to here (via
   // pendingWorkspace), but a workspace can also change without a deferred
@@ -5494,7 +5539,7 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
       todoEntries.push(entry.message);
     }
   }
-  todoMirrorPanel.hydrateFromMessages(todoEntries);
+  widgetMirrorRegistry.handleSessionSwitch(todoEntries);
 
   updateTokenUsage();
   fetchContextWindow();
