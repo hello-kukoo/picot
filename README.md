@@ -92,7 +92,7 @@ Provide credentials with `pi /login` inside any workspace, shell-exported provid
 - Scroll-to-bottom button with unread indicator
 - **Message queuing** — type while the agent is working; messages queue as pills and auto-send when ready
 - **Conversation turn navigator** — Codex-style dot rail beside the chat; hover a dot for a preview, click to jump to that turn
-- **Command palette** — quick access to Compact, Expand/Collapse All Tools, Settings, and Help
+- **Command palette** — quick access to Compact, Expand or Collapse All Tools, Settings, and Help
 - **Fork from any message** — branch a new session off any point in the conversation
 
 **`@` file mentions** — type `@` in any composer to search and insert a file-path reference (workspace, `../`, `~/`, or absolute):

@@ -7,3 +7,10 @@ useDefault = true
 [allowlist]
 description = "Rust build artifacts (compiled dependency metadata)"
 paths = ['''(^|/)target/''', '''\.rmeta$''']
+# Prose in docs reads like a key-value pair to gitleaks' generic-api-key rule
+# whenever it contains a keyword (e.g. "access") within ~20 chars of a comma
+# separator followed by a >=10-char value — README's "quick access to Compact,
+# Expand/Collapse All Tools" matched with secret "Expand/Collapse" and blocked
+# every turn via the turn-end secrets gate. These words never belong to a real
+# credential, so stopword them instead of excluding markdown from the lane.
+stopwords = ["Expand", "Collapse", "Compact"]
