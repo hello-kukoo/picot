@@ -34,7 +34,10 @@ vi.mock("./app/transport.js", () => ({
 vi.mock("./sidebar/index.js", () => ({
   SessionSidebar: class {
     constructor(_container, onSessionSelect, onNewChat, options) {
-      harness.sidebarInstance = {
+      // The seams live on the instance itself: landing.js holds `new
+      // SessionSidebar(...)` and calls methods on it, so a bare class with
+      // only a recorded literal would make every sidebar.* call throw.
+      Object.assign(this, {
         onSessionSelect,
         onNewChat,
         onRegisterWorkspace: options.onRegisterWorkspace,
@@ -48,7 +51,8 @@ vi.mock("./sidebar/index.js", () => ({
         render: () => {},
         refresh: () => harness.refreshCalls.push(1),
         addProjectViaPicker: () => harness.pickerCalls.push(1),
-      };
+      });
+      harness.sidebarInstance = this;
     }
   },
 }));
@@ -389,8 +393,14 @@ test("quick chat button unhides after host capabilities arrive", async () => {
   await bootLanding();
   const button = document.getElementById("quick-chat-btn");
   expect(button.classList.contains("hidden")).toBe(true);
+  expect(harness.refreshCalls).toHaveLength(0);
   harness.wsClient.dispatchEvent(new Event("hostCapabilities"));
   expect(button.classList.contains("hidden")).toBe(false);
+  // The same hello-handshake listener runs the initial sidebar registry load
+  // (the workspace shell's refreshInitialSidebar contract): without it the
+  // cookie-cached rows stay authoritative forever and their lazy session
+  // refetches carry no registryId.
+  expect(harness.refreshCalls.length).toBeGreaterThanOrEqual(1);
 });
 
 test("errors render into the landing notice, never a chat renderer", async () => {

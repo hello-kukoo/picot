@@ -127,6 +127,10 @@ function toSessionCache(s) {
 function toProjectCache(p) {
   return {
     workspaceId: typeof p.workspaceId === "string" ? p.workspaceId : null,
+    // The raw DB uuid: hydrated landing rows must refetch sessions with the
+    // host-bound id, not the `ws:` display id (which the host rejects with
+    // workspace_not_found, leaving the row visibly empty).
+    registryId: typeof p.registryId === "string" ? p.registryId : null,
     path: typeof p.path === "string" ? p.path : null,
     folderName: typeof p.folderName === "string" ? p.folderName : null,
     // Registry rows carry null until their first lazy load; keep the null so
