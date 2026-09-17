@@ -56,6 +56,8 @@ vi.mock("./sidebar/index.js", () => ({
 function makeTransportStub() {
   return {
     capabilities: { native: true },
+    mobileAccessInfo: async () => ({ enabled: false, lanUrls: [] }),
+    getPreference: async () => ({ value: true }),
     runtimeInstances: async () => ({ instances: [] }),
     prepareWorkspaceTarget: async (targetCwd, options) => {
       harness.prepares.push({ targetCwd, options });
