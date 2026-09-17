@@ -131,7 +131,7 @@ function installDom() {
       </div></div>
       <div class="landing hidden" id="landing" aria-hidden="true">
         <div class="landing-drag-strip" aria-hidden="true"></div>
-        <div class="landing-logo"><img id="landing-logo-img" alt="" /></div>
+        <svg class="pi-logo-mark" viewBox="0 0 800 800" aria-hidden="true"></svg>
         <div class="landing-name">Picot</div>
         <p class="landing-hint" data-i18n="landing.hint"></p>
         <button type="button" class="landing-btn" id="landing-add-project-btn">

@@ -132,11 +132,13 @@ corresponding v2 text where noted.
 Single centered column, vertical position slightly above center
 (`padding-bottom: 12vh`):
 
+Column order (Dr. Lin, 2026-09-17): logo → tagline → "Picot" wordmark → hint.
+
 | Element | Spec |
 | --- | --- |
-| Logo container | 112×112px, `border-radius: 28px`, `var(--bg-glass)` fill, `1px var(--border)` outline |
-| Logo glyph | 64×64px; `icons/logo.svg` (white) on dark themes, `icons/logo-dark.svg` (#09090b) on light themes |
-| App name | "Picot", 56px, weight 800, `letter-spacing: -0.02em`; brand name, never translated |
+| Logo mark | The pi.dev hero SVG verbatim (three paths, `#F09082`/`#4D9ABF`/`#F1BE58`, viewBox 0 0 800 800), rendered inline at 88×88px with **no container** (Dr. Lin, 2026-09-17); fixed colors, no light/dark swap |
+| Tagline | pi.dev hero slogan "There are many agent harnesses but this one is yours"; Plantin italic serif stack (`"Plantin MT Pro", …, Georgia, serif` — the commercial face is NOT bundled, Georgia is the fallback), `clamp(1.5rem, 4vw, 2.1rem)`, line-height 1.02, `letter-spacing: -0.015em`, `var(--text-primary)`; the word `yours` carries the pi.dev accent blue `#6a9fcc`. **Not an i18n key** — every locale shows the same English sentence (Dr. Lin, 2026-09-17) |
+| App name | "Picot", 56px, weight 800, `letter-spacing: -0.02em`; brand name, never translated; `margin-top: var(--space-3)` tight under the tagline |
 | Hint | `var(--font-size-lg)`, `var(--text-secondary)`, centered, max-width 420px; copy `landing.hint` |
 | Button | Height 40px, `padding: 0 24px`, `border-radius: var(--radius-md)`, `var(--bg-glass-hover)` fill, `1px var(--border-bright)` outline, 16px lucide `plus` icon, label `sidebar.addProject` |
 

@@ -143,33 +143,36 @@ body.landing-mode .workspace {
 body.landing-mode #landing {
   display: flex;
 }
-.landing-logo {
-  width: 112px;
-  height: 112px;
-  /* design-token-ignore: approved prototype visual spec fixes the 28px squircle radius; no theme radius token matches */
-  border-radius: 28px;
-  background: var(--bg-glass);
-  border: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+/* The pi.dev hero mark verbatim (three fixed colors, no container per Dr.
+   Lin 2026-09-17): theme-independent, so no light/dark swap is needed. */
+.pi-logo-mark {
+  width: 88px;
+  height: 88px;
 }
-.landing-logo img {
-  width: 64px;
-  height: 64px;
+/* pi.dev hero tagline: Plantin italic serif with the blue "yours" accent.
+   Plantin is a commercial Monotype face, so the stack falls back to Georgia
+   (a visually close transitional serif) instead of bundling the font. */
+.landing-slogan {
+  margin: var(--space-5) 0 0;
+  max-width: 31rem;
+  font-family: "Plantin MT Pro", "Plantin MT Std", Plantin, Georgia, serif;
+  font-style: italic;
+  font-weight: 400;
+  font-size: clamp(1.5rem, 4vw, 2.1rem);
+  line-height: 1.02;
+  letter-spacing: -0.015em;
+  color: var(--text-primary);
+  text-align: center;
 }
-/* White glyph on dark themes, near-black glyph on light themes; CSS-only so
-   a theme switch redraws the landing logo with no JS. */
-#landing-logo-img {
-  content: url("icons/logo-dark.svg");
+.landing-slogan-line {
+  display: block;
 }
-:root[data-theme="night"] #landing-logo-img,
-:root[data-theme="midnight"] #landing-logo-img,
-:root[data-theme="dawn"] #landing-logo-img {
-  content: url("icons/logo.svg");
+.landing-slogan-accent {
+  color: #6a9fcc;
 }
 .landing-name {
-  margin-top: var(--space-6);
+  /* Tight pairing under the tagline above it (logo → slogan → wordmark). */
+  margin-top: var(--space-3);
   /* design-token-ignore: approved prototype visual spec fixes the 56px brand wordmark; largest theme token is 24px */
   font-size: 56px;
   font-weight: 800;
