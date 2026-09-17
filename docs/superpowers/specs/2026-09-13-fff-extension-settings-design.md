@@ -3,7 +3,9 @@
 **Status:** Approved by Dr. Lin on 2026-09-13 (grilling sessions, Q1 +
 amendment session same day); revised same day after spec review (injection
 amendment superseded by file-only config; set op partial-key contract;
-exact env-var table; minimal-file reset; 0600 parity).
+exact env-var table; minimal-file reset; 0600 parity). Implemented
+2026-09-15 on the bridge; migrated same day to host ops per Dr. Lin's
+decision (landing configurability); spec tracks code.
 **Date:** 2026-09-13
 
 ## Goal
@@ -68,19 +70,41 @@ this table, never from a `PI_FFF_*` naming assumption.
 
 ## Contract
 
-### Bridge ops — added to `extensions/extension-settings.ts`
+### Host ops — `src-tauri/src/fff_config.rs`, control-plane cases in `main.rs`
 
-- `fff.config.get` → `{ values, envShadowed: string[] (field names), invalid?: { reason } }`.
-  Effective chain per field: flag (Picot never sets one; surface as
-  shadowed if present) > `process.env` > file > schema default.
-- `fff.config.set` → takes a **single changed key** (save-on-change: one
+Control ops (`transport.getFffConfig()` → `get_fff_config`,
+`transport.setFffConfig(payload)` → `set_fff_config`), gated by the
+same `require_native_owner` Desktop+owner check as the pi-package ops —
+landing owners included, so fff is configurable **before** any workspace
+is opened (advisor cannot: its model catalog needs the bridge's
+in-process modelRegistry).
+
+- `get_fff_config` → `{ values, envShadowed: string[] (field names),
+  flagShadowed: string[], shadowNames: Record<field, name>,
+  invalid?: { reason } }`. Effective chain per field: env > file > schema
+  default. Env is read from the **host process** — accurate for the
+  embedded Pi because the child inherits the host env and
+  `launch.environment` never sets `FFF_*`/`PI_FFF_*`. **Flag detection is
+  dropped host-side**: the host constructs the embedded Pi's argv and
+  never adds `--fff-*`, while a terminal `pi`'s flags are per-instance
+  and unobservable from the host; `flagShadowed` stays in the payload as
+  an always-empty array so the renderer shape is stable.
+  `shadowNames` quotes the exact var string from the table so the
+  renderer's badge never assumes a `PI_FFF_*` pattern; env values that
+  fail pi-fff's parse (booleans accept only 1/true/0/false) are not
+  shadows — they fall through, matching `getConfigValue`.
+- `set_fff_config` → takes a **single changed key** (save-on-change: one
   control, one call) — never a full-form serialization, so an untouched
-  default can never solidify into an explicit file key. Validates
-  against the schema rules (enum, types, `additionalProperties: false` —
-  unknown keys are *dropped*, the opposite of advisor's
-  preserve-unknowns), read-modify-write, atomic write, `0600` (mirrors
-  `advisor.config.set`), preserve `$schema` (write it on create). Only
-  known keys are ever written.
+  default can never solidify into an explicit file key. The file is
+  re-read leniently (JSON parse only) and rebuilt schema-clean: only
+  known keys with valid values carry over, so unknown or wrong-typed
+  junk is dropped (the opposite of advisor's preserve-unknowns) and
+  Picot can never write an invalid file; a JSON-parse-broken file is
+  never silently overwritten — the explicit reset is the destructive
+  path. Writes go through `host_config::write_json` (proper-lockfile +
+  tmp+rename + `0600`, 2-space pretty), preserve `$schema` (write it on
+  create). `reset: true` on the same op writes the minimal `$schema`-only
+  file — reset means full defaults, no third op.
 - Path fields: empty input clears the key (fall back to fff-managed
   default); no existence validation — fff tolerates its own paths.
 
@@ -102,8 +126,11 @@ this table, never from a `PI_FFF_*` naming assumption.
 
 ### Renderer — entry in `public/settings/package-extension-settings.js`
 
-- Registered under `@ff-labs/pi-fff`.
-- Flat: mode segmented control, 4 toggles (existing `toggles.js`).
+- Registered under `@ff-labs/pi-fff`; depends on **transport only**
+  (host control ops), so the section renders in the landing settings as
+  well. Advisor's entry stays gateway-gated and landing-hidden.
+- Flat: mode segmented control, 4 toggles (extensions-page switch
+  pattern).
 -「高级」disclosure: the two path text inputs.
 - Save on change with the standard save-status indicator.
 - Shadowed field → control disabled + badge with the env var name.
@@ -123,17 +150,22 @@ invalid-config error.
 
 ## Verification
 
-- Op tests: missing file → defaults + no shadow; env shadowing computed
-  per field with the exact var names from the table; flag shadow
-  surfaced when present; malformed file → invalid reason; set validates
-  and drops unknown keys; partial set (toggle a boolean on a file
-  without `mode` → the saved file still has no `mode` key); `$schema`
-  preserved/created; atomic write with `0600`.
-- Renderer tests: layout groups, shadowed-control disabling with the
-  exact env-var badge, invalid-state reset button writes the
-  `$schema`-only file, restart hint presence.
-- `bun run check`, focused vitest, then `bun run test`.
-- `ARCHITECTURE.md`: extend the extension-settings ops line with fff.
+- Rust inline tests (`fff_config.rs`): missing file → defaults + no
+  shadow; env shadowing computed per field with the exact var names from
+  the table (garbage env is not a shadow); malformed/schema-invalid
+  files → fff's failure reasons; set drops unknown keys, never
+  solidifies untouched defaults, preserves/creates `$schema`; null/empty
+  path clears; enum/type validation; parse-broken file demands reset;
+  reset writes the `$schema`-only file; writes are 2-space pretty with
+  `0600`.
+- Renderer tests: transport-only mount (landing scenario), layout
+  groups, shadowed-control disabling with the exact env-var badge,
+  invalid-state two-click reset writes the `$schema`-only file and
+  rebuilds, restart hint presence, failed save/load surfaces errors.
+- `bun run check`, `bun run check:rust`, focused vitest, then
+  `bun run test`.
+- `ARCHITECTURE.md`: fff ops described on the host control plane
+  (moved out of the bridge paragraph).
 
 ## Out of scope
 

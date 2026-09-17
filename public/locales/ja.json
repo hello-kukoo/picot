@@ -623,6 +623,46 @@
     "title": "設定",
     "general": "一般",
     "extensions": "拡張機能",
+    "extensionAdvisor": {
+      "title": "Advisor",
+      "modelLabel": "レビューモデル",
+      "effortLabel": "推論強度",
+      "off": "Advisor を無効化",
+      "effortOff": "off（reasoning を送信しない）",
+      "hint": "変更は新しいセッションで有効になります",
+      "effortReset": "保存された推論強度はこのモデルでサポートされていないため、off に戻しました",
+      "saved": "保存しました。",
+      "saveFailed": "保存に失敗しました：{message}"
+    },
+    "extensionFff": {
+      "title": "pi-fff",
+      "hint": "Picot の再起動後に有効になります",
+      "modeLabel": "モード",
+      "mode": {
+        "tools-and-ui": "ツール + UI",
+        "tools-only": "ツールのみ",
+        "override": "オーバーライド"
+      },
+      "modeDesc": {
+        "tools-and-ui": "fffind / ffgrep / fff-multi-grep ツールと FFF による @ 補完を追加",
+        "tools-only": "ツールのみ追加し、pi 標準の @ 補完を維持",
+        "override": "pi 内蔵の find / grep を置き換え、multi-grep と FFF 補完を追加"
+      },
+      "enableFsRootScanning": "ファイルシステムルートのスキャン",
+      "enableHomeDirScanning": "ホームディレクトリのスキャン",
+      "warnOnHomeDirScan": "ホームスキャン時に警告",
+      "followSymlinks": "シンボリックリンクを辿る",
+      "advanced": "詳細",
+      "frecencyDbPath": "frecency DB パス",
+      "historyDbPath": "履歴 DB パス",
+      "dbManaged": "（fff 管理）",
+      "shadowBadge": "{name} で上書き",
+      "invalidConfig": "pi-fff.json が無効なため拡張機能を読み込めません：",
+      "reset": "デフォルトに戻す",
+      "resetConfirm": "もう一度クリックして確定",
+      "saved": "保存しました。",
+      "saveFailed": "保存に失敗しました：{message}"
+    },
     "mcp": {
       "title": "MCP",
       "groups": {

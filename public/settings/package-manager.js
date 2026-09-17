@@ -1,6 +1,8 @@
 // ABOUTME: Renders the Settings > Extensions Installed package manager.
 // ABOUTME: Keeps package selection, scope grouping, resource details, and native mutations isolated.
 
+import { renderExtensionSettings } from "./package-extension-settings.js";
+
 const RESOURCE_GROUPS = [
   ["extensions", "extensions"],
   ["skills", "skills"],
@@ -72,6 +74,7 @@ export function setupPackageManager({
   getSessionId,
   onRestarted,
   onUpdatesChecked,
+  configGateway = null,
 }) {
   const groupsEl = root.getElementById("pkg-manager-groups");
   if (!groupsEl) return { load: async () => {} };
@@ -339,6 +342,7 @@ export function setupPackageManager({
       }
     }
     detailEl.appendChild(resources);
+    renderExtensionSettings(detailEl, pkg, { configGateway, transport });
   }
 
   function addStatus(parent, label, value, { wrap = false } = {}) {

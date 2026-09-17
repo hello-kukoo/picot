@@ -112,6 +112,17 @@ export class WsTransport {
     );
   }
 
+  // pi-fff config lives on the host control plane (works on the landing page,
+  // no Pi process needed) — unlike advisor settings which need the bridge's
+  // in-process model registry.
+  getFffConfig() {
+    return this._control("get_fff_config", {});
+  }
+
+  setFffConfig(payload) {
+    return this._control("set_fff_config", payload);
+  }
+
   restartRuntime(workspaceId, sessionId) {
     return this._control(
       "restart_runtime",

@@ -623,6 +623,46 @@
     "title": "Settings",
     "general": "General",
     "extensions": "Extensions",
+    "extensionAdvisor": {
+      "title": "Advisor",
+      "modelLabel": "Reviewer model",
+      "effortLabel": "Reasoning effort",
+      "off": "Disable Advisor",
+      "effortOff": "off (no reasoning sent)",
+      "hint": "Changes take effect in new sessions",
+      "effortReset": "Stored effort is not supported by this model — reset to off",
+      "saved": "Saved.",
+      "saveFailed": "Save failed: {message}"
+    },
+    "extensionFff": {
+      "title": "pi-fff",
+      "hint": "Changes take effect after restarting Picot",
+      "modeLabel": "Mode",
+      "mode": {
+        "tools-and-ui": "Tools & UI",
+        "tools-only": "Tools only",
+        "override": "Override"
+      },
+      "modeDesc": {
+        "tools-and-ui": "Adds fffind / ffgrep / fff-multi-grep tools and FFF-backed @ autocomplete",
+        "tools-only": "Adds the tools; keeps pi's default @ autocomplete",
+        "override": "Replaces pi's built-in find / grep and adds multi-grep + FFF autocomplete"
+      },
+      "enableFsRootScanning": "Filesystem root scanning",
+      "enableHomeDirScanning": "Home directory scanning",
+      "warnOnHomeDirScan": "Warn when scanning home",
+      "followSymlinks": "Follow symlinks",
+      "advanced": "Advanced",
+      "frecencyDbPath": "Frecency database path",
+      "historyDbPath": "History database path",
+      "dbManaged": "(fff-managed)",
+      "shadowBadge": "overridden by {name}",
+      "invalidConfig": "pi-fff.json is invalid — the extension cannot load:",
+      "reset": "Reset to defaults",
+      "resetConfirm": "Click again to confirm",
+      "saved": "Saved.",
+      "saveFailed": "Save failed: {message}"
+    },
     "mcp": {
       "title": "MCP",
       "groups": {

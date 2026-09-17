@@ -4,6 +4,7 @@
 
 // Host runtime modules are compiled into one native transport path.
 // Retired compatibility handlers remain explicit and fail closed where needed.
+mod fff_config;
 mod host_capability;
 #[allow(dead_code)]
 mod host_config;
@@ -2491,6 +2492,16 @@ fn install_control_handler(
                         )?;
                         // Legacy model cache retired: models load per runtime via v2.
                         Ok(serde_json::json!({ "changed": changed }))
+                    }
+                    "get_fff_config" => {
+                        // Global pi-fff.json is workspace-independent; landing
+                        // owners configure it too (host op, not bridge).
+                        require_native_owner(&ctx)?;
+                        Ok(fff_config::get_config())
+                    }
+                    "set_fff_config" => {
+                        require_native_owner(&ctx)?;
+                        fff_config::set_config(&args)
                     }
                     "restart_runtime" => {
                         require_native_owner(&ctx)?;

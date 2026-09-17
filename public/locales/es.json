@@ -623,6 +623,46 @@
     "title": "Ajustes",
     "general": "General",
     "extensions": "Extensiones",
+    "extensionAdvisor": {
+      "title": "Advisor",
+      "modelLabel": "Modelo revisor",
+      "effortLabel": "Esfuerzo de razonamiento",
+      "off": "Desactivar Advisor",
+      "effortOff": "off (sin razonamiento)",
+      "hint": "Los cambios surten efecto en nuevas sesiones",
+      "effortReset": "El esfuerzo guardado no es compatible con este modelo; se restableció a off",
+      "saved": "Guardado.",
+      "saveFailed": "Error al guardar: {message}"
+    },
+    "extensionFff": {
+      "title": "pi-fff",
+      "hint": "Los cambios surten efecto tras reiniciar Picot",
+      "modeLabel": "Modo",
+      "mode": {
+        "tools-and-ui": "Herramientas e interfaz",
+        "tools-only": "Solo herramientas",
+        "override": "Reemplazar"
+      },
+      "modeDesc": {
+        "tools-and-ui": "Añade las herramientas fffind / ffgrep / fff-multi-grep y el autocompletado @ de FFF",
+        "tools-only": "Solo añade las herramientas; mantiene el autocompletado @ de pi",
+        "override": "Reemplaza find / grep integrados de pi y añade multi-grep y el autocompletado de FFF"
+      },
+      "enableFsRootScanning": "Escaneo de la raíz del sistema de archivos",
+      "enableHomeDirScanning": "Escaneo del directorio principal",
+      "warnOnHomeDirScan": "Avisar al escanear el directorio principal",
+      "followSymlinks": "Seguir enlaces simbólicos",
+      "advanced": "Avanzado",
+      "frecencyDbPath": "Ruta de la base de datos de frecuencia",
+      "historyDbPath": "Ruta de la base de datos de historial",
+      "dbManaged": "(gestionado por fff)",
+      "shadowBadge": "anulado por {name}",
+      "invalidConfig": "pi-fff.json no es válido; la extensión no puede cargarse:",
+      "reset": "Restablecer valores",
+      "resetConfirm": "Haz clic de nuevo para confirmar",
+      "saved": "Guardado.",
+      "saveFailed": "Error al guardar: {message}"
+    },
     "mcp": {
       "title": "MCP",
       "groups": {

@@ -623,6 +623,46 @@
     "title": "设置",
     "general": "通用",
     "extensions": "扩展",
+    "extensionAdvisor": {
+      "title": "Advisor",
+      "modelLabel": "审阅模型",
+      "effortLabel": "推理强度",
+      "off": "关闭 Advisor",
+      "effortOff": "off（不发送 reasoning）",
+      "hint": "更改将在新会话生效",
+      "effortReset": "已保存的推理强度不被该模型支持，已重置为 off",
+      "saved": "已保存。",
+      "saveFailed": "保存失败：{message}"
+    },
+    "extensionFff": {
+      "title": "pi-fff",
+      "hint": "重启 Picot 后生效",
+      "modeLabel": "模式",
+      "mode": {
+        "tools-and-ui": "工具 + 界面",
+        "tools-only": "仅工具",
+        "override": "覆盖内置"
+      },
+      "modeDesc": {
+        "tools-and-ui": "追加 fffind / ffgrep / fff-multi-grep 工具与 FFF 的 @ 自动补全",
+        "tools-only": "仅追加工具，保留 pi 默认 @ 自动补全",
+        "override": "替换 pi 内置 find / grep，追加 multi-grep 与 FFF 自动补全"
+      },
+      "enableFsRootScanning": "文件系统根目录扫描",
+      "enableHomeDirScanning": "主目录扫描",
+      "warnOnHomeDirScan": "扫描主目录时提醒",
+      "followSymlinks": "跟随符号链接",
+      "advanced": "高级",
+      "frecencyDbPath": "frecency 数据库路径",
+      "historyDbPath": "历史数据库路径",
+      "dbManaged": "（由 fff 管理）",
+      "shadowBadge": "被 {name} 覆盖",
+      "invalidConfig": "pi-fff.json 无效——扩展无法加载：",
+      "reset": "重置为默认",
+      "resetConfirm": "再次点击确认重置",
+      "saved": "已保存。",
+      "saveFailed": "保存失败：{message}"
+    },
     "mcp": {
       "title": "MCP",
       "groups": {

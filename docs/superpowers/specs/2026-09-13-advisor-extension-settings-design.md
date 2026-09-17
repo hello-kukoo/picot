@@ -2,7 +2,7 @@
 
 **Status:** Approved by Dr. Lin on 2026-09-13 (grilling session, Q1–Q3);
 revised same day after spec review (i18n namespace, cross-spec parity
-with the fff spec).
+with the fff spec). Implemented 2026-09-15; spec tracks code.
 **Date:** 2026-09-13
 
 ## Goal
@@ -55,13 +55,22 @@ effort).
 
 ### Bridge op module — `extensions/extension-settings.ts`
 
-- `advisor.config.get` → `{ modelKey?: string, effort?: string }` resolved
-  through the same XDG path logic; missing file = off state.
+- `advisor.config.get` → `{ modelKey?: string, effort?: string, models }`
+  resolved through the same `~/.config/rpiv-advisor/advisor.json` path
+  (rpiv-config `configPath`); missing file = off state. `models` rides in
+  the same response (one round trip for the renderer): each
+  `{ key, name, levels, available }` where `levels` is
+  `getSupportedThinkingLevels` ∩ the GradedEffort ordinal — the same
+  intersection the TUI's `buildEffortItems` computes, so the GUI can
+  never offer an effort the advisor would refuse to rank.
 - `advisor.config.set` → read-modify-write preserving unknown keys
   (`guidance`, `disabledForModels`), atomic write (tmp+rename — stricter
   than `saveJsonConfig`'s plain `writeFileSync`), best-effort `0600`
-  (same best-effort posture as `saveJsonConfig`). Returns the saved
-  config; write failure surfaces to the UI without mutating state shown.
+  (same best-effort posture as `saveJsonConfig`). Takes `modelKey` and
+  `effort`, each absent = leave unchanged, null/"" = clear; the whole
+  visible state is sent on every save-on-change so an illegal
+  model+effort pair can never be persisted. Returns the saved config;
+  write failure surfaces to the UI without mutating state shown.
 - Model catalog + per-model supported levels reuse in-process
   `modelRegistry` / `pi-ai` (bridge lives in the Pi process).
 - Registered in `picot-bridge.ts` operations; WebView talks through the

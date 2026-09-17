@@ -6527,6 +6527,7 @@ packageManager = setupPackageManager({
   getSessionId: () => mirrorActiveSessionFile || sidebar.activeSessionFile || wsClient.sessionId,
   onRestarted: () => wsClient.forceReconnect(),
   onUpdatesChecked: (count) => extensionUpdateIndicator.setCount(count),
+  configGateway,
 });
 const extensionUpdateIndicator = setupExtensionUpdateIndicator({
   transport,

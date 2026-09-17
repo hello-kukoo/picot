@@ -28,6 +28,7 @@ import {
   resolveProviderId,
   testProviderConnectivity,
 } from "./custom-provider-probe";
+import { advisorConfigGet, advisorConfigSet } from "./extension-settings";
 import { deleteMcpServer, listMcpServers, saveMcpServer, toggleMcpServer } from "./mcp-settings";
 import {
   createOAuthLoginOperationManager,
@@ -1310,6 +1311,12 @@ export async function handlePicotConfig(
 
       case "mcp_toggle_server":
         return { ok: true, data: toggleMcpServer(params, PI_AGENT_ROOT, mcpCwd(ctx)) };
+
+      case "advisor.config.get":
+        return { ok: true, data: await advisorConfigGet(requireRegistry()) };
+
+      case "advisor.config.set":
+        return { ok: true, data: advisorConfigSet(params) };
 
       case "set_default_auto_compaction":
         return {
