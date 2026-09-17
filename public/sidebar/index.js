@@ -62,6 +62,9 @@ export class SessionSidebar {
     this.projectSessionInitialLimit = 5;
     this.projectSessionStep = 10;
     this.container = container;
+    // Provisional-row retirement happens at the app-level selection choke
+    // point (app.js handleSessionSelect) so the Focus sidebar — which wires
+    // its own onSessionSelect — shares the same behavior.
     this.onSessionSelect = onSessionSelect;
     this.onNewChat = onNewChat;
     this.onOpenProject = options.onOpenProject || null;
@@ -689,6 +692,20 @@ export class SessionSidebar {
     project.sessions = [pending, ...sessions.filter((session) => !session?.provisional)];
     if (typeof project.sessionCount === "number") {
       project.sessionCount = Math.max(project.sessionCount, project.sessions.length);
+    }
+  }
+
+  /** Drop the provisional row and its pending state: the unpersisted
+   * session was abandoned by selecting another session. */
+  retireProvisionalSession() {
+    const pending = this.provisionalSession;
+    if (!pending) return;
+    this.provisionalSession = null;
+    for (const project of this.projects) {
+      if (!Array.isArray(project?.sessions)) continue;
+      project.sessions = project.sessions.filter(
+        (session) => session?.filePath !== pending.filePath,
+      );
     }
   }
 
@@ -1814,10 +1831,13 @@ export class SessionSidebar {
 
     this.renderPinnedSection();
 
+    const projectRows = this.projects.filter(
+      (project) => project.source !== "registry" || !project.pinned,
+    );
     const { section: projectsSection, sessionsContainer: projectsGroup } = buildSidebarSection({
       region: "projects",
       titleKey: "sidebar.projects",
-      count: this.projects.length,
+      count: projectRows.length,
       expanded: !this.projectsCollapsed,
       onToggle: (expanded) => {
         this.projectsCollapsed = !expanded;
@@ -1825,7 +1845,7 @@ export class SessionSidebar {
     });
     projectsSection.className = `projects-group ${projectsSection.className}`;
     const seenRowKeys = new Set();
-    for (const project of this.projects) {
+    for (const project of projectRows) {
       seenRowKeys.add(project.workspaceId);
       const { group } = this.projectRowNode(project);
       projectsGroup.appendChild(group);
@@ -1855,10 +1875,6 @@ export class SessionSidebar {
   renderEmptyState({ append = false } = {}) {
     const empty = document.createElement("div");
     empty.className = "session-empty-state";
-    const title = document.createElement("div");
-    title.className = "session-empty-title";
-    title.textContent = t("sidebar.emptyRegistryTitle");
-    empty.appendChild(title);
     const hint = document.createElement("div");
     hint.className = "session-empty-hint";
     hint.textContent = t("sidebar.emptyRegistryHint");
@@ -1866,9 +1882,10 @@ export class SessionSidebar {
     const openButton = document.createElement("button");
     openButton.type = "button";
     openButton.className = "session-empty-open-project";
-    openButton.title = t("sidebar.openProject");
-    openButton.setAttribute("aria-label", t("sidebar.openProject"));
-    openButton.textContent = t("sidebar.openProject");
+    const addProjectLabel = t("sidebar.addProject");
+    openButton.title = addProjectLabel;
+    openButton.setAttribute("aria-label", addProjectLabel);
+    openButton.textContent = `+${addProjectLabel}`;
     openButton.addEventListener("click", () => this.onOpenProject?.());
     empty.appendChild(openButton);
     if (append) this.container.appendChild(empty);

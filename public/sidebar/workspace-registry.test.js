@@ -97,7 +97,6 @@ async function makeSidebar({
           sidebar: {
             workspaceMissingRemoved:
               "Directory missing — removed from the list. Session files were kept.",
-            emptyRegistryTitle: "No projects yet",
             emptyRegistryHint: "Add a project to see its sessions here.",
             sessionCountPending: "Session count will be calculated after opening this workspace.",
             alreadyRegistered: "This project is already in the list.",
@@ -686,6 +685,47 @@ describe("registry cache invalidation wiring", () => {
       provisional: true,
     });
     expect(alpha.sessionCount).toBeNull();
+  });
+
+  test("selecting another session retires the unpersisted provisional row", async () => {
+    const { sidebar } = await makeSidebar({
+      rows: REGISTRY_ROWS,
+      fetchRoutes: {
+        instances: [],
+        workspaceSessions: (url) =>
+          url.searchParams.get("path") === "/work/alpha"
+            ? { sessions: [{ filePath: "/sessions/a.jsonl", name: "A" }] }
+            : { sessions: [] },
+      },
+    });
+    await sidebar.loadSessions();
+    const alpha = sidebar.projects.find((project) => project.workspaceId === "ws:uuid-1");
+    await sidebar.setWorkspaceExpanded(alpha, true);
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-file-path="/sessions/a.jsonl"]')).not.toBeNull();
+    });
+
+    sidebar.setProvisionalSession({ workspaceId: "uuid-1", sessionId: "native-session-new" });
+    expect(
+      document.querySelector('.session-item[data-file-path="native-session-new"]'),
+    ).not.toBeNull();
+
+    // Selecting another session in the same workspace abandons the empty
+    // new chat. app.js handleSessionSelect performs this retirement at the
+    // choke point both sidebars share; this drives that exact sequence.
+    sidebar.retireProvisionalSession();
+    sidebar.setActive("/sessions/a.jsonl");
+
+    expect(sidebar.provisionalSession).toBeNull();
+    expect(document.querySelector('.session-item[data-file-path="native-session-new"]')).toBeNull();
+    expect(
+      document.querySelector('[data-file-path="/sessions/a.jsonl"]').classList.contains("active"),
+    ).toBe(true);
+
+    // Later refreshes must not resurrect the abandoned row.
+    await sidebar.refresh({ workspacePath: "/work/alpha" });
+    await settleFetches();
+    expect(document.querySelector('.session-item[data-file-path="native-session-new"]')).toBeNull();
   });
 
   test("coalesced refresh preserves in-flight session-list generation", async () => {

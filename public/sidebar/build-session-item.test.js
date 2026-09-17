@@ -104,6 +104,21 @@ describe("buildSessionItem state and safety", () => {
     expect(item.classList.contains("streaming")).toBe(true);
   });
 
+  test("keeps the tree prefix in the title row", () => {
+    const item = buildSessionItem({
+      session: makeSession({ name: "[worker] Implement questionnaire renderer" }),
+      treeDepth: 1,
+      treeIsLast: false,
+      treeAncestorChain: { parent: null, continues: false },
+    });
+    const titleRow = item.querySelector(".session-title-row");
+    expect(item.querySelector(":scope > .session-tree-prefix")).toBeNull();
+    expect(titleRow.querySelector(".session-tree-prefix").textContent).toBe("   ├─ ");
+    expect(titleRow.querySelector(".session-title").textContent).toBe(
+      "[worker] Implement questionnaire renderer",
+    );
+  });
+
   test("title is rendered via textContent, never as HTML", () => {
     const item = buildSessionItem({
       session: makeSession({ name: "<img src=x onerror=alert(1)>" }),

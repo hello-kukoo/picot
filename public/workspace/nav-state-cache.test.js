@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { buildFlattenedSessionTree } from "../sidebar/session-tree-model.js";
 import {
   cacheSidebarProjects,
   consumeNavState,
@@ -27,9 +28,11 @@ const sampleProjects = [
     sessions: [
       {
         filePath: "/s1.jsonl",
+        parentSession: "/parent.jsonl",
         name: "Session 1",
         firstMessage: "hello",
         timestamp: 123,
+        mtime: 456,
         ctime: 100,
         tmux: false,
       },
@@ -120,6 +123,46 @@ describe("nav-state-cache", () => {
       expect(cached[0].sessions[0].name).toBe("Session 1");
       expect(cached[0].sessions[0].firstMessage).toBe("hello");
       expect(cached[0].sessions[0].filePath).toBe("/s1.jsonl");
+      expect(cached[0].sessions[0].mtime).toBe(456);
+      expect(cached[0].sessions[0].parentSession).toBe("/parent.jsonl");
+    });
+
+    it("preserves mtime for recent-first ordering after cache restore", () => {
+      const sessions = [
+        {
+          filePath: "/old.jsonl",
+          timestamp: "2026-01-02T00:00:00.000Z",
+          mtime: Date.parse("2026-01-01T00:00:00.000Z"),
+        },
+        {
+          filePath: "/recent.jsonl",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          mtime: Date.parse("2026-01-03T00:00:00.000Z"),
+        },
+      ];
+      cacheSidebarProjects([{ ...sampleProjects[0], sessions }]);
+
+      const cached = readCachedSidebarProjects();
+      const rows = buildFlattenedSessionTree(cached[0].sessions);
+
+      expect(rows.map((row) => row.session.filePath)).toEqual(["/recent.jsonl", "/old.jsonl"]);
+    });
+
+    it("falls back to session timestamp when cached mtime is unavailable", () => {
+      cacheSidebarProjects([
+        {
+          ...sampleProjects[0],
+          sessions: [
+            { filePath: "/old.jsonl", timestamp: "2026-01-01T00:00:00.000Z" },
+            { filePath: "/recent.jsonl", timestamp: "2026-01-02T00:00:00.000Z" },
+          ],
+        },
+      ]);
+
+      const cached = readCachedSidebarProjects();
+      const rows = buildFlattenedSessionTree(cached[0].sessions);
+
+      expect(rows.map((row) => row.session.filePath)).toEqual(["/recent.jsonl", "/old.jsonl"]);
     });
 
     it("drops sessions without a filePath and incomplete projects", () => {

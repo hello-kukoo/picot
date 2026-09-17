@@ -4,7 +4,10 @@ const DEFAULT_SETTLE_PASSES = 2;
 export function anchorHistoryToBottom(
   messagesEl,
   {
-    requestAnimationFrame = window.requestAnimationFrame.bind(window),
+    requestAnimationFrame = typeof window !== "undefined" &&
+    typeof window.requestAnimationFrame === "function"
+      ? window.requestAnimationFrame.bind(window)
+      : (callback) => setTimeout(callback, 0),
     setTimeout = window.setTimeout.bind(window),
     settleDelayMs = DEFAULT_SETTLE_DELAY_MS,
     settlePasses = DEFAULT_SETTLE_PASSES,

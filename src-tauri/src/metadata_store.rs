@@ -45,16 +45,6 @@ pub struct RemovedWorkspace {
     pub canonical_path: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SessionSidebarVisibilityRow {
-    pub session_file: String,
-    pub bucket_name: String,
-    pub modified_at_ms: i64,
-    pub size_bytes: i64,
-    pub is_subagent: bool,
-    pub is_sidebar_visible: bool,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum AddWorkspaceError {
     PathNotFound(String),
@@ -237,7 +227,7 @@ impl MetadataStore {
         // exist at every accepted schema level.
         if current >= WRITTEN_SCHEMA_VERSION {
             self.ensure_workspace_session_bucket_column()?;
-            self.ensure_session_sidebar_visibility_table()?;
+            self.drop_session_sidebar_visibility_table()?;
             return Ok(());
         }
 
@@ -319,7 +309,7 @@ impl MetadataStore {
         transaction
             .commit()
             .map_err(|error| format!("Cannot commit Picot metadata migration: {error}"))?;
-        self.ensure_session_sidebar_visibility_table()
+        self.drop_session_sidebar_visibility_table()
     }
 
     fn ensure_workspace_session_bucket_column(&self) -> Result<(), String> {
@@ -346,112 +336,14 @@ impl MetadataStore {
         Ok(())
     }
 
-    fn ensure_session_sidebar_visibility_table(&self) -> Result<(), String> {
+    /// The session sidebar visibility cache table is deprecated (Dr. Lin,
+    /// 2026-09-17): sidebar classification is a live scan of the session
+    /// files, so the historical cache is dropped once at every open —
+    /// idempotent, and no code path recreates it.
+    fn drop_session_sidebar_visibility_table(&self) -> Result<(), String> {
         self.connection
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS session_sidebar_visibility (
-                    session_file TEXT PRIMARY KEY,
-                    bucket_name TEXT NOT NULL,
-                    modified_at_ms INTEGER NOT NULL,
-                    size_bytes INTEGER NOT NULL,
-                    is_subagent INTEGER NOT NULL CHECK (is_subagent IN (0, 1)),
-                    is_sidebar_visible INTEGER NOT NULL CHECK (is_sidebar_visible IN (0, 1))
-                );
-                CREATE INDEX IF NOT EXISTS idx_session_sidebar_visibility_bucket
-                    ON session_sidebar_visibility(bucket_name);",
-            )
-            .map_err(|error| format!("Cannot ensure session sidebar visibility cache: {error}"))
-    }
-
-    pub(crate) fn session_sidebar_visibility(
-        &self,
-        session_file: &Path,
-    ) -> Result<Option<SessionSidebarVisibilityRow>, String> {
-        let session_file = session_file.to_string_lossy();
-        self.connection
-            .query_row(
-                "SELECT session_file, bucket_name, modified_at_ms, size_bytes,
-                        is_subagent, is_sidebar_visible
-                 FROM session_sidebar_visibility
-                 WHERE session_file = ?1",
-                [session_file.as_ref()],
-                |row| {
-                    Ok(SessionSidebarVisibilityRow {
-                        session_file: row.get(0)?,
-                        bucket_name: row.get(1)?,
-                        modified_at_ms: row.get(2)?,
-                        size_bytes: row.get(3)?,
-                        is_subagent: row.get::<_, i64>(4)? != 0,
-                        is_sidebar_visible: row.get::<_, i64>(5)? != 0,
-                    })
-                },
-            )
-            .optional()
-            .map_err(|error| format!("Cannot read session sidebar visibility cache: {error}"))
-    }
-
-    pub(crate) fn upsert_session_sidebar_visibility(
-        &self,
-        row: &SessionSidebarVisibilityRow,
-    ) -> Result<(), String> {
-        self.connection
-            .execute(
-                "INSERT INTO session_sidebar_visibility
-                    (session_file, bucket_name, modified_at_ms, size_bytes,
-                     is_subagent, is_sidebar_visible)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                 ON CONFLICT(session_file) DO UPDATE SET
-                    bucket_name = excluded.bucket_name,
-                    modified_at_ms = excluded.modified_at_ms,
-                    size_bytes = excluded.size_bytes,
-                    is_subagent = excluded.is_subagent,
-                    is_sidebar_visible = excluded.is_sidebar_visible",
-                params![
-                    row.session_file,
-                    row.bucket_name,
-                    row.modified_at_ms,
-                    row.size_bytes,
-                    i64::from(row.is_subagent),
-                    i64::from(row.is_sidebar_visible),
-                ],
-            )
-            .map_err(|error| format!("Cannot write session sidebar visibility cache: {error}"))?;
-        Ok(())
-    }
-
-    pub(crate) fn prune_session_sidebar_visibility_bucket(
-        &self,
-        bucket_name: &str,
-        retained_paths: &[String],
-    ) -> Result<(), String> {
-        if retained_paths.is_empty() {
-            self.connection
-                .execute(
-                    "DELETE FROM session_sidebar_visibility WHERE bucket_name = ?1",
-                    [bucket_name],
-                )
-                .map_err(|error| {
-                    format!("Cannot prune session sidebar visibility cache: {error}")
-                })?;
-            return Ok(());
-        }
-
-        let placeholders = std::iter::repeat_n("?", retained_paths.len())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!(
-            "DELETE FROM session_sidebar_visibility
-             WHERE bucket_name = ?1 AND session_file NOT IN ({placeholders})"
-        );
-        let mut values: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(retained_paths.len() + 1);
-        values.push(&bucket_name);
-        for path in retained_paths {
-            values.push(path);
-        }
-        self.connection
-            .execute(&sql, rusqlite::params_from_iter(values))
-            .map_err(|error| format!("Cannot prune session sidebar visibility cache: {error}"))?;
-        Ok(())
+            .execute_batch("DROP TABLE IF EXISTS session_sidebar_visibility;")
+            .map_err(|error| format!("Cannot drop session sidebar visibility cache: {error}"))
     }
 
     #[cfg(unix)]
@@ -950,8 +842,8 @@ fn token_hash(token: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AddWorkspaceError, MetadataStore, RemovedWorkspace, SessionSidebarVisibilityRow,
-        WorkspaceLookupError, SCHEMA_VERSION, WRITTEN_SCHEMA_VERSION,
+        AddWorkspaceError, MetadataStore, RemovedWorkspace, WorkspaceLookupError, SCHEMA_VERSION,
+        WRITTEN_SCHEMA_VERSION,
     };
     use rusqlite::Connection;
     use std::fs;
@@ -1041,7 +933,7 @@ mod tests {
             );
         }
         assert!(store.list_workspaces_and_prune().unwrap().0.is_empty());
-        assert!(table_exists(&store, "session_sidebar_visibility"));
+        assert!(!table_exists(&store, "session_sidebar_visibility"));
         // Corp tables belong to Corp builds; a public-created database must
         // never fabricate them or claim a Corp-complete schema version.
         for corp_table in [
@@ -1057,75 +949,33 @@ mod tests {
     }
 
     #[test]
-    fn visibility_cache_is_idempotent_and_does_not_change_user_version() {
+    fn deprecated_visibility_table_is_dropped_at_open_and_stays_gone() {
         let (_guard, store) = fresh_store("picot.sqlite3");
         assert_eq!(store.schema_version().unwrap(), WRITTEN_SCHEMA_VERSION);
-        assert!(table_exists(&store, "session_sidebar_visibility"));
+        assert!(!table_exists(&store, "session_sidebar_visibility"));
 
-        let reopened = MetadataStore::open(&store.path).unwrap();
-        assert_eq!(reopened.schema_version().unwrap(), WRITTEN_SCHEMA_VERSION);
-        assert!(table_exists(&reopened, "session_sidebar_visibility"));
-    }
-
-    #[test]
-    fn visibility_cache_is_recreated_without_removing_workspaces() {
-        let (guard, store) = fresh_store("picot.sqlite3");
-        let workspace = guard.0.join("workspace");
-        fs::create_dir_all(&workspace).unwrap();
-        let (row, added) = store.add_workspace(&workspace).unwrap();
-        assert!(added);
-
+        // A database left over from a deprecated build still carries the
+        // table; re-opening must drop it and never recreate it.
         store
             .connection
-            .execute("DROP TABLE session_sidebar_visibility", [])
+            .execute(
+                "CREATE TABLE session_sidebar_visibility (
+                    session_file TEXT PRIMARY KEY,
+                    bucket_name TEXT NOT NULL,
+                    modified_at_ms INTEGER NOT NULL,
+                    size_bytes INTEGER NOT NULL,
+                    is_subagent INTEGER NOT NULL,
+                    is_sidebar_visible INTEGER NOT NULL
+                )",
+                [],
+            )
             .unwrap();
         let database = store.path.clone();
         drop(store);
 
-        let mut reopened = MetadataStore::open(&database).unwrap();
-        assert!(table_exists(&reopened, "session_sidebar_visibility"));
+        let reopened = MetadataStore::open(&database).unwrap();
         assert_eq!(reopened.schema_version().unwrap(), WRITTEN_SCHEMA_VERSION);
-        let rows = reopened.list_workspaces_and_prune().unwrap().0;
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].workspace_id, row.workspace_id);
-    }
-
-    #[test]
-    fn visibility_cache_round_trips_and_prunes_only_missing_bucket_paths() {
-        let (_guard, store) = fresh_store("picot.sqlite3");
-        let kept = SessionSidebarVisibilityRow {
-            session_file: "/sessions/--bucket--/kept.jsonl".into(),
-            bucket_name: "--bucket--".into(),
-            modified_at_ms: 10,
-            size_bytes: 20,
-            is_subagent: false,
-            is_sidebar_visible: true,
-        };
-        let removed = SessionSidebarVisibilityRow {
-            session_file: "/sessions/--bucket--/gone.jsonl".into(),
-            ..kept.clone()
-        };
-        store.upsert_session_sidebar_visibility(&kept).unwrap();
-        store.upsert_session_sidebar_visibility(&removed).unwrap();
-        store
-            .prune_session_sidebar_visibility_bucket(
-                "--bucket--",
-                std::slice::from_ref(&kept.session_file),
-            )
-            .unwrap();
-
-        assert_eq!(
-            store
-                .session_sidebar_visibility(Path::new(&kept.session_file))
-                .unwrap(),
-            Some(kept)
-        );
-        assert_eq!(
-            store
-                .session_sidebar_visibility(Path::new(&removed.session_file))
-                .unwrap(),
-            None
-        );
+        assert!(!table_exists(&reopened, "session_sidebar_visibility"));
     }
 
     #[test]
@@ -1330,7 +1180,7 @@ mod tests {
         // staircase owns v4–v6 completion, and this build must neither stamp
         // a Corp-complete version nor fabricate Corp tables it does not use.
         assert_eq!(store.schema_version().unwrap(), 4);
-        assert!(table_exists(&store, "session_sidebar_visibility"));
+        assert!(!table_exists(&store, "session_sidebar_visibility"));
         assert!(table_exists(&store, "company_account_profiles"));
         assert!(
             !table_exists(&store, "gitlab_bindings"),

@@ -71,9 +71,10 @@ const wsClient = new WebSocketClient(resolveWebSocketUrl(window));
 const transport = initTransport({ wsClient, env: window });
 const preferencesClient = createPreferencesClient({ transport });
 
-// Landing-local launch serialization (the chat-side
-// `workspaceLaunchInProgress` flag belongs to app.js, not this module).
+// Landing-local serializations: picking a folder and transitioning into the
+// selected workspace are separate async phases and must not share a lock.
 let launchInProgress = false;
+let transitionInProgress = false;
 
 // Quick Chat overlays the landing view. Its mount roots live inside the
 // workspace chrome in index.html; reparent them to <body> so the dialog is
@@ -173,9 +174,8 @@ function navigateInWindow(url) {
 // Never touches messageRenderer, resetUiForNewSession, quickChatDialog state,
 // filePreviewPanel, terminalPanel, or the model picker.
 async function enterWorkspace(path, { sessionPath, forceNewSession } = {}) {
-  if (launchInProgress) return false;
-  if (!path) return false;
-  launchInProgress = true;
+  if (transitionInProgress || !path) return false;
+  transitionInProgress = true;
   let prepared = null;
   try {
     // Live-instance check for session selection: reuse the exact running
@@ -215,7 +215,7 @@ async function enterWorkspace(path, { sessionPath, forceNewSession } = {}) {
     renderLandingNotice(t("errors.failedToSwitchSession", { error }));
     return false;
   } finally {
-    launchInProgress = false;
+    transitionInProgress = false;
   }
 }
 
@@ -244,6 +244,9 @@ const sidebar = new SessionSidebar(
   {
     transport,
     onRegisterWorkspace: handleRegisterWorkspace,
+    // The empty-registry "+ 添加项目" button opens the same picker flow as
+    // the sidebar + buttons; without this seam the button renders dead.
+    onOpenProject: () => addProjectViaPicker(),
     // No focus seam at landing: Focus-mode gating is "a workspace session is
     // selected", and landing selects none — the classic predicate (active
     // session or current workspace) can never pass here, so no `>` button.

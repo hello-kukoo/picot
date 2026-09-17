@@ -41,6 +41,7 @@ vi.mock("./sidebar/index.js", () => ({
         onSessionSelect,
         onNewChat,
         onRegisterWorkspace: options.onRegisterWorkspace,
+        onOpenProject: options.onOpenProject,
         onWorkspaceFocus: options.onWorkspaceFocus,
         canFocusWorkspace: options.canFocusWorkspace,
         isCurrentWorkspace: options.isCurrentWorkspace,
@@ -50,7 +51,10 @@ vi.mock("./sidebar/index.js", () => ({
         _registryPins: null,
         render: () => {},
         refresh: () => harness.refreshCalls.push(1),
-        addProjectViaPicker: () => harness.pickerCalls.push(1),
+        addProjectViaPicker: async () => {
+          harness.pickerCalls.push(1);
+          return this.onRegisterWorkspace?.("/tmp/picked");
+        },
       });
       harness.sidebarInstance = this;
     }
@@ -366,6 +370,16 @@ test("new-chat and post-add seams force a new session", async () => {
   expect(harness.prepares[1].options.forceNewSession).toBe(true);
 });
 
+test("empty-registry picker can enter a workspace while picker lock is held", async () => {
+  await bootLanding();
+  harness.sidebarInstance.onOpenProject();
+  await vi.waitFor(() => expect(harness.pickerCalls).toEqual([1]));
+  await vi.waitFor(() => expect(harness.prepares).toHaveLength(1));
+  expect(harness.prepares[0].targetCwd).toBe("/tmp/picked");
+  expect(harness.prepares[0].options.forceNewSession).toBe(true);
+  expect(harness.commits).toEqual(harness.generations);
+});
+
 test("focus seam is absent at landing: no session selected means no focus entry", async () => {
   await bootLanding();
   // Focus-mode gating is "a workspace session is selected"; landing selects
@@ -373,6 +387,9 @@ test("focus seam is absent at landing: no session selected means no focus entry"
   // (active session or current workspace) can never pass.
   expect(harness.sidebarInstance.canFocusWorkspace ?? null).toBeNull();
   expect(harness.sidebarInstance.onWorkspaceFocus ?? null).toBeNull();
+  // The empty-registry "+ 添加项目" button must work at landing: the seam
+  // routes into the same add-project picker flow as the sidebar + buttons.
+  expect(typeof harness.sidebarInstance.onOpenProject).toBe("function");
 });
 
 test("hint and button labels follow the active locale", async () => {

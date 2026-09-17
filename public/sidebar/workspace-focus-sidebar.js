@@ -157,7 +157,11 @@ export class WorkspaceFocusSidebar {
     const item = this.buildSessionItem({
       session,
       project: this.project,
-      isActive: session.filePath === this.activeSessionFile,
+      // Provisional rows force-highlight like the normal sidebar: after
+      // "new task" the active file still points at the previous session
+      // until Pi persists the new one. Selection-based retirement (app.js
+      // handleSessionSelect) removes the row when the user switches away.
+      isActive: session?.provisional === true || session.filePath === this.activeSessionFile,
       isUnread: this.unread.has(session.filePath),
       isStreaming: this.streaming.has(session.filePath),
       treeDepth: row.depth,

@@ -232,6 +232,8 @@ mod tests {
         let (store, temp) = shared_store();
         let project = temp.join("project");
         fs::create_dir_all(&project).unwrap();
+        let session_file = project.join("session.jsonl");
+        fs::write(&session_file, "session fixture\n").unwrap();
 
         // Red signal for our gate would be Remote acceptance; also prove the
         // gate applies before any DB work by driving handle through same fn.
@@ -299,8 +301,15 @@ mod tests {
         assert_eq!(remove_result["removed"], true);
         assert_eq!(denied, NATIVE_OWNER_REQUIRED);
 
-        // Directory content untouched by registry removal.
+        // Registry removal deletes only the row; workspace content is retained.
+        assert!(store
+            .lock()
+            .unwrap()
+            .get_workspace(&workspace_id)
+            .unwrap()
+            .is_none());
         assert!(project.is_dir());
+        assert!(session_file.is_file());
     }
 
     #[test]

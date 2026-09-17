@@ -4718,6 +4718,19 @@ async function handleNewProjectChat(project) {
 // Public entry point: serializes selections so overlapping clicks don't
 // interleave their awaits and corrupt shared routing state.
 function handleSessionSelect(session, project) {
+  // Selecting another session abandons an unpersisted provisional row (Pi
+  // never wrote its JSONL). This is the single choke point both sidebars
+  // converge on — the normal sidebar's wrapped rows and the Focus sidebar's
+  // own onSessionSelect — so the retirement cannot diverge between modes.
+  // Selecting the provisional row itself (Focus renders it through the raw
+  // builder) keeps the row: the chat stays in that session.
+  if (
+    session?.filePath &&
+    sidebar.provisionalSession &&
+    sidebar.provisionalSession.filePath !== session.filePath
+  ) {
+    sidebar.retireProvisionalSession();
+  }
   const run = sessionSelectChain.then(() => handleSessionSelectImpl(session, project));
   // Keep the chain alive even if this selection rejects.
   sessionSelectChain = run.catch(() => {});

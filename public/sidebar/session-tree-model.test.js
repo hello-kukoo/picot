@@ -60,6 +60,26 @@ describe("sidebar session tree model", () => {
     ]);
   });
 
+  test("uses file mtime before the immutable session header timestamp", () => {
+    const oldSession = {
+      filePath: "/sessions/old.jsonl",
+      timestamp: "2026-01-02T00:00:00.000Z",
+      mtime: Date.parse("2026-01-01T00:00:00.000Z"),
+    };
+    const recentSession = {
+      filePath: "/sessions/recent.jsonl",
+      timestamp: "2026-01-01T00:00:00.000Z",
+      mtime: Date.parse("2026-01-03T00:00:00.000Z"),
+    };
+
+    const rows = flattenSessionTree(buildSessionTree([oldSession, recentSession]));
+
+    expect(rows.map((row) => row.session.filePath)).toEqual([
+      "/sessions/recent.jsonl",
+      "/sessions/old.jsonl",
+    ]);
+  });
+
   test("does not mutate the input session records", () => {
     const input = [
       session("/sessions/parent.jsonl", 100),

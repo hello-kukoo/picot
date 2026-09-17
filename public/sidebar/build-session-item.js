@@ -64,14 +64,14 @@ export function buildSessionItem({
   if (isStreaming) item.classList.add("streaming");
 
   const title = getSessionDisplayTitle(session);
+  const titleRow = document.createElement("div");
+  titleRow.className = "session-title-row";
   if (treeDepth > 0) {
     const prefix = document.createElement("span");
     prefix.className = "session-tree-prefix";
     prefix.textContent = formatTreePrefix(treeAncestorChain, treeIsLast);
-    item.appendChild(prefix);
+    titleRow.appendChild(prefix);
   }
-  const titleRow = document.createElement("div");
-  titleRow.className = "session-title-row";
   const titleElement = document.createElement("div");
   titleElement.className = "session-title";
   titleElement.title = title;

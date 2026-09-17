@@ -157,6 +157,32 @@ describe("WorkspaceFocusSidebar", () => {
     expect(opts.isActive).toBe(true);
   });
 
+  test("a provisional new-chat row highlights before active catches up", () => {
+    // "New task" inserts a provisional row whose runtime identity (session
+    // id) is not yet the active file; it must highlight exactly like the
+    // normal sidebar until selection-based retirement removes it.
+    // The real flow boots a fresh page for the new session: active is still
+    // unset while the provisional row must already highlight.
+    const sidebar = makeSidebar({
+      sessions: [
+        { filePath: "/s/current.jsonl", name: "Current" },
+        { filePath: "native-session-new", name: "New chat", provisional: true },
+      ],
+      activeSessionFile: null,
+    });
+    sidebar.render();
+    expect(
+      sidebar.container
+        .querySelector('[data-file-path="native-session-new"]')
+        .classList.contains("active"),
+    ).toBe(true);
+    expect(
+      sidebar.container
+        .querySelector('[data-file-path="/s/current.jsonl"]')
+        .classList.contains("active"),
+    ).toBe(false);
+  });
+
   test("renders a session timestamp like the normal sidebar", () => {
     const sidebar = makeSidebar({ sessions: makeSessions(1) });
     sidebar.buildSessionItem = buildSessionItem;
@@ -165,6 +191,48 @@ describe("WorkspaceFocusSidebar", () => {
     const time = sidebar.container.querySelector(".session-time");
     expect(time).toBeTruthy();
     expect(time.textContent).not.toBe("");
+  });
+
+  test("renders worker branches with aligned prefixes", () => {
+    const parent = {
+      filePath: "/sessions/parent.jsonl",
+      name: "extension 的参数设置",
+      timestamp: "2026-01-01T00:00:00.000Z",
+    };
+    const children = [
+      "[worker] Implement questionnaire renderer",
+      "[worker] Implement widget mirror registry",
+      "[codebase-analyzer] Map widget and questionnaire code",
+      "[explore] Trace UI event flows",
+      "[worker] Hunk review comment fixes",
+    ].map((name, index) => ({
+      filePath: `/sessions/child-${index}.jsonl`,
+      name,
+      parentSession: parent.filePath,
+      timestamp: `2026-01-0${index + 2}T00:00:00.000Z`,
+    }));
+    const sidebar = makeSidebar({
+      sessions: [parent, ...children],
+      buildSessionItem,
+    });
+
+    sidebar.render();
+
+    const rows = [...sidebar.container.querySelectorAll(".focus-session-list .session-item")];
+    expect(rows).toHaveLength(children.length + 1);
+    expect(rows[0].querySelector(".session-title").textContent).toBe(parent.name);
+    expect(
+      rows.slice(1).map((row) => row.querySelector(".session-tree-prefix").textContent),
+    ).toEqual(["   ├─ ", "   ├─ ", "   ├─ ", "   ├─ ", "   └─ "]);
+    expect(
+      rows
+        .slice(1)
+        .every(
+          (row) =>
+            row.querySelector(".session-title-row > .session-tree-prefix") &&
+            !row.querySelector(":scope > .session-tree-prefix"),
+        ),
+    ).toBe(true);
   });
 
   test("focus rows forward rename actions with the target session", () => {

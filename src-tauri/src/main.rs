@@ -95,18 +95,69 @@ type EphemeralRegistryState = Arc<EphemeralRegistry>;
 
 // ─── Tauri Commands ───────────────────────────────────────────────────────────
 
-/// Build the slash-command message that drives in-place tree navigation.
-/// pi's stdin RPC has no native `navigate_tree` command; the picot-bridge
-/// extension registers `/picot-navigate-tree`, whose handler runs with pi's
-/// command context and calls `ctx.navigateTree` (the same primitive the TUI
-/// `/tree` selector uses). RPC `prompt` dispatches extension commands, so we
-/// send the navigation request as a prompt. `summarize: false` keeps the GUI
-/// path deterministic (no hidden LLM branch-summary call; pi's own summary
-/// flow stays available when invoked from pi itself).
-#[allow(dead_code)] // pending native ephemeral/tree work package
-fn navigate_tree_message(entry_id: &str, summarize: bool) -> String {
-    let args = serde_json::json!({ "targetId": entry_id, "summarize": summarize });
-    format!("/picot-navigate-tree {args}")
+/// Record the session bucket for a freshly spawned runtime, host-side.
+///
+/// The registry's session_bucket column is otherwise only written from the
+/// WebView-driven runtime_snapshot_request proxy (host_server.rs), whose
+/// timing depends on window boot and instance triples — a fresh session
+/// from "add project" historically left the column NULL, so landing cold
+/// starts showed a session count of 0 even for workspaces with history on
+/// disk. Pi allocates the persisted session file path at session start
+/// (session-manager.ts newSession), so the first get_state after spawn
+/// already carries it. Callers may run this detached when navigation does not
+/// depend on the registry row being ready; the landing prepare path awaits it
+/// before returning its transition. Failure only logs (the WebView snapshot
+/// path remains as a fallback).
+async fn record_session_bucket_after_spawn(
+    runtimes: NativePiManager,
+    metadata: SharedMetadataStore,
+    host_events: crate::host_control::HostEventSink,
+    target: RuntimeTarget,
+) {
+    let response = match runtimes
+        .request(
+            &target,
+            serde_json::json!({ "type": "get_state" }),
+            None,
+            std::time::Duration::from_secs(30),
+        )
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            log::warn!(
+                "[picot-native] post-spawn get_state failed for workspace {}: {error}",
+                target.workspace_id
+            );
+            return;
+        }
+    };
+    let Some(session_file) = response
+        .pointer("/data/sessionFile")
+        .and_then(serde_json::Value::as_str)
+        .filter(|session_file| !session_file.is_empty())
+    else {
+        return;
+    };
+    let session_root = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".pi/agent/sessions");
+    let data = host_data::HostDataPlane::new(metadata).with_session_root(session_root);
+    match data.record_pi_session_bucket(&target.workspace_id, session_file) {
+        Ok(true) => {
+            host_events.broadcast_native_event(serde_json::json!({
+                "type": "registry_changed",
+                "reason": "session_bucket_recorded",
+            }));
+        }
+        Ok(false) => {}
+        Err(error) => {
+            log::warn!(
+                "[picot-native] Pi returned invalid session bucket for workspace {}: {error}",
+                target.workspace_id
+            );
+        }
+    }
 }
 
 /// Run the bundled pi CLI with the desktop environment (PATH, agent root).
@@ -700,8 +751,8 @@ fn find_static_dir(app: &tauri::App) -> PathBuf {
 mod tests {
     use super::{
         cancel_should_stop_target, find_existing_runtime_for_prepare, image_mime_from_path,
-        navigate_tree_message, new_session_menu_enabled, persisted_session_id_for_workspace,
-        quick_chat_snapshot, resolve_static_dir, should_stop_owner_runtimes_on_transition,
+        new_session_menu_enabled, persisted_session_id_for_workspace, quick_chat_snapshot,
+        resolve_static_dir, should_stop_owner_runtimes_on_transition,
         side_chat_startup_rpc_commands, skill_scope_context, touch_registered_workspace,
         workspace_snapshot_for,
     };
@@ -733,6 +784,57 @@ mod tests {
             )),
             temp,
         )
+    }
+
+    #[tokio::test]
+    async fn post_spawn_recording_persists_the_pi_reported_bucket() {
+        let manager = crate::native_pi_manager::NativePiManager::new(8);
+        let (metadata, temp) = shared_test_metadata("bucket-record");
+        let workspace = temp.join("ws");
+        fs::create_dir_all(&workspace).unwrap();
+        let (row, added) = metadata.lock().unwrap().add_workspace(&workspace).unwrap();
+        assert!(added);
+        // The runtime target carries the registered row's workspace id —
+        // production prepare resolves it the same way before spawning.
+        let target = crate::runtime_coordinator::RuntimeTarget::with_owner(
+            row.workspace_id.clone(),
+            "session-a",
+            "instance-a",
+            "owner-a",
+            0,
+        );
+        let mut fake = manager.register_in_memory(target.clone()).unwrap();
+
+        let (event_tx, _event_rx) = tokio::sync::broadcast::channel(16);
+        let sink = crate::host_control::HostEventSink::new(event_tx);
+        let task = tokio::spawn(super::record_session_bucket_after_spawn(
+            manager.clone(),
+            metadata.clone(),
+            sink,
+            target.clone(),
+        ));
+
+        // Pi answers get_state with the session file it allocated at start.
+        let outbound = fake.read_request().await.unwrap();
+        let id = outbound["id"].as_str().unwrap();
+        fake.write_frame(json!({
+            "id": id,
+            "type": "response",
+            "command": "get_state",
+            "success": true,
+            "data": { "sessionFile": "/home/user/.pi/agent/sessions/--ws-bucket--/s.jsonl" }
+        }))
+        .await
+        .unwrap();
+        task.await.unwrap();
+
+        let stored = metadata
+            .lock()
+            .unwrap()
+            .get_workspace(&row.workspace_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.session_bucket.as_deref(), Some("--ws-bucket--"));
     }
 
     #[tokio::test]
@@ -964,34 +1066,6 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("pi-studio-{label}-{suffix}"))
-    }
-
-    #[test]
-    fn navigate_tree_message_builds_dispatchable_slash_command() {
-        // The bridge command JSON-parses its argument string, so the payload
-        // must stay a single compact JSON object after the command name.
-        let msg = navigate_tree_message("entry-1", false);
-        assert_eq!(
-            msg,
-            "/picot-navigate-tree {\"summarize\":false,\"targetId\":\"entry-1\"}"
-        );
-        let args = msg
-            .strip_prefix("/picot-navigate-tree ")
-            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-            .expect("args must parse as JSON");
-        assert_eq!(args["targetId"], json!("entry-1"));
-        assert_eq!(args["summarize"], json!(false));
-    }
-
-    #[test]
-    fn navigate_tree_message_escapes_entry_ids() {
-        let msg = navigate_tree_message("a\"b {c}", true);
-        let args = msg
-            .strip_prefix("/picot-navigate-tree ")
-            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-            .expect("escaped id must still parse as JSON");
-        assert_eq!(args["targetId"], json!("a\"b {c}"));
-        assert_eq!(args["summarize"], json!(true));
     }
 
     #[test]
@@ -2000,6 +2074,12 @@ fn install_control_handler(
                             owner_registry.revoke_owner(&owner);
                             return Err(error);
                         }
+                        tokio::spawn(record_session_bucket_after_spawn(
+                            runtimes.clone(),
+                            metadata.clone(),
+                            host_events.clone(),
+                            target.clone(),
+                        ));
                         if arg_bool("forceNewSession").unwrap_or(false) {
                             if let Err(error) = runtimes
                                 .request(
@@ -2539,6 +2619,12 @@ fn install_control_handler(
                             new_target.workspace_id,
                             new_target.instance_id
                         );
+                        tokio::spawn(record_session_bucket_after_spawn(
+                            runtimes.clone(),
+                            metadata.clone(),
+                            host_events.clone(),
+                            new_target.clone(),
+                        ));
                         Ok(serde_json::json!({ "instanceId": new_target.instance_id }))
                     }
                     "check_for_update" => check_for_update_core(&app).await,
@@ -2814,6 +2900,13 @@ fn install_control_handler(
                                     generation,
                                     &new_target.instance_id,
                                 );
+                                record_session_bucket_after_spawn(
+                                    runtimes.clone(),
+                                    metadata.clone(),
+                                    host_events.clone(),
+                                    new_target.clone(),
+                                )
+                                .await;
                                 (new_target, generation)
                             }
                         };

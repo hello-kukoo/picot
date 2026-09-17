@@ -176,10 +176,30 @@ describe("SessionSidebar regions", () => {
 
   test("session rows never expose pin controls", () => {
     const sidebar = makeRegistrySidebar({ transport: makeTransport() });
-    seedProjects(sidebar, structuredClone(RENDER_SET), []);
+    seedProjects(sidebar, structuredClone(RENDER_SET), [
+      { id: "ws:uuid-alpha", path: "/work/alpha" },
+    ]);
     const item = document.querySelector('.session-item[data-file-path="/sessions/alpha.jsonl"]');
     expect(item.querySelector(".session-pin-btn")).toBeNull();
     expect(item.querySelector(".session-delete-btn")).not.toBeNull();
+  });
+
+  test("moves pinned workspaces out of Projects into Pinned", () => {
+    const sidebar = makeRegistrySidebar({ transport: makeTransport() });
+    seedProjects(sidebar, structuredClone([ROW_ALPHA, ROW_BETA, LIVE_ROW]), [
+      { id: "ws:uuid-alpha", path: "/work/alpha" },
+    ]);
+
+    expect(
+      [...document.querySelectorAll(".pinned-group .workspace-group")].map(
+        (group) => group.dataset.workspaceId,
+      ),
+    ).toEqual(["ws:uuid-alpha"]);
+    expect(
+      [...document.querySelectorAll(".projects-group .workspace-group")].map(
+        (group) => group.dataset.workspaceId,
+      ),
+    ).toEqual(["ws:uuid-beta", "path:/work/live"]);
   });
 
   test("all section headers share the chevron and no folder icon", () => {
@@ -203,9 +223,11 @@ describe("SessionSidebar context menu", () => {
       transport: makeTransport(),
       options: { onOpenProject },
     });
-    seedProjects(sidebar, structuredClone(RENDER_SET), []);
+    seedProjects(sidebar, structuredClone(RENDER_SET), [
+      { id: "ws:uuid-alpha", path: "/work/alpha" },
+    ]);
 
-    const header = document.querySelector(".projects-group .workspace-header");
+    const header = document.querySelector(".pinned-group .workspace-header");
     header.querySelector(".workspace-more-actions-btn").click();
     const menu = document.querySelector(".sidebar-context-menu").textContent;
     // Fixture row is pinned; toggle renders its inverse action.
@@ -318,7 +340,9 @@ describe("SessionSidebar PINNED section", () => {
 describe("SessionSidebar fold-state stability", () => {
   test("workspaces start collapsed and sections start expanded on first render", () => {
     const sidebar = makeRegistrySidebar({ transport: makeTransport() });
-    seedProjects(sidebar, structuredClone(RENDER_SET), []);
+    seedProjects(sidebar, structuredClone(RENDER_SET), [
+      { id: "ws:uuid-alpha", path: "/work/alpha" },
+    ]);
 
     expect(workspaceExpanded("ws:uuid-alpha")).toBe(false);
     expect(workspaceExpanded("path:/work/live")).toBe(false);
@@ -334,11 +358,13 @@ describe("SessionSidebar fold-state stability", () => {
 
   test("rebuilding preserves expansion; no legacy archived state exists", () => {
     const sidebar = makeRegistrySidebar({ transport: makeTransport() });
-    seedProjects(sidebar, structuredClone(RENDER_SET), []);
+    seedProjects(sidebar, structuredClone(RENDER_SET), [
+      { id: "ws:uuid-alpha", path: "/work/alpha" },
+    ]);
 
     document
       .querySelector(
-        '.projects-group .workspace-group[data-workspace-id="ws:uuid-alpha"] .workspace-header',
+        '.pinned-group .workspace-group[data-workspace-id="ws:uuid-alpha"] .workspace-header',
       )
       .click();
     expect(workspaceExpanded("ws:uuid-alpha")).toBe(true);

@@ -119,8 +119,10 @@ function toSessionCache(s) {
     name: typeof s.name === "string" ? s.name : "",
     firstMessage: typeof s.firstMessage === "string" ? s.firstMessage : "",
     timestamp: s.timestamp ?? null,
+    mtime: typeof s.mtime === "number" ? s.mtime : null,
     ctime: s.ctime ?? null,
     tmux: Boolean(s.tmux),
+    parentSession: typeof s.parentSession === "string" ? s.parentSession : null,
   };
 }
 

@@ -1,9 +1,8 @@
 // ABOUTME: Host data-plane reads for registry-authorized workspaces.
 // ABOUTME: Resolves workspace roots through shared MetadataStore authority.
-use crate::metadata_store::SessionSidebarVisibilityRow;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader};
 use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -196,43 +195,63 @@ impl HostDataPlane {
             // cold-start badges must be exact without opening any JSONL content.
             return (bucket_name, Vec::new(), Some(jsonl_files.len()), None);
         }
-
-        let retained_paths = jsonl_files
-            .iter()
-            .map(|path| cache_path(path).to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
-        if let Some(bucket_name) = bucket_name.as_deref() {
-            let _ = self.prune_visibility_cache(bucket_name, &retained_paths);
+        if jsonl_files.is_empty() {
+            return (bucket_name, Vec::new(), Some(0), Some(0));
         }
+
+        let workers = std::thread::available_parallelism()
+            .map(|count| count.get())
+            .unwrap_or(1)
+            .clamp(1, 10)
+            .min(jsonl_files.len());
+        let chunk_size = jsonl_files.len().div_ceil(workers).max(1);
+        let classification_chunks = std::thread::scope(|scope| {
+            let handles = jsonl_files
+                .chunks(chunk_size)
+                .map(|chunk| {
+                    scope.spawn(|| {
+                        chunk
+                            .iter()
+                            .map(|path| {
+                                (path.clone(), self.classify_sidebar_file(path, &workspace))
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| handle.join())
+                .collect::<Result<Vec<_>, _>>()
+        });
 
         let mut sessions = Vec::new();
         let mut visible_count = 0;
-        let mut hidden_count = 0;
+        let hidden_count = 0;
         let mut all_resolved = true;
-        for path in &jsonl_files {
-            let Some(classification) =
-                self.classify_sidebar_file(path, bucket_name.as_deref(), &workspace)
-            else {
-                all_resolved = false;
-                continue;
-            };
-            if !classification.resolved {
-                all_resolved = false;
-                continue;
+        let Ok(classification_chunks) = classification_chunks else {
+            return (bucket_name, sessions, None, None);
+        };
+        for chunk in classification_chunks {
+            for (path, classification) in chunk {
+                let Some(classification) = classification else {
+                    all_resolved = false;
+                    continue;
+                };
+                if !classification.resolved {
+                    all_resolved = false;
+                    continue;
+                }
+                if !classification.is_sidebar_visible {
+                    continue;
+                }
+                let Some(header) = classification.header else {
+                    all_resolved = false;
+                    continue;
+                };
+                visible_count += 1;
+                sessions.push(session_summary_value(&path, &header));
             }
-            if classification.is_subagent {
-                hidden_count += 1;
-                continue;
-            }
-            if !classification.is_sidebar_visible {
-                continue;
-            }
-            let Some(header) = classification.header else {
-                all_resolved = false;
-                continue;
-            };
-            visible_count += 1;
-            sessions.push(session_summary_value(path, &header));
         }
         sessions.sort_by(|left, right| {
             session_activity_time(right).total_cmp(&session_activity_time(left))
@@ -249,151 +268,28 @@ impl HostDataPlane {
         }
     }
 
-    fn visibility_cache(
-        &self,
-        path: &Path,
-    ) -> Result<Option<SessionSidebarVisibilityRow>, HostDataError> {
-        self.metadata
-            .lock()
-            .map_err(|_| HostDataError::Io("Picot metadata lock poisoned".to_owned()))?
-            .session_sidebar_visibility(&cache_path(path))
-            .map_err(HostDataError::Io)
-    }
-
-    fn prune_visibility_cache(
-        &self,
-        bucket_name: &str,
-        retained_paths: &[String],
-    ) -> Result<(), HostDataError> {
-        self.metadata
-            .lock()
-            .map_err(|_| HostDataError::Io("Picot metadata lock poisoned".to_owned()))?
-            .prune_session_sidebar_visibility_bucket(bucket_name, retained_paths)
-            .map_err(HostDataError::Io)
-    }
-
-    fn save_visibility_cache(&self, row: &SessionSidebarVisibilityRow) {
-        if let Ok(metadata) = self.metadata.lock() {
-            let _ = metadata.upsert_session_sidebar_visibility(row);
-        }
-    }
-
     fn classify_sidebar_file(
         &self,
         path: &Path,
-        bucket_name: Option<&str>,
         workspace: &Path,
     ) -> Option<SidebarFileClassification> {
         let before = sidebar_file_metadata(path)?;
-        let cached = self.visibility_cache(path).ok().flatten();
-        let bucket_name = bucket_name?.to_owned();
         let path = cache_path(path);
-
-        if let Some(row) = cached.as_ref() {
-            if sidebar_file_metadata_matches(
-                before,
-                SidebarFileMetadata {
-                    modified_at_ms: row.modified_at_ms,
-                    size_bytes: row.size_bytes,
-                },
-            ) {
-                if row.is_subagent || !row.is_sidebar_visible {
-                    return Some(SidebarFileClassification {
-                        is_subagent: row.is_subagent,
-                        is_sidebar_visible: row.is_sidebar_visible,
-                        resolved: true,
-                        header: None,
-                    });
-                }
-                if let Some(header) = parse_session_header(&path) {
-                    let is_sidebar_visible = session_header_matches_workspace(&header, workspace);
-                    if !is_sidebar_visible {
-                        self.save_visibility_cache(&SessionSidebarVisibilityRow {
-                            session_file: path.to_string_lossy().into_owned(),
-                            bucket_name: bucket_name.clone(),
-                            modified_at_ms: before.modified_at_ms,
-                            size_bytes: before.size_bytes,
-                            is_subagent: false,
-                            is_sidebar_visible: false,
-                        });
-                    }
-                    return Some(SidebarFileClassification {
-                        is_subagent: false,
-                        is_sidebar_visible,
-                        resolved: true,
-                        header: is_sidebar_visible.then_some(header),
-                    });
-                }
-            } else if before.size_bytes > row.size_bytes {
-                if let Ok(found) = scan_subagent_marker_tail(&path, row.size_bytes as u64) {
-                    let after = sidebar_file_metadata(&path)?;
-                    if after.size_bytes == before.size_bytes
-                        && after.modified_at_ms == before.modified_at_ms
-                    {
-                        if found || row.is_subagent {
-                            self.save_visibility_cache(&SessionSidebarVisibilityRow {
-                                session_file: path.to_string_lossy().into_owned(),
-                                bucket_name: bucket_name.clone(),
-                                modified_at_ms: after.modified_at_ms,
-                                size_bytes: after.size_bytes,
-                                is_subagent: true,
-                                is_sidebar_visible: false,
-                            });
-                            return Some(SidebarFileClassification {
-                                is_subagent: true,
-                                is_sidebar_visible: false,
-                                resolved: true,
-                                header: None,
-                            });
-                        }
-                        if let Some(header) = parse_session_header(&path) {
-                            let is_sidebar_visible =
-                                session_header_matches_workspace(&header, workspace);
-                            self.save_visibility_cache(&SessionSidebarVisibilityRow {
-                                session_file: path.to_string_lossy().into_owned(),
-                                bucket_name,
-                                modified_at_ms: after.modified_at_ms,
-                                size_bytes: after.size_bytes,
-                                is_subagent: false,
-                                is_sidebar_visible,
-                            });
-                            return Some(SidebarFileClassification {
-                                is_subagent: false,
-                                is_sidebar_visible,
-                                resolved: true,
-                                header: is_sidebar_visible.then_some(header),
-                            });
-                        }
-                    }
-                }
-            }
-        }
 
         let scan = scan_session_sidebar_visibility(&path).ok()?;
         let after = sidebar_file_metadata(&path)?;
         let header = scan.header;
-        let is_sidebar_visible = !scan.is_subagent
-            && header
-                .as_ref()
-                .is_some_and(|header| session_header_matches_workspace(header, workspace));
+        let is_sidebar_visible = header
+            .as_ref()
+            .is_some_and(|header| session_header_matches_workspace(header, workspace));
         if !sidebar_file_metadata_matches(before, after) {
             return Some(SidebarFileClassification {
-                is_subagent: scan.is_subagent,
                 is_sidebar_visible,
                 resolved: false,
                 header: is_sidebar_visible.then_some(header).flatten(),
             });
         }
-        self.save_visibility_cache(&SessionSidebarVisibilityRow {
-            session_file: path.to_string_lossy().into_owned(),
-            bucket_name,
-            modified_at_ms: after.modified_at_ms,
-            size_bytes: after.size_bytes,
-            is_subagent: scan.is_subagent,
-            is_sidebar_visible,
-        });
         Some(SidebarFileClassification {
-            is_subagent: scan.is_subagent,
             is_sidebar_visible,
             resolved: true,
             header: is_sidebar_visible.then_some(header).flatten(),
@@ -784,11 +680,6 @@ impl HostDataPlane {
         if !bucket.is_dir() {
             return Ok(Vec::new());
         }
-        let bucket_name = bucket
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(str::to_owned)
-            .ok_or_else(|| HostDataError::Io("invalid session bucket name".to_owned()))?;
         let files = std::fs::read_dir(&bucket)
             .map_err(|error| HostDataError::Io(error.to_string()))?
             .filter_map(Result::ok)
@@ -797,9 +688,7 @@ impl HostDataPlane {
             .collect::<Vec<_>>();
         let mut sessions = Vec::new();
         for path in files {
-            let Some(classification) =
-                self.classify_sidebar_file(&path, Some(&bucket_name), &workspace)
-            else {
+            let Some(classification) = self.classify_sidebar_file(&path, &workspace) else {
                 continue;
             };
             if !should_project_sidebar_file(&classification) {
@@ -827,11 +716,6 @@ impl HostDataPlane {
         if query.len() < 2 || !bucket.is_dir() {
             return Ok(Vec::new());
         }
-        let bucket_name = bucket
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(str::to_owned)
-            .ok_or_else(|| HostDataError::Io("invalid session bucket name".to_owned()))?;
         let files = std::fs::read_dir(&bucket)
             .map_err(|error| HostDataError::Io(error.to_string()))?
             .filter_map(Result::ok)
@@ -843,9 +727,7 @@ impl HostDataPlane {
             if results.len() >= MAX_RESULTS {
                 return Ok(results);
             }
-            let Some(classification) =
-                self.classify_sidebar_file(&path, Some(&bucket_name), &workspace)
-            else {
+            let Some(classification) = self.classify_sidebar_file(&path, &workspace) else {
                 continue;
             };
             if !should_project_sidebar_file(&classification) {
@@ -1093,6 +975,7 @@ pub(crate) struct SessionHeader {
     pub name: Option<String>,
     pub first_message: Option<String>,
     pub cwd: Option<String>,
+    pub parent_session: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1102,17 +985,18 @@ struct SidebarFileMetadata {
 }
 
 struct SidebarFileClassification {
-    is_subagent: bool,
     is_sidebar_visible: bool,
     resolved: bool,
     header: Option<SessionHeader>,
 }
 
 struct SidebarScan {
-    is_subagent: bool,
     header: Option<SessionHeader>,
 }
 
+/// `(bucket_name, sessions, visible_count, hidden_subagent_count)` returned
+/// by workspace session discovery. The fourth value is deprecated and always
+/// zero; it remains only for frontend wire compatibility.
 pub(crate) type WorkspaceSessionBucketResult = (
     Option<String>,
     Vec<serde_json::Value>,
@@ -1154,7 +1038,7 @@ fn session_header_matches_workspace(header: &SessionHeader, workspace: &Path) ->
 }
 
 fn should_project_sidebar_file(classification: &SidebarFileClassification) -> bool {
-    classification.resolved && classification.is_sidebar_visible && !classification.is_subagent
+    classification.resolved && classification.is_sidebar_visible
 }
 
 fn session_summary_value(path: &Path, header: &SessionHeader) -> serde_json::Value {
@@ -1179,6 +1063,7 @@ fn session_summary_value(path: &Path, header: &SessionHeader) -> serde_json::Val
         "name": header.name,
         "firstMessage": header.first_message,
         "cwd": header.cwd,
+        "parentSession": header.parent_session,
         "file": path.file_name().map(|name| name.to_string_lossy().into_owned()),
         "filePath": path.to_string_lossy(),
         "mtime": modified,
@@ -1186,34 +1071,14 @@ fn session_summary_value(path: &Path, header: &SessionHeader) -> serde_json::Val
     })
 }
 
-fn scan_subagent_marker_tail(path: &Path, from_offset: u64) -> Result<bool, HostDataError> {
-    let mut file =
-        std::fs::File::open(path).map_err(|error| HostDataError::Io(error.to_string()))?;
-    file.seek(SeekFrom::Start(from_offset))
-        .map_err(|error| HostDataError::Io(error.to_string()))?;
-    for line in BufReader::new(file).lines() {
-        let line = line.map_err(|error| HostDataError::Io(error.to_string()))?;
-        let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue;
-        };
-        if entry.get("type").and_then(serde_json::Value::as_str) == Some("custom")
-            && entry.get("customType").and_then(serde_json::Value::as_str)
-                == Some("pi-subagents_launch_metadata")
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
 fn scan_session_sidebar_visibility(path: &Path) -> Result<SidebarScan, HostDataError> {
     let file = std::fs::File::open(path).map_err(|error| HostDataError::Io(error.to_string()))?;
-    let mut header: Option<(String, String, Option<String>)> = None;
+    let mut header: Option<(String, String, Option<String>, Option<String>)> = None;
     let mut name: Option<String> = None;
+    let mut name_sealed = false;
     let mut first_message: Option<String> = None;
     let mut user_messages = 0usize;
     let mut line_count = 0usize;
-    let mut is_subagent = false;
     for line in BufReader::new(file).lines() {
         let line = line.map_err(|error| HostDataError::Io(error.to_string()))?;
         if line.trim().is_empty() {
@@ -1240,53 +1105,64 @@ fn scan_session_sidebar_visibility(path: &Path) -> Result<SidebarScan, HostDataE
                         .get("cwd")
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_owned),
+                    entry
+                        .get("parentSession")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
                 ));
-            }
-            Some("session_info") if name.is_none() => {
-                name = entry
+                if let Some(session_name) = entry
                     .get("name")
                     .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned);
+                    .filter(|value| !value.is_empty())
+                {
+                    name = Some(session_name.to_owned());
+                }
             }
-            Some("message") => {
+            Some("session_info") => {
+                if let Some(session_name) = entry
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.is_empty())
+                {
+                    name = Some(session_name.to_owned());
+                    name_sealed = true;
+                }
+            }
+            Some("message")
                 if entry
                     .pointer("/message/role")
                     .and_then(serde_json::Value::as_str)
-                    == Some("user")
-                {
-                    user_messages += 1;
-                    if first_message.is_none() {
-                        first_message =
-                            entry
-                                .pointer("/message/content")
-                                .and_then(|content| match content {
-                                    serde_json::Value::String(text) => {
-                                        Some(text.chars().take(120).collect::<String>())
-                                    }
-                                    serde_json::Value::Array(blocks) => blocks
-                                        .iter()
-                                        .find(|block| {
-                                            block.get("type").and_then(serde_json::Value::as_str)
-                                                == Some("text")
-                                        })
-                                        .and_then(|block| block.get("text"))
-                                        .and_then(serde_json::Value::as_str)
-                                        .map(|text| text.chars().take(120).collect::<String>()),
-                                    _ => None,
-                                });
-                    }
-                }
-            }
-            Some("custom")
-                if entry.get("customType").and_then(serde_json::Value::as_str)
-                    == Some("pi-subagents_launch_metadata") =>
+                    == Some("user") =>
             {
-                is_subagent = true;
+                user_messages += 1;
+                if first_message.is_none() {
+                    first_message =
+                        entry
+                            .pointer("/message/content")
+                            .and_then(|content| match content {
+                                serde_json::Value::String(text) => {
+                                    Some(text.chars().take(120).collect::<String>())
+                                }
+                                serde_json::Value::Array(blocks) => blocks
+                                    .iter()
+                                    .find(|block| {
+                                        block.get("type").and_then(serde_json::Value::as_str)
+                                            == Some("text")
+                                    })
+                                    .and_then(|block| block.get("text"))
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(|text| text.chars().take(120).collect::<String>()),
+                                _ => None,
+                            });
+                }
             }
             _ => {}
         }
+        if header.is_some() && user_messages > 0 && first_message.is_some() && name_sealed {
+            break;
+        }
     }
-    let header = header.and_then(|(id, timestamp, cwd)| {
+    let header = header.and_then(|(id, timestamp, cwd, parent_session)| {
         if id.is_empty() || (user_messages == 0 && line_count <= 4) {
             return None;
         }
@@ -1296,19 +1172,18 @@ fn scan_session_sidebar_visibility(path: &Path) -> Result<SidebarScan, HostDataE
             name,
             first_message,
             cwd,
+            parent_session,
         })
     });
-    Ok(SidebarScan {
-        is_subagent,
-        header,
-    })
+    Ok(SidebarScan { header })
 }
 
 pub(crate) fn parse_session_header(path: &Path) -> Option<SessionHeader> {
     use std::io::BufRead;
     let file = std::fs::File::open(path).ok()?;
-    let mut header: Option<(String, String, Option<String>)> = None;
+    let mut header: Option<(String, String, Option<String>, Option<String>)> = None;
     let mut name: Option<String> = None;
+    let mut name_sealed = false;
     let mut first_message: Option<String> = None;
     let mut user_messages = 0usize;
     let mut line_count = 0usize;
@@ -1338,14 +1213,27 @@ pub(crate) fn parse_session_header(path: &Path) -> Option<SessionHeader> {
                         .get("cwd")
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_owned),
+                    entry
+                        .get("parentSession")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
                 ));
+                if let Some(session_name) = entry
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.is_empty())
+                {
+                    name = Some(session_name.to_owned());
+                }
             }
             Some("session_info") => {
-                if name.is_none() {
-                    name = entry
-                        .get("name")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned);
+                if let Some(session_name) = entry
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.is_empty())
+                {
+                    name = Some(session_name.to_owned());
+                    name_sealed = true;
                 }
             }
             Some("message") => {
@@ -1378,11 +1266,11 @@ pub(crate) fn parse_session_header(path: &Path) -> Option<SessionHeader> {
             }
             _ => {}
         }
-        if line_count > 50 && first_message.is_some() && name.is_some() {
+        if header.is_some() && user_messages > 0 && first_message.is_some() && name_sealed {
             break;
         }
     }
-    let (id, timestamp, cwd) = header?;
+    let (id, timestamp, cwd, parent_session) = header?;
     if id.is_empty() {
         return None;
     }
@@ -1396,6 +1284,7 @@ pub(crate) fn parse_session_header(path: &Path) -> Option<SessionHeader> {
         name,
         first_message,
         cwd,
+        parent_session,
     })
 }
 
@@ -2055,7 +1944,7 @@ mod tests {
     }
 
     #[test]
-    fn persisted_bucket_reads_classified_visible_and_hidden_sessions() {
+    fn persisted_bucket_reads_parent_and_subagent_sessions_as_tree_inputs() {
         let temp = tempfile::tempdir().unwrap();
         let workspace = temp.path().join("workspace");
         let other_workspace = temp.path().join("other-workspace");
@@ -2144,9 +2033,23 @@ mod tests {
             .map(|row| row["id"].as_str().unwrap())
             .collect::<Vec<_>>();
         ids.sort_unstable();
-        assert_eq!(ids, vec!["human-fork", "main"]);
-        assert_eq!(visible_count, Some(2));
-        assert_eq!(hidden_count, Some(3));
+        assert_eq!(
+            ids,
+            vec![
+                "fork-child",
+                "human-fork",
+                "lineage-child",
+                "main",
+                "standalone-child",
+            ]
+        );
+        assert_eq!(visible_count, Some(5));
+        assert_eq!(hidden_count, Some(0));
+        let lineage_child = sessions
+            .iter()
+            .find(|row| row["id"] == "lineage-child")
+            .expect("subagent session is projected");
+        assert_eq!(lineage_child["parentSession"], "/sessions/parent.jsonl");
 
         let (_, cached_sessions, cached_count, cached_hidden) =
             data.read_workspace_session_bucket(&workspace_id, true);
@@ -2158,8 +2061,10 @@ mod tests {
         assert_eq!(cached_hidden, None);
 
         let search_results = data.search_sessions(&workspace_id, "refactor").unwrap();
-        assert_eq!(search_results.len(), 1);
-        assert_eq!(search_results[0].session_id, "human-fork");
+        assert_eq!(search_results.len(), 4);
+        assert!(search_results
+            .iter()
+            .any(|result| result.session_id == "lineage-child"));
 
         let mut listed_ids = data
             .list_sessions(&workspace_id)
@@ -2168,56 +2073,20 @@ mod tests {
             .map(|session| session.id)
             .collect::<Vec<_>>();
         listed_ids.sort();
-        assert_eq!(listed_ids, vec!["human-fork", "main"]);
+        assert_eq!(
+            listed_ids,
+            vec![
+                "fork-child",
+                "human-fork",
+                "lineage-child",
+                "main",
+                "standalone-child",
+            ]
+        );
     }
 
     #[test]
-    fn cache_pruning_is_deferred_until_full_bucket_projection() {
-        use crate::metadata_store::SessionSidebarVisibilityRow;
-
-        let temp = tempfile::tempdir().unwrap();
-        let workspace = temp.path().join("workspace");
-        let sessions = temp.path().join("sessions");
-        fs::create_dir_all(&workspace).unwrap();
-        let (data, workspace_id) = test_data(&workspace);
-        let data = data.with_session_root(sessions);
-        let bucket = data
-            .session_bucket_for_workspace(&workspace_id)
-            .expect("persisted session bucket");
-        fs::create_dir_all(&bucket).unwrap();
-        let stale_file = bucket.join("stale.jsonl");
-        data.metadata
-            .lock()
-            .unwrap()
-            .upsert_session_sidebar_visibility(&SessionSidebarVisibilityRow {
-                session_file: stale_file.to_string_lossy().into_owned(),
-                bucket_name: "--test-bucket--".to_owned(),
-                modified_at_ms: 1,
-                size_bytes: 1,
-                is_subagent: false,
-                is_sidebar_visible: true,
-            })
-            .unwrap();
-
-        let (_, _, count, hidden_count) = data.read_workspace_session_bucket(&workspace_id, true);
-        assert_eq!(count, Some(0));
-        assert_eq!(hidden_count, None);
-        assert!(data.visibility_cache(&stale_file).unwrap().is_some());
-
-        assert!(data.list_sessions(&workspace_id).unwrap().is_empty());
-        assert!(data.visibility_cache(&stale_file).unwrap().is_some());
-        assert!(data
-            .search_sessions(&workspace_id, "stale")
-            .unwrap()
-            .is_empty());
-        assert!(data.visibility_cache(&stale_file).unwrap().is_some());
-
-        data.read_workspace_session_bucket(&workspace_id, false);
-        assert!(data.visibility_cache(&stale_file).unwrap().is_none());
-    }
-
-    #[test]
-    fn append_only_tail_scan_hides_a_pre_marker_visible_file() {
+    fn appended_subagent_marker_does_not_hide_a_session() {
         let temp = tempfile::tempdir().unwrap();
         let workspace = temp.path().join("workspace");
         fs::create_dir_all(&workspace).unwrap();
@@ -2247,20 +2116,76 @@ mod tests {
 
         let (_, sessions, second_count, second_hidden) =
             data.read_workspace_session_bucket(&workspace_id, false);
-        assert!(sessions.is_empty());
-        assert_eq!(second_count, Some(0));
-        assert_eq!(second_hidden, Some(1));
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0]["id"], "grown");
+        assert_eq!(second_count, Some(1));
+        assert_eq!(second_hidden, Some(0));
     }
 
     #[test]
     fn unresolved_sidebar_classifications_are_not_projected() {
         let classification = SidebarFileClassification {
-            is_subagent: false,
             is_sidebar_visible: true,
             resolved: false,
             header: None,
         };
         assert!(!should_project_sidebar_file(&classification));
+    }
+
+    #[test]
+    fn session_header_name_is_used_and_session_info_can_override_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let header_path = temp.path().join("header-name.jsonl");
+        let header = serde_json::json!({
+            "type": "session",
+            "id": "header-name",
+            "timestamp": "2026-09-12T00:00:00.000Z",
+            "cwd": "/workspace",
+            "name": "[worker] Implement questionnaire renderer",
+        });
+        let message = serde_json::json!({
+            "type": "message",
+            "message": { "role": "user", "content": "hello" },
+        });
+        fs::write(&header_path, format!("{header}\n{message}\n")).unwrap();
+
+        let scan = super::scan_session_sidebar_visibility(&header_path).unwrap();
+        assert_eq!(
+            scan.header.as_ref().and_then(|value| value.name.as_deref()),
+            Some("[worker] Implement questionnaire renderer")
+        );
+        assert_eq!(
+            super::parse_session_header(&header_path).and_then(|value| value.name),
+            Some("[worker] Implement questionnaire renderer".to_string())
+        );
+
+        let renamed_path = temp.path().join("renamed.jsonl");
+        fs::write(
+            &renamed_path,
+            format!("{header}\n{message}\n{{\"type\":\"session_info\",\"name\":\"Renamed\"}}\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            super::parse_session_header(&renamed_path).and_then(|value| value.name),
+            Some("Renamed".to_string())
+        );
+    }
+
+    #[test]
+    fn sidebar_scan_stops_after_required_fields_are_found() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("early-stop.jsonl");
+        let mut content = session_fixture("early-stop", "/workspace", None, "hello").into_bytes();
+        content.extend_from_slice(
+            b"{\"type\":\"message\",\"message\":{\"role\":\"assistant\"}}\n\xff\n",
+        );
+        fs::write(&path, content).unwrap();
+
+        let scan = super::scan_session_sidebar_visibility(&path).unwrap();
+        assert_eq!(
+            scan.header.as_ref().map(|header| header.id.as_str()),
+            Some("early-stop")
+        );
     }
 
     #[test]

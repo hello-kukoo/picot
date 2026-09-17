@@ -164,7 +164,13 @@ class FakeWebSocket extends EventTarget {
               event: {
                 type: "extension_ui_request",
                 method: "notify",
-                message: JSON.stringify({ __picotConfig: parsed.id, ok: true, data: {} }),
+                message: JSON.stringify({
+                  __picotConfig: parsed.id,
+                  ok: true,
+                  data: msg.includes('"op":"list_package_skill_inventory"')
+                    ? { packages: [], diagnostics: [] }
+                    : {},
+                }),
               },
             }),
           });
@@ -260,6 +266,7 @@ beforeEach(async () => {
   vi.spyOn(console, "debug").mockImplementation(() => {});
   vi.spyOn(console, "log").mockImplementation(() => {});
   globalThis.requestAnimationFrame = (callback) => callback();
+  window.requestAnimationFrame = globalThis.requestAnimationFrame;
   globalThis.ResizeObserver = class {
     observe() {}
     disconnect() {}

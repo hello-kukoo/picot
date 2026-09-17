@@ -42,35 +42,56 @@ beforeEach(async () => {
   await initI18n();
 });
 
-test("renders parent and child sessions with a linear tree prefix", () => {
+test("renders a parent and five worker branches as one aligned tree", () => {
   const sidebar = new SessionSidebar(document.getElementById("sessions"), vi.fn(), vi.fn());
   const parent = {
     id: "parent",
     filePath: "/sessions/parent.jsonl",
-    name: "Parent",
+    name: "extension 的参数设置",
     timestamp: "2026-01-01T00:00:00.000Z",
   };
-  const child = {
-    id: "child",
-    filePath: "/sessions/child.jsonl",
-    name: "Child",
+  const children = [
+    "[worker] Implement questionnaire renderer",
+    "[worker] Implement widget mirror registry",
+    "[codebase-analyzer] Map widget and questionnaire code",
+    "[explore] Trace UI event flows",
+    "[worker] Hunk review comment fixes",
+  ].map((name, index) => ({
+    id: `child-${index}`,
+    filePath: `/sessions/child-${index}.jsonl`,
+    name,
     parentSession: parent.filePath,
-    timestamp: "2026-01-02T00:00:00.000Z",
-  };
+    timestamp: `2026-01-0${index + 2}T00:00:00.000Z`,
+  }));
   sidebar.projects = [
     {
       workspaceId: "workspace",
       path: "/work",
       folderName: "work",
-      sessions: [child, parent],
-      sessionCount: 2,
+      sessions: [...children, parent],
+      sessionCount: children.length + 1,
     },
   ];
+  sidebar.projectSessionInitialLimit = children.length + 1;
 
   sidebar.render();
 
   const rows = [...document.querySelectorAll(".project-group .session-item")];
-  expect(rows.map((row) => row.dataset.filePath)).toEqual([parent.filePath, child.filePath]);
+  expect(rows).toHaveLength(children.length + 1);
   expect(rows[0].querySelector(".session-tree-prefix")).toBeNull();
-  expect(rows[1].querySelector(".session-tree-prefix").textContent).toBe("   └─ ");
+  expect(rows.slice(1).map((row) => row.querySelector(".session-tree-prefix").textContent)).toEqual(
+    ["   ├─ ", "   ├─ ", "   ├─ ", "   ├─ ", "   └─ "],
+  );
+  expect(
+    rows.slice(1).every((row) => {
+      const titleRow = row.querySelector(".session-title-row");
+      return (
+        titleRow.querySelector(".session-tree-prefix") &&
+        !row.querySelector(":scope > .session-tree-prefix")
+      );
+    }),
+  ).toBe(true);
+  expect(rows.slice(1).map((row) => row.querySelector(".session-title").textContent)).toEqual(
+    [...children].reverse().map((child) => child.name),
+  );
 });

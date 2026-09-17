@@ -18,7 +18,7 @@ beforeEach(async () => {
           sidebar: {
             showMore: "Show more",
             showLess: "Show less",
-            openProject: "Open Project",
+            addProject: "Add project",
             loadingSessions: "Loading sessions...",
             pinned: "PINNED",
             projects: "PROJECTS",
@@ -85,8 +85,8 @@ describe("SessionSidebar onboarding empty state", () => {
 
     const button = document.querySelector(".session-empty-open-project");
     expect(button).not.toBeNull();
-    expect(button.getAttribute("aria-label")).toBe("Open Project");
-    expect(button.textContent).toContain("Open Project");
+    expect(button.getAttribute("aria-label")).toBe("Add project");
+    expect(button.textContent).toBe("+Add project");
 
     button.click();
     expect(onOpenProject).toHaveBeenCalledTimes(1);

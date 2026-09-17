@@ -12,13 +12,13 @@ export function sessionPath(session) {
 }
 
 function sessionActivity(session) {
+  const mtime = Number(session?.mtime);
+  if (Number.isFinite(mtime) && mtime > 0) return mtime;
   const rawActivity = session?.lastActivityAt;
   const activity = typeof rawActivity === "number" ? rawActivity : Date.parse(rawActivity || "");
   if (Number.isFinite(activity)) return activity;
   const timestamp = Date.parse(session?.timestamp || "");
   if (Number.isFinite(timestamp)) return timestamp;
-  const mtime = Number(session?.mtime);
-  if (Number.isFinite(mtime) && mtime > 0) return mtime;
   const ctime = Number(session?.ctime);
   return Number.isFinite(ctime) ? ctime : 0;
 }

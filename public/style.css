@@ -1157,6 +1157,13 @@ body.landing-mode #landing {
   position: relative;
 }
 
+.session-tree-prefix {
+  flex: 0 0 auto;
+  white-space: pre;
+  color: var(--text-dim);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
 .session-action-slot {
   position: relative;
   width: 76px;
