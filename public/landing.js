@@ -146,7 +146,7 @@ function snapshotUiStateForNavigation() {
   }
 }
 
-function navigateInWindow(url, { focusWorkspaceId } = {}) {
+function navigateInWindow(url) {
   let targetUrl;
   try {
     const parsed = new URL(url, window.location.href);
@@ -160,11 +160,7 @@ function navigateInWindow(url, { focusWorkspaceId } = {}) {
       console.error("[landing] rejected cross-origin target");
       return;
     }
-    if (focusWorkspaceId) {
-      parsed.searchParams.set(FOCUS_WORKSPACE_PARAM, focusWorkspaceId);
-    } else {
-      parsed.searchParams.delete(FOCUS_WORKSPACE_PARAM);
-    }
+    parsed.searchParams.delete(FOCUS_WORKSPACE_PARAM);
     targetUrl = parsed;
   } catch {
     console.error("[landing] rejected invalid target");
@@ -176,7 +172,7 @@ function navigateInWindow(url, { focusWorkspaceId } = {}) {
 // The only way landing enters a workspace: prepare → commit → navigate.
 // Never touches messageRenderer, resetUiForNewSession, quickChatDialog state,
 // filePreviewPanel, terminalPanel, or the model picker.
-async function enterWorkspace(path, { sessionPath, forceNewSession, focusWorkspaceId } = {}) {
+async function enterWorkspace(path, { sessionPath, forceNewSession } = {}) {
   if (launchInProgress) return false;
   if (!path) return false;
   launchInProgress = true;
@@ -210,7 +206,7 @@ async function enterWorkspace(path, { sessionPath, forceNewSession, focusWorkspa
       throw error;
     }
     snapshotUiStateForNavigation();
-    navigateInWindow(prepared.targetOrigin, { targetCwd: path, focusWorkspaceId });
+    navigateInWindow(prepared.targetOrigin);
     return true;
   } catch (error) {
     if (prepared?.transitionGeneration != null) {
@@ -241,12 +237,6 @@ function handleRegisterWorkspace(targetCwd) {
   return enterWorkspace(targetCwd || "", { forceNewSession: true });
 }
 
-// 4. Focus — a transition, never the workspace-page enterFocus mutation.
-function handleWorkspaceFocus(project) {
-  if (!project?.path) return false;
-  return enterWorkspace(project.path, { focusWorkspaceId: `workspace:${project.path}` });
-}
-
 const sidebar = new SessionSidebar(
   document.getElementById("session-list"),
   handleSessionSelect,
@@ -254,10 +244,9 @@ const sidebar = new SessionSidebar(
   {
     transport,
     onRegisterWorkspace: handleRegisterWorkspace,
-    onWorkspaceFocus: handleWorkspaceFocus,
-    // Landing has no active session and no current workspace: enable Focus
-    // for every registered row instead of the classic active/current gate.
-    canFocusWorkspace: (project) => project?.source === "registry",
+    // No focus seam at landing: Focus-mode gating is "a workspace session is
+    // selected", and landing selects none — the classic predicate (active
+    // session or current workspace) can never pass here, so no `>` button.
     isCurrentWorkspace: () => false,
     onSessionNotice: (message) => renderLandingNotice(message),
   },
@@ -725,7 +714,8 @@ void updater.initUpdaterUI();
 // Discovered-skills inventory rides host control ops, so the tab works at
 // landing. The "packages" sub-tab (扩展中的技能) stays bridge-bound — its
 // inventory/mutation carries project-delta semantics only the bridge
-// implements — and is hidden at landing via CSS.
+// implements — and is excluded from the landing tab shell entirely (no
+// click, no keyboard nav).
 
 function landingSkillRpc(cmd) {
   const handlers = {
@@ -764,8 +754,14 @@ const skillsInstallPage = setupSkillsInstallTab({
   ...skillsSaveFeedback,
 });
 
+// The packages sub-tab needs a live Pi runtime (bridge-bound); at landing it
+// is hidden entirely — same contract as the Pi-bound settings tabs above.
+document.querySelector('[data-skills-page-tab="packages"]')?.classList.add("hidden");
+
 setupSkillsTabShell({
-  tabs: document.querySelectorAll("[data-skills-page-tab]"),
+  // The same exclusion keeps keyboard navigation from selecting the hidden
+  // packages tab (arrow keys cycle the shell's own tab list).
+  tabs: document.querySelectorAll('[data-skills-page-tab]:not([data-skills-page-tab="packages"])'),
   panels: {
     discovered: document.getElementById("settings-skills"),
     install: document.getElementById("settings-install-skills"),

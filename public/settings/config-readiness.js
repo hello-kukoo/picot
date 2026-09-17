@@ -22,8 +22,9 @@ export function createConfigReadiness({ targetKeyOf }) {
 
   // A foreground snapshot for the CURRENT target just rendered: that target is
   // live. Release its waiter; fail fast every stale waiter whose key the
-  // routing has already moved past (ConfigGateway has no timeout before the
-  // request dispatches, so hanging waiters would stall callers forever).
+  // routing has already moved past (ConfigGateway bounds the gate wait with
+  // its own timeout, but an explicit rejection reports the real cause —
+  // the routing moved on — instead of a generic timeout).
   function noteForegroundSnapshot() {
     const key = targetKeyOf();
     if (!key) return;

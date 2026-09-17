@@ -49,7 +49,21 @@ export class ConfigGateway {
   // `{ ok: boolean, data?, error? }`. Rejects only on transport/timeout errors.
   call(op, params = {}, options = {}) {
     if (this.#waitUntilReady) {
-      return this.#waitUntilReady().then(() => this.#send(op, params, options));
+      // The readiness gate runs before #send, so #send's timeout does not
+      // cover it: a runtime that never proves live (e.g. a disk-restored
+      // session that never binds) must surface as an error, not hang the
+      // caller forever.
+      let gateTimer;
+      const gateTimeout = new Promise((_, reject) => {
+        gateTimer = setTimeout(
+          () => reject(new Error(`Configuration request "${op}" timed out waiting for runtime`)),
+          options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        );
+      });
+      return Promise.race([
+        this.#waitUntilReady().then(() => this.#send(op, params, options)),
+        gateTimeout,
+      ]).finally(() => clearTimeout(gateTimer));
     }
     return this.#send(op, params, options);
   }

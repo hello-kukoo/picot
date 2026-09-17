@@ -57,6 +57,8 @@ function makeTransportStub() {
   return {
     capabilities: { native: true },
     mobileAccessInfo: async () => ({ enabled: false, lanUrls: [] }),
+    listSkillInventory: async () => ({ skills: [] }),
+    setSkillEnabled: async () => ({}),
     getPreference: async () => ({ value: true }),
     runtimeInstances: async () => ({ instances: [] }),
     prepareWorkspaceTarget: async (targetCwd, options) => {
@@ -304,6 +306,18 @@ test("landing settings show only functional tabs; usage works, Pi-bound tabs hid
   // The back button returns to the landing view.
   document.getElementById("settings-close").click();
   expect(panel.classList.contains("hidden")).toBe(true);
+  // The bridge-bound packages sub-tab is hidden entirely at landing (no
+  // visible entry) and excluded from the shell (no keyboard selection).
+  const discoveredTab = document.querySelector('[data-skills-page-tab="discovered"]');
+  const packagesTab = document.querySelector('[data-skills-page-tab="packages"]');
+  expect(packagesTab.classList.contains("hidden")).toBe(true);
+  discoveredTab.click();
+  expect(discoveredTab.classList.contains("active")).toBe(true);
+  packagesTab.click();
+  expect(packagesTab.classList.contains("active")).toBe(false);
+  expect(document.getElementById("settings-package-skills").classList.contains("hidden")).toBe(
+    true,
+  );
   // Appearance stays fully functional.
   navItems.find((item) => item.dataset.settingsTab === "appearance").click();
   expect(
@@ -348,15 +362,13 @@ test("new-chat and post-add seams force a new session", async () => {
   expect(harness.prepares[1].options.forceNewSession).toBe(true);
 });
 
-test("focus seam carries focusWorkspaceId for the selected workspace", async () => {
+test("focus seam is absent at landing: no session selected means no focus entry", async () => {
   await bootLanding();
-  const assigns = trackNavigation();
-  expect(harness.sidebarInstance.canFocusWorkspace({ source: "registry" })).toBe(true);
-  expect(harness.sidebarInstance.canFocusWorkspace({ source: "live" })).toBe(false);
-  await harness.sidebarInstance.onWorkspaceFocus({ path: "/tmp/focus" });
-  expect(harness.prepares[0].targetCwd).toBe("/tmp/focus");
-  const navigated = new URL(assigns[0]);
-  expect(navigated.searchParams.get("focusWorkspaceId")).toBe("workspace:/tmp/focus");
+  // Focus-mode gating is "a workspace session is selected"; landing selects
+  // none, so the sidebar receives neither seam and the classic predicate
+  // (active session or current workspace) can never pass.
+  expect(harness.sidebarInstance.canFocusWorkspace ?? null).toBeNull();
+  expect(harness.sidebarInstance.onWorkspaceFocus ?? null).toBeNull();
 });
 
 test("hint and button labels follow the active locale", async () => {

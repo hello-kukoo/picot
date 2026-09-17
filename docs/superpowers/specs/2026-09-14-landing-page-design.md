@@ -112,9 +112,16 @@ corresponding v2 text where noted.
    no instant cold render. Accepted trade-off of "no runtime at startup".
 4. **Justified additions** (v2 silent, all reviewed): macOS drag strip on
    the landing area (no chat header otherwise owns window dragging);
-   Quick Chat dialog roots reparent to `<body>` at landing; Focus as a
-   fourth enterWorkspace seam; same-cwd generation retention now requires
-   a Registered binding (placeholder-home edge, unit-tested).
+   Quick Chat dialog roots reparent to `<body>` at landing; same-cwd
+   generation retention now requires a Registered binding (placeholder-home
+   edge, unit-tested). *Retracted 2026-09-16 after Dr. Lin's hands-on test:*
+   "Focus as a fourth enterWorkspace seam" — every registry row showed the
+   focus `>` at landing, but Focus-mode gating is "a workspace session is
+   selected" and landing selects none. The seam (`canFocusWorkspace` /
+   `onWorkspaceFocus` wiring and the focusWorkspaceId transition option)
+   is removed from landing.js; the classic sidebar predicate (active
+   session or current workspace) never passes at landing, so no `>`
+   button renders there.
 5. **Review round fixes**: `getLanguagePreference` import bug (landing
    Settings language selector threw ReferenceError; found in review, fixed
    by Dr. Lin's other agent and verified); the `dispatch` control gate was

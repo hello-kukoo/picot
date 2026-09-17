@@ -185,6 +185,26 @@ describe("ConfigGateway", () => {
     }
   });
 
+  it("rejects when the readiness gate never opens", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtime = { request: vi.fn() };
+      const gateway = new ConfigGateway({
+        runtime,
+        getTarget: () => ({ workspaceId: "w", sessionId: "s", instanceId: "i" }),
+        waitUntilReady: () => new Promise(() => {}),
+      });
+      const assertion = expect(gateway.call("list_model_catalog")).rejects.toThrow(
+        "waiting for runtime",
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+      await assertion;
+      expect(runtime.request).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects when there is no active session target", async () => {
     const runtime = { request: vi.fn() };
     const gateway = new ConfigGateway({ runtime, getTarget: () => null });
