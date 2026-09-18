@@ -38,6 +38,7 @@ mod pi_launch;
 mod pi_rpc_bridge;
 #[allow(dead_code)]
 mod process_tree;
+mod project_trust;
 mod remote_auth;
 mod runtime_coordinator;
 mod session_ui_profile_store;
@@ -759,7 +760,7 @@ mod tests {
     use crate::metadata_store::{MetadataStore, SharedMetadataStore};
     use serde_json::json;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1051,12 +1052,53 @@ mod tests {
         assert!(quick_chat_snapshot(&registry, &unknown).is_err());
         // Project-scoped skills reject the landing owner; global scope is
         // admitted (it never reads the workspace).
-        assert!(skill_scope_context(&registry, &owner, "project").is_err());
-        assert!(skill_scope_context(&registry, &owner, "global").is_ok());
+        assert!(skill_scope_context(
+            &registry,
+            &owner,
+            "project",
+            Path::new("/nonexistent-agent")
+        )
+        .is_err());
+        assert!(
+            skill_scope_context(&registry, &owner, "global", Path::new("/nonexistent-agent"))
+                .is_ok()
+        );
         // Silence unused-import lint for the shared helper type alias in
         // non-test builds.
         let _ = StdMutex::new(());
         let _ = OwnerWorkspaceSnapshot::NoWorkspace;
+    }
+
+    #[test]
+    fn skill_scope_context_reports_project_trust_for_every_scope() {
+        use crate::window_owner::{TemporaryKind, WindowOwnerRegistry};
+        use std::sync::Arc;
+        let registry = Arc::new(WindowOwnerRegistry::default());
+        let agent_root = tempfile::tempdir().expect("agent root temp dir");
+        let workspace = tempfile::tempdir().expect("workspace temp dir");
+        crate::project_trust::trust_project(agent_root.path(), workspace.path())
+            .expect("seed trust entry");
+        let (owner, _) = registry
+            .create_owner_with_workspace(
+                "native-trust-global".to_string(),
+                workspace.path().canonicalize().unwrap(),
+                3001,
+                "http://127.0.0.1:3001".to_string(),
+                Some("wid-trust-global".to_string()),
+                TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        let canonical = workspace.path().canonicalize().unwrap();
+        // Global listings must carry the real project-trust state — the
+        // inventory includes project roots in every scope's response so the
+        // frontend can compute both scope badges from one load.
+        let (cwd, trusted) =
+            skill_scope_context(&registry, &owner, "global", agent_root.path()).unwrap();
+        assert_eq!(cwd, canonical);
+        assert!(trusted, "global scope must report the real trust state");
+        let (_, project_trusted) =
+            skill_scope_context(&registry, &owner, "project", agent_root.path()).unwrap();
+        assert!(project_trusted);
     }
 
     #[test]
@@ -1865,6 +1907,7 @@ fn skill_scope_context(
     owner_registry: &Arc<WindowOwnerRegistry>,
     owner: &window_owner::OwnerId,
     scope: &str,
+    agent_root: &Path,
 ) -> Result<(PathBuf, bool), String> {
     let snapshot = owner_registry.owner_current_workspace(owner);
     let cwd = match (&snapshot, scope) {
@@ -1876,20 +1919,11 @@ fn skill_scope_context(
             return Err("project-scoped skills require a registered workspace".to_string());
         }
     };
-    if scope != "project" {
-        return Ok((cwd, false));
-    }
-    let agent_root = pi_launch::resolve_pi_agent_root()?;
-    let trust = std::fs::read_to_string(agent_root.join("trust.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
-    let key = cwd.to_string_lossy().into_owned();
-    let trusted = trust.get(&key).and_then(Value::as_bool).unwrap_or(false)
-        || trust
-            .iter()
-            .any(|(path, value)| value.as_bool().unwrap_or(false) && Path::new(path) == cwd);
+    // Trust is scope-independent (mirrors the bridge's skillInventoryOptions,
+    // which always reads ctx.isProjectTrusted()): a global-scoped listing must
+    // still carry the real trust state so the inventory includes project
+    // roots — the frontend computes both scope badges from one load.
+    let trusted = project_trust::is_project_trusted(agent_root, &cwd);
     Ok((cwd, trusted))
 }
 
@@ -2071,6 +2105,19 @@ fn install_control_handler(
                             "type": "registry_changed",
                             "reason": change.reason(),
                         }));
+                    }
+                    // Registering a project through Picot's picker is an
+                    // explicit trust gesture: record it in Pi's trust store
+                    // (best-effort; workspace registration itself must not
+                    // fail on a trust-write hiccup).
+                    if command == "workspace.add" {
+                        if let Some(canonical) = result
+                            .get("workspace")
+                            .and_then(|workspace| workspace.get("canonicalPath"))
+                            .and_then(Value::as_str)
+                        {
+                            project_trust::trust_registered_workspace(canonical);
+                        }
                     }
                     return Ok(result);
                 }
@@ -2367,8 +2414,9 @@ fn install_control_handler(
                         require_native_owner(&ctx)?;
                         let owner = ctx.owner_id.as_ref().ok_or("native owner required")?;
                         let scope = arg_str("scope").unwrap_or_else(|| "global".into());
-                        let (cwd, trusted) = skill_scope_context(&owner_registry, owner, &scope)?;
                         let agent_root = pi_launch::resolve_pi_agent_root()?;
+                        let (cwd, trusted) =
+                            skill_scope_context(&owner_registry, owner, &scope, &agent_root)?;
                         let home = home_dir()?;
                         Ok(host_skills::build_skill_inventory(
                             &host_skills::SkillInventoryOptions {
@@ -2388,8 +2436,9 @@ fn install_control_handler(
                         require_native_owner(&ctx)?;
                         let owner = ctx.owner_id.as_ref().ok_or("native owner required")?;
                         let scope = arg_str("scope").unwrap_or_else(|| "global".into());
-                        let (cwd, trusted) = skill_scope_context(&owner_registry, owner, &scope)?;
                         let agent_root = pi_launch::resolve_pi_agent_root()?;
+                        let (cwd, trusted) =
+                            skill_scope_context(&owner_registry, owner, &scope, &agent_root)?;
                         let home = home_dir()?;
                         Ok(host_skills::build_package_skill_inventory(
                             &host_skills::SkillInventoryOptions {
@@ -2409,8 +2458,9 @@ fn install_control_handler(
                         require_native_owner(&ctx)?;
                         let owner = ctx.owner_id.as_ref().ok_or("native owner required")?;
                         let scope = arg_str("scope").unwrap_or_else(|| "global".into());
-                        let (cwd, trusted) = skill_scope_context(&owner_registry, owner, &scope)?;
                         let agent_root = pi_launch::resolve_pi_agent_root()?;
+                        let (cwd, trusted) =
+                            skill_scope_context(&owner_registry, owner, &scope, &agent_root)?;
                         let home = home_dir()?;
                         let target = arg("target");
                         let target_kind = target

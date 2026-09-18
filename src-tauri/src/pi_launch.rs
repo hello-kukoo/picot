@@ -242,12 +242,20 @@ pub(crate) fn native_launch_spec(
     cwd: &str,
     session_path: Option<&str>,
 ) -> Result<NativeLaunchSpec, String> {
-    native_launch_spec_for(
+    let spec = native_launch_spec_for(
         static_dir,
         NativeRuntimeType::Primary,
         Path::new(cwd),
         session_path.map(Path::new),
-    )
+    )?;
+    // Every wrapper caller (open_workspace / restart_runtime / workspace
+    // transition) launches on a registry-verified workspace root: that launch
+    // is Picot's explicit trust gesture. Record it BEFORE spawn so Pi's RPC
+    // startup — no UI, undecided extension, no saved decision — resolves the
+    // project as trusted and loads its project-local resources. Ephemeral
+    // runtimes call native_launch_spec_for directly and stay untrusted.
+    crate::project_trust::trust_registered_workspace(cwd);
+    Ok(spec)
 }
 /// Build native launch inputs for a specific runtime type.
 ///

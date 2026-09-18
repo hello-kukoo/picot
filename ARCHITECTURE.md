@@ -205,6 +205,14 @@ global `~/.pi/agent/settings.json` 与 trusted project `<workspace>/.pi/settings
 
 Picot 的 Packages tab 由 `public/settings/package-skills-tab.js` 渲染；它经 `/picot-config` 的 `list_package_skill_inventory` 取得 `extensions/package-skill-inventory.ts` 解析出的 effective package candidates 和 enabled state。单项切换发送 `set_package_skill_enabled`，bridge (`extensions/picot-config.ts`) 在同一 scope 的 settings 文件上使用 settings lock 与 atomic write 更新 `packages[].skills`，随后返回重算后的 inventory。该修改只影响后续 Pi resource discovery，响应携带 `runtimeRestartRequired: true`；当前 runtime 不热重载 skills，用户须新建 session 或重启 Pi 后生效。
 
+### 项目信任（trust.json）
+
+Pi 以 `~/.pi/agent/trust.json`（键为 canonical 路径，值为 true/false/null）决定是否加载项目本地 `.pi/` 资源（skills/prompts/extensions/settings.json 等）。RPC 模式无 UI 询问、Picot 的 `project_trust` extension 分支返回 `undecided`、Pi 对「ask 且无 UI」的兑底是不信任，因此 Picot 必须自己建立信任决定：
+
+- **写入点**（`src-tauri/src/project_trust.rs`，均为 best-effort，失败仅 `log::warn` 不阻断）：①`workspace.add` 控制面 op 成功后，按返回的 `canonicalPath` 写入；②`pi_launch::native_launch_spec`（open_workspace / restart_runtime / workspace transition 的统一封装）在 spawn 前写入。通过 Picot 添加或打开已注册 workspace 即显式信任手势，会覆盖该路径的显式 `false`。ephemeral/quick/side-chat runtime 走 `native_launch_spec_for`，**不**写信任（临时目录保持隔离）。
+- **写入协议**：复刻 Pi 的 proper-lockfile 语义——`create_dir`（原子 EEXIST，绝不可用 `create_dir_all`）在 `trust.json.lock` 目录上获取锁，10s mtime 过期阈值，20ms 重试、上限 750 次，`remove_dir` 释放；read-modify-write 保留其他条目，键排序 + 2 空格 JSON + 尾随换行与 Pi 的 `writeTrustFile` 逐字节一致，tmp+rename 原子落盘。
+- **查询语义**：`skill_scope_context` 改用 `is_project_trusted`，对齐 Pi 的 `findNearestTrustEntry`——从项目根向上找最近的 true/false 条目（更近的显式 `false` 覆盖受信父目录），null/缺失继续上溯，无条目则不信任。
+
 ## 兼容路由（P8 删除候选）
 
 `/api/*` compatibility routes maintain existing shell behavior on host origin. Each route uses owner capability authorization. Runtime traffic must use `/v2/*` and `/v2/ws`; retained HTTP routes are explicit compatibility or retirement responses, never Pi-origin forwarding.
