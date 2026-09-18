@@ -718,11 +718,11 @@ setupSkillSlashCommand({
   input: messageInput,
   container: skillSlashMenu,
   loadSkills: async () => {
-    const response = await rpcCommand({ type: "list_skills" }, null, true);
+    const response = await rpcCommand({ type: "list_slash_commands" }, null, true);
     if (!response?.success) {
-      throw new Error(response?.error || "Failed to load skills");
+      throw new Error(response?.error || "Failed to load slash commands");
     }
-    return response.data?.skills || [];
+    return response.data?.commands || [];
   },
 });
 
@@ -3634,16 +3634,18 @@ const HOST_CONTROL_COMMANDS = new Map([
 
 // Skills surfaces were retired with /api/rpc and are now native host
 // controls; the slash-command list reads the runtime's own command registry
-// (get_commands), so a `/skill:` typed in the composer always matches Pi.
+// (get_commands). Skills and prompt templates are the expansion-type entries
+// (both expand on send; extension commands execute code and stay excluded),
+// so a `/skill:` or `/template` typed in the composer always matches Pi.
 const RUNTIME_GET_COMMANDS_TIMEOUT_MS = 15000;
-async function listSkillsViaRuntime() {
+async function listSlashCommandsViaRuntime() {
   const data = await wsRequest({ type: "get_commands" }, RUNTIME_GET_COMMANDS_TIMEOUT_MS);
   const commands = Array.isArray(data?.commands) ? data.commands : [];
   return {
-    skills: commands
+    commands: commands
       .filter(
         (command) =>
-          command?.source === "skill" &&
+          (command?.source === "skill" || command?.source === "prompt") &&
           typeof command?.name === "string" &&
           command.name.length > 0,
       )
@@ -3652,6 +3654,7 @@ async function listSkillsViaRuntime() {
         name: command.name.replace(/^skill:/, ""),
         description: typeof command?.description === "string" ? command.description.trim() : "",
         scope: command?.location === "project" ? "project" : "personal",
+        kind: command.source === "prompt" ? "prompt" : "skill",
       })),
   };
 }
@@ -3665,7 +3668,7 @@ const bridgeData = (op, params) =>
     return result.data ?? {};
   });
 const SKILL_HOST_COMMANDS = new Map([
-  ["list_skills", () => listSkillsViaRuntime()],
+  ["list_slash_commands", () => listSlashCommandsViaRuntime()],
   // Discovered-skills inventory: host control ops (no Pi runtime needed,
   // works at landing). The package-skills entries below stay on the bridge —
   // their inventory/mutation carries project-delta semantics that only the

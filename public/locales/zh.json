@@ -1077,6 +1077,10 @@
   "fileMention": {
     "listLabel": "文件"
   },
+  "slashCommands": {
+    "listLabel": "命令",
+    "emptyLabel": "没有匹配的命令"
+  },
   "workspace": {
     "focus": "进入专注模式",
     "focusTitle": "工作区",

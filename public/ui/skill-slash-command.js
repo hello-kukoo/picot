@@ -1,3 +1,7 @@
+// ABOUTME: Slash-trigger completion menu listing expansion-type commands (prompts + skills).
+// ABOUTME: Selection inserts `/name `; Pi expands the command natively on send.
+
+import { t } from "../i18n.js";
 import { createIcon } from "../icons.js";
 
 function titleCaseSkillName(name) {
@@ -22,8 +26,8 @@ function scopeLabel(scope) {
   return "Personal";
 }
 
-function cubeIcon(doc) {
-  return createIcon("box", { size: 16, document: doc });
+function kindIcon(kind, doc) {
+  return createIcon(kind === "prompt" ? "file-text" : "box", { size: 16, document: doc });
 }
 
 export function setupSkillSlashCommand({ input, container, loadSkills }) {
@@ -35,7 +39,7 @@ export function setupSkillSlashCommand({ input, container, loadSkills }) {
   let updateGeneration = 0;
 
   container.setAttribute("role", "listbox");
-  container.setAttribute("aria-label", "Skills");
+  container.setAttribute("aria-label", t("slashCommands.listLabel"));
 
   function close() {
     updateGeneration += 1;
@@ -92,15 +96,16 @@ export function setupSkillSlashCommand({ input, container, loadSkills }) {
     selectedIndex = Math.min(selectedIndex, Math.max(matches.length - 1, 0));
 
     container.replaceChildren();
+    container.setAttribute("aria-label", t("slashCommands.listLabel"));
     const heading = document.createElement("div");
     heading.className = "skill-slash-heading";
-    heading.textContent = "Skills";
+    heading.textContent = t("slashCommands.listLabel");
     container.appendChild(heading);
 
     if (matches.length === 0) {
       const empty = document.createElement("div");
       empty.className = "skill-slash-empty";
-      empty.textContent = "No matching skills";
+      empty.textContent = t("slashCommands.emptyLabel");
       container.appendChild(empty);
     } else {
       matches.forEach((skill, index) => {
@@ -108,12 +113,13 @@ export function setupSkillSlashCommand({ input, container, loadSkills }) {
         option.type = "button";
         option.id = `skill-slash-option-${index}`;
         option.className = "skill-slash-option";
+        option.dataset.kind = skill.kind || "skill";
         option.classList.toggle("selected", index === selectedIndex);
         option.setAttribute("role", "option");
         option.setAttribute("aria-selected", String(index === selectedIndex));
         const icon = document.createElement("span");
         icon.className = "skill-slash-icon";
-        const iconSvg = cubeIcon(document);
+        const iconSvg = kindIcon(skill.kind, document);
         if (iconSvg) icon.appendChild(iconSvg);
         const name = document.createElement("span");
         name.className = "skill-slash-name";

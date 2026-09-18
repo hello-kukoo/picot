@@ -1076,6 +1076,10 @@
   "fileMention": {
     "listLabel": "Archivos"
   },
+  "slashCommands": {
+    "listLabel": "Comandos",
+    "emptyLabel": "Sin comandos coincidentes"
+  },
   "workspace": {
     "focus": "Entrar en modo de enfoque",
     "focusTitle": "Espacio de trabajo",

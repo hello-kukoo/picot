@@ -1076,6 +1076,10 @@
   "fileMention": {
     "listLabel": "ファイル"
   },
+  "slashCommands": {
+    "listLabel": "コマンド",
+    "emptyLabel": "一致するコマンドがありません"
+  },
   "workspace": {
     "focus": "フォーカスモードに入る",
     "focusTitle": "ワークスペース",

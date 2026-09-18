@@ -549,7 +549,36 @@ impl HostDataPlane {
         let root = self.workspace_root(workspace_id)?;
         let needle = query.trim().trim_start_matches('@').to_lowercase();
         if needle.is_empty() {
-            return Ok(Vec::new());
+            // ponytail: bare `@` lists the workspace root's first level (dot
+            // entries skipped, name-sorted) so typing `@` immediately shows
+            // files — the pi TUI affordance. Upgrade to a gitignore-aware
+            // recursive walk only if drilling from the bare list matters.
+            let mut root_entries: Vec<std::fs::DirEntry> = std::fs::read_dir(&root)
+                .map(|dir| {
+                    dir.flatten()
+                        .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+                        .collect()
+                })
+                .unwrap_or_default();
+            root_entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
+            let results = root_entries
+                .into_iter()
+                .take(MAX_RESULTS)
+                .map(|entry| {
+                    let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    FileEntry {
+                        kind: if is_dir {
+                            FileKind::Directory
+                        } else {
+                            FileKind::File
+                        },
+                        relative_path: name.clone(),
+                        name,
+                    }
+                })
+                .collect();
+            return Ok(results);
         }
         let started = std::time::Instant::now();
         let mut visited = 0usize;
@@ -1712,6 +1741,39 @@ mod tests {
             .set_workspace_session_bucket_from_pi(&row.workspace_id, "--test-bucket--")
             .unwrap();
         (HostDataPlane::new(store), row.workspace_id)
+    }
+
+    #[test]
+    fn file_mentions_bare_query_lists_workspace_root_first_level() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-mention-bare-{nonce}"));
+        let workspace = temp.join("workspace");
+        fs::create_dir_all(workspace.join("src")).unwrap();
+        fs::write(workspace.join("package.json"), "{}").unwrap();
+        fs::write(workspace.join("README.md"), "x").unwrap();
+        fs::write(workspace.join(".hidden"), "x").unwrap();
+        let (data, workspace_id) = test_data(&workspace);
+
+        // Bare `@` must list files immediately (pi TUI affordance): the root's
+        // first level, dot entries skipped, deterministic name order.
+        let entries = data.file_mentions(&workspace_id, "@").unwrap();
+        let names: Vec<String> = entries.iter().map(|entry| entry.name.clone()).collect();
+        assert!(names.contains(&"package.json".to_string()), "got {names:?}");
+        assert!(names.contains(&"README.md".to_string()), "got {names:?}");
+        assert!(names.contains(&"src".to_string()), "got {names:?}");
+        assert!(!names.iter().any(|name| name.starts_with('.')));
+        let src = entries.iter().find(|entry| entry.name == "src").unwrap();
+        assert!(matches!(src.kind, FileKind::Directory));
+
+        // Non-empty queries keep the substring walk semantics.
+        let filtered = data.file_mentions(&workspace_id, "@pack").unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "package.json");
+
+        fs::remove_dir_all(temp).unwrap();
     }
 
     #[test]

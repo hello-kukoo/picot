@@ -1,5 +1,6 @@
 import { JSDOM } from "jsdom";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { t } from "../i18n.js";
 import {
   activeSlashQuery,
   setupSkillSlashCommand,
@@ -226,5 +227,87 @@ describe("skill slash command", () => {
 
   test("formats kebab-case names for display", () => {
     expect(titleCaseSkillName("agent-evaluation")).toBe("Agent Evaluation");
+  });
+
+  test("renders prompt templates alongside skills with kind markers", async () => {
+    const picker = setupSkillSlashCommand({
+      input,
+      container,
+      loadSkills: async () => [
+        {
+          command: "/review",
+          name: "review",
+          description: "Review staged git changes",
+          scope: "project",
+          kind: "prompt",
+        },
+        {
+          command: "/skill:research",
+          name: "research",
+          description: "Investigate primary sources",
+          scope: "personal",
+          kind: "skill",
+        },
+      ],
+    });
+
+    input.value = "/";
+    input.setSelectionRange(1, 1);
+    await picker.update();
+
+    const options = container.querySelectorAll(".skill-slash-option");
+    expect(options).toHaveLength(2);
+    expect(options[0].dataset.kind).toBe("prompt");
+    expect(options[1].dataset.kind).toBe("skill");
+    // Visual distinction rides on the icon: file-text renders 5 paths, box 3.
+    expect(options[0].querySelectorAll(".skill-slash-icon path")).toHaveLength(5);
+    expect(options[1].querySelectorAll(".skill-slash-icon path")).toHaveLength(3);
+    expect(container.textContent).toContain("Review");
+    expect(container.textContent).toContain("Project");
+  });
+
+  test("headings and empty state use the slashCommands i18n namespace", async () => {
+    const picker = setupSkillSlashCommand({
+      input,
+      container,
+      loadSkills: async () => [],
+    });
+
+    input.value = "/";
+    input.setSelectionRange(1, 1);
+    await picker.update();
+
+    expect(container.getAttribute("aria-label")).toBe(t("slashCommands.listLabel"));
+    expect(container.querySelector(".skill-slash-heading").textContent).toBe(
+      t("slashCommands.listLabel"),
+    );
+    expect(container.querySelector(".skill-slash-empty").textContent).toBe(
+      t("slashCommands.emptyLabel"),
+    );
+  });
+
+  test("keyboard selection inserts a prompt template command", async () => {
+    const picker = setupSkillSlashCommand({
+      input,
+      container,
+      loadSkills: async () => [
+        {
+          command: "/review",
+          name: "review",
+          description: "Review staged git changes",
+          scope: "project",
+          kind: "prompt",
+        },
+      ],
+    });
+
+    input.value = "/";
+    input.setSelectionRange(1, 1);
+    await picker.update();
+    input.dispatchEvent(
+      new dom.window.KeyboardEvent("keydown", { key: "Enter", cancelable: true }),
+    );
+
+    expect(input.value).toBe("/review ");
   });
 });

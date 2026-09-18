@@ -753,9 +753,8 @@ mod tests {
     use super::{
         cancel_should_stop_target, filter_session_delete_paths, find_existing_runtime_for_prepare,
         image_mime_from_path, new_session_menu_enabled, persisted_session_id_for_workspace,
-        quick_chat_snapshot, resolve_static_dir, should_stop_owner_runtimes_on_transition,
-        side_chat_startup_rpc_commands, skill_scope_context, touch_registered_workspace,
-        workspace_snapshot_for,
+        quick_chat_snapshot, resolve_static_dir, side_chat_startup_rpc_commands,
+        skill_scope_context, touch_registered_workspace, workspace_snapshot_for,
     };
     use crate::metadata_store::{MetadataStore, SharedMetadataStore};
     use serde_json::json;
@@ -935,16 +934,40 @@ mod tests {
     }
 
     #[test]
-    fn same_workspace_session_transition_keeps_prior_runtime_alive() {
-        let workspace = PathBuf::from("/workspace");
-        assert!(!should_stop_owner_runtimes_on_transition(
-            Some(workspace.as_path()),
-            Some(workspace.as_path()),
-        ));
-        assert!(should_stop_owner_runtimes_on_transition(
-            Some(workspace.as_path()),
-            Some(PathBuf::from("/other-workspace").as_path()),
-        ));
+    fn cross_workspace_return_reuses_the_prior_runtime() {
+        let manager = crate::native_pi_manager::NativePiManager::new(8);
+        let prior = crate::runtime_coordinator::RuntimeTarget::with_owner(
+            "workspace-a",
+            "saved-session",
+            "instance-a",
+            "owner-a",
+            1,
+        );
+        manager.register_in_memory(prior.clone()).unwrap();
+
+        // A cross-workspace commit must not stop A. While B is current,
+        // authorize_target denies this old target; returning to A adopts it.
+        assert_eq!(
+            find_existing_runtime_for_prepare(
+                &manager,
+                "workspace-a",
+                "owner-a",
+                Some("saved-session"),
+                false,
+            ),
+            Some(prior.clone()),
+        );
+        assert!(manager.rebind_owner_generation("owner-a", "saved-session", 3));
+        assert_eq!(
+            manager.target_for_session_id("saved-session"),
+            Some(crate::runtime_coordinator::RuntimeTarget::with_owner(
+                "workspace-a",
+                "saved-session",
+                "instance-a",
+                "owner-a",
+                3,
+            )),
+        );
     }
 
     #[test]
