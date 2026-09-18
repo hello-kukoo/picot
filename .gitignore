@@ -19,6 +19,12 @@ src-tauri/resources/pi/
 .cache/terminal-fonts/
 .cache/cjk-fonts/
 
+# This repo's public/ is tracked source (vanilla JS WebView), not a static
+# build output — un-ignore it against over-broad global ignores (e.g. a
+# Gatsby-style `public/` rule in ~/.gitignore_global) so `git add` and the
+# husky restage step work.
+!public/
+
 # Generated terminal font assets (produced by scripts/fetch-terminal-font.js)
 public/fonts/terminal/
 
