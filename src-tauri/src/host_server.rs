@@ -2277,21 +2277,31 @@ async fn dispatch(
                 .ok_or(("invalid_command", "Runtime command is required".into()))?;
             let scope = operation_scope(context, &target.session_id)?;
             if command.get("type").and_then(Value::as_str) == Some("extension_ui_response") {
-                // Ownership is resolved from the live runtime host-side; the
-                // wire target carries no owner fields to compare against.
-                let live_owner = state
-                    .runtimes
-                    .target_for_session_id(&target.session_id)
-                    .and_then(|live| live.owner_id);
-                if !dialog_response_allowed(context, live_owner.as_deref()) {
+                // Ownership and the full routing target are resolved host-side;
+                // the wire target carries only the routing triple, so it can
+                // never equal the coordinator's registered target (owner Some,
+                // generation N) — the live target must bridge the response.
+                let live_target = state.runtimes.target_for_session_id(&target.session_id);
+                if !dialog_response_allowed(
+                    context,
+                    live_target
+                        .as_ref()
+                        .and_then(|live| live.owner_id.as_deref()),
+                ) {
                     return Err((
                         "dialog_response_forbidden",
                         "Only the current workspace owner may answer this dialog".into(),
                     ));
                 }
+                let Some(live_target) = live_target else {
+                    return Err((
+                        "dialog_response_failed",
+                        "No running runtime for this session".into(),
+                    ));
+                };
                 state
                     .runtimes
-                    .respond_extension_ui(&target, command)
+                    .respond_extension_ui(&live_target, command)
                     .await
                     .map_err(|message| ("dialog_response_failed", message))?;
                 return Ok(json!({
@@ -5636,6 +5646,132 @@ mod tests {
         socket.next().await.unwrap().unwrap();
         assert_eq!(
             fake.read_request().await.unwrap(),
+            json!({
+                "type": "extension_ui_response",
+                "id": "dialog-1",
+                "value": "Trust once"
+            })
+        );
+
+        host.stop();
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[tokio::test]
+    async fn routes_extension_ui_response_sent_with_wire_triple_only() {
+        // The desktop WebView sends only the routing triple: owner binding and
+        // workspace generation never cross the wire. The dialog branch must
+        // resolve the live target host-side; exact-equality validation against
+        // the wire form would reject every production answer (live targets
+        // carry owner Some and generation N) and strand pi's dialog forever.
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-dialog-triple-{nonce}"));
+        let public = temp.join("public");
+        fs::create_dir_all(&public).unwrap();
+        fs::write(public.join("index.html"), "Picot").unwrap();
+        let metadata = Arc::new(Mutex::new(
+            MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
+        ));
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
+        let runtimes = NativePiManager::new(32);
+        let registry = Arc::new(crate::window_owner::WindowOwnerRegistry::default());
+        let (owner, capability) = registry
+            .create_owner_with_workspace(
+                "owner".into(),
+                temp.clone(),
+                0,
+                "http://127.0.0.1:1".into(),
+                Some("workspace-a".into()),
+                crate::window_owner::TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        let target =
+            RuntimeTarget::with_owner("workspace-a", "session-a", "instance-a", owner.as_str(), 0);
+        let mut fake = runtimes.register_in_memory(target.clone()).unwrap();
+        fake.write_frame(json!({
+            "type": "extension_ui_request",
+            "id": "dialog-1",
+            "method": "select",
+            "title": "Project trust",
+            "options": ["Trust once", "Open untrusted"]
+        }))
+        .await
+        .unwrap();
+        tokio::task::yield_now().await;
+
+        let host = HostServer::start(public, runtimes, auth, metadata)
+            .await
+            .unwrap();
+        host.set_owner_registry(registry);
+        let ws_url = host.origin().replace("http://", "ws://") + "/v2/ws";
+        let (mut socket, _) = tokio_tungstenite::connect_async(ws_url).await.unwrap();
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "type": "hello",
+                    "protocolVersion": 2,
+                    "clientType": "desktop",
+                    "clientId": "owner",
+                    "desktopCapability": capability
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        socket.next().await.unwrap().unwrap();
+        let wire_target = json!({
+            "workspaceId": "workspace-a",
+            "sessionId": "session-a",
+            "instanceId": "instance-a"
+        });
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "type": "runtime_subscribe",
+                    "requestId": "subscribe",
+                    "target": wire_target,
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        socket.next().await.unwrap().unwrap();
+        let replay = socket.next().await.unwrap().unwrap();
+        let replay: serde_json::Value = serde_json::from_str(replay.to_text().unwrap()).unwrap();
+        assert_eq!(replay["event"]["id"], "dialog-1");
+
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "type": "runtime_request",
+                    "requestId": "dialog-response",
+                    "target": wire_target,
+                    "command": {
+                        "type": "extension_ui_response",
+                        "id": "dialog-1",
+                        "value": "Trust once"
+                    }
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let reply = socket.next().await.unwrap().unwrap();
+        let reply: serde_json::Value = serde_json::from_str(reply.to_text().unwrap()).unwrap();
+        assert_eq!(
+            reply["type"], "runtime_response",
+            "dialog response was rejected: {reply}"
+        );
+        assert_eq!(reply["response"]["success"], serde_json::json!(true));
+        let delivered = tokio::time::timeout(Duration::from_secs(2), fake.read_request())
+            .await
+            .expect("dialog answer must reach pi stdin")
+            .unwrap();
+        assert_eq!(
+            delivered,
             json!({
                 "type": "extension_ui_response",
                 "id": "dialog-1",

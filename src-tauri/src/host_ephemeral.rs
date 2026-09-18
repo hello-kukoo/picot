@@ -600,6 +600,26 @@ impl EphemeralHub {
         // Admission: owner + generation must match the live target before any
         // state is read or command delivered.
         let entry = self.owned_target(owner, instance_id, Some(generation))?;
+        // Dialog answers are fire-and-forget: pi resolves the waiting dialog
+        // by the id it issued and never sends an RPC reply, so the generic
+        // forward would clobber that id and then time out. Deliver the frame
+        // raw against the live target and acknowledge immediately.
+        if payload.get("type").and_then(Value::as_str) == Some("extension_ui_response") {
+            runtimes
+                .respond_extension_ui(&entry.target, payload)
+                .await?;
+            self.host_events.send_owner_event(
+                owner,
+                json!({
+                    "type": "ephemeral_event",
+                    "requestId": request_id,
+                    "instanceId": instance_id,
+                    "generation": generation,
+                    "payload": { "delivered": true }
+                }),
+            );
+            return Ok(());
+        }
         // Snapshot requests never reach the runtime; the hub owns render state.
         // Authoritative model/thinking/context come from a fresh get_state.
         if payload.get("type").and_then(Value::as_str) == Some("ephemeral_snapshot_request") {
@@ -1115,6 +1135,45 @@ mod generation_token_tests {
             .unwrap()
             .insert(instance_id.clone(), EphemeralRenderState::new());
         (hub, owner, instance_id, receiver)
+    }
+
+    #[tokio::test]
+    async fn forward_command_delivers_extension_ui_response_with_dialog_id_intact() {
+        // Dialog answers are fire-and-forget: pi resolves the waiting dialog
+        // by the id it issued and never sends an RPC reply. The command
+        // routing id must not overwrite the dialog id, and the forward must
+        // not sit out the RPC reply timeout.
+        let (hub, owner, instance_id, _receiver) = hub_with_record("owner-a", 5);
+        let target = hub
+            .target_of(&instance_id)
+            .expect("target registered")
+            .target;
+        let runtimes = NativePiManager::new(8);
+        let mut fake = runtimes.register_in_memory(target).unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            hub.forward_command(
+                &runtimes,
+                &owner,
+                &instance_id,
+                1,
+                json!({ "type": "extension_ui_response", "id": "dialog-9", "value": "A" }),
+                "req-77",
+            ),
+        )
+        .await
+        .expect("dialog answer forward must be immediate")
+        .unwrap();
+        let delivered = tokio::time::timeout(Duration::from_secs(2), fake.read_request())
+            .await
+            .expect("dialog answer must reach pi stdin")
+            .unwrap();
+        assert_eq!(delivered["type"], "extension_ui_response");
+        assert_eq!(
+            delivered["id"], "dialog-9",
+            "routing id req-77 must not clobber the dialog id"
+        );
+        assert_eq!(delivered["value"], "A");
     }
 
     #[tokio::test]
