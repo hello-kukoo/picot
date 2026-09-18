@@ -202,6 +202,39 @@ describe("SessionSidebar regions", () => {
     ).toEqual(["ws:uuid-beta", "path:/work/live"]);
   });
 
+  test("expanding a pinned registry workspace lazy-loads its sessions", async () => {
+    const transport = makeTransport();
+    transport.workspaceSessions = vi.fn(async () => ({
+      path: "/work/alpha",
+      dirName: "--work-alpha--",
+      sessions: [{ filePath: "/sessions/lazy.jsonl", name: "Lazy" }],
+      sessionCount: 1,
+      hiddenSubagentCount: 0,
+    }));
+    const sidebar = makeRegistrySidebar({ transport });
+    const pinnedRow = { ...structuredClone(ROW_ALPHA), sessions: [], sessionCount: 67 };
+    seedProjects(
+      sidebar,
+      [pinnedRow, structuredClone(LIVE_ROW)],
+      [{ id: "ws:uuid-alpha", path: "/work/alpha" }],
+    );
+
+    const header = document.querySelector(
+      '.pinned-group .workspace-group[data-workspace-id="ws:uuid-alpha"] .workspace-header',
+    );
+    header.click();
+
+    await vi.waitFor(() => {
+      expect(
+        document.querySelector(
+          '.pinned-group .session-item[data-file-path="/sessions/lazy.jsonl"]',
+        ),
+      ).not.toBeNull();
+    });
+    // Host-bound identity is the raw registry id, not the `ws:` display id.
+    expect(transport.workspaceSessions).toHaveBeenCalledWith("uuid-alpha");
+  });
+
   test("all section headers share the chevron and no folder icon", () => {
     const sidebar = makeRegistrySidebar({ transport: makeTransport() });
     seedProjects(sidebar, structuredClone(RENDER_SET), [
