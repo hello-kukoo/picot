@@ -1,3 +1,5 @@
+import { initImageLightbox } from "../../ui/image-lightbox.js";
+
 const MAX_IMAGE_DIMENSION = 2048;
 const VALID_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
@@ -62,6 +64,8 @@ export function setupComposerImageAttachments({
 
   let pendingImages = [];
 
+  initImageLightbox(previewContainer);
+
   function renderPreviews() {
     previewContainer.innerHTML = "";
     previewContainer.classList.toggle("hidden", pendingImages.length === 0);
@@ -70,6 +74,7 @@ export function setupComposerImageAttachments({
       preview.className = "image-preview";
 
       const thumbnail = document.createElement("img");
+      thumbnail.className = "lightbox-image";
       thumbnail.src = `data:${image.mimeType};base64,${image.data}`;
       thumbnail.alt = "Attached image preview";
 

@@ -288,6 +288,15 @@ pub struct HostDataPlane {
     session_root: Option<PathBuf>,
     session_summary_cache: Arc<RwLock<HashMap<PathBuf, CachedSessionSummary>>>,
     cost_metrics_cache: Arc<Mutex<HashMap<PathBuf, CachedMetrics>>>,
+    // session_id -> file path. `resolve_session_path` is on the hot path for
+    // every session switch (it backs the disk-history fast path and lazy
+    // runtime resume), and used to walk every project directory + jsonl file
+    // on every call. This index lets a repeat lookup for an already-seen
+    // session id skip the walk entirely; it's populated opportunistically by
+    // any full scan (resolve_session_path miss, list_sessions,
+    // list_all_sessions, search_sessions) and self-heals when a cached path
+    // goes stale (file moved/deleted) by falling back to a rescan.
+    session_path_index: Arc<RwLock<HashMap<String, PathBuf>>>,
 }
 
 fn message_with_entry_id(mut message: serde_json::Value, entry_id: &str) -> serde_json::Value {
@@ -426,6 +435,7 @@ impl HostDataPlane {
             session_root: None,
             session_summary_cache: Arc::new(RwLock::new(HashMap::new())),
             cost_metrics_cache: Arc::new(Mutex::new(HashMap::new())),
+            session_path_index: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -998,6 +1008,29 @@ impl HostDataPlane {
         if !session_root.is_dir() {
             return Ok(None);
         }
+
+        // Fast path: a session id we've already seen (from an earlier scan or
+        // lookup) resolves straight to its file, no directory walk needed.
+        // Still re-verified against the live summary (cheap: a single stat +
+        // cache hit in the common case) since a session file can be deleted
+        // or moved between calls. Any mismatch (wrong workspace, mismatched
+        // id) *or* read failure (file gone/moved) is treated as a stale
+        // entry: it's evicted and control falls through to the full rescan
+        // below, which repairs the index rather than surfacing a spurious
+        // error for what is a normal, expected cache-miss condition.
+        if let Some(cached_path) = self.indexed_session_path(session_id)? {
+            let hit = matches!(
+                self.cached_session_summary(&cached_path),
+                Ok(Some(summary))
+                    if summary.id == session_id
+                        && same_dir(workspace, Path::new(&summary.project_path))
+            );
+            if hit {
+                return Ok(Some(cached_path));
+            }
+            self.forget_indexed_session_path(session_id);
+        }
+
         for project in std::fs::read_dir(session_root)
             .map_err(|error| HostDataError::Io(error.to_string()))?
             .filter_map(Result::ok)
@@ -1019,6 +1052,11 @@ impl HostDataPlane {
                 let Some(summary) = self.cached_session_summary(&path)? else {
                     continue;
                 };
+                // Populate the index for every session seen during this scan
+                // (not just the one being resolved) so a follow-up switch to
+                // a *different* session also hits the fast path above
+                // instead of triggering another full walk.
+                self.remember_indexed_session_path(summary.id.clone(), path.clone());
                 if summary.id == session_id && same_dir(workspace, Path::new(&summary.project_path))
                 {
                     return Ok(Some(path));
@@ -1314,6 +1352,7 @@ impl HostDataPlane {
                 }
                 match remove_session_file_trash_first(&path) {
                     Ok(()) => {
+                        self.forget_indexed_session_path(&session_id);
                         deleted.insert(session_id);
                     }
                     Err(_) => {
@@ -1367,6 +1406,10 @@ impl HostDataPlane {
                 let Ok(Some(summary)) = self.cached_session_summary(&path) else {
                     continue;
                 };
+                // Opportunistically warm the resolve_session_path index from
+                // this scan too (sidebar list loads run far more often than
+                // cold resolves, so this keeps the fast path hot in practice).
+                self.remember_indexed_session_path(summary.id.clone(), path.clone());
                 if let Some(filter) = workspace_filter {
                     if !same_dir(filter, Path::new(&summary.project_path)) {
                         continue;
@@ -1376,6 +1419,30 @@ impl HostDataPlane {
             }
         }
         Ok(sessions)
+    }
+
+    /// Look up a previously-indexed path for `session_id` without touching
+    /// the filesystem. Returns `None` when the id has never been seen by a
+    /// scan (e.g. right after startup, before any resolve/list has run).
+    fn indexed_session_path(&self, session_id: &str) -> Result<Option<PathBuf>, HostDataError> {
+        Ok(self
+            .session_path_index
+            .read()
+            .map_err(|_| HostDataError::Io("session path index poisoned".into()))?
+            .get(session_id)
+            .cloned())
+    }
+
+    fn remember_indexed_session_path(&self, session_id: String, path: PathBuf) {
+        if let Ok(mut index) = self.session_path_index.write() {
+            index.insert(session_id, path);
+        }
+    }
+
+    fn forget_indexed_session_path(&self, session_id: &str) {
+        if let Ok(mut index) = self.session_path_index.write() {
+            index.remove(session_id);
+        }
     }
 
     fn cached_session_summary(&self, path: &Path) -> Result<Option<SessionSummary>, HostDataError> {
@@ -3107,6 +3174,73 @@ mod tests {
             data.resolve_session_path("workspace-a", "missing").unwrap(),
             None
         );
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_session_path_reuses_the_index_without_rescanning_the_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-resolve-index-{nonce}"));
+        let workspace = temp.join("workspace");
+        let sessions = temp.join("sessions");
+        // A single project directory holds both session files, so *any* full
+        // rescan (naive or otherwise) is forced to descend into it — there is
+        // nowhere else in the tree to find a match. That makes the
+        // permission-denied trick below deterministic, independent of
+        // whatever order the OS happens to return directory entries in.
+        let project = sessions.join("project");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        let write_session = |file: &str, id: &str| {
+            fs::write(
+                project.join(file),
+                format!(
+                    "{{\"type\":\"session\",\"id\":\"{id}\",\"timestamp\":\"2026-01-01\",\"cwd\":{}}}\n{{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":\"hello\"}}}}\n",
+                    serde_json::to_string(&workspace.to_string_lossy()).unwrap()
+                ),
+            )
+            .unwrap();
+        };
+        write_session("a.jsonl", "session-a");
+        let included_b = project.join("b.jsonl");
+        write_session("b.jsonl", "session-b");
+        let data = HostDataPlane::new(HashMap::from([("workspace-a".into(), workspace)]))
+            .unwrap()
+            .with_session_root(sessions.clone());
+
+        // Cold lookup for session-a has to walk the session root — during
+        // that walk it also encounters session-b's file and, per
+        // resolve_session_path's populate-during-scan behavior, indexes it
+        // too even though nobody asked for it yet.
+        assert!(data
+            .resolve_session_path("workspace-a", "session-a")
+            .unwrap()
+            .is_some());
+
+        // Revoke the *list* permission (read) on the project directory while
+        // keeping *traverse* (execute) so a direct stat of a known file path
+        // still succeeds (what the fast path does) but `std::fs::read_dir`
+        // (what a full rescan does to enumerate files) deterministically
+        // fails with a permission-denied `HostDataError::Io`.
+        let mut perms = fs::metadata(&project).unwrap().permissions();
+        perms.set_mode(0o111);
+        fs::set_permissions(&project, perms.clone()).unwrap();
+
+        // Resolving session-b must succeed straight from the index: the only
+        // way to find it at all right now is via the cache, since walking
+        // into `project` to look for it would error. A correct answer here
+        // proves resolve_session_path is not doing a full rescan on this call.
+        let resolved = data.resolve_session_path("workspace-a", "session-b");
+        perms.set_mode(0o755);
+        fs::set_permissions(&project, perms).unwrap();
+        assert_eq!(resolved.unwrap(), Some(included_b));
+
         fs::remove_dir_all(temp).unwrap();
     }
 

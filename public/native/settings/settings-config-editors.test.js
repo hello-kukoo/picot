@@ -185,6 +185,7 @@ describe("settings API key model refresh", () => {
                 provider: "anthropic",
                 id: "claude-sonnet-5",
                 available: true,
+                visible: true,
                 health: { status: "healthy" },
               },
             ],

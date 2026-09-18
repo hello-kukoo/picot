@@ -319,10 +319,11 @@ class ModelPreferencesStore {
   write(next: Required<ModelPreferencesFile>): void {
     fs.mkdirSync(path.dirname(this.path), { recursive: true });
     fs.writeFileSync(this.path, JSON.stringify(next, null, 2), "utf8");
+    invalidateModelCatalogCache();
   }
 
   isVisible(provider: string, modelId: string): boolean {
-    return this.read().visibility[modelPreferenceKey(provider, modelId)] !== false;
+    return this.read().visibility[modelPreferenceKey(provider, modelId)] === true;
   }
 
   setVisibility(provider: string, modelId: string, visible: boolean): void {
@@ -342,7 +343,30 @@ class ModelPreferencesStore {
   }
 }
 
+const MODEL_CATALOG_CACHE_TTL_MS = 3_000;
+let modelCatalogCache: {
+  expires: number;
+  promise: ReturnType<typeof buildModelCatalogUncached>;
+} | null = null;
+
+function invalidateModelCatalogCache(): void {
+  modelCatalogCache = null;
+}
+
+// The registry's getAvailable()/getProviderAuthStatus() probe live provider
+// auth on every call; short-lived caching avoids re-probing every provider
+// each time a session switch or Settings open asks for the catalog.
 async function buildModelCatalog(registry: CatalogRegistry, preferences: ModelPreferencesStore) {
+  if (modelCatalogCache && modelCatalogCache.expires > Date.now()) {
+    return modelCatalogCache.promise;
+  }
+  const promise = buildModelCatalogUncached(registry, preferences);
+  modelCatalogCache = { expires: Date.now() + MODEL_CATALOG_CACHE_TTL_MS, promise };
+  promise.catch(() => invalidateModelCatalogCache());
+  return promise;
+}
+
+async function buildModelCatalogUncached(registry: CatalogRegistry, preferences: ModelPreferencesStore) {
   const allModels = registry.getAll();
   const availableModels = await registry.getAvailable();
   const availableKeys = new Set(
@@ -660,6 +684,7 @@ async function refreshRegistryBestEffort(registry?: CatalogRegistry): Promise<bo
     });
     const refresh = (async () => {
       await registry.refresh();
+      invalidateModelCatalogCache();
       return true;
     })().catch(() => false);
     return await Promise.race([refresh, timeout]);
@@ -1090,7 +1115,10 @@ export async function handlePicotConfig(
             clearExpiryTimer();
             try {
               emit(oauthLoginManager.complete(started.operationId));
-              if (registry) await registry.refresh();
+              if (registry) {
+                await registry.refresh();
+                invalidateModelCatalogCache();
+              }
             } catch {
               // Already removed (cancelled/expired) — nothing to complete.
             }
@@ -1138,7 +1166,10 @@ export async function handlePicotConfig(
         if (provider !== "openai-codex") throw new Error("Unsupported OAuth provider");
         const runtime = await ModelRuntime.create();
         await runtime.logout(provider);
-        if (registry) await registry.refresh();
+        if (registry) {
+          await registry.refresh();
+          invalidateModelCatalogCache();
+        }
         return { ok: true, data: { provider } };
       }
 
@@ -1183,7 +1214,7 @@ export async function handlePicotConfig(
         const provider = asString(params.provider);
         const modelId = asString(params.modelId);
         if (!provider || !modelId) throw new Error("provider and modelId are required");
-        const visible = params.visible !== false;
+        const visible = params.visible === true;
         preferences.setVisibility(provider, modelId, visible);
         return { ok: true, data: { provider, modelId, visible } };
       }
@@ -1204,10 +1235,9 @@ export async function handlePicotConfig(
           return availableKeys.has(modelPreferenceKey(provider, model.id as string));
         });
         if (models.length === 0) throw new Error("No matching models available for health check");
-        const results = [];
-        for (const model of models) {
-          results.push(await runModelHealthCheck(reg, model, preferences));
-        }
+        const results = await Promise.all(
+          models.map((model) => runModelHealthCheck(reg, model, preferences)),
+        );
         return { ok: true, data: { results } };
       }
 
@@ -1217,7 +1247,10 @@ export async function handlePicotConfig(
         if (!provider) throw new Error("provider is required");
         if (!apiKey) throw new Error("apiKey is required");
         await setStoredApiKey(registry, provider, apiKey);
-        if (registry) await registry.refresh();
+        if (registry) {
+          await registry.refresh();
+          invalidateModelCatalogCache();
+        }
         return { ok: true, data: { provider } };
       }
 
@@ -1225,7 +1258,10 @@ export async function handlePicotConfig(
         const provider = asString(params.provider);
         if (!provider) throw new Error("provider is required");
         await removeStoredApiKey(registry, provider);
-        if (registry) await registry.refresh();
+        if (registry) {
+          await registry.refresh();
+          invalidateModelCatalogCache();
+        }
         return { ok: true, data: { provider } };
       }
 

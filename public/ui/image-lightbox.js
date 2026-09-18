@@ -78,7 +78,7 @@ export function initImageLightbox(container) {
   container.dataset.lightboxWired = "1";
 
   container.addEventListener("click", (e) => {
-    const img = e.target.closest("img.message-image, img.inline-image");
+    const img = e.target.closest("img.message-image, img.inline-image, img.lightbox-image");
     if (!img) return;
     e.stopPropagation();
     openLightbox(img.src, img.alt);

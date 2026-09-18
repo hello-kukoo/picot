@@ -32,6 +32,7 @@ import { setupComposerImageAttachments } from "./composer/composer-images.js";
 import { setupComposerPasteOffload } from "./composer/composer-paste-offload.js";
 import { setupComposerSlashMenu } from "./composer/composer-slash-menu.js";
 import { setupComposerSubmitHandling } from "./composer/composer-submit.js";
+import { getLastModel, setLastModel } from "./composer/last-model-store.js";
 import { isSelectedModel, splitModelsByScope } from "./composer/model-selection.js";
 import { renderQueuedMessages } from "./composer/queued-messages.js";
 import {
@@ -276,9 +277,16 @@ const sessionUiState = new SessionUiStateStore({
 });
 let currentModelContextWindow = 0;
 let availableModels = [];
+// True once get_available_models + the visibility catalog have resolved once.
+// The dropdown reuses this cache on every open; only a model-configuration
+// change (auth/visibility edits) forces a refetch. Avoids the per-open reload.
+let availableModelsLoaded = false;
 // Ordered provider/model ids from Pi's global enabledModels (composer
 // favorites). Rendered as the dropdown's first section when available.
 let scopedModelIds = [];
+// Cache the scoped list too so opening the dropdown no longer round-trips the
+// config bridge each time (the previous source of the visible reload/reflow).
+let scopedModelsLoaded = false;
 let target = provisionalTargetFromRoute(route);
 let configGatewayTargetReady = false;
 let resolveConfigGatewayReady;
@@ -943,8 +951,17 @@ const hydrateFromSnapshot = async (snapshot) => {
   contextUsage.setWorking(Boolean(pi.isStreaming));
   if (pi.isStreaming) showLiveProcessIndicator();
   contextUsage.setCompacting(snapshot.state.compaction?.status === "running");
-  updateComposerModel(pi.model ?? null);
+  // Fresh sessions (no history) show the stored last model straight from the
+  // frontend so the composer never flashes pi's built-in default while the
+  // set_model round-trip below reconciles the runtime. Sessions with history
+  // keep the model pi restored from their own record.
+  const storedModel = messages.length === 0 ? getLastModel() : null;
+  updateComposerModel(
+    storedModel ? { provider: storedModel.provider, id: storedModel.modelId } : (pi.model ?? null),
+  );
   updateComposerThinking(pi.thinkingLevel ?? "off");
+  // Fresh sessions inherit the last manually selected model (localStorage).
+  void maybeInheritLastModel({ messages, piModel: pi.model ?? null });
   contextUsage.setUsage(findLatestAssistantUsage(messages), currentModelContextWindow);
   setSessionCost(computeTotalCostFromMessages(messages));
   // Hydrate header status bar from authoritative get_session_stats
@@ -1253,7 +1270,12 @@ const settingsPanel = setupSettingsPanel({
   getWorkspaceId: () => target.workspaceId,
   configGateway: config,
   oauthGateway,
-  onModelConfigurationChanged: () => loadAvailableModels(),
+  onModelConfigurationChanged: () => {
+    // Auth or visibility edits invalidate both caches; refetch authoritatively.
+    scopedModelsLoaded = false;
+    loadScopedModelIds({ force: true });
+    loadAvailableModels({ force: true });
+  },
   runtime,
   getTarget: () => target,
   onError: showError,
@@ -2841,11 +2863,14 @@ function updateComposerThinking(level) {
   }
 }
 
-async function loadAvailableModels() {
+async function loadAvailableModels({ force = false } = {}) {
+  // Serve the cache unless a configuration change explicitly invalidated it.
+  if (availableModelsLoaded && !force) return;
   try {
     const result = await runtime.request({ type: "get_available_models" }, target);
     const runtimeModels = result?.response?.data?.models ?? [];
     availableModels = await applyConfiguredModelVisibility(runtimeModels);
+    availableModelsLoaded = true;
     if (!currentModelContextWindow) {
       currentModelContextWindow = findModelContextWindow(currentModelProvider, currentModelId);
       contextUsage.setContextWindowSize(currentModelContextWindow);
@@ -2856,6 +2881,35 @@ async function loadAvailableModels() {
   }
 }
 
+/**
+ * New sessions (zero messages) inherit the last manually selected model instead
+ * of pi's built-in startup default. Resumed sessions (with history) keep the
+ * model pi restored from their own session record, so this is a no-op for them.
+ */
+async function maybeInheritLastModel({ messages, piModel }) {
+  if (Array.isArray(messages) && messages.length > 0) return;
+  const last = getLastModel();
+  if (!last) return;
+  if (piModel?.provider === last.provider && piModel?.id === last.modelId) return;
+  try {
+    const result = await runtime.request(
+      { type: "set_model", provider: last.provider, modelId: last.modelId },
+      target,
+      { idempotencyKey: randomId() },
+    );
+    // pi returns false / no model when the provider is unauthenticated; keep the
+    // session on pi's default rather than showing a model it cannot use.
+    const applied = result?.response?.data;
+    if (applied === false) return;
+    updateComposerModel({ provider: last.provider, id: last.modelId });
+    const stateResult = await runtime.request({ type: "get_state" }, target);
+    const level = stateResult?.response?.data?.thinkingLevel;
+    if (level) updateComposerThinking(level);
+  } catch (error) {
+    console.warn("[Native] Failed to inherit last model:", error);
+  }
+}
+
 async function applyConfiguredModelVisibility(models) {
   try {
     const catalog = await config.call("list_model_catalog");
@@ -2863,7 +2917,7 @@ async function applyConfiguredModelVisibility(models) {
     const visibleKeys = new Set();
     for (const provider of catalog.data?.providers ?? []) {
       for (const model of provider.models ?? []) {
-        if (model.available && model.visible !== false) {
+        if (model.available && model.visible === true) {
           visibleKeys.add(`${model.provider || provider.provider}/${model.id}`);
         }
       }
@@ -2871,7 +2925,7 @@ async function applyConfiguredModelVisibility(models) {
     return models.filter((model) => visibleKeys.has(`${model.provider}/${model.id}`));
   } catch (error) {
     console.warn("[Native] Failed to load configured model visibility:", error);
-    return models;
+    return [];
   }
 }
 
@@ -2957,6 +3011,8 @@ function buildModelDropdownItem(model, isScoped) {
         target,
         { idempotencyKey: randomId() },
       );
+      // Remember the manual pick so future new sessions inherit it (localStorage).
+      setLastModel(model);
       updateComposerModel(model);
       // Reconcile the thinking level after a model switch. pi 0.83's set_model
       // response is the Model object (no thinkingLevel field, see rpc.md); the
@@ -3038,11 +3094,13 @@ function appendModelSection(container, label, models, isScoped) {
   }
 }
 
-async function loadScopedModelIds() {
+async function loadScopedModelIds({ force = false } = {}) {
+  if (scopedModelsLoaded && !force) return;
   try {
     const response = await config.call("list_scoped_models");
     if (response?.ok && Array.isArray(response.data?.modelIds)) {
       scopedModelIds = response.data.modelIds;
+      scopedModelsLoaded = true;
     }
   } catch {
     // An unavailable config bridge degrades to the ungrouped enabled list.
@@ -3064,13 +3122,16 @@ function renderModelDropdownMenu() {
   modelDropdownMenu.appendChild(itemsContainer);
 
   renderModelDropdownItems(itemsContainer);
-  // Scoped ids arrive async: rerender once loaded (the enabled list is shown
-  // immediately so the menu never blocks on the config bridge).
-  void loadScopedModelIds().then(() => {
-    if (!modelDropdownMenu.classList.contains("hidden")) {
-      renderModelDropdownItems(itemsContainer, search.value);
-    }
-  });
+  // Scoped ids are cached after the first open; only the initial fetch rerenders
+  // (the enabled list is shown immediately so the menu never blocks on the
+  // config bridge, and subsequent opens reuse the cache without a round-trip).
+  if (!scopedModelsLoaded) {
+    void loadScopedModelIds().then(() => {
+      if (!modelDropdownMenu.classList.contains("hidden")) {
+        renderModelDropdownItems(itemsContainer, search.value);
+      }
+    });
+  }
 
   search.addEventListener("input", () => renderModelDropdownItems(itemsContainer, search.value));
   search.addEventListener("keydown", (event) => {
@@ -3108,7 +3169,7 @@ if (modelDropdownBtn) {
     if (isOpen) {
       closeModelDropdown();
     } else {
-      if (availableModels.length === 0) loadAvailableModels();
+      if (!availableModelsLoaded) loadAvailableModels();
       openModelDropdown();
     }
   });
@@ -3117,6 +3178,17 @@ if (modelDropdownBtn) {
 document.addEventListener("click", (event) => {
   if (!event.target.closest("#model-dropdown")) closeModelDropdown();
 });
+
+// Optimistic composer label: paint the stored last model straight away so a
+// fresh window/new task shows it immediately instead of the HTML placeholder
+// while the first snapshot loads. Display only — the snapshot hydrate (and
+// maybeInheritLastModel) reconcile the authoritative runtime model.
+{
+  const storedInitialModel = getLastModel();
+  if (storedInitialModel && modelDropdownLabel) {
+    modelDropdownLabel.textContent = formatModelName({ id: storedInitialModel.modelId }) || "model";
+  }
+}
 
 onLocaleChange(() => {
   updateComposerThinking(currentThinkingLevel);
