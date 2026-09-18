@@ -6,7 +6,7 @@
   },
   "shortcuts": {
     "focusInput": "聚焦输入框",
-    "abort": "中止"
+    "abort": "终止"
   },
   "nav": {
     "chat": "聊天",
@@ -38,7 +38,7 @@
     "actionWhileStreaming": "请等待当前回复完成",
     "actionDesktopOnly": "此操作需要桌面版应用",
     "statusError": "出错",
-    "statusAborted": "已中止",
+    "statusAborted": "已终止",
     "imageMessage": "图片",
     "empty": "暂无消息",
     "roleUser": "你",
@@ -136,7 +136,7 @@
     "commands": "命令",
     "switchModel": "切换模型",
     "send": "发送消息",
-    "abort": "中止 (Esc)",
+    "abort": "终止 (Esc)",
     "messagePlaceholder": "消息...",
     "mirrorReadOnly": "正在查看历史会话（只读）",
     "waitingForSession": "等待当前会话结束…",
@@ -420,7 +420,7 @@
     "modelRequestFailedDetail": "[{provider}/{model}] {message}",
     "newSessionCancelled": "新会话已取消",
     "mobileBrokerRequired": "在另一个项目中发起新聊天需要桌面端代理。请重新打开移动端二维码。",
-    "abortedByUser": "已被用户中止",
+    "abortedByUser": "已被用户终止",
     "invalidJson": "无效的 JSON：{detail}",
     "modelsMustBeObject": "models.json 必须是 JSON 对象。",
     "providersMustBeObject": "'providers' 必须是对象。",
@@ -1054,7 +1054,7 @@
   "ephemeral": {
     "placeholder": "随意提问…",
     "send": "发送",
-    "abort": "中止",
+    "abort": "终止",
     "newChat": "新对话",
     "startingSideChat": "正在启动侧边聊天…",
     "startingQuickChat": "正在启动快速聊天…",

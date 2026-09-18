@@ -38,7 +38,7 @@ const zhMessages = {
     welcomeHint: "输入消息...",
     currentWorkspace: "当前工作区：",
   },
-  shortcuts: { focusInput: "聚焦输入", abort: "中止" },
+  shortcuts: { focusInput: "聚焦输入", abort: "终止" },
 };
 
 beforeEach(async () => {
