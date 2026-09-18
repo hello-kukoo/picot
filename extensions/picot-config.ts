@@ -366,7 +366,10 @@ async function buildModelCatalog(registry: CatalogRegistry, preferences: ModelPr
   return promise;
 }
 
-async function buildModelCatalogUncached(registry: CatalogRegistry, preferences: ModelPreferencesStore) {
+async function buildModelCatalogUncached(
+  registry: CatalogRegistry,
+  preferences: ModelPreferencesStore,
+) {
   const allModels = registry.getAll();
   const availableModels = await registry.getAvailable();
   const availableKeys = new Set(
