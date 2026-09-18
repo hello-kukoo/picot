@@ -34,8 +34,12 @@ public/fonts/cjk/
 # husky internal scripts (managed by `bun run prepare`)
 .husky/_/
 
-# Frontend vendor bundles (produced by scripts/build-frontend.js)
-public/vendor/
+# Frontend vendor bundles (produced by scripts/build-frontend.js).
+# NOTE: dir/* wildcard instead of dir/ — remend.js below is hand-vendored
+# and committed (see its header); a directory rule would make `git add` of
+# that tracked file fail the husky restage step.
+public/vendor/*
+!public/vendor/remend.js
 
 # Agent memory (personal session-derived notes; not for version control)
 .memory/
@@ -43,6 +47,9 @@ public/vendor/
 # Zed editor
 .zed/
 
+# Pi agent local state (extensions/config/session data; zero tracked files —
+# the repo intentionally keeps agent runtime state out of version control)
+.pi/
+
 # Agent memory tooling (workspace-private, see .memory/MEMORY.md)
-.pi/extensions/auto-memory.ts
 .claude/skills/update-memory/

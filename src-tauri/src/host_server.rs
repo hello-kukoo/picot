@@ -1802,10 +1802,23 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
                         match serde_json::from_value::<RuntimeTarget>(target) {
                             Ok(requested) => {
                                 let target = state.runtimes.target_for_session(&requested.workspace_id, &requested.session_id);
-                                if let Some(target) = target.filter(|target| authorize_target(&state, client_context.as_ref(), target) && runtime_target_is_live(&state, target)) {
+                                // Any authenticated desktop owner may watch a live
+                                // runtime's activity (sidebar green/blue dots across
+                                // workspaces); command admission stays authorize_target's
+                                // job in runtime_request dispatch.
+                                let desktop_owner = client_context.as_ref().is_some_and(|context| {
+                                    context.kind == crate::host_router::ClientKind::Desktop
+                                        && context.owner_id.is_some()
+                                });
+                                if let Some(target) = target.filter(|target| desktop_owner && runtime_target_is_live(&state, target)) {
                                 subscriptions.insert(target.clone());
-                                if let Ok(pending) = state.runtimes.pending_extension_ui(&target) {
-                                    after_response.extend(pending.into_iter().map(runtime_event_frame));
+                                // Pending blocking dialogs replay only to the
+                                // subscriber whose workspace generation still matches
+                                // (upstream extension_ui_requires_owner semantics).
+                                if authorize_target(&state, client_context.as_ref(), &target) {
+                                    if let Ok(pending) = state.runtimes.pending_extension_ui(&target) {
+                                        after_response.extend(pending.into_iter().map(runtime_event_frame));
+                                    }
                                 }
                                 Ok(json!({ "type": "runtime_subscribed", "requestId": request_id }))
                                 } else {
@@ -1901,10 +1914,16 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
             event = runtime_events.recv() => {
                 match event {
                     Ok(event) if subscriptions.contains(&event.target) => {
-                        // Re-check authority on delivery too: transition can commit while
-                        // socket remains subscribed, so stale contexts receive nothing.
-                        if !authorize_target(&state, client_context.as_ref(), &event.target) {
-                            subscriptions.remove(&event.target);
+                        // Blocking dialogs stay scoped to the authorize_target-passing
+                        // subscriber (upstream extension_ui_requires_owner): a page
+                        // viewing another workspace never pops the old workspace's
+                        // questionnaire. Every other event flows to any subscribed
+                        // desktop owner so background agent activity keeps the
+                        // sidebar's streaming/unread dots live across workspaces. The
+                        // subscription itself outlives a workspace transition.
+                        if extension_ui_requires_owner(&event.event)
+                            && !authorize_target(&state, client_context.as_ref(), &event.target)
+                        {
                             continue;
                         }
                         let outgoing = runtime_event_frame(event);
@@ -1963,6 +1982,20 @@ fn runtime_target_is_live(state: &HostState, target: &RuntimeTarget) -> bool {
         .is_some_and(|live| {
             live.workspace_id == target.workspace_id && live.instance_id == target.instance_id
         })
+}
+
+/// Blocking dialogs demand an answer only the owning window can give; they
+/// must never surface in a page that is viewing another workspace (upstream
+/// `extension_ui_requires_owner`). Non-blocking UI payloads (`setWidget`,
+/// `notify`) are ordinary subscribed events.
+fn extension_ui_requires_owner(event: &Value) -> bool {
+    if event.get("type").and_then(Value::as_str) != Some("extension_ui_request") {
+        return false;
+    }
+    matches!(
+        event.get("method").and_then(Value::as_str),
+        Some("select" | "confirm" | "input" | "editor")
+    )
 }
 
 fn current_registered_context(state: &HostState, context: &HostClientContext) -> bool {
@@ -5252,10 +5285,24 @@ mod tests {
             ))
             .await
             .unwrap();
-        let denied = socket_a.next().await.unwrap().unwrap();
-        let denied: serde_json::Value = serde_json::from_str(denied.to_text().unwrap()).unwrap();
-        assert_eq!(denied["type"], "error");
-        assert_eq!(denied["error"]["code"], "unauthorized_target");
+        let admitted = socket_a.next().await.unwrap().unwrap();
+        let admitted: serde_json::Value =
+            serde_json::from_str(admitted.to_text().unwrap()).unwrap();
+        assert_eq!(
+            admitted["type"], "runtime_subscribed",
+            "cross-owner activity subscriptions are admitted: {admitted}"
+        );
+        // The pending dialog must not replay to the non-owning subscriber;
+        // the next frame owner-a can see is ordinary activity.
+        fake.write_frame(json!({ "type": "agent_start" }))
+            .await
+            .unwrap();
+        let probe = socket_a.next().await.unwrap().unwrap();
+        let probe: serde_json::Value = serde_json::from_str(probe.to_text().unwrap()).unwrap();
+        assert_eq!(
+            probe["event"]["type"], "agent_start",
+            "no dialog replay before the activity probe: {probe}"
+        );
 
         let (mut socket_b, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
         socket_b
@@ -5287,6 +5334,30 @@ mod tests {
         let replay = socket_b.next().await.unwrap().unwrap();
         let replay: serde_json::Value = serde_json::from_str(replay.to_text().unwrap()).unwrap();
         assert_eq!(replay["event"]["id"], "dialog-b");
+
+        // Admission to watch is not admission to answer: owner-a's attempt to
+        // claim owner-b's dialog response must stay rejected.
+        socket_a
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "type": "runtime_request",
+                    "requestId": "dialog-response-a",
+                    "target": target,
+                    "command": {
+                        "type": "extension_ui_response",
+                        "id": "dialog-b",
+                        "value": "Claimed by A"
+                    }
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let claim_denied = socket_a.next().await.unwrap().unwrap();
+        let claim_denied: serde_json::Value =
+            serde_json::from_str(claim_denied.to_text().unwrap()).unwrap();
+        assert_eq!(claim_denied["type"], "error");
+        assert_eq!(claim_denied["error"]["code"], "unauthorized_target");
 
         socket_b
             .send(tokio_tungstenite::tungstenite::Message::Text(
@@ -5778,6 +5849,318 @@ mod tests {
                 "value": "Trust once"
             })
         );
+
+        host.stop();
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    async fn ws_send(
+        socket: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        frame: Value,
+    ) {
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                frame.to_string(),
+            ))
+            .await
+            .unwrap();
+    }
+
+    async fn ws_next(
+        socket: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    ) -> Value {
+        let frame = tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .expect("frame deadline")
+            .unwrap()
+            .unwrap();
+        serde_json::from_str(frame.to_text().unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn cross_workspace_activity_events_reach_other_subscribers_but_dialogs_stay_scoped() {
+        // Cross-workspace switch (upstream parity): the B page must see A's
+        // agent activity (sidebar green/blue dots) while never receiving A's
+        // blocking dialogs, and its runtime commands must stay rejected.
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-cross-ws-{nonce}"));
+        let public = temp.join("public");
+        fs::create_dir_all(public.join("")).unwrap();
+        fs::create_dir_all(temp.join("ws-a")).unwrap();
+        fs::create_dir_all(temp.join("ws-b")).unwrap();
+        fs::write(public.join("index.html"), "Picot").unwrap();
+        let metadata = Arc::new(Mutex::new(
+            MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
+        ));
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
+        let runtimes = NativePiManager::new(32);
+        let registry = Arc::new(crate::window_owner::WindowOwnerRegistry::default());
+        let (owner_a, capability_a) = registry
+            .create_owner_with_workspace(
+                "owner-a".into(),
+                temp.join("ws-a").canonicalize().unwrap(),
+                0,
+                "http://127.0.0.1:1".into(),
+                Some("workspace-a".into()),
+                crate::window_owner::TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        let (_owner_b, capability_b) = registry
+            .create_owner_with_workspace(
+                "owner-b".into(),
+                temp.join("ws-b").canonicalize().unwrap(),
+                0,
+                "http://127.0.0.1:1".into(),
+                Some("workspace-b".into()),
+                crate::window_owner::TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        let target = RuntimeTarget::with_owner(
+            "workspace-a",
+            "session-a",
+            "instance-a",
+            owner_a.as_str(),
+            0,
+        );
+        let mut fake = runtimes.register_in_memory(target.clone()).unwrap();
+
+        let host = HostServer::start(public, runtimes, auth, metadata)
+            .await
+            .unwrap();
+        host.set_owner_registry(registry);
+        let ws_url = host.origin().replace("http://", "ws://") + "/v2/ws";
+        let (mut socket_a, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
+        let (mut socket_b, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
+        ws_send(
+            &mut socket_a,
+            json!({
+                "type": "hello", "protocolVersion": 2, "clientType": "desktop",
+                "clientId": "client-a", "desktopCapability": capability_a
+            }),
+        )
+        .await;
+        ws_send(
+            &mut socket_b,
+            json!({
+                "type": "hello", "protocolVersion": 2, "clientType": "desktop",
+                "clientId": "client-b", "desktopCapability": capability_b
+            }),
+        )
+        .await;
+        ws_next(&mut socket_a).await; // hello_ack
+        ws_next(&mut socket_b).await; // hello_ack
+        let wire_target = json!({
+            "workspaceId": "workspace-a",
+            "sessionId": "session-a",
+            "instanceId": "instance-a"
+        });
+        ws_send(
+            &mut socket_a,
+            json!({ "type": "runtime_subscribe", "requestId": "sub-a", "target": wire_target }),
+        )
+        .await;
+        let ack_a = ws_next(&mut socket_a).await;
+        assert_eq!(
+            ack_a["type"], "runtime_subscribed",
+            "owner subscribes: {ack_a}"
+        );
+        ws_send(
+            &mut socket_b,
+            json!({ "type": "runtime_subscribe", "requestId": "sub-b", "target": wire_target }),
+        )
+        .await;
+        let ack_b = ws_next(&mut socket_b).await;
+        assert_eq!(
+            ack_b["type"], "runtime_subscribed",
+            "cross-workspace subscribe must be admitted: {ack_b}"
+        );
+
+        // Ordinary activity flows to both subscribers (green/blue dot feed).
+        fake.write_frame(json!({ "type": "agent_start" }))
+            .await
+            .unwrap();
+        let event_a = ws_next(&mut socket_a).await;
+        assert_eq!(event_a["event"]["type"], "agent_start");
+        let event_b = ws_next(&mut socket_b).await;
+        assert_eq!(
+            event_b["event"]["type"], "agent_start",
+            "cross-workspace subscriber sees the activity event: {event_b}"
+        );
+
+        // Blocking dialogs reach only the owner-scoped subscriber.
+        fake.write_frame(json!({
+            "type": "extension_ui_request",
+            "id": "dialog-1",
+            "method": "select",
+            "title": "Project trust",
+            "options": ["Trust once", "Open untrusted"]
+        }))
+        .await
+        .unwrap();
+        let dialog_a = ws_next(&mut socket_a).await;
+        assert_eq!(dialog_a["event"]["id"], "dialog-1");
+
+        // Non-blocking UI payloads stay broadcast to every subscriber.
+        fake.write_frame(json!({
+            "type": "extension_ui_request",
+            "id": "widget-1",
+            "method": "setWidget",
+            "payload": { "kind": "todo" }
+        }))
+        .await
+        .unwrap();
+        let widget_b = ws_next(&mut socket_b).await;
+        assert_eq!(
+            widget_b["event"]["id"], "widget-1",
+            "cross-workspace subscriber's next frame is the widget, not the dialog: {widget_b}"
+        );
+
+        // Command admission is unchanged: B's runtime requests stay rejected.
+        ws_send(
+            &mut socket_b,
+            json!({
+                "type": "runtime_request", "requestId": "prompt-b",
+                "target": wire_target,
+                "command": { "type": "prompt", "message": "hi" }
+            }),
+        )
+        .await;
+        let reply_b = ws_next(&mut socket_b).await;
+        assert_eq!(reply_b["requestId"], "prompt-b");
+        assert_eq!(
+            reply_b["type"], "error",
+            "cross-workspace prompt must be rejected"
+        );
+
+        host.stop();
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[tokio::test]
+    async fn pending_dialog_replay_skips_cross_workspace_subscribers() {
+        // A dialog queued before any subscription must replay only to the
+        // authorize_target-passing owner; a cross-workspace subscriber gets
+        // the ack and later activity, never the pending dialog.
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-cross-replay-{nonce}"));
+        let public = temp.join("public");
+        fs::create_dir_all(public.join("")).unwrap();
+        fs::create_dir_all(temp.join("ws-a")).unwrap();
+        fs::create_dir_all(temp.join("ws-b")).unwrap();
+        fs::write(public.join("index.html"), "Picot").unwrap();
+        let metadata = Arc::new(Mutex::new(
+            MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
+        ));
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
+        let runtimes = NativePiManager::new(32);
+        let registry = Arc::new(crate::window_owner::WindowOwnerRegistry::default());
+        let (owner_a, capability_a) = registry
+            .create_owner_with_workspace(
+                "owner-a".into(),
+                temp.join("ws-a").canonicalize().unwrap(),
+                0,
+                "http://127.0.0.1:1".into(),
+                Some("workspace-a".into()),
+                crate::window_owner::TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        let (_owner_b, capability_b) = registry
+            .create_owner_with_workspace(
+                "owner-b".into(),
+                temp.join("ws-b").canonicalize().unwrap(),
+                0,
+                "http://127.0.0.1:1".into(),
+                Some("workspace-b".into()),
+                crate::window_owner::TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        let target = RuntimeTarget::with_owner(
+            "workspace-a",
+            "session-a",
+            "instance-a",
+            owner_a.as_str(),
+            0,
+        );
+        let mut fake = runtimes.register_in_memory(target.clone()).unwrap();
+        fake.write_frame(json!({
+            "type": "extension_ui_request",
+            "id": "dialog-pending",
+            "method": "select",
+            "title": "Project trust",
+            "options": ["Trust once", "Open untrusted"]
+        }))
+        .await
+        .unwrap();
+        tokio::task::yield_now().await;
+
+        let host = HostServer::start(public, runtimes, auth, metadata)
+            .await
+            .unwrap();
+        host.set_owner_registry(registry);
+        let ws_url = host.origin().replace("http://", "ws://") + "/v2/ws";
+        let (mut socket_b, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
+        ws_send(
+            &mut socket_b,
+            json!({
+                "type": "hello", "protocolVersion": 2, "clientType": "desktop",
+                "clientId": "client-b", "desktopCapability": capability_b
+            }),
+        )
+        .await;
+        ws_next(&mut socket_b).await; // hello_ack
+        let wire_target = json!({
+            "workspaceId": "workspace-a",
+            "sessionId": "session-a",
+            "instanceId": "instance-a"
+        });
+        ws_send(
+            &mut socket_b,
+            json!({ "type": "runtime_subscribe", "requestId": "sub-b", "target": wire_target }),
+        )
+        .await;
+        let ack_b = ws_next(&mut socket_b).await;
+        assert_eq!(ack_b["type"], "runtime_subscribed");
+
+        // The very next frame the cross-workspace subscriber may see is
+        // ordinary activity — the pending dialog must not have been replayed.
+        fake.write_frame(json!({ "type": "agent_start" }))
+            .await
+            .unwrap();
+        let next_b = ws_next(&mut socket_b).await;
+        assert_eq!(
+            next_b["event"]["type"], "agent_start",
+            "pending dialog must not replay to a cross-workspace subscriber: {next_b}"
+        );
+
+        // The authorized owner still gets the replay.
+        let (mut socket_a, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
+        ws_send(
+            &mut socket_a,
+            json!({
+                "type": "hello", "protocolVersion": 2, "clientType": "desktop",
+                "clientId": "client-a", "desktopCapability": capability_a
+            }),
+        )
+        .await;
+        ws_next(&mut socket_a).await; // hello_ack
+        ws_send(
+            &mut socket_a,
+            json!({ "type": "runtime_subscribe", "requestId": "sub-a", "target": wire_target }),
+        )
+        .await;
+        let _ = ws_next(&mut socket_a).await; // subscribe ack
+        let replay_a = ws_next(&mut socket_a).await;
+        assert_eq!(replay_a["event"]["id"], "dialog-pending");
 
         host.stop();
         fs::remove_dir_all(temp).unwrap();

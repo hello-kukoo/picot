@@ -717,6 +717,42 @@ fn find_existing_runtime_for_prepare(
     })
 }
 
+/// Running-runtime summaries for every registered workspace regardless of
+/// owner: a page viewing workspace B still sees workspace A's live sessions
+/// (sidebar streaming/unread dots). Runtimes whose workspace or session file
+/// cannot be resolved stay host-internal.
+fn runtime_instance_summaries(
+    runtimes: &NativePiManager,
+    metadata: &SharedMetadataStore,
+    session_root: Option<&std::path::Path>,
+) -> Vec<serde_json::Value> {
+    runtimes
+        .running_targets()
+        .into_iter()
+        .filter_map(|target| {
+            let cwd = metadata
+                .lock()
+                .ok()?
+                .canonical_root_for_workspace_id(&target.workspace_id)
+                .ok()?;
+            let mut data = host_data::HostDataPlane::new(metadata.clone());
+            if let Some(root) = session_root {
+                data = data.with_session_root(root.to_path_buf());
+            }
+            let session_file = data.session_file_path(&target.workspace_id, &target.session_id)?;
+            Some(serde_json::json!({
+                "workspaceId": target.workspace_id,
+                "sessionId": target.session_id,
+                "instanceId": target.instance_id,
+                "cwd": cwd.to_string_lossy(),
+                "sessionFile": session_file.to_string_lossy(),
+                "pid": runtimes.pid_for(&target),
+                "startedAt": serde_json::Value::Null,
+            }))
+        })
+        .collect()
+}
+
 fn persisted_session_id_for_workspace(
     session_path: &std::path::Path,
     workspace_cwd: &std::path::Path,
@@ -753,7 +789,8 @@ mod tests {
     use super::{
         cancel_should_stop_target, filter_session_delete_paths, find_existing_runtime_for_prepare,
         image_mime_from_path, new_session_menu_enabled, persisted_session_id_for_workspace,
-        quick_chat_snapshot, resolve_static_dir, side_chat_startup_rpc_commands,
+        quick_chat_snapshot, resolve_static_dir, runtime_instance_summaries,
+        should_stop_owner_runtimes_on_transition, side_chat_startup_rpc_commands,
         skill_scope_context, touch_registered_workspace, workspace_snapshot_for,
     };
     use crate::metadata_store::{MetadataStore, SharedMetadataStore};
@@ -933,8 +970,125 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn runtime_instance_summaries_span_every_registered_workspace() {
+        use crate::native_pi_manager::NativePiManager;
+        use crate::runtime_coordinator::RuntimeTarget;
+
+        let manager = NativePiManager::new(8);
+        let (metadata, temp) = shared_test_metadata("instance-summaries");
+        // Session root mirrors Pi's layout: one bucket dir per workspace with
+        // a header-matching JSONL the data plane can resolve.
+        let sessions_root = temp.join("sessions");
+        let seed = |bucket: &str, session_id: &str, cwd: &std::path::Path| {
+            let dir = sessions_root.join(bucket);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join(format!("2026-09-18T00-00-00-000Z_{session_id}.jsonl")),
+                format!(
+                    "{{\"type\":\"session\",\"version\":3,\"id\":\"{session_id}\",\"cwd\":\"{}\"}}\n\
+                     {{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":\"hello\"}}}}\n",
+                    cwd.to_string_lossy(),
+                ),
+            )
+            .unwrap();
+        };
+        let root_a = {
+            fs::create_dir_all(temp.join("a")).unwrap();
+            temp.join("a").canonicalize().unwrap()
+        };
+        let root_b = {
+            fs::create_dir_all(temp.join("b")).unwrap();
+            temp.join("b").canonicalize().unwrap()
+        };
+        let (row_a, _) = metadata.lock().unwrap().add_workspace(&root_a).unwrap();
+        let (row_b, _) = metadata.lock().unwrap().add_workspace(&root_b).unwrap();
+        metadata
+            .lock()
+            .unwrap()
+            .set_workspace_session_bucket_from_pi(&row_a.workspace_id, "--ws-a--")
+            .unwrap();
+        metadata
+            .lock()
+            .unwrap()
+            .set_workspace_session_bucket_from_pi(&row_b.workspace_id, "--ws-b--")
+            .unwrap();
+        seed("--ws-a--", "session-a", &root_a);
+        seed("--ws-b--", "session-b", &root_b);
+
+        // Two live runtimes under different owners; plus one runtime whose
+        // workspace never registered (stays host-internal).
+        manager
+            .register_in_memory(RuntimeTarget::with_owner(
+                &row_a.workspace_id,
+                "session-a",
+                "instance-a",
+                "owner-a",
+                1,
+            ))
+            .unwrap();
+        manager
+            .register_in_memory(RuntimeTarget::with_owner(
+                &row_b.workspace_id,
+                "session-b",
+                "instance-b",
+                "owner-b",
+                2,
+            ))
+            .unwrap();
+        manager
+            .register_in_memory(RuntimeTarget::with_owner(
+                "workspace-ghost",
+                "session-ghost",
+                "instance-ghost",
+                "owner-a",
+                1,
+            ))
+            .unwrap();
+
+        let summaries = runtime_instance_summaries(&manager, &metadata, Some(&sessions_root));
+        let mut workspace_ids: Vec<&str> = summaries
+            .iter()
+            .filter_map(|entry| entry["workspaceId"].as_str())
+            .collect();
+        workspace_ids.sort_unstable();
+        let mut expected = vec![row_a.workspace_id.as_str(), row_b.workspace_id.as_str()];
+        expected.sort_unstable();
+        assert_eq!(
+            workspace_ids, expected,
+            "every registered workspace's runtime is visible to any owner"
+        );
+        let a = summaries
+            .iter()
+            .find(|entry| entry["sessionId"] == "session-a")
+            .unwrap();
+        assert_eq!(
+            a["cwd"],
+            serde_json::json!(root_a.to_string_lossy().to_string())
+        );
+        assert!(a["sessionFile"]
+            .as_str()
+            .unwrap()
+            .contains("session-a.jsonl"));
+    }
+
     #[test]
-    fn cross_workspace_return_reuses_the_prior_runtime() {
+    fn transition_cleanup_predicate_separates_same_and_cross_workspace() {
+        // The predicate still gates per-generation cleanup (export grants,
+        // side-chat leases); runtimes themselves are no longer stopped by it.
+        let workspace = PathBuf::from("/workspace");
+        assert!(!should_stop_owner_runtimes_on_transition(
+            Some(workspace.as_path()),
+            Some(workspace.as_path()),
+        ));
+        assert!(should_stop_owner_runtimes_on_transition(
+            Some(workspace.as_path()),
+            Some(PathBuf::from("/other-workspace").as_path()),
+        ));
+    }
+
+    #[tokio::test]
+    async fn cross_workspace_return_reuses_the_prior_runtime() {
         let manager = crate::native_pi_manager::NativePiManager::new(8);
         let prior = crate::runtime_coordinator::RuntimeTarget::with_owner(
             "workspace-a",
@@ -2148,38 +2302,19 @@ fn install_control_handler(
                 match command.as_str() {
                     "runtime_instances" => {
                         require_native_owner(&ctx)?;
-                        let owner = ctx
-                            .owner_id
-                            .as_ref()
-                            .ok_or("verified window owner required")?;
-                        let instances = runtimes
-                            .running_targets()
-                            .into_iter()
-                            .filter(|target| target.owner_id.as_deref() == Some(owner.as_str()))
-                            .filter_map(|target| {
-                                let cwd = metadata
-                                    .lock()
-                                    .ok()?
-                                    .canonical_root_for_workspace_id(&target.workspace_id)
-                                    .ok()?;
-                                let data = host_data::HostDataPlane::new(metadata.clone())
-                                    .with_session_root(
-                                        dirs::home_dir()?.join(".pi/agent/sessions"),
-                                    );
-                                let session_file = data
-                                    .session_file_path(&target.workspace_id, &target.session_id)?;
-                                Some(serde_json::json!({
-                                    "workspaceId": target.workspace_id,
-                                    "sessionId": target.session_id,
-                                    "instanceId": target.instance_id,
-                                    "cwd": cwd.to_string_lossy(),
-                                    "sessionFile": session_file.to_string_lossy(),
-                                    "pid": runtimes.pid_for(&target),
-                                    "startedAt": Value::Null,
-                                }))
-                            })
-                            .collect::<Vec<_>>();
-                        Ok(serde_json::json!({ "instances": instances }))
+                        // Visibility spans every registered workspace (upstream
+                        // parity): the page viewing workspace B must see
+                        // workspace A's live sessions for sidebar status dots.
+                        // Command admission remains owner+generation scoped.
+                        let session_root =
+                            dirs::home_dir().map(|home| home.join(".pi/agent/sessions"));
+                        Ok(serde_json::json!({
+                            "instances": runtime_instance_summaries(
+                                &runtimes,
+                                &metadata,
+                                session_root.as_deref(),
+                            )
+                        }))
                     }
                     "host_health" => {
                         require_native_owner(&ctx)?;
@@ -3085,18 +3220,21 @@ fn install_control_handler(
                         // A same-workspace session select moves this WebView to a
                         // fresh runtime without invalidating the prior one: it may
                         // have an active turn. Cross-workspace transitions revoke
-                        // the prior generation and stop its owner-bound runtimes.
-                        let should_stop_prior_runtimes = should_stop_owner_runtimes_on_transition(
-                            owner_registry
-                                .current_workspace(&owner)
-                                .as_ref()
-                                .map(|(cwd, _)| cwd.as_path()),
-                            owner_registry.pending_target_cwd(&owner).as_deref(),
-                        );
-                        if should_stop_prior_runtimes {
-                            if let Some(native) = app.try_state::<NativePiManagerState>() {
-                                native.stop_for_owner_transition(owner.as_str(), gen);
-                            }
+                        // the prior generation's grants (exports, side chats) but
+                        // leave its runtimes alive (upstream parity: switching
+                        // workspaces never interrupts a running turn). A stale
+                        // runtime stays unreachable via authorize_target until the
+                        // owner returns and prepare rebinds it to a fresh
+                        // generation.
+                        let should_revoke_prior_generation =
+                            should_stop_owner_runtimes_on_transition(
+                                owner_registry
+                                    .current_workspace(&owner)
+                                    .as_ref()
+                                    .map(|(cwd, _)| cwd.as_path()),
+                                owner_registry.pending_target_cwd(&owner).as_deref(),
+                            );
+                        if should_revoke_prior_generation {
                             // M4: export grants die with the old generation.
                             if let Some(host) = app.try_state::<host_server::HostServer>() {
                                 host.revoke_session_exports(owner.as_str());

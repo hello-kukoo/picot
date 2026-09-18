@@ -101,8 +101,12 @@ WindowOwnerRegistry
 ```
 
 - **capability** 是 32 字节 URL-safe 随机值，仅发放给 desktop 窗口
-- **generation** 是单调递增的工作区代数——workspace transition 递增，旧代 runtime/操作/令牌全部失效
+- **generation** 是单调递增的工作区代数——workspace transition 递增，旧代授权/操作/令牌全部失效；旧代 runtime 进程保留存活（upstream 语义：跨工作区切换不中断运行中的 turn），但因 wid/generation 失配被授权闸门拒之门外，返回原工作区时由 prepare rebind 到新代复用
 - 远程设备经 `/v2/auth/exchange` 配对获得 device token（非 capability）
+
+### 运行时事件可见性
+
+任何已认证 desktop owner 可订阅任意 live runtime 的**事件流**（跨工作区侧栏绿/蓝点的数据源）；`runtime_request` 命令面仍要求 owner+workspace+generation 全匹配。阻塞型 `extension_ui_request`（select/confirm/input/editor）仅投递给 `authorize_target` 通过的订阅者，其余订阅者（以及 pending replay）不接收；`setWidget`/`notify` 等非阻塞 UI 事件与普通事件一样按订阅投递。
 
 ### 数据面 containment
 
@@ -226,5 +230,5 @@ Pi 以 `~/.pi/agent/trust.json`（键为 canonical 路径，值为 true/false/nu
 1. **Loopback-only**：HostServer 拒绝非 loopback 绑定
 2. **Owner capability**：每个桌面窗口持唯一 32 字节随机 capability
 3. **Workspace containment**：所有文件操作限制在注册根目录内
-4. **Generation 失效**：workspace transition 使旧代 runtime/操作/导出令牌全部失效
+4. **Generation 失效**：workspace transition 使旧代授权、操作与导出令牌全部失效；旧代 runtime 进程保留存活但不可达（授权闸门拒收），至窗口销毁/owner 撤销/app 退出或返回 rebind
 5. **匿名遥测**：仅 allowlisted 粗粒度字段，无 per-user/per-token 维度
