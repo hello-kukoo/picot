@@ -568,6 +568,7 @@
     "brand": "Espacio de trabajo Picot",
     "deleteSession": "Eliminar",
     "deleteSessionRunning": "No se puede eliminar una sesión en ejecución",
+    "deleteSessionFailed": "No se pudo eliminar la sesión",
     "deleteDisabledActive": "No se puede eliminar la sesión activa",
     "deleteDisabledStreaming": "No se puede eliminar una sesión en streaming",
     "deleteDisabledRunning": "No se puede eliminar una sesión en ejecución",

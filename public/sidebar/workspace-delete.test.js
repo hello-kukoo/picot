@@ -47,6 +47,7 @@ beforeEach(async () => {
             deleteSessionConfirmMany: "Delete {count} sessions permanently?",
             deleteSessionAriaLabel: "Delete sessions",
             deleteSessionRunning: "Cannot delete a running session",
+            deleteSessionFailed: "Failed to delete session",
             pinWorkspace: "Pin workspace",
             unpinWorkspace: "Unpin workspace",
             openInFinder: "Open in Finder",
@@ -116,6 +117,35 @@ describe("SessionSidebar workspace deletion", () => {
     );
   });
 
+  test("host rejection surfaces a failure notice and reports not deleted", async () => {
+    const sidebar = makeSidebar();
+    sidebar.showFallbackConfirmDialog = vi.fn(async () => true);
+    sidebar.transport.sessionDeleteBatch = vi.fn(async () => {
+      throw new Error("workspace is not available");
+    });
+    const notice = vi.fn();
+    sidebar.onSessionNotice = notice;
+
+    await expect(sidebar.deleteSession("/s/a.jsonl")).resolves.toBe(false);
+    expect(notice).toHaveBeenCalledWith("Failed to delete session");
+  });
+
+  test("per-path errors surface a failure notice and report not deleted", async () => {
+    const sidebar = makeSidebar();
+    sidebar.showFallbackConfirmDialog = vi.fn(async () => true);
+    sidebar.transport.sessionDeleteBatch = vi.fn(async () => ({
+      deleted: 0,
+      errors: ["/s/a.jsonl"],
+      running: [],
+    }));
+    const notice = vi.fn();
+    sidebar.onSessionNotice = notice;
+
+    await expect(sidebar.deleteSession("/s/a.jsonl")).resolves.toBe(false);
+    expect(notice).toHaveBeenCalledWith("Failed to delete session");
+    expect(sidebar.transport.sessionDeleteBatch).toHaveBeenCalledWith(["/s/a.jsonl"]);
+  });
+
   test("confirm cancel sends no delete-batch request", async () => {
     const fetchMock = deleteBatchFetch({ deleted: 0, errors: [], running: [] });
     global.fetch = fetchMock;
@@ -168,6 +198,25 @@ describe("SessionSidebar workspace deletion", () => {
 
     expect(fetchMock.lastPayload).toEqual({ filePaths: ["/s/a.jsonl", "/s/b.jsonl"] });
     expect(notice).toHaveBeenCalled();
+  });
+
+  test("batch that deletes nothing while reporting errors surfaces a failure notice", async () => {
+    const fetchMock = deleteBatchFetch({ deleted: 0, errors: ["/s/a.jsonl"], running: [] });
+    global.fetch = fetchMock;
+    const notice = vi.fn();
+    const sidebar = makeSidebar({ notice });
+    const operation = sidebar.deleteWorkspaceSessions({
+      ...WORKSPACE,
+      folderName: "w",
+    });
+    const dialog = document.querySelector(".sidebar-confirm-dialog");
+    const input = dialog.querySelector(".workspace-delete-confirm-input");
+    input.value = "w";
+    dialog.querySelector(".sidebar-confirm-yes").click();
+    await operation;
+
+    expect(fetchMock.lastPayload).toEqual({ filePaths: ["/s/a.jsonl", "/s/b.jsonl"] });
+    expect(notice).toHaveBeenCalledWith("Failed to delete session");
   });
 
   test("workspace name mismatch keeps modal open and sends no request", async () => {

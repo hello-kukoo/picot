@@ -112,6 +112,10 @@ WindowOwnerRegistry
 - `strip_prefix` 包含性（分隔符安全，兄弟前缀拒绝）
 - atomic write + mtime conflict 检测
 
+### Session 删除授权（per-path）
+
+`session_delete_batch` control op 采用 Desktop+owner 身份门禁（`require_native_owner`）加逐路径校验，不依赖 owner 当前的 workspace 绑定：每个 path 必须存在于 `~/.pi/agent/sessions`、是可解析 header 的 `.jsonl`，且 header 记录的 cwd canonicalize 后命中注册 workspace root；运行中 session 另由 running 列表保护。这与 `workspace_sessions` data 路由的授权模型对齐：landing owner（无 workspace 绑定）能列出已注册 workspace 的 session，也就能删除它们；授权边界是 desktop owner capability，不是 workspace 绑定。被拒路径必须进入响应的 `errors` 数组而非静默丢弃——前端把「不在 errors 中」视为已删除，静默丢弃会伪造成功并让 session 在 refresh 后复活。
+
 ## 运行时生命周期
 
 ```text

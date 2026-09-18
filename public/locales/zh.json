@@ -568,6 +568,7 @@
     "brand": "Picot 工作区",
     "deleteSession": "删除",
     "deleteSessionRunning": "无法删除正在运行的会话",
+    "deleteSessionFailed": "删除会话失败",
     "deleteDisabledActive": "无法删除当前会话",
     "deleteDisabledStreaming": "无法删除正在流式输出的会话",
     "deleteDisabledRunning": "无法删除正在运行的会话",

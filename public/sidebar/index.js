@@ -238,9 +238,13 @@ export class SessionSidebar {
       deleted = !errors.has(filePath);
     } catch (err) {
       console.error("[Sidebar] deleteSession failed:", err);
+      this.onSessionNotice?.(t("sidebar.deleteSessionFailed"));
       return false;
     }
-    if (!deleted) return false;
+    if (!deleted) {
+      this.onSessionNotice?.(t("sidebar.deleteSessionFailed"));
+      return false;
+    }
     // The owning registry row may serve its session list from the lazy cache;
     // drop that entry so the reload below cannot resurrect the deleted file.
     const owner = this.projects.find(
@@ -1233,6 +1237,13 @@ export class SessionSidebar {
       }
     } catch (err) {
       console.error("[Sidebar] deleteWorkspaceSessions failed:", err);
+      this.onSessionNotice?.(t("sidebar.deleteSessionFailed"));
+    }
+
+    // A batch that deleted nothing while reporting per-path errors is a
+    // failure, not a silent no-op: every confirmed path was rejected.
+    if (data.deleted === 0 && (data.errors || []).length > 0) {
+      this.onSessionNotice?.(t("sidebar.deleteSessionFailed"));
     }
 
     // Batch deletes must invalidate this workspace's cache or the reload
@@ -1630,7 +1641,12 @@ export class SessionSidebar {
             unavailableFilePath ||
             t("sidebar.unavailable");
           const workspaceId = workspace?.workspaceId || `pinned-session:${unavailableFilePath}`;
-          const expansionWorkspace = { workspaceId };
+          // Expansion and lazy-load must carry the full registry project
+          // (source/path/registryId). A bare {workspaceId} object makes
+          // ensureWorkspaceSessions bail at its source!="registry" guard,
+          // so a pinned workspace expands to an empty session list until
+          // it is unpinned back into the Projects region.
+          const expansionWorkspace = workspace || { workspaceId };
           const pinnedActive =
             !pinned.unavailable &&
             Array.isArray(pinned.sessions) &&

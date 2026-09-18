@@ -568,6 +568,7 @@
     "brand": "Picotワークスペース",
     "deleteSession": "削除",
     "deleteSessionRunning": "実行中のセッションは削除できません",
+    "deleteSessionFailed": "セッションの削除に失敗しました",
     "deleteDisabledActive": "アクティブなセッションは削除できません",
     "deleteDisabledStreaming": "ストリーミング中のセッションは削除できません",
     "deleteDisabledRunning": "実行中のセッションは削除できません",

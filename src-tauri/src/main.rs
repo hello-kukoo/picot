@@ -750,9 +750,9 @@ fn find_static_dir(app: &tauri::App) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        cancel_should_stop_target, find_existing_runtime_for_prepare, image_mime_from_path,
-        new_session_menu_enabled, persisted_session_id_for_workspace, quick_chat_snapshot,
-        resolve_static_dir, should_stop_owner_runtimes_on_transition,
+        cancel_should_stop_target, filter_session_delete_paths, find_existing_runtime_for_prepare,
+        image_mime_from_path, new_session_menu_enabled, persisted_session_id_for_workspace,
+        quick_chat_snapshot, resolve_static_dir, should_stop_owner_runtimes_on_transition,
         side_chat_startup_rpc_commands, skill_scope_context, touch_registered_workspace,
         workspace_snapshot_for,
     };
@@ -784,6 +784,48 @@ mod tests {
             )),
             temp,
         )
+    }
+
+    #[test]
+    fn session_delete_paths_authorize_by_registered_cwd_and_reject_the_rest() {
+        let (metadata, temp) = shared_test_metadata("del-filter");
+        let root = temp.canonicalize().unwrap();
+        metadata
+            .lock()
+            .unwrap()
+            .add_workspace(&root)
+            .expect("workspace registration");
+
+        let write_session = |name: &str, cwd: &str| {
+            let file = temp.join(name);
+            // A user message is required: parse_session_header suppresses
+            // trivially-short sessions with no user input at all.
+            fs::write(
+                &file,
+                format!(
+                    "{{\"type\":\"session\",\"version\":3,\"id\":\"{name}\",\"cwd\":\"{cwd}\"}}\n\
+                     {{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":\"hello\"}}}}\n"
+                ),
+            )
+            .unwrap();
+            file.to_string_lossy().into_owned()
+        };
+        let registered = write_session("registered.jsonl", &root.to_string_lossy());
+        let unregistered = {
+            let other = temp.join("other");
+            fs::create_dir_all(&other).unwrap();
+            let other = other.canonicalize().unwrap();
+            write_session("unregistered.jsonl", &other.to_string_lossy())
+        };
+        let missing = temp.join("missing.jsonl").to_string_lossy().into_owned();
+
+        let (allowed, rejected) = filter_session_delete_paths(
+            &[registered, unregistered.clone(), missing.clone()],
+            &metadata,
+        );
+        assert_eq!(allowed.len(), 1);
+        assert!(allowed[0].ends_with("registered.jsonl"));
+        assert_eq!(rejected, vec![unregistered, missing]);
     }
 
     #[tokio::test]
@@ -1162,6 +1204,46 @@ mod tests {
         assert!(side_chat_startup_rpc_commands(&json!({"thinkingLevel":"medium"})).is_empty());
         assert!(side_chat_startup_rpc_commands(&json!({"provider":"","modelId":""})).is_empty());
     }
+}
+
+/// Per-path session-delete authorization. A path is allowed only when the
+/// file exists, carries a parseable `.jsonl` session header whose recorded
+/// cwd canonicalizes to a registered workspace root. Anything else is
+/// returned as rejected so callers surface it as a per-path error instead of
+/// silently dropping it (the sidebar treats a path missing from `errors` as
+/// deleted, so a drop would fake success and resurrect the session after
+/// refresh).
+fn filter_session_delete_paths(
+    file_paths: &[String],
+    metadata: &SharedMetadataStore,
+) -> (Vec<String>, Vec<String>) {
+    let mut allowed = Vec::new();
+    let mut rejected = Vec::new();
+    for path in file_paths {
+        let canonical = fs::canonicalize(path).ok();
+        let authorized = canonical
+            .as_ref()
+            .and_then(|path| extract_session_cwd(&path.to_path_buf()))
+            .and_then(|cwd| fs::canonicalize(cwd).ok())
+            .and_then(|cwd| {
+                metadata
+                    .lock()
+                    .ok()?
+                    .workspace_id_for_canonical_root(&cwd)
+                    .ok()
+            })
+            .is_some()
+            && canonical.as_ref().is_some_and(|path| {
+                path.to_string_lossy().ends_with(".jsonl")
+                    && host_data::parse_session_header(path).is_some()
+            });
+        if authorized {
+            allowed.push(path.clone());
+        } else {
+            rejected.push(path.clone());
+        }
+    }
+    (allowed, rejected)
 }
 
 fn extract_session_cwd(session_path: &PathBuf) -> Option<String> {
@@ -2431,36 +2513,21 @@ fn install_control_handler(
                             .filter_map(Value::as_str)
                             .map(str::to_owned)
                             .collect::<Vec<_>>();
-                        // Session files are workspace-scoped data: Registered-only.
-                        registered_workspace(&owner_registry, owner)?;
+                        // Session delete authorization is per-path, not
+                        // owner-workspace-scoped: the landing owner has no
+                        // workspace binding yet its sidebar still lists
+                        // registered workspaces' sessions (same authorization
+                        // model as the workspace_sessions data route). Each
+                        // path must itself resolve to a registered
+                        // workspace's session file.
                         let data = host_data::HostDataPlane::new(metadata.clone())
                             .with_session_root(
                                 dirs::home_dir()
                                     .ok_or("Session unavailable")?
                                     .join(".pi/agent/sessions"),
                             );
-                        let allowed_paths = file_paths
-                            .into_iter()
-                            .filter(|path| {
-                                let canonical = fs::canonicalize(path).ok();
-                                canonical
-                                    .as_ref()
-                                    .and_then(|path| extract_session_cwd(&path.to_path_buf()))
-                                    .and_then(|cwd| fs::canonicalize(cwd).ok())
-                                    .and_then(|cwd| {
-                                        metadata
-                                            .lock()
-                                            .ok()?
-                                            .workspace_id_for_canonical_root(&cwd)
-                                            .ok()
-                                    })
-                                    .is_some()
-                                    && canonical.as_ref().is_some_and(|path| {
-                                        path.to_string_lossy().ends_with(".jsonl")
-                                            && host_data::parse_session_header(path).is_some()
-                                    })
-                            })
-                            .collect::<Vec<_>>();
+                        let (allowed_paths, rejected_paths) =
+                            filter_session_delete_paths(&file_paths, &metadata);
                         let running = runtimes
                             .running_targets()
                             .into_iter()
@@ -2470,8 +2537,19 @@ fn install_control_handler(
                                     .map(|path| path.to_string_lossy().into_owned())
                             })
                             .collect::<Vec<_>>();
-                        data.delete_session_batch(&allowed_paths, &running)
-                            .map_err(|error| format!("Session deletion failed: {error:?}"))
+                        let mut result = data
+                            .delete_session_batch(&allowed_paths, &running)
+                            .map_err(|error| format!("Session deletion failed: {error:?}"))?;
+                        // Rejected paths are deletion failures, not silent
+                        // drops: the sidebar treats a path absent from
+                        // `errors` as deleted, and a silently dropped path
+                        // would resurrect the session after refresh.
+                        if !rejected_paths.is_empty() {
+                            if let Some(errors) = result["errors"].as_array_mut() {
+                                errors.extend(rejected_paths.into_iter().map(Value::String));
+                            }
+                        }
+                        Ok(result)
                     }
                     "session_ui_profile_load" => {
                         require_native_owner(&ctx)?;

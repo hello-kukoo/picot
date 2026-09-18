@@ -568,6 +568,7 @@
     "brand": "Picot Workspace",
     "deleteSession": "Delete",
     "deleteSessionRunning": "Cannot delete a running session",
+    "deleteSessionFailed": "Failed to delete session",
     "deleteDisabledActive": "Cannot delete the active session",
     "deleteDisabledStreaming": "Cannot delete a streaming session",
     "deleteDisabledRunning": "Cannot delete a running session",
