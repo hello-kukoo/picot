@@ -25,6 +25,11 @@ live in [`ARCHITECTURE.md`](ARCHITECTURE.md).
   contract. Changes to LAN access, cross-platform paths, or static serving also
   require the corresponding architecture update.
 
+## Documentation
+
+- Design spec（`docs/superpowers/specs/`）用中文写；implementation plan（`docs/superpowers/plans/`）用英文写。
+- 文档交付前用 `writing-clearly-and-concisely` skill 润色；中文文档再用 `humanizer-zh` skill 去 AI 味。
+
 ## Agent memory
 
 This repo maintains an agent memory bank at `.memory/MEMORY.md` (gitignored,
