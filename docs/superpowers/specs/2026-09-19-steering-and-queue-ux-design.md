@@ -60,4 +60,10 @@ runtime 命令原样透传，此表是唯一闸门），Esc 的 clear 等待有 
     结束才清空 → 文本先 `DONE` 后 `FOLLOWED`（等整轮结束，与 steer 形成对照）。
   · **clear_queue + abort**：`clear_queue` 响应 `data.steering` 原样返回队列文本、队列随即清空；随后
     `abort` 终止了正在执行的 bash（`tool_execution_end error=true`）并结束该轮，被清的文本全程未被执行。
-  因此本节原先的三个「手动」项均已有等价证据；GUI 端人眼走查仍可做，但已不是未知项。
+  · **extension command**（另一次带用户扩展的重跑，不加 `-ne`）：运行中发
+    `{"type":"prompt","message":"/no-sleep"}`（**不带** `streamingBehavior`）→ `success: true`；
+    同一轮再发纯文本裸 prompt → `success: false`，error 为
+    「Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.」。
+    这正是 Q1-A 让 extension command 走裸 prompt、其余走 steer/followUp 的依据。
+  因此本节原先的三个「手动」项均已有等价证据，extension command 走裸 prompt 的前提也一并实测；
+  GUI 端人眼走查仍可做，但已不是未知项。

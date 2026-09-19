@@ -500,6 +500,24 @@ test("an idle direct send still dedupes its own echo", async () => {
   expect(document.querySelectorAll("#messages .message.user")).toHaveLength(1);
 });
 
+test("idle Alt+Enter degrades to a direct send", async () => {
+  await import("./app.js?steering-alt-enter-idle");
+  const ws = wsInstances.at(-1);
+  await settle();
+
+  typeIntoComposer("idle alt enter");
+  pressAltEnter();
+  await settle();
+
+  // Spec 按钮可见性: a bare keypress has no disabled state to show, so idle
+  // Alt+Enter degrades to the ordinary send instead of blocking.
+  expect(commandFrames(ws, "follow_up")).toHaveLength(0);
+  const prompts = commandFrames(ws, "prompt");
+  expect(prompts).toHaveLength(1);
+  expect(prompts[0].command.message).toBe("idle alt enter");
+  expect(prompts[0].command.streamingBehavior).toBeUndefined();
+});
+
 test("the delayed-send caret exists only while a run is active", async () => {
   await import("./app.js?steering-caret");
   const ws = wsInstances.at(-1);
