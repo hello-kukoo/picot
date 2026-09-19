@@ -112,6 +112,51 @@ describe("createPromptDelivery", () => {
     expect(h.callbacks.accept).toHaveBeenCalledOnce();
   });
 
+  test("the record hands the captured images and sources to the callbacks", async () => {
+    // C3 owns attachment ownership: acceptance may consume exactly the captured
+    // set, rejection must hand the same set back. Nothing else pins this.
+    const images = [{ type: "image", data: "AAA", mimeType: "image/png" }];
+    const imageSources = [{ data: "AAA", mimeType: "image/png" }];
+
+    const accepted = makeHarness();
+    accepted.delivery.dispatch(
+      { type: "prompt", message: "hi", images },
+      { text: "hi", images, imageSources },
+    );
+    accepted.getPending().resolve({ success: true });
+    await accepted.flush();
+    const [acceptRecord] = accepted.callbacks.accept.mock.calls[0];
+    expect(acceptRecord.images).toEqual(images);
+    expect(acceptRecord.imageSources).toEqual(imageSources);
+
+    const rejected = makeHarness();
+    rejected.delivery.dispatch(
+      { type: "prompt", message: "hi", images },
+      { text: "hi", images, imageSources },
+    );
+    rejected.getPending().resolve({ success: false, error: "nope" });
+    await rejected.flush();
+    const [rejectRecord] = rejected.callbacks.reject.mock.calls[0];
+    expect(rejectRecord.images).toEqual(images);
+    expect(rejectRecord.imageSources).toEqual(imageSources);
+  });
+
+  test("pullBackTexts also settles an unconfirmed record (Esc while its pill shows)", async () => {
+    const h = makeHarness();
+    h.delivery.dispatch(CMD, { text: "pill text" });
+    h.advance(8000);
+    expect(h.delivery.unconfirmed()).toHaveLength(1);
+
+    expect(h.delivery.pullBackTexts(["pill text"])).toBe(1);
+    expect(h.delivery.unconfirmed()).toHaveLength(0);
+    expect(h.delivery.get("req-1")).toBe(null);
+
+    // A late reply for a settled record must not reach the composer code.
+    h.getPending().resolve({ success: true });
+    await h.flush();
+    expect(h.callbacks.accept).not.toHaveBeenCalled();
+  });
+
   test("a malformed or missing success reply rejects, never accepts", async () => {
     // Regression: only reply.success === true is acceptance. Undefined,
     // null, shape-invalid, or truthy-but-not-true replies must reject so a
