@@ -3982,6 +3982,10 @@ const RUNTIME_RPC_COMMANDS = new Set([
   "get_session_stats",
   "get_state",
   "new_session",
+  // pi 0.84.4+: removes ALL queued steering/followUp and returns their text
+  // (queue clearing, 2026-09-19 steering spec). The host forwards runtime
+  // commands verbatim — this table is the only gate.
+  "clear_queue",
 ]);
 
 // Commands owned by the Rust host control plane rather than the runtime. A Map
@@ -6120,27 +6124,24 @@ function showTypingIndicator(show) {
  * failed — the caller proceeds with abort regardless, per spec).
  */
 async function clearPiQueueAndRestore() {
-  let cleared = "";
-  try {
-    const result = await rpcCommand({ type: "clear_queue" }, null, true);
-    if (result?.success) {
-      const texts = [
-        ...(Array.isArray(result.data?.steering) ? result.data.steering : []),
-        ...(Array.isArray(result.data?.followUp) ? result.data.followUp : []),
-      ];
-      cleared = texts.filter((text) => typeof text === "string" && text.trim()).join("\n");
-    }
-  } catch {
-    /* fall through: abort must proceed even when clearing fails */
-  }
+  // The queue only visibly empties when pi CONFIRMS the clear — a failed or
+  // unknown command must leave the pills alone (they are still queued at pi;
+  // hiding them would be the silent degradation the review flagged).
+  const result = await rpcCommand({ type: "clear_queue" }, null, true);
+  if (!result?.success) return "";
+  const texts = [
+    ...(Array.isArray(result.data?.steering) ? result.data.steering : []),
+    ...(Array.isArray(result.data?.followUp) ? result.data.followUp : []),
+  ];
+  const cleared = texts.filter((text) => typeof text === "string" && text.trim()).join("\n");
   if (cleared) {
     if (!messageInput.value.trim()) messageInput.value = cleared;
     else if (!messageInput.value.includes(cleared))
       messageInput.value = `${messageInput.value}\n${cleared}`;
     messageInput.dispatchEvent(new Event("input", { bubbles: true }));
   }
-  // pi re-emits queue_update on clear; also clear locally so the pills drop
-  // immediately even if that event races the click.
+  // pi re-emits queue_update on clear; hide now too so the pills drop
+  // immediately. A late queue_update with content would restore the truth.
   document.getElementById("pi-queue")?.classList.add("hidden");
   return cleared;
 }
@@ -6149,9 +6150,27 @@ function abortCurrentRun() {
   // Q3-A: abort alone would let pi CONTINUE with queued steer/followUp
   // ("abort continues queued messages"). Clear first, restore the text to
   // the composer, then abort — Esc means "really stop", and no text is lost.
-  if (state.isStreaming)
-    void clearPiQueueAndRestore().finally(() => wsClient.send({ type: "abort" }));
-  else wsClient.send({ type: "abort" });
+  // The clear races a ~1s cap: an unresponsive pi (exactly when users hit
+  // Esc) must not delay the real abort behind wsRequest's 15s default. A
+  // late clear that genuinely succeeded still restores its text — the queue
+  // was provably emptied at pi, so the text is real either way.
+  if (state.isStreaming) {
+    let aborted = false;
+    const abortNow = () => {
+      if (aborted) return;
+      aborted = true;
+      wsClient.send({ type: "abort" });
+    };
+    const cap = setTimeout(abortNow, 1000);
+    void clearPiQueueAndRestore()
+      .catch(() => {})
+      .finally(() => {
+        clearTimeout(cap);
+        abortNow();
+      });
+  } else {
+    wsClient.send({ type: "abort" });
+  }
   messageRenderer.renderError(t("errors.abortedByUser"));
   showTypingIndicator(false);
 

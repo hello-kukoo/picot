@@ -1,11 +1,15 @@
 # Enter=Steering、pi 队列取消与 Esc 语义设计
 
-**Status:** Approved — 2026-09-19 grilling 定案（Q1–Q3 全取推荐项）。
+**Status:** Implemented — 2026-09-19 grilling 定案（Q1–Q3 全取推荐项）并同日实施。
+评审修正：clear_queue 须列入 WebView 侧 `RUNTIME_RPC_COMMANDS` 白名单（host 对
+runtime 命令原样透传，此表是唯一闸门），Esc 的 clear 等待有 ~1s 上限。
 **Date:** 2026-09-19
-**演化关系:** 取代 `2026-09-16-composer-interaction-design.md` C5 中「本地队列行为不变」
-与「GUI 取消能力 blocked（协议无 clear_queue）」两项结论——后者经查证为过时文档所致误判。
+**演化关系:** 取代 `2026-09-16-composer-interaction-design.md` 三项结论——C5 的
+「本地队列行为不变」「GUI 取消能力 blocked（协议无 clear_queue）」（后者经查证为
+过时文档所致误判），以及 C3 的「流式本地队列即时清空例外」（本地队列删除后例外
+随之失效，流式 Enter 与 direct 发送走同一 C3 投递记录）。
 
-## 事实更正（本次核实）
+## 事实更正（实施前核实，行为基线）
 
 - `clear_queue` RPC 自 **0.84.4** 进入上游（CHANGELOG + git tag 证实），内嵌 0.85.1 **支持**：
   全量移除 pi 侧 steering + followUp 队列并返回被清文本；不支持按条删除。
@@ -39,6 +43,7 @@
 ## 验证
 
 - `planSteeringSend` 意图矩阵单测（idle→direct、流式+extension→prompt-now、流式→steer）。
+- i18n：新增 `queue.clearQueue`（四语言）；`queue.steering`/`queue.followUp` 沿用既有键。
 - composer-follow-up / app-startup / at-file-mention 焦点测试；全量 `bun run test` + `bun run check`。
 - 手动：流式中 Enter 发 steer（「Steer」pill 出现、当前轮转向）；Alt+Enter 发 followUp；
   清空队列按钮回填；Esc 终止 + 队列文本回输入框；idle 无 caret。

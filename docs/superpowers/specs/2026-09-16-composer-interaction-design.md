@@ -58,6 +58,8 @@ per-session drafts — plus C5, the follow-up queue send integrated from the for
   fails late, or fails after the user has started typing again, is dropped without a trace.
 - The streaming path is different and already safe: while `state.isStreaming` the message goes
   into the local `messageQueue` and the input is cleared immediately — the queue holds the payload.
+  **[SUPERSEDED 2026-09-19]** 本地队列已删除（Enter=steer），见
+  `2026-09-19-steering-and-queue-ux-design.md`。
 - Composer text persistence today is exactly one mechanism: `workspace/nav-state-cache.js`'s
   `inputDraft` (1500-char cap, 90-second cookie, written only inside the swap-navigation snapshot,
   restored only when the composer is empty). `setComposerDraft()` is called once in the whole app
@@ -130,9 +132,10 @@ Each direct `prompt` and C5 `follow_up` uses one delivery record:
   render the existing `#queued-messages` area with `queue.unconfirmedSend`. Keep its request id,
   text, and attachments; never auto-resend. A late successful response resolves it as accepted; a
   late rejection follows the rejection path. Clicking the pill restores its text without sending.
-- The streaming local-queue branch remains the documented exception: it has already retained the
+- ~~The streaming local-queue branch remains the documented exception: it has already retained the
   payload in `messageQueue`, so it may clear immediately. It must not also create an unconfirmed
-  record.
+  record.~~ **[SUPERSEDED 2026-09-19]** 本地队列已删除；流式中的 Enter 现发
+  `prompt + streamingBehavior:"steer"`，走与 direct 发送相同的 C3 投递记录（无即时清空例外）。
 - `handleResumeBranch`'s deliberate clear is authoritative; C3 restore paths must not resurrect
   input belonging to the old branch. C4 clears that branch's stored draft.
 
@@ -167,15 +170,19 @@ Each direct `prompt` and C5 `follow_up` uses one delivery record:
 未实施），2026-09-18 应 Dr. Lin 要求整合入本 spec 并删除原文件。以下三项明确取代原
 决定：按钮-only 改为 Option/Alt+Enter 主入口；快捷键 idle 时由禁用改为降级直发；
 `clear_queue` 全部取消改为 blocked，因为当前协议没有该命令。
+**[SUPERSEDED 2026-09-19]** 该核实有误：`clear_queue` 自 0.84.4 存在（内嵌 0.85.1 支持），
+队列清空已实现（`2026-09-19-steering-and-queue-ux-design.md` Q2-A）。
 
 ### 背景——两个队列并存
 
-- **本地队列**（`messageQueue`/`renderQueuedMessages`）：流式中发送 →
+- **[SUPERSEDED 2026-09-19：本地队列已删除，Enter 改发 steer]**
+  **本地队列**（`messageQueue`/`renderQueuedMessages`）：流式中发送 →
   客户端队列，`agent_end` 后 flush 成新 prompt；流式中 Enter 即此路径，逐条可取消。
   协议禁止流式中裸 `prompt`（无 `streamingBehavior`），故此队列存在。行为不变。
 - **Pi 队列**（`renderPiQueue`，只读）：pi 进程内的 steering + followUp，
-  `queue_update` 事件驱动展示。**协议无 `clear_queue` 命令（2026-09-18 核实
-  rpc.md 全命令清单）——GUI 取消能力 blocked，待 upstream 支持**；队列保持只读。
+  `queue_update` 事件驱动展示。~~**协议无 `clear_queue` 命令（2026-09-18 核实
+  rpc.md 全命令清单）——GUI 取消能力 blocked，待 upstream 支持**；队列保持只读。~~
+  **[SUPERSEDED 2026-09-19]** `clear_queue` 可用，pi 队列有「清空队列」按钮（Q2-A）。
 
 pi 语义（2026-09-13 源码核实）：`follow_up` 仅入队；drain 只在 run 自然停止点
 执行；idle 时入队会挂到下一个无关 run 结束才执行（idle trap）；extension
@@ -212,7 +219,7 @@ tooltip）；placeholder hint 键；四语言。
 ### 不做
 
 steering 菜单项、`set_follow_up_mode` 暴露、Quick/Side Chat composer、取消按钮
-（blocked，见上）。
+（~~blocked，见上~~ **[SUPERSEDED 2026-09-19：取消按钮已实现]**）。
 
 ### 验证
 
