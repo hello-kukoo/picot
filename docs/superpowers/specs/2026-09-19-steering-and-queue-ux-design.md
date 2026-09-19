@@ -49,7 +49,15 @@ runtime 命令原样透传，此表是唯一闸门），Esc 的 clear 等待有 
   `streamingBehavior` 的裸 prompt；流式 + extension command 发裸 prompt；`queue_update` 渲染只读的
   Steer/Follow-up pill；清空按钮**真的发出 `clear_queue`**（P0 回归护栏）且只在确认成功后回填并隐藏，
   失败时保持原状；非空草稿下回填按换行追加；Esc 先 `clear_queue` 后 `abort` 且文本回到输入框；
-  caret 仅流式存在。
+  caret 仅流式存在；Alt+Enter 流式中发出 `follow_up`（非 steer）且无本地气泡。
 - composer-follow-up / app-startup / at-file-mention 焦点测试；全量 `bun run test` + `bun run check`。
-- 手动（保留的是需要真实 Pi 的那一半）：流式中 Enter 发 steer 观察当前轮转向；Alt+Enter 发 followUp；
-  Esc 终止后确认 pi 侧队列确实已清空、文本回到输入框。
+- 真机实测（2026-09-19，内嵌 `src-tauri/resources/pi/pi` **0.85.1**，rpc 模式，
+  `--provider google --model gemini-3.1-flash-lite`，`-ne` 隔离用户扩展）：首轮让模型调 bash 执行
+  `sleep 8`，在工具执行期间注入消息，观测到的帧与时刻为
+  · **steer**：2.5s 入队（`queue_update steering=[…]`）→ 10.2s 工具结束**的同一时刻** steering 清空
+    （在工具间隙、下一次 LLM 调用前投递）→ 该轮最终文本为 `STEERED`，原计划的 `DONE` 未出现（真转向）。
+  · **followUp**：同样 2.5s 入队但进 `followUp` 桶 → 10.2s 工具结束**不**投递 → 12.6s 本轮 LLM 调用
+    结束才清空 → 文本先 `DONE` 后 `FOLLOWED`（等整轮结束，与 steer 形成对照）。
+  · **clear_queue + abort**：`clear_queue` 响应 `data.steering` 原样返回队列文本、队列随即清空；随后
+    `abort` 终止了正在执行的 bash（`tool_execution_end error=true`）并结束该轮，被清的文本全程未被执行。
+  因此本节原先的三个「手动」项均已有等价证据；GUI 端人眼走查仍可做，但已不是未知项。

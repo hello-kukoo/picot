@@ -180,6 +180,14 @@ function typeIntoComposer(text) {
   return input;
 }
 
+function pressAltEnter() {
+  document
+    .getElementById("message-input")
+    .dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", altKey: true, bubbles: true, cancelable: true }),
+    );
+}
+
 function pressEnter() {
   document
     .getElementById("message-input")
@@ -378,6 +386,26 @@ test("Escape aborts within the cap when clear_queue never answers", async () => 
   expect(commandFrames(ws, "clear_queue")).toHaveLength(1);
   expect(commandFrames(ws, "abort")).toHaveLength(1);
 }, 15000);
+
+test("Alt+Enter while streaming queues a follow_up, not a steer", async () => {
+  await import("./app.js?steering-alt-enter");
+  const ws = wsInstances.at(-1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start", turnId: "t10" });
+  await settle();
+
+  typeIntoComposer("summarize when done");
+  pressAltEnter();
+  await settle();
+
+  const followUps = commandFrames(ws, "follow_up");
+  expect(followUps).toHaveLength(1);
+  expect(followUps[0].command.message).toBe("summarize when done");
+  expect(followUps[0].command.streamingBehavior).toBeUndefined();
+  // C5: the queued message surfaces via queue_update, never as a local bubble.
+  expect(commandFrames(ws, "prompt")).toHaveLength(0);
+  expect(document.querySelectorAll("#messages .message.user")).toHaveLength(0);
+});
 
 test("the delayed-send caret exists only while a run is active", async () => {
   await import("./app.js?steering-caret");
