@@ -505,7 +505,11 @@ test("the delayed-send caret exists only while a run is active", async () => {
   const ws = wsInstances.at(-1);
   await settle();
   const caret = document.getElementById("send-caret-btn");
+  const abortBtn = document.getElementById("abort-btn");
   expect(caret.classList.contains("hidden")).toBe(true);
+  // Spec 按钮可见性: while streaming the caret must sit to the LEFT of the red
+  // abort button (4 = DOCUMENT_POSITION_FOLLOWING).
+  expect(caret.compareDocumentPosition(abortBtn) & 4).toBeTruthy();
 
   runtimeEvent(ws, { type: "agent_start", turnId: "t5" });
   await settle();
