@@ -6,6 +6,17 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { initI18n } from "./i18n.js";
 
+// The real processor decodes/resizes via canvas, which jsdom cannot run. The
+// logic under test is the composer→C3 attachment ownership, not the codec.
+vi.mock("./image-attachments.js", () => ({
+  processImageFile: async (file) => ({ data: "FAKE-BASE64", mimeType: file?.type || "image/png" }),
+  processImagePayload: async (payload) => ({
+    data: payload?.data ?? "FAKE-BASE64",
+    mimeType: payload?.mimeType || "image/png",
+  }),
+  isSupportedImageMime: () => true,
+}));
+
 // The composer only enables sending once Pi has reported configured models, and
 // that list arrives through the picot-config bridge — outside this test's fake
 // WebSocket. Pin the onboarding gate open so the send paths are reachable; the
@@ -210,6 +221,29 @@ function pressEnter() {
   document
     .getElementById("message-input")
     .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+}
+
+function pasteImage() {
+  const event = new Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "clipboardData", {
+    value: {
+      // A real paste carries text accessors too; the paste-offload listener
+      // reads them, so the stub must not be image-only.
+      getData: () => "",
+      files: [],
+      items: [
+        {
+          type: "image/png",
+          getAsFile: () => new File([new Uint8Array([1, 2, 3])], "shot.png", { type: "image/png" }),
+        },
+      ],
+    },
+  });
+  document.getElementById("message-input").dispatchEvent(event);
+}
+
+function pendingPreviews() {
+  return [...document.querySelectorAll("#image-previews .image-preview")];
 }
 
 function renderPiQueue(ws, steering, followUp, sequence) {
@@ -635,6 +669,65 @@ test("clearing restores both buckets, in queue order, when the composer is empty
 
   expect(document.getElementById("message-input").value).toBe("steer text\nfollow-up text");
   expect(document.getElementById("pi-queue").classList.contains("hidden")).toBe(true);
+});
+
+test("a steer carries the pending image and acceptance releases exactly it", async () => {
+  await import("./app.js?steering-attachments");
+  const ws = wsInstances.at(-1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start", turnId: "t17" });
+  await settle();
+
+  pasteImage();
+  await settle();
+  expect(pendingPreviews()).toHaveLength(1);
+
+  deferPromptResponse = true;
+  typeIntoComposer("look at this");
+  pressEnter();
+  await settle();
+
+  const steers = commandFrames(ws, "prompt").filter(
+    (frame) => frame.command.streamingBehavior === "steer",
+  );
+  expect(steers).toHaveLength(1);
+  expect(steers[0].command.images).toEqual([
+    { type: "image", data: "FAKE-BASE64", mimeType: "image/png" },
+  ]);
+  // C3 keeps the attachments owned by the composer until pi answers.
+  expect(pendingPreviews()).toHaveLength(1);
+
+  ws.onmessage({
+    data: JSON.stringify({
+      type: "runtime_response",
+      requestId: deferredPromptId,
+      response: { success: true, data: {} },
+    }),
+  });
+  await settle();
+  expect(pendingPreviews()).toHaveLength(0);
+  expect(document.getElementById("image-previews").classList.contains("hidden")).toBe(true);
+});
+
+test("a rejected steer leaves the pending image attached", async () => {
+  await import("./app.js?steering-attachments-rejected");
+  const ws = wsInstances.at(-1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start", turnId: "t18" });
+  await settle();
+
+  pasteImage();
+  await settle();
+  expect(pendingPreviews()).toHaveLength(1);
+
+  promptFails = true;
+  typeIntoComposer("this one gets rejected");
+  pressEnter();
+  await settle();
+
+  expect(commandFrames(ws, "prompt")).toHaveLength(1);
+  // The steer never reached pi, so the attachment must still be there to send.
+  expect(pendingPreviews()).toHaveLength(1);
 });
 
 test("the delayed-send caret exists only while a run is active", async () => {
