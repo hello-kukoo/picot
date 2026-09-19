@@ -447,6 +447,59 @@ test("a rejected steer keeps the run's streaming state", async () => {
   expect(document.getElementById("message-input").value).toContain("steer that pi rejects");
 });
 
+test("a steer renders no optimistic bubble, and pi's echo still appears", async () => {
+  await import("./app.js?steering-echo");
+  const ws = wsInstances.at(-1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start", turnId: "t12" });
+  await settle();
+
+  typeIntoComposer("steer me");
+  pressEnter();
+  await settle();
+  // Mid-run sends draw no bubble of their own (the pill comes from queue_update).
+  expect(document.querySelectorAll("#messages .message.user")).toHaveLength(0);
+
+  // Later pi delivers it and echoes the user message: with no `lastSentMessage`
+  // accounting for steers, that echo is what puts the prompt in the transcript.
+  runtimeEvent(
+    ws,
+    {
+      type: "message_start",
+      message: { role: "user", content: [{ type: "text", text: "steer me" }] },
+    },
+    2,
+  );
+  await settle();
+  const bubbles = [...document.querySelectorAll("#messages .message.user")];
+  expect(bubbles).toHaveLength(1);
+  expect(bubbles[0].textContent).toContain("steer me");
+});
+
+test("an idle direct send still dedupes its own echo", async () => {
+  await import("./app.js?steering-echo-idle");
+  const ws = wsInstances.at(-1);
+  await settle();
+
+  typeIntoComposer("plain question");
+  pressEnter();
+  await settle();
+  // The optimistic bubble is rendered up front for a direct send...
+  expect(document.querySelectorAll("#messages .message.user")).toHaveLength(1);
+
+  // ...so pi's echo of the same text must not double it (lastSentMessage).
+  runtimeEvent(
+    ws,
+    {
+      type: "message_start",
+      message: { role: "user", content: [{ type: "text", text: "plain question" }] },
+    },
+    1,
+  );
+  await settle();
+  expect(document.querySelectorAll("#messages .message.user")).toHaveLength(1);
+});
+
 test("the delayed-send caret exists only while a run is active", async () => {
   await import("./app.js?steering-caret");
   const ws = wsInstances.at(-1);
