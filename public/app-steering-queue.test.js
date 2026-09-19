@@ -1,6 +1,7 @@
 // ABOUTME: Steering/queue UX integration (2026-09-19 spec) — streaming Enter
 // ABOUTME: sends a steer, queue pills come from queue_update, clear_queue is
-// ABOUTME: reachable from the WebView, and Esc clears before aborting.
+// ABOUTME: reachable, Esc clears before aborting, and steer attachments stay
+// ABOUTME: composer-owned until the correlated acceptance releases them.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
