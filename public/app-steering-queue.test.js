@@ -318,6 +318,10 @@ test("Escape clears the pi queue before aborting and restores the text", async (
   expect(clearIndex).toBeGreaterThanOrEqual(0);
   expect(abortIndex).toBeGreaterThan(clearIndex);
   expect(document.getElementById("message-input").value).toContain("hold on");
+  // "run 真正终止" from the UI's side: back to idle (send visible, abort gone).
+  expect(document.getElementById("abort-btn").classList.contains("hidden")).toBe(true);
+  expect(document.getElementById("send-btn").classList.contains("hidden")).toBe(false);
+  expect(document.getElementById("send-caret-btn").classList.contains("hidden")).toBe(true);
 });
 
 test("an extension command while streaming goes out as a bare prompt", async () => {
@@ -516,6 +520,62 @@ test("idle Alt+Enter degrades to a direct send", async () => {
   expect(prompts).toHaveLength(1);
   expect(prompts[0].command.message).toBe("idle alt enter");
   expect(prompts[0].command.streamingBehavior).toBeUndefined();
+});
+
+test("switching the session identity drops the previous session's queue pills", async () => {
+  await import("./app.js?steering-queue-scope");
+  const ws = wsInstances.at(-1);
+  await settle();
+  const snapshot = (sessionFile, sequence) =>
+    ws.onmessage({
+      data: JSON.stringify({
+        type: "runtime_snapshot",
+        protocolVersion: 2,
+        sequence,
+        target,
+        state: { pi: { sessionFile, isStreaming: true }, messages: [] },
+      }),
+    });
+
+  snapshot("/pi/sessions/s1.jsonl", 1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start", turnId: "t13" });
+  await settle();
+  renderPiQueue(ws, ["belongs to s1"], [], 2);
+  await settle();
+  const queueEl = document.getElementById("pi-queue");
+  expect(queueEl.classList.contains("hidden")).toBe(false);
+
+  // Same-runtime session switch: the identity changes without a page reload.
+  snapshot("/pi/sessions/s2.jsonl", 3);
+  await settle();
+
+  expect(queueEl.classList.contains("hidden")).toBe(true);
+});
+
+test("the panel comes back when pi reports a new queue after a clear", async () => {
+  await import("./app.js?steering-queue-repaint");
+  const ws = wsInstances.at(-1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start", turnId: "t14" });
+  await settle();
+  renderPiQueue(ws, ["first"], [], 2);
+  await settle();
+
+  clearQueueData = { steering: ["first"], followUp: [] };
+  document.getElementById("pi-queue").querySelector(".pi-queue-clear").click();
+  await settle();
+  expect(document.getElementById("pi-queue").classList.contains("hidden")).toBe(true);
+
+  // The hide was a confirmed clear, not a permanent one.
+  renderPiQueue(ws, ["second"], ["after"], 3);
+  await settle();
+  const queueEl = document.getElementById("pi-queue");
+  expect(queueEl.classList.contains("hidden")).toBe(false);
+  expect([...queueEl.querySelectorAll(".queued-msg-label")].map((el) => el.textContent)).toEqual([
+    "Steer",
+    "Follow-up",
+  ]);
 });
 
 test("the delayed-send caret exists only while a run is active", async () => {

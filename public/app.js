@@ -3608,6 +3608,13 @@ function switchComposerIdentityState(previousIdentity) {
   if (outgoingImages.length > 0) attachmentStash.set(previousIdentity, outgoingImages);
   else attachmentStash.delete(previousIdentity);
 
+  // The pi queue pills (and their Clear-queue button) belong to the runtime
+  // that produced them. This seam is where every session-identity change lands
+  // — including the in-page same-workspace switch, which does not reload the
+  // page — so the previous session's queue must not stay on screen as if it
+  // were the new session's. pi repaints the truth on its next queue_update.
+  document.getElementById("pi-queue")?.classList.add("hidden");
+
   const nextIdentity = composerIdentity();
   mainImageAttachments.replacePendingImages(attachmentStash.get(nextIdentity) || []);
   setComposerDraft(composerDraftStore.get(nextIdentity) || "");
@@ -3644,6 +3651,16 @@ function sendMessage() {
   const message = messageInput.value.trim();
   if (!message) return;
 
+  if (state.isStreaming) {
+    // Streaming-Enter sends REAL steering (2026-09-19 steering spec): the
+    // local client-side queue is gone — the message goes to pi now and is
+    // injected between tool calls; the "Steer" pill comes from queue_update.
+    // sendSteering builds its own command and attachment snapshot, so this
+    // branch returns before the direct-send work below.
+    void sendSteering();
+    return;
+  }
+
   const cmd = {
     type: "prompt",
     message,
@@ -3654,14 +3671,6 @@ function sendMessage() {
   const imageSources = [...mainImageAttachments.getPendingImages()];
   if (imageSources.length > 0) {
     cmd.images = imageSources.map(attachmentCommandImage);
-  }
-
-  if (state.isStreaming) {
-    // Streaming-Enter sends REAL steering (2026-09-19 steering spec): the
-    // local client-side queue is gone — the message goes to pi now and is
-    // injected between tool calls; the "Steer" pill comes from queue_update.
-    void sendSteering();
-    return;
   }
 
   lastSentMessage = message;
@@ -3696,17 +3705,26 @@ function sendMessage() {
 // same get_commands registry the composer menu reads.
 let extensionCommandNames = null; // Set<string> | null (null = registry not loaded)
 
+// The probe rides the send path (steer/follow_up intent): a busy pi must not
+// hold Enter hostage behind the 15s default — 2s caps the wait. The composer
+// MENU's catalog load keeps its own long timeout (it has a loading state).
+const EXTENSION_COMMAND_PROBE_TIMEOUT_MS = 2000;
+
 async function loadExtensionCommandNames() {
   if (extensionCommandNames) return extensionCommandNames;
   try {
-    const data = await wsRequest({ type: "get_commands" }, RUNTIME_GET_COMMANDS_TIMEOUT_MS);
+    const data = await wsRequest({ type: "get_commands" }, EXTENSION_COMMAND_PROBE_TIMEOUT_MS);
     extensionCommandNames = new Set(
       (Array.isArray(data?.commands) ? data.commands : [])
         .filter((command) => command?.source === "extension" && typeof command?.name === "string")
         .map((command) => command.name.replace(/^\//, "").toLowerCase()),
     );
   } catch {
-    extensionCommandNames = new Set(); // unknown registry: degrade to queueable
+    // Transient timeout: stay unloaded so the next send retries — caching an
+    // empty registry permanently would misclassify extension commands as
+    // steerable text. This call degrades to "no extension commands"; a wrong
+    // steer is rejected by pi and restored by the C3 record.
+    return new Set();
   }
   return extensionCommandNames;
 }

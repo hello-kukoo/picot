@@ -49,7 +49,9 @@ runtime 命令原样透传，此表是唯一闸门），Esc 的 clear 等待有 
   `streamingBehavior` 的裸 prompt；流式 + extension command 发裸 prompt；`queue_update` 渲染只读的
   Steer/Follow-up pill；清空按钮**真的发出 `clear_queue`**（P0 回归护栏）且只在确认成功后回填并隐藏，
   失败时保持原状；非空草稿下回填按换行追加；Esc 先 `clear_queue` 后 `abort` 且文本回到输入框；
-  caret 仅流式存在；Alt+Enter 流式中发出 `follow_up`（非 steer）且无本地气泡。
+  caret 仅流式存在；Alt+Enter 流式中发出 `follow_up`（非 steer）且无本地气泡；拒绝 steer 不动
+  streaming 态；Esc 后 UI 回到 idle；会话身份切换后上一会话的队列 pill 不残留（含同工作区原地
+  切换这条无刷新路径）；确认清空后的隐藏不是永久的（pi 再报队列会重新显示）。
 - composer-follow-up / app-startup / at-file-mention 焦点测试；全量 `bun run test` + `bun run check`。
 - 真机实测（2026-09-19，内嵌 `src-tauri/resources/pi/pi` **0.85.1**，rpc 模式，
   `--provider google --model gemini-3.1-flash-lite`，`-ne` 隔离用户扩展）：首轮让模型调 bash 执行
