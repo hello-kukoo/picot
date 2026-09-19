@@ -3754,6 +3754,9 @@ async function sendSteering() {
     images: cmd.images || [],
     imageSources,
     sessionIdentity: composerIdentity(),
+    // A steer (or a mid-run extension command) is dispatched while a run is
+    // active: a rejection must not unlock that run's streaming state.
+    streamingAtDispatch: state.isStreaming,
   });
 }
 

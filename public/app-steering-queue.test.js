@@ -27,6 +27,7 @@ let clearQueueData = { steering: [], followUp: [] };
 let clearQueueFails = false;
 let commandRegistry = [];
 let swallowClearQueue = false;
+let promptFails = false;
 
 class FakeWebSocket extends EventTarget {
   static CONNECTING = 0;
@@ -71,6 +72,14 @@ class FakeWebSocket extends EventTarget {
     }
     if (envelope.type === "runtime_request") {
       const command = envelope.command || {};
+      if (command.type === "prompt" && promptFails) {
+        this.reply({
+          type: "runtime_response",
+          requestId: envelope.requestId,
+          response: { success: false, error: "steer rejected by pi" },
+        });
+        return;
+      }
       if (command.type === "clear_queue" && swallowClearQueue) {
         // Deliberately never answer: exercises the abort cap.
         return;
@@ -108,6 +117,7 @@ beforeEach(async () => {
   clearQueueFails = false;
   commandRegistry = [];
   swallowClearQueue = false;
+  promptFails = false;
   window.history.pushState(null, "", "/workspaces/w1/sessions/s1");
   document.documentElement.innerHTML = readFileSync(
     join(process.cwd(), "public/index.html"),
@@ -405,6 +415,36 @@ test("Alt+Enter while streaming queues a follow_up, not a steer", async () => {
   // C5: the queued message surfaces via queue_update, never as a local bubble.
   expect(commandFrames(ws, "prompt")).toHaveLength(0);
   expect(document.querySelectorAll("#messages .message.user")).toHaveLength(0);
+});
+
+test("a rejected steer keeps the run's streaming state", async () => {
+  await import("./app.js?steering-steer-rejected");
+  const ws = wsInstances.at(-1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start", turnId: "t11" });
+  await settle();
+
+  const abortBtn = document.getElementById("abort-btn");
+  const typing = document.getElementById("typing-indicator");
+  expect(abortBtn.classList.contains("hidden")).toBe(false);
+
+  promptFails = true;
+  typeIntoComposer("steer that pi rejects");
+  pressEnter();
+  await settle();
+
+  expect(commandFrames(ws, "prompt")).toHaveLength(1);
+  // The steer dispatch rides promptDelivery (not rpcCommand), so the failure
+  // surfaces as a transcript error row carrying pi's message.
+  const errorRow = document.querySelector("#messages .error-message");
+  expect(errorRow).not.toBeNull();
+  expect(errorRow.textContent).toContain("steer rejected by pi");
+  // Q1-A: a rejection of a dispatch made MID-RUN must not end the run's
+  // streaming state — the run is still going, only this steer failed.
+  expect(abortBtn.classList.contains("hidden")).toBe(false);
+  expect(typing.classList.contains("hidden")).toBe(false);
+  // And the failed text comes back to the composer.
+  expect(document.getElementById("message-input").value).toContain("steer that pi rejects");
 });
 
 test("the delayed-send caret exists only while a run is active", async () => {
