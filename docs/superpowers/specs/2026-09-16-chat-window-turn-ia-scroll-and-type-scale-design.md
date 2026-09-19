@@ -1,6 +1,7 @@
 # Chat Window Turn IA, History Fold, Scroll Ownership & Type Scale Design
 
-**Status:** Draft — awaiting Dr. Lin's decisions (see "Open decisions"). Not approved, not implemented.
+**Status:** Implemented 2026-09-19 (P1–P5, per the 2026-09-19 goal; D1/D2/D3/D5 taken
+at their recommended options, D4 as decided 2026-09-16).
 **Date:** 2026-09-16
 **Provenance:** borrow-list items #1, #2, #4, #5 from the PiChamber study
 (`.memory/notes/pichamber-ui-and-remote-study.md`). PiChamber is Electron + React; only its
@@ -390,12 +391,14 @@ implementation is **not** the target.
   active visual option. ArrowUp/ArrowDown/Home/End move the active index, Enter calls
   `ensureTurnMounted()` then jumps, and Escape returns focus to the transcript. The existing
   previous/next-conversation shortcuts keep sharing the same active-turn resolution.
-- **P5.6 Dock to the message column.** The rail positions against the centered message
-  column's left edge (measured with a ResizeObserver, not recomputed per scroll), not the pane
-  edge, with a narrow hit-zone fallback when the column reaches under the rail; the existing
-  `@media (max-width: 900px)` hide stays as the outer bound. The left side is kept
-  deliberately: Picot's user bubbles are right-aligned and filled, so a right-side rail would
-  contend with the bubble edge and its action toolbar.
+- **P5.6 Left-gutter float（2026-09-19 手动测试修订）.** The rail floats in the chat
+  pane's left gutter via CSS `left: 16px` against its offset parent（gutter ≥ 48px；
+  `@media (max-width: 900px)` 隐藏保留）。The original column-edge docking was implemented
+  then rejected in manual review: it double-counted the sidebar width (viewport rect fed into
+  an offset-parent-relative `style.left`) and landed mid-window; the left-gutter float is the
+  confirmed target behavior. The left side is kept deliberately: Picot's user bubbles are
+  right-aligned and filled, so a right-side rail would contend with the bubble edge and its
+  action toolbar.
 
 **Deliberately not in P5** (PiChamber has these; they are polish on top of a working rail): the
 hover mini-list panel, the edge auto-carousel timer, the sliding window/panel animations, and a

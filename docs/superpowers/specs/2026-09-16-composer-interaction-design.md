@@ -1,9 +1,10 @@
 # Composer Interaction Design
 
-**Status:** Approved — D1–D4 decided 2026-09-18 (all recommendations
-accepted). The 2026-09-13 composer-follow-up spec is integrated as **C5**
-(same day; source file deleted). C1–C5 implementation not started; Addendum A
-below is approved and lands first.
+**Status:** Implemented — Addendum A landed 2026-09-17 (commit 090e5ad);
+C5 的「本地队列行为不变」「GUI 取消 blocked（无 clear_queue）」两项结论已被
+`2026-09-19-steering-and-queue-ux-design.md` 取代（Enter=steer、本地队列删除、
+clear_queue 实为 0.84.4+ 可用）；
+C1–C5 implemented 2026-09-19 per the 2026-09-19 goal. D1–D4 as decided 2026-09-18.
 **Date:** 2026-09-16
 **Provenance:** borrow-list item from the PiChamber study
 (`.memory/notes/pichamber-ui-and-remote-study.md` §1.5), re-verified against Picot's own
