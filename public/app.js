@@ -6154,6 +6154,10 @@ async function clearPiQueueAndRestore() {
     ...(Array.isArray(result.data?.steering) ? result.data.steering : []),
     ...(Array.isArray(result.data?.followUp) ? result.data.followUp : []),
   ];
+  // The cleared texts are back in the composer now; drop their in-flight C3
+  // records so a late acceptance cannot wipe what this restore just put back.
+  promptDelivery.pullBackTexts(texts);
+  renderQueuedMessages();
   const cleared = texts.filter((text) => typeof text === "string" && text.trim()).join("\n");
   if (cleared) {
     if (!messageInput.value.trim()) messageInput.value = cleared;

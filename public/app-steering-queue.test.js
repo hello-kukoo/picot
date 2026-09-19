@@ -28,6 +28,8 @@ let clearQueueFails = false;
 let commandRegistry = [];
 let swallowClearQueue = false;
 let promptFails = false;
+let deferPromptResponse = false;
+let deferredPromptId = null;
 
 class FakeWebSocket extends EventTarget {
   static CONNECTING = 0;
@@ -72,6 +74,10 @@ class FakeWebSocket extends EventTarget {
     }
     if (envelope.type === "runtime_request") {
       const command = envelope.command || {};
+      if (command.type === "prompt" && deferPromptResponse) {
+        deferredPromptId = envelope.requestId;
+        return;
+      }
       if (command.type === "prompt" && promptFails) {
         this.reply({
           type: "runtime_response",
@@ -118,6 +124,8 @@ beforeEach(async () => {
   commandRegistry = [];
   swallowClearQueue = false;
   promptFails = false;
+  deferPromptResponse = false;
+  deferredPromptId = null;
   window.history.pushState(null, "", "/workspaces/w1/sessions/s1");
   document.documentElement.innerHTML = readFileSync(
     join(process.cwd(), "public/index.html"),
@@ -576,6 +584,39 @@ test("the panel comes back when pi reports a new queue after a clear", async () 
     "Steer",
     "Follow-up",
   ]);
+});
+
+test("Esc during an in-flight steer keeps the restored text", async () => {
+  await import("./app.js?steering-esc-inflight");
+  const ws = wsInstances.at(-1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start", turnId: "t15" });
+  await settle();
+
+  deferPromptResponse = true;
+  typeIntoComposer("hold on please");
+  pressEnter();
+  await settle();
+  expect(commandFrames(ws, "prompt")).toHaveLength(1);
+
+  // pi had queued it, so Esc's clear returns exactly that text.
+  clearQueueData = { steering: ["hold on please"], followUp: [] };
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await settle(120);
+  const input = document.getElementById("message-input");
+  expect(input.value).toContain("hold on please");
+
+  // The steer's own acceptance lands after the clear: it must not now wipe the
+  // text that the clear just restored (Q3-A: 不丢字).
+  ws.onmessage({
+    data: JSON.stringify({
+      type: "runtime_response",
+      requestId: deferredPromptId,
+      response: { success: true, data: {} },
+    }),
+  });
+  await settle();
+  expect(input.value).toContain("hold on please");
 });
 
 test("the delayed-send caret exists only while a run is active", async () => {

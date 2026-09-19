@@ -143,6 +143,32 @@ export function createPromptDelivery({
     rejectRecord(requestId, reason);
   }
 
+  /**
+   * Esc / clear-queue path: pi just handed these texts back, so the matching
+   * in-flight records are settled here. Their commands no longer exist at pi,
+   * which means neither a late acceptance (which would otherwise wipe the
+   * composer because it still equals `textAtSend`) nor an unconfirmed pill may
+   * touch the composer again.
+   */
+  function pullBackTexts(texts) {
+    if (!Array.isArray(texts) || texts.length === 0) return 0;
+    const returned = new Set(texts.filter((text) => typeof text === "string" && text.trim()));
+    if (returned.size === 0) return 0;
+    let settled = 0;
+    for (const [requestId, record] of [...records]) {
+      if (!returned.has(record.text)) continue;
+      if (record.timer) {
+        clearTimeoutFn(record.timer);
+        record.timer = null;
+      }
+      records.delete(requestId);
+      record.pulledBack = true;
+      onRecordsChanged(record);
+      settled += 1;
+    }
+    return settled;
+  }
+
   /** Unconfirmed pill click: restore the text without sending. */
   function pullBack(requestId) {
     const record = records.get(requestId);
@@ -155,5 +181,5 @@ export function createPromptDelivery({
   const unconfirmed = () => Array.from(records.values()).filter((r) => r.state === "unconfirmed");
   const get = (requestId) => records.get(requestId) ?? null;
 
-  return { dispatch, rejectByRequestId, pullBack, hasAwaiting, unconfirmed, get };
+  return { dispatch, rejectByRequestId, pullBack, pullBackTexts, hasAwaiting, unconfirmed, get };
 }

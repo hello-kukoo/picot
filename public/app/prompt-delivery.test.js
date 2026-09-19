@@ -77,6 +77,41 @@ describe("createPromptDelivery", () => {
     expect(h2.callbacks.reject.mock.calls[0][1]).toEqual({ message: "no route" });
   });
 
+  test("pullBackTexts settles the matching record so its reply cannot touch the composer", async () => {
+    const h = makeHarness();
+    h.delivery.dispatch(CMD, { text: "queued steer" });
+    expect(h.delivery.hasAwaiting()).toBe(true);
+
+    expect(h.delivery.pullBackTexts(["queued steer"])).toBe(1);
+    // The record is gone: no awaiting state, no pill, no pending timer.
+    expect(h.delivery.hasAwaiting()).toBe(false);
+    expect(h.delivery.get("req-1")).toBe(null);
+    expect(h.delivery.unconfirmed()).toHaveLength(0);
+
+    // pi's acceptance still arrives, but it must be ignored: the text is
+    // already back in the composer, so clearing it would lose it.
+    h.getPending().resolve({ success: true });
+    await h.flush();
+    expect(h.callbacks.accept).not.toHaveBeenCalled();
+    h.advance(8000);
+    expect(h.callbacks.unconfirmed).not.toHaveBeenCalled();
+  });
+
+  test("pullBackTexts ignores non-matching and empty input", async () => {
+    const h = makeHarness();
+    h.delivery.dispatch(CMD, { text: "kept" });
+
+    expect(h.delivery.pullBackTexts(["other"])).toBe(0);
+    expect(h.delivery.pullBackTexts([])).toBe(0);
+    expect(h.delivery.pullBackTexts(null)).toBe(0);
+    expect(h.delivery.pullBackTexts(["   "])).toBe(0);
+    // The unmatched record stays live and still settles normally.
+    expect(h.delivery.hasAwaiting()).toBe(true);
+    h.getPending().resolve({ success: true });
+    await h.flush();
+    expect(h.callbacks.accept).toHaveBeenCalledOnce();
+  });
+
   test("a malformed or missing success reply rejects, never accepts", async () => {
     // Regression: only reply.success === true is acceptance. Undefined,
     // null, shape-invalid, or truthy-but-not-true replies must reject so a
