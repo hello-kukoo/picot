@@ -3073,8 +3073,17 @@ function handleMessageStart(message) {
     if (!lastSentMessage || getMessageText(message) !== lastSentMessage) {
       const content = getMessageText(message);
       const images = getMessageImages(message);
-      if (content || images.length > 0)
-        renderNavigableUserMessage({ content, images, timestamp: Date.now() });
+      if (content || images.length > 0) {
+        const echoEl = renderNavigableUserMessage({ content, images, timestamp: Date.now() });
+        // A steer renders no optimistic bubble, and pi emits agent_start BEFORE
+        // the user echo (probe: 0.4s agent_start, 0.4s message_start(user)). So
+        // this echo is the open turn's only user row: claim it into the turn,
+        // above status/rail/answer, or the prompt would render below the very
+        // answer it steered.
+        if (echoEl && activeTurn && !activeTurn.element.querySelector(".message.user")) {
+          activeTurn.claimUserElement(echoEl);
+        }
+      }
     }
     lastSentMessage = null;
   }

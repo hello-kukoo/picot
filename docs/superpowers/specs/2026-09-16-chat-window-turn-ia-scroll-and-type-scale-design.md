@@ -131,6 +131,10 @@ the "main window first, ephemeral dispatch isolated" precedent):
   into the turn only when its key matches the event target; otherwise it creates an
   assistant-origin turn. Clear the pending reference on session switch, reconnect reset, agent end,
   and after it is claimed, so a stale optimistic bubble can never cross sessions.
+  A **user echo from Pi** (`message_start` role `user`) claims into the open turn the same way
+  when that turn has no user row yet. This matters for sends that render no optimistic bubble:
+  a steer (steering spec) emits `agent_start` *before* the echoed user message, so appending the
+  echo flat would render the prompt **below the answer it steered**.
 - Assistant text renders into `turn.answer.host` while it is the only content; on the next
   `tool_execution_start` within the same turn the open text segment is **demoted** into the
   rail (one element move, at most once per segment) — that is the live expression of

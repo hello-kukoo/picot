@@ -731,6 +731,50 @@ test("a rejected steer leaves the pending image attached", async () => {
   expect(pendingPreviews()).toHaveLength(1);
 });
 
+test("pi's echo of a steer renders above that turn's answer, not below it", async () => {
+  await import("./app.js?steering-echo-order");
+  const ws = wsInstances.at(-1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start", turnId: "t19" });
+  await settle();
+
+  // A steer draws no optimistic bubble, and pi emits agent_start BEFORE the
+  // user echo (probe: 0.4s agent_start, 0.4s message_start(user)). So the echo
+  // is the turn's only user row and must land inside the turn, above its
+  // status/rail/answer — otherwise the prompt shows up under its own answer.
+  runtimeEvent(
+    ws,
+    {
+      type: "message_start",
+      message: { role: "user", content: [{ type: "text", text: "steer me" }] },
+    },
+    2,
+  );
+  await settle();
+  runtimeEvent(ws, { type: "message_start", message: { role: "assistant", content: [] } }, 3);
+  runtimeEvent(
+    ws,
+    {
+      type: "message_update",
+      message: { role: "assistant", content: [{ type: "text", text: "the answer" }] },
+      assistantMessageEvent: { type: "text_delta", delta: "the answer" },
+    },
+    4,
+  );
+  await settle();
+
+  const messages = document.getElementById("messages");
+  const turn = messages.querySelector("section.turn");
+  expect(turn).not.toBeNull();
+  const userRow = turn.querySelector(".message.user");
+  expect(userRow).not.toBeNull();
+  expect(userRow.textContent).toContain("steer me");
+  // Order inside the turn: user → status → rail → answer.
+  const ordered = [...turn.children].map((child) => child.className.split(" ")[0]);
+  expect(ordered[0]).toBe("message");
+  expect(turn.firstElementChild).toBe(userRow);
+});
+
 test("the delayed-send caret exists only while a run is active", async () => {
   await import("./app.js?steering-caret");
   const ws = wsInstances.at(-1);
