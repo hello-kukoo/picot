@@ -3080,8 +3080,21 @@ function handleMessageStart(message) {
         // this echo is the open turn's only user row: claim it into the turn,
         // above status/rail/answer, or the prompt would render below the very
         // answer it steered.
-        if (echoEl && activeTurn && !activeTurn.element.querySelector(".message.user")) {
-          activeTurn.claimUserElement(echoEl);
+        if (echoEl && activeTurn) {
+          if (!activeTurn.element.querySelector(".message.user")) {
+            activeTurn.claimUserElement(echoEl);
+          } else {
+            // Delivered INSIDE the same run (a follow-up or steer drained
+            // mid-turn): pi sends no agent_start for it, so this user message is
+            // the turn boundary. Without a fresh turn the next task's answer
+            // keeps appending to the previous turn's answer slot and this prompt
+            // strands below it.
+            // The previous task did finish here, so settle it with its real
+            // duration rather than leaving its status row blank.
+            settleLiveTurn();
+            openLiveTurn(null);
+            activeTurn?.claimUserElement(echoEl);
+          }
         }
       }
     }

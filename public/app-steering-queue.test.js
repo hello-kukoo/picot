@@ -775,6 +775,67 @@ test("pi's echo of a steer renders above that turn's answer, not below it", asyn
   expect(turn.firstElementChild).toBe(userRow);
 });
 
+test("a follow-up delivered inside the same run opens its own turn", async () => {
+  // pi sends NO agent_start for a follow-up: it drains inside the running turn
+  // (probe: queue_update followUp=[] → message_start(user) → assistant, one
+  // agent_end). Without a turn boundary here the second task's answer keeps
+  // appending to the first turn and its prompt lands below both answers.
+  await import("./app.js?steering-followup-turn");
+  const ws = wsInstances.at(-1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start", turnId: "t20" });
+  await settle();
+
+  const userStart = (text, sequence) =>
+    runtimeEvent(
+      ws,
+      { type: "message_start", message: { role: "user", content: [{ type: "text", text }] } },
+      sequence,
+    );
+  const assistantText = (text, sequence) => {
+    runtimeEvent(
+      ws,
+      { type: "message_start", message: { role: "assistant", content: [] } },
+      sequence,
+    );
+    runtimeEvent(
+      ws,
+      {
+        type: "message_update",
+        message: { role: "assistant", content: [{ type: "text", text }] },
+        assistantMessageEvent: { type: "text_delta", delta: text },
+      },
+      sequence + 1,
+    );
+  };
+
+  userStart("first prompt", 2);
+  await settle();
+  assistantText("first answer", 3);
+  await settle();
+
+  userStart("follow-up prompt", 5); // same run: no agent_start
+  await settle();
+  assistantText("second answer", 6);
+  await settle();
+
+  const messages = document.getElementById("messages");
+  const turns = [...messages.querySelectorAll("section.turn")];
+  expect(turns).toHaveLength(2);
+  // No user row may be left floating outside a turn.
+  expect(messages.querySelectorAll(":scope > .message.user")).toHaveLength(0);
+
+  expect(turns[0].firstElementChild?.textContent).toContain("first prompt");
+  expect(turns[0].querySelector(".turn-answer")?.textContent).toContain("first answer");
+  expect(turns[0].querySelector(".turn-answer")?.textContent).not.toContain("second answer");
+  expect(turns[1].firstElementChild?.textContent).toContain("follow-up prompt");
+  expect(turns[1].querySelector(".turn-answer")?.textContent).toContain("second answer");
+  // The first task really did finish at that boundary, so its status row
+  // settles with a duration instead of going blank; the new turn is live.
+  expect(turns[0].querySelector(".turn-status")?.textContent).toContain("Worked for");
+  expect(turns[1].querySelector(".turn-status")?.classList.contains("live")).toBe(true);
+});
+
 test("the delayed-send caret exists only while a run is active", async () => {
   await import("./app.js?steering-caret");
   const ws = wsInstances.at(-1);
