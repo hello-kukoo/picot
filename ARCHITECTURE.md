@@ -110,11 +110,30 @@ WindowOwnerRegistry
 
 ### 数据面 containment
 
-`HostDataPlane` 强制所有文件操作限制在注册工作区根目录内：
+`HostDataPlane` 强制所有文件**读写**操作限制在注册工作区根目录内：
 
 - `safe_join(root, relative_path)` — canonicalize + symlink 检查
 - `strip_prefix` 包含性（分隔符安全，兄弟前缀拒绝）
 - atomic write + mtime conflict 检测
+
+**列举 ≠ 读写（2026-09-19 @ 提及宽根）：** `file_mentions` 的**搜索列举**可按
+用户前缀越出 workspace（desktop capability 专属 op；spec
+`2026-09-19-file-mention-paths-design.md` 显式接受——与 Pi TUI 同机同用户语义
+一致），而文件**读写** containment 完全不变。列举的搜索根按 query 前缀分级，
+host 是唯一权威（WebView 只提交镜像声明供全等校验，不符即 `invalid_mention_query`）：
+
+| 前缀 | 搜索根 | 声明 `{kind, value}` |
+| --- | --- | --- |
+| `@foo`、`@src/foo`、`@./foo` | 注册 workspace root | `{workspace, ""}` |
+| `@../foo`（可多级，封底于根） | workspace 祖先目录 | `{absolute, 爬升路径}` |
+| `@~/foo` | host 进程用户 home（`~` 仅 host 展开） | `{home, "~"}` |
+| `@/foo`（仅 POSIX） | 文件系统根 | `{absolute, "/"}` |
+| `@C:/foo`（Windows） | 盘符根（2s 可达性探测） | `{drive, "C:/"}` |
+| `@//server/share/foo`（Windows） | UNC 共享根（2s 探测） | `{unc, "//server/share"}` |
+
+词中 `..` 一律拒绝；递归下钻不越出声明的搜索根；预算（visited 10k / collected
+200 / 返回 20 / 500ms / 深度 4）照抄 upstream 纪律。宽根 walk 在
+`spawn_blocking` 中执行，不占异步 worker。
 
 ### Session 删除授权（per-path）
 
@@ -229,6 +248,6 @@ Pi 以 `~/.pi/agent/trust.json`（键为 canonical 路径，值为 true/false/nu
 
 1. **Loopback-only**：HostServer 拒绝非 loopback 绑定
 2. **Owner capability**：每个桌面窗口持唯一 32 字节随机 capability
-3. **Workspace containment**：所有文件操作限制在注册根目录内
+3. **Workspace containment**：所有文件读写限制在注册根目录内；`file_mentions` 的列举按上表根分级可越出（仅 desktop，读写不受影响）
 4. **Generation 失效**：workspace transition 使旧代授权、操作与导出令牌全部失效；旧代 runtime 进程保留存活但不可达（授权闸门拒收），至窗口销毁/owner 撤销/app 退出或返回 rebind
 5. **匿名遥测**：仅 allowlisted 粗粒度字段，无 per-user/per-token 维度
