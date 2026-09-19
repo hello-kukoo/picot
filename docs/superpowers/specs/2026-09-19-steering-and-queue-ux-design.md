@@ -69,5 +69,12 @@ runtime 命令原样透传，此表是唯一闸门），Esc 的 clear 等待有 
     同一轮再发纯文本裸 prompt → `success: false`，error 为
     「Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.」。
     这正是 Q1-A 让 extension command 走裸 prompt、其余走 steer/followUp 的依据。
-  因此本节原先的三个「手动」项均已有等价证据，extension command 走裸 prompt 的前提也一并实测；
-  GUI 端人眼走查仍可做，但已不是未知项。
+  · **abort 不清队列会继续排空**（Q3-A 为何必须先 clear）：运行中入队 steer 后**只发 `abort`、不发
+    `clear_queue`** → 3.2s `agent_end` 的**同一时刻**又起 `agent_start` 且 steering 清空 → 该轮最终文本为
+    `DONE` 加 `ABORT-DRAINED`，即被 abort 的排队消息照样执行了一遍。这是「abort continues queued
+    messages」的实证，也正是旧客户端 Esc 之后「停下又接着跑」的坑。
+  · **clear_queue 两个桶一起清、各自返回**：先入队 steer 再入队 followUp（`queue_update` 分别显示两个桶）
+    → `clear_queue` 响应 `data = {steering:["S-MARK-STEER"], followUp:["Reply with exactly: F-MARK-EXECUTED"]}`
+    → 随后 `queue_update` 两桶皆空；被清的 followUp 文案从未出现在任何 assistant 文本中（确未执行）。
+  因此本节原先的三个「手动」项均已有等价证据，extension command 走裸 prompt 与 abort/clear 的取舍前提
+  也一并实测；GUI 端人眼走查仍可做，但已不是未知项。
