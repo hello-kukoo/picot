@@ -352,3 +352,51 @@ test("history turns render the user row above the rail and the answer", async ()
   expect(turn.querySelector(".message.user")?.textContent).toContain("first prompt");
   expect(turn.querySelector(".turn-answer")?.textContent).toContain("first answer");
 });
+
+test("turns revealed by the batch controls keep the user row above the answer", async () => {
+  // Regression: the reveal path renders each turn into a DocumentFragment, so a
+  // user-slot claim that requires an attached node silently does nothing there —
+  // the first paint looked right while every batch-revealed turn read
+  // assistant-first, user-last.
+  const entries = makeTurnEntries(6);
+  await import("./app.js?history-gate-reveal-order");
+  const ws = wsInstances.at(-1);
+  ws.onmessage({
+    data: JSON.stringify({
+      type: "runtime_snapshot",
+      protocolVersion: 2,
+      sequence: 1,
+      target,
+      state: {
+        pi: { sessionFile: "/pi/sessions/reveal.jsonl", isStreaming: false },
+        messages: entries.map((entry) => entry.message),
+      },
+    }),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  const messages = document.getElementById("messages");
+  const assertTurnOrder = () => {
+    for (const turn of messages.querySelectorAll("section.turn")) {
+      const first = turn.firstElementChild;
+      expect(first.classList.contains("message")).toBe(true);
+      expect(first.classList.contains("user")).toBe(true);
+      const answer = turn.querySelector(".turn-answer");
+      if (answer) {
+        // 4 = DOCUMENT_POSITION_FOLLOWING: the answer follows the user row.
+        expect(first.compareDocumentPosition(answer) & 4).toBeTruthy();
+      }
+    }
+  };
+  assertTurnOrder();
+
+  messages.querySelector(".history-gate-btn")?.click(); // Load older history
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  // The newly revealed turns must obey the same order as the first paint.
+  expect(messages.querySelectorAll("section.turn").length).toBeGreaterThan(2);
+  assertTurnOrder();
+
+  messages.querySelector(".history-gate-all")?.click(); // Load all history
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assertTurnOrder();
+});

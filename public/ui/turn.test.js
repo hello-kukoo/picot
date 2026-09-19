@@ -58,8 +58,22 @@ describe("createTurnSection", () => {
     main.appendChild(turn.element);
     expect(turn.claimUserElement(bubble)).toBe(true);
     expect(turn.element.firstElementChild).toBe(bubble);
-    // A disconnected element can never be claimed.
-    expect(turn.claimUserElement(document.createElement("div"))).toBe(false);
+    // A DETACHED element is claimed too: the history fold gate builds revealed
+    // turns inside a DocumentFragment, so requiring attachment would leave those
+    // bubbles below their own answer.
+    const detachedHost = document.createElement("div");
+    const fragmentTurn = createTurnSection({ turnId: "t-fragment", withStatus: false });
+    detachedHost.appendChild(fragmentTurn.element);
+    const detachedBubble = document.createElement("div");
+    detachedBubble.className = "message user";
+    fragmentTurn.element.appendChild(detachedBubble);
+    expect(detachedBubble.isConnected).toBe(false);
+    expect(fragmentTurn.claimUserElement(detachedBubble)).toBe(true);
+    expect(fragmentTurn.element.firstElementChild).toBe(detachedBubble);
+
+    // Non-elements are still refused.
+    expect(turn.claimUserElement(document.createTextNode("nope"))).toBe(false);
+    expect(turn.claimUserElement(null)).toBe(false);
   });
 
   test("status lifecycle: live label → settled label, spinner removed, timer cleared", () => {

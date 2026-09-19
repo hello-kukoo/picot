@@ -130,7 +130,12 @@ export function createTurnSection({
     },
     /** Claim the optimistic user bubble by moving it into the user slot. */
     claimUserElement(userEl) {
-      if (!userEl?.isConnected) return false;
+      // No `isConnected` guard: the history fold gate renders each revealed turn
+      // into a DocumentFragment, so requiring an attached node would silently
+      // skip the move and leave that bubble below its own answer. Callers that
+      // must not move a stale element (the live optimistic bubble) already check
+      // attachment themselves before calling in.
+      if (userEl?.nodeType !== 1) return false;
       section.insertBefore(userEl, userSlotRef);
       return true;
     },
