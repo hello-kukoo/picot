@@ -286,3 +286,69 @@ test("a search render mounts all turns before highlighting; the gate re-applies 
   await new Promise((resolve) => setTimeout(resolve, 300));
   expect([...messages.querySelectorAll(".message.user")]).toHaveLength(2);
 });
+
+test("history turns render the user row above the rail and the answer", async () => {
+  // Regression: the turn section is built rail → answer, so a user bubble simply
+  // appended into it lands BELOW its own answer (observed on real sessions:
+  // every turn read assistant-first, user-last). The bubble must be claimed
+  // into the user slot, as the live path does.
+  const entries = [
+    {
+      id: "u1",
+      parentId: null,
+      type: "message",
+      message: { role: "user", content: "first prompt" },
+    },
+    {
+      id: "a1",
+      parentId: "u1",
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "ls" } }],
+      },
+    },
+    {
+      id: "r1",
+      parentId: "a1",
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolCallId: "t1",
+        content: [{ type: "text", text: "ok" }],
+      },
+    },
+    {
+      id: "a2",
+      parentId: "r1",
+      type: "message",
+      message: { role: "assistant", content: [{ type: "text", text: "first answer" }] },
+    },
+  ];
+
+  await import("./app.js?history-turn-order");
+  const ws = wsInstances.at(-1);
+  ws.onmessage({
+    data: JSON.stringify({
+      type: "runtime_snapshot",
+      protocolVersion: 2,
+      sequence: 1,
+      target,
+      state: {
+        pi: { sessionFile: "/pi/sessions/order.jsonl", isStreaming: false },
+        messages: entries.map((entry) => entry.message),
+      },
+    }),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  const turn = document.querySelector("#messages section.turn");
+  expect(turn).not.toBeNull();
+  expect([...turn.children].map((child) => child.className.split(" ")[0])).toEqual([
+    "message",
+    "process-details-group",
+    "turn-answer",
+  ]);
+  expect(turn.querySelector(".message.user")?.textContent).toContain("first prompt");
+  expect(turn.querySelector(".turn-answer")?.textContent).toContain("first answer");
+});

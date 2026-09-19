@@ -135,6 +135,11 @@ the "main window first, ephemeral dispatch isolated" precedent):
   when that turn has no user row yet. This matters for sends that render no optimistic bubble:
   a steer (steering spec) emits `agent_start` *before* the echoed user message, so appending the
   echo flat would render the prompt **below the answer it steered**.
+  **History rendering must claim the bubble too.** The turn section is built rail → answer, so a
+  user element simply appended into it lands below its own answer — every replayed turn reads
+  assistant-first, user-last. Both the live and the history renderers therefore place the user
+  row through the same user-slot seam, and the turn's child order is always
+  `user → (status) → rail → answer`.
 - Assistant text renders into `turn.answer.host` while it is the only content; on the next
   `tool_execution_start` within the same turn the open text segment is **demoted** into the
   rail (one element move, at most once per segment) — that is the live expression of

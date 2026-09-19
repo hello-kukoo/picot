@@ -5879,6 +5879,10 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
       turnUserEl = renderUserFromMsg(anchor, messageEntryIds[start], turnSection.element);
       bodyStart = start + 1;
     }
+    // The section is already built as rail → answer, so a bubble rendered into
+    // it lands BELOW its own answer. Claim it into the user slot (the same seam
+    // the live path uses) so history reads: user → rail → answer.
+    if (turnUserEl) turnSection.claimUserElement(turnUserEl);
 
     // The last assistant message that still has visible text is the final
     // answer; everything before it in this turn is process noise.
