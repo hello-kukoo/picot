@@ -619,6 +619,24 @@ test("Esc during an in-flight steer keeps the restored text", async () => {
   expect(input.value).toContain("hold on please");
 });
 
+test("clearing restores both buckets, in queue order, when the composer is empty", async () => {
+  await import("./app.js?steering-clear-both");
+  const ws = wsInstances.at(-1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start", turnId: "t16" });
+  await settle();
+  renderPiQueue(ws, ["steer text"], ["follow-up text"], 2);
+  await settle();
+
+  // pi returns both buckets (verified against 0.85.1); the refill joins them.
+  clearQueueData = { steering: ["steer text"], followUp: ["follow-up text"] };
+  document.getElementById("pi-queue").querySelector(".pi-queue-clear").click();
+  await settle();
+
+  expect(document.getElementById("message-input").value).toBe("steer text\nfollow-up text");
+  expect(document.getElementById("pi-queue").classList.contains("hidden")).toBe(true);
+});
+
 test("the delayed-send caret exists only while a run is active", async () => {
   await import("./app.js?steering-caret");
   const ws = wsInstances.at(-1);
