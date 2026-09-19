@@ -437,7 +437,8 @@ export class WebSocketClient extends EventTarget {
           "instanceId" in targetOrOptions;
         const target = hasExplicitTarget ? targetOrOptions : this._wireTarget();
         const requestOptions = hasExplicitTarget ? options : (targetOrOptions ?? {});
-        const { timeoutMs, idempotencyKey } = requestOptions;
+        // `timeoutMs` is applied by the caller's option bag, not here.
+        const { idempotencyKey } = requestOptions;
         return {
           type: "runtime_request",
           protocolVersion: 2,

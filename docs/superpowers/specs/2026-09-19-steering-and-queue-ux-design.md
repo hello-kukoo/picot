@@ -44,6 +44,12 @@ runtime 命令原样透传，此表是唯一闸门），Esc 的 clear 等待有 
 
 - `planSteeringSend` 意图矩阵单测（idle→direct、流式+extension→prompt-now、流式→steer）。
 - i18n：新增 `queue.clearQueue`（四语言）；`queue.steering`/`queue.followUp` 沿用既有键。
+- app 级集成测试 `public/app-steering-queue.test.js`（JSDOM + 假 WebSocket，覆盖下列「手动」项的客户端一半）：
+  流式 Enter 发出 `prompt + streamingBehavior:"steer"` 且不渲染乐观气泡；idle Enter 发出无
+  `streamingBehavior` 的裸 prompt；流式 + extension command 发裸 prompt；`queue_update` 渲染只读的
+  Steer/Follow-up pill；清空按钮**真的发出 `clear_queue`**（P0 回归护栏）且只在确认成功后回填并隐藏，
+  失败时保持原状；非空草稿下回填按换行追加；Esc 先 `clear_queue` 后 `abort` 且文本回到输入框；
+  caret 仅流式存在。
 - composer-follow-up / app-startup / at-file-mention 焦点测试；全量 `bun run test` + `bun run check`。
-- 手动：流式中 Enter 发 steer（「Steer」pill 出现、当前轮转向）；Alt+Enter 发 followUp；
-  清空队列按钮回填；Esc 终止 + 队列文本回输入框；idle 无 caret。
+- 手动（保留的是需要真实 Pi 的那一半）：流式中 Enter 发 steer 观察当前轮转向；Alt+Enter 发 followUp；
+  Esc 终止后确认 pi 侧队列确实已清空、文本回到输入框。
