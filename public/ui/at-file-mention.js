@@ -5,13 +5,14 @@ import { t } from "../i18n.js";
 const TOKEN_DELIMITERS = new Set([" ", "\t", "=", "'", '"']);
 
 /**
- * Extract the active `@` mention prefix at the textarea cursor, or null when the
- * cursor is not inside a mention token. A token starts only at a supported
+ * Resolve the active `@` mention token for a raw value and caret, or null when
+ * the caret is not inside a mention token. A token starts only at a supported
  * boundary (line start, or after a delimiter) and never crosses a newline.
+ * Pure so the composer trigger router can share the exact same semantics.
  */
-export function activeAtMention(input) {
-  const cursor = input.selectionStart ?? input.value.length;
-  const before = input.value.slice(0, cursor);
+export function resolveAtMentionToken(value, caret) {
+  if (typeof value !== "string" || typeof caret !== "number" || caret < 1) return null;
+  const before = value.slice(0, caret);
   const lineStart = before.lastIndexOf("\n") + 1;
   const line = before.slice(lineStart);
 
@@ -36,61 +37,129 @@ export function activeAtMention(input) {
     }
   }
 
-  return { prefix: line.slice(atIdx), start: lineStart + atIdx, end: cursor };
+  return { prefix: line.slice(atIdx), start: lineStart + atIdx, end: caret };
 }
 
 /**
- * Install @-file-mention completion on a textarea. Mirrors the lifecycle of
- * `setupSkillSlashCommand()` but is independent from skills. Returns an
- * idempotent controller whose keydown listener must be registered before any
- * composer send handler.
+ * Extract the active `@` mention prefix at the textarea cursor, or null when the
+ * cursor is not inside a mention token. Thin wrapper over the pure resolver.
  */
-/**
- * Build a mention candidate from a resolved workspace path. Mirrors the Pi TUI
- * `@<absolute-path>` semantics: directories keep the trailing slash and paths
- * containing spaces are quoted, so the inserted token parses as one mention.
- */
-export function buildMentionCandidate(displayPath, isDirectory) {
-  const valuePath = isDirectory ? `${displayPath}/` : displayPath;
-  const name = displayPath.split("/").filter(Boolean).pop() || displayPath;
-  const needsQuotes = valuePath.includes(" ");
-  return {
-    value: needsQuotes ? `@"${valuePath}"` : `@${valuePath}`,
-    label: `${name}${isDirectory ? "/" : ""}`,
-    description: displayPath,
-    isDirectory,
-  };
+export function activeAtMention(input) {
+  return resolveAtMentionToken(input.value, input.selectionStart ?? input.value.length);
 }
 
 /**
- * `searchFiles` implementation over the host v2 data plane. The host answers
- * with workspace-relative entries, so the absolute display path is rebuilt
- * here from the caller's live workspace root.
+ * Classify a mention query's search root (2026-09-19 spec, contract D audit
+ * field). Mirrors the Rust `classify_mention_body` — the host re-parses
+ * authoritatively and rejects any declaration that disagrees. Returns
+ * `{ kind, value }` or null for syntactically invalid tokens (the caller
+ * skips the round-trip; the host would reject them anyway).
+ * `~` is NEVER expanded here — the host owns home resolution.
  */
+export function classifyMentionRoot(query, workspaceRoot) {
+  if (typeof query !== "string" || !query.startsWith("@")) return null;
+  let body = query.slice(1);
+  if (body.startsWith('"')) body = body.slice(1).replace(/"$/, "");
+  body = body.replace(/\\/g, "/");
+  const dotDot = (scope) => scope.split("/").some((part) => part === "..");
+  // Case-sensitive on purpose (repo precedent, appearance-preferences): a
+  // case-insensitive /win/i would match macOS "darwin".
+  const windows = /Windows/.test(globalThis.navigator?.userAgent || "");
+
+  if (body === "~" || body.startsWith("~/")) {
+    const scope = body === "~" ? "" : body.slice(2);
+    return dotDot(scope) ? null : { kind: "home", value: "~" };
+  }
+  // Drive prefixes are a Windows-only form (mirrors the Rust cfg gate): on
+  // other platforms `@c:/x` stays a workspace-relative token.
+  if (windows && /^[A-Za-z]:($|\/)/.test(body)) {
+    const scope = body.length > 2 ? body.slice(3) : "";
+    return dotDot(scope) ? null : { kind: "drive", value: `${body[0].toUpperCase()}:/` };
+  }
+  if (body.startsWith("/")) {
+    if (!windows) {
+      return dotDot(body.slice(1)) ? null : { kind: "absolute", value: "/" };
+    }
+    if (!body.startsWith("//")) return null; // bare `@/` has no single root on Windows
+    const parts = body.slice(2).split("/");
+    if (!parts[0] || !parts[1]) return null;
+    return dotDot(parts.slice(2).join("/"))
+      ? null
+      : { kind: "unc", value: `//${parts[0]}/${parts[1]}` };
+  }
+  let levels = 0;
+  let rest = body;
+  while (rest.startsWith("../")) {
+    levels += 1;
+    rest = rest.slice(3);
+  }
+  if (rest === "..") {
+    levels += 1;
+    rest = "";
+  }
+  if (levels > 0) {
+    if (dotDot(rest)) return null;
+    const ws = String(workspaceRoot || "")
+      .replace(/\\/g, "/")
+      .replace(/\/+$/, "");
+    const comps = ws.split("/").filter(Boolean);
+    const floor = windows ? 1 : 0;
+    while (comps.length > floor && levels > 0) {
+      comps.pop();
+      levels -= 1;
+    }
+    const value = comps.length === 0 ? "/" : `/${comps.join("/")}`;
+    return { kind: "absolute", value };
+  }
+  const scope = body.startsWith("./") ? body.slice(2) : body;
+  return dotDot(scope) ? null : { kind: "workspace", value: "" };
+}
+
+// Mention candidates are constructed HOST-side (Rust
+// `build_file_mention_candidate`, upstream parity): `value` is the insertable
+// token in the user's input form — relative to the search scope, directories
+// keep the trailing slash, spaces quote the token. The frontend passes them
+// through verbatim and never re-roots them (2026-09-19 spec, contract A).
 /**
  * `searchFiles` implementation over the host v2 data plane. The host answers
- * with workspace-relative entries, so the absolute display path is rebuilt
- * here from the caller's live workspace root. `getTransport` is resolved per
- * call because ephemeral runtimes swap or drop their transport on teardown.
+ * with fully-built candidates (`items` + `truncated`); the frontend maps them
+ * 1:1. An unavailable transport or workspace degrades to an empty list.
  */
 export function createHostFileMentionSearch(getTransport) {
   return async (workspaceRoot, query) => {
     const transport = typeof getTransport === "function" ? getTransport() : getTransport;
-    if (!transport?.fileMentions || !workspaceRoot) return { items: [] };
-    const response = await transport.fileMentions(query);
-    const entries = Array.isArray(response?.entries) ? response.entries : [];
-    const root = String(workspaceRoot).replace(/\/+$/, "");
+    if (!transport?.fileMentions || !workspaceRoot) return { items: [], truncated: false };
+    // The declared root must mirror the host's own parse; an invalid token
+    // skips the round-trip (the host would reject it).
+    const root = classifyMentionRoot(query, workspaceRoot);
+    if (!root) return { items: [], truncated: false };
+    const response = await transport.fileMentions(query, root);
+    const items = Array.isArray(response?.items) ? response.items : [];
     return {
-      items: entries.map((entry) =>
-        buildMentionCandidate(`${root}/${entry.relativePath ?? ""}`, entry.kind === "directory"),
-      ),
+      items: items.map((item) => ({
+        value: item.value,
+        label: item.label,
+        description: item.description,
+        isDirectory: Boolean(item.isDirectory),
+      })),
+      // Data-only for now; no UI (2026-09-19 decision ③).
+      truncated: Boolean(response?.truncated),
     };
   };
 }
 
+/**
+ * Install @-file-mention completion on a textarea. In the default standalone
+ * mode the controller owns its input/click/keyup/keydown/blur listeners.
+ * With `router: true` (main composer) the composer trigger router drives
+ * `update(trigger)` / `handleKeydown(event)` and owns the only keydown
+ * listener, so no two handlers contend for a key — but blur-close still
+ * registers here in both modes (the router has no replacement for it).
+ */
 export function setupAtFileMention(options) {
   const { input, container, getWorkspaceRoot, searchFiles } = options;
   const doc = options.document ?? document;
+  const routerMode = Boolean(options.router);
 
   let destroyed = false;
   let generation = 0;
@@ -119,6 +188,25 @@ export function setupAtFileMention(options) {
       abortController.abort();
       abortController = null;
     }
+  }
+
+  // Contract E (decision ②): an invalid query or an unreachable search root
+  // renders one error line in the menu's empty-state area — distinguishable
+  // from a legitimate "no matches" (which stays a closed/empty menu).
+  function renderError(message) {
+    if (destroyed) return;
+    matches = [];
+    input.removeAttribute("aria-activedescendant");
+    selectedIndex = 0;
+    container.replaceChildren();
+    const error = doc.createElement("div");
+    error.className = "at-file-mention-error";
+    error.setAttribute("role", "status");
+    error.textContent = message;
+    container.appendChild(error);
+    open = true;
+    container.classList.remove("hidden");
+    input.setAttribute("aria-expanded", "true");
   }
 
   function render(items) {
@@ -233,8 +321,17 @@ export function setupAtFileMention(options) {
     let result;
     try {
       result = await searchFiles(workspaceRoot, active.prefix, abortController.signal);
-    } catch {
-      if (!destroyed) close();
+    } catch (error) {
+      if (destroyed) return;
+      if (error?.code === "invalid_mention_query") {
+        renderError(t("fileMention.invalidQuery"));
+        return;
+      }
+      if (error?.code === "mention_root_unavailable") {
+        renderError(t("fileMention.rootUnavailable"));
+        return;
+      }
+      close();
       return;
     }
 
@@ -249,17 +346,60 @@ export function setupAtFileMention(options) {
     render(result.items ?? []);
   }
 
-  function schedule() {
+  // The token passed here comes either from the router's resolver or from the
+  // standalone listeners; either way it is the same pure parser's output.
+  function schedule(token) {
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = null;
-      const active = activeAtMention(input);
-      if (!active) {
+      if (!token) {
         close();
         return;
       }
-      runRequest(active);
+      runRequest(token);
     }, 20);
+  }
+
+  // Router-facing contract: consume a resolved trigger (or null → close).
+  function updateFromTrigger(trigger) {
+    schedule(
+      trigger && trigger.kind === "mention" && typeof trigger.query === "string"
+        ? { prefix: trigger.query, start: trigger.start, end: trigger.end }
+        : null,
+    );
+    return Promise.resolve();
+  }
+
+  /**
+   * Consume a keydown when the menu is open. Returns true when the key was
+   * consumed (preventDefault + stopImmediatePropagation already applied).
+   * The router only calls this while the picker reports itself open.
+   */
+  function handleKeydown(event) {
+    if (event.isComposing || event.keyCode === 229) return false;
+    if (!open) return false;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      close();
+      return true;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (matches.length === 0) return true;
+      const delta = event.key === "ArrowDown" ? 1 : -1;
+      selectedIndex = (selectedIndex + delta + matches.length) % matches.length;
+      updateSelection();
+      return true;
+    }
+    if ((event.key === "Enter" || event.key === "Tab") && matches.length > 0) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      select(selectedIndex);
+      return true;
+    }
+    return false;
   }
 
   function onKeyDown(event) {
@@ -271,30 +411,19 @@ export function setupAtFileMention(options) {
       return;
     }
     if (!open) return;
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      if (matches.length === 0) return;
-      const delta = event.key === "ArrowDown" ? 1 : -1;
-      selectedIndex = (selectedIndex + delta + matches.length) % matches.length;
-      updateSelection();
-      return;
-    }
-    if ((event.key === "Enter" || event.key === "Tab") && matches.length > 0) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      select(selectedIndex);
-    }
+    handleKeydown(event);
   }
 
   const onBlur = () => queueMicrotask(close);
   input.setAttribute("aria-autocomplete", "list");
   input.setAttribute("aria-controls", container.id);
   input.setAttribute("aria-expanded", "false");
-  input.addEventListener("input", schedule);
-  input.addEventListener("click", schedule);
-  input.addEventListener("keyup", schedule);
-  input.addEventListener("keydown", onKeyDown);
+  if (!routerMode) {
+    input.addEventListener("input", () => schedule(activeAtMention(input)));
+    input.addEventListener("click", () => schedule(activeAtMention(input)));
+    input.addEventListener("keyup", () => schedule(activeAtMention(input)));
+    input.addEventListener("keydown", onKeyDown);
+  }
   input.addEventListener("blur", onBlur);
 
   function destroy() {
@@ -302,10 +431,9 @@ export function setupAtFileMention(options) {
     destroyed = true;
     if (abortController) abortController.abort();
     if (timer) clearTimeout(timer);
-    input.removeEventListener("input", schedule);
-    input.removeEventListener("click", schedule);
-    input.removeEventListener("keyup", schedule);
-    input.removeEventListener("keydown", onKeyDown);
+    if (!routerMode) {
+      input.removeEventListener("keydown", onKeyDown);
+    }
     input.removeEventListener("blur", onBlur);
     close();
   }
@@ -321,5 +449,9 @@ export function setupAtFileMention(options) {
     await runRequest(active);
   }
 
-  return { close, destroy, update, select };
+  const controller = { close, destroy, update, select, isOpen: () => open, handleKeydown };
+  if (routerMode) {
+    controller.update = updateFromTrigger;
+  }
+  return controller;
 }

@@ -209,13 +209,19 @@ export class WsTransport {
     return this._control("session_export", { sessionId });
   }
 
+  // Turn files card (2026-09-19 spec): per-file working-tree stats, frozen
+  // at turn end. Non-git workspaces reject → caller degrades to a plain list.
+  gitTurnStats(paths) {
+    return this._control("git_turn_stats", { paths });
+  }
+
   // ── Host data plane (v2 `data_request`) ──────────────────────────────────────
   // Paths are workspace-relative; `workspaceId` is carried by the envelope from
   // the client's own authoritative route. `file_read`/`file_write`/`file_raw`
   // helpers land together with the preview-panel migration that needs them.
 
-  fileMentions(query) {
-    return this.wsClient.sendData("file_mentions", { query });
+  fileMentions(query, root) {
+    return this.wsClient.sendData("file_mentions", { query, root });
   }
 
   listFiles(path = "") {

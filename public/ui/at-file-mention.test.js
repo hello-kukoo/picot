@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { initI18n } from "../i18n.js";
 import {
   activeAtMention,
-  buildMentionCandidate,
+  classifyMentionRoot,
   createHostFileMentionSearch,
   setupAtFileMention,
 } from "./at-file-mention.js";
@@ -505,44 +505,35 @@ describe("at-file-mention", () => {
 });
 
 describe("host file-mention search", () => {
-  test("maps workspace-relative entries onto absolute mention candidates", async () => {
+  test("passes host-built candidates through verbatim (relative insert forms)", async () => {
     const transport = {
       fileMentions: vi.fn(async () => ({
         operation: "file_mentions",
-        entries: [
-          { name: "a.ts", relativePath: "src/a.ts", kind: "file" },
-          { name: "pkg", relativePath: "src/pkg", kind: "directory" },
-          { name: "b md", relativePath: "docs/b md", kind: "file" },
+        items: [
+          { value: "@src/a.ts", label: "a.ts", description: "src/a.ts", isDirectory: false },
+          { value: "@src/pkg/", label: "pkg/", description: "src/pkg", isDirectory: true },
+          { value: `@"docs/b md"`, label: "b md", description: "docs/b md", isDirectory: false },
         ],
+        truncated: false,
       })),
     };
     const search = createHostFileMentionSearch(() => transport);
 
-    const result = await search("/repo/", "a");
+    const result = await search("/repo/", "@a");
 
-    // Pi TUI mention semantics are absolute paths; directories keep the trailing
-    // slash and paths with spaces are quoted so the token stays whole.
-    expect(transport.fileMentions).toHaveBeenCalledWith("a");
+    // Candidates come from the Rust side (upstream parity): relative values,
+    // directory trailing slash, quoted spaces. The frontend NEVER re-roots
+    // them — no workspace-root concatenation anywhere.
+    expect(transport.fileMentions).toHaveBeenCalledWith("@a", {
+      kind: "workspace",
+      value: "",
+    });
     expect(result.items).toEqual([
-      {
-        value: "@/repo/src/a.ts",
-        label: "a.ts",
-        description: "/repo/src/a.ts",
-        isDirectory: false,
-      },
-      {
-        value: "@/repo/src/pkg/",
-        label: "pkg/",
-        description: "/repo/src/pkg",
-        isDirectory: true,
-      },
-      {
-        value: `@"/repo/docs/b md"`,
-        label: "b md",
-        description: "/repo/docs/b md",
-        isDirectory: false,
-      },
+      { value: "@src/a.ts", label: "a.ts", description: "src/a.ts", isDirectory: false },
+      { value: "@src/pkg/", label: "pkg/", description: "src/pkg", isDirectory: true },
+      { value: `@"docs/b md"`, label: "b md", description: "docs/b md", isDirectory: false },
     ]);
+    expect(result.truncated).toBe(false);
   });
 
   test("returns an empty list when the transport or workspace root is unavailable", async () => {
@@ -550,17 +541,151 @@ describe("host file-mention search", () => {
     // degrade to no candidates instead of throwing inside the popup.
     const search = createHostFileMentionSearch(() => null);
 
-    await expect(search("/repo", "a")).resolves.toEqual({ items: [] });
+    await expect(search("/repo", "a")).resolves.toEqual({ items: [], truncated: false });
     await expect(createHostFileMentionSearch(() => ({}))("/repo", "a")).resolves.toEqual({
       items: [],
+      truncated: false,
+    });
+  });
+});
+
+describe("mention menu error line (contract E)", () => {
+  let dom;
+  let input;
+  let container;
+
+  beforeEach(async () => {
+    dom = new JSDOM(`
+      <textarea id="input"></textarea>
+      <div id="popup" class="hidden"></div>
+    `);
+    globalThis.window = dom.window;
+    globalThis.document = dom.window.document;
+    globalThis.Event = dom.window.Event;
+    globalThis.queueMicrotask = (callback) => callback();
+    globalThis.fetch = vi.fn(async (input) => {
+      if (String(input).includes("/locales/en.json")) {
+        return { ok: true, status: 200, json: async () => enMessages };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+    await initI18n();
+    input = document.getElementById("input");
+    container = document.getElementById("popup");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    dom.window.close();
+    delete globalThis.window;
+    delete globalThis.document;
+    delete globalThis.Event;
+    delete globalThis.queueMicrotask;
+    delete globalThis.fetch;
+  });
+
+  test("an unreachable root renders an error line, not a silent empty menu", async () => {
+    const searchFiles = vi.fn(async () => {
+      const error = new Error("search root probe timed out");
+      error.code = "mention_root_unavailable";
+      throw error;
+    });
+    setupAtFileMention({
+      input,
+      container,
+      getWorkspaceRoot: () => "/repo",
+      searchFiles,
+    });
+
+    input.value = "@~/Doc";
+    input.setSelectionRange(6, 6);
+    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(searchFiles).toHaveBeenCalled();
+    const error = container.querySelector(".at-file-mention-error");
+    expect(error).not.toBeNull();
+    expect(error.textContent).toBe(enMessages.fileMention.rootUnavailable);
+    expect(container.classList.contains("hidden")).toBe(false);
+    // No options render alongside the error line.
+    expect(container.querySelectorAll(".at-file-mention-option")).toHaveLength(0);
+  });
+
+  test("other failures keep the silent close (no error line)", async () => {
+    const searchFiles = vi.fn(async () => {
+      throw new Error("socket closed");
+    });
+    setupAtFileMention({
+      input,
+      container,
+      getWorkspaceRoot: () => "/repo",
+      searchFiles,
+    });
+
+    input.value = "@src";
+    input.setSelectionRange(4, 4);
+    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(container.querySelector(".at-file-mention-error")).toBeNull();
+    expect(container.classList.contains("hidden")).toBe(true);
+  });
+});
+
+describe("classifyMentionRoot (contract D declaration mirror)", () => {
+  const WS = "/Users/lin/dev/picot-v3";
+
+  test("workspace forms declare the registered root", () => {
+    expect(classifyMentionRoot("@foo", WS)).toEqual({ kind: "workspace", value: "" });
+    expect(classifyMentionRoot("@src/foo", WS)).toEqual({ kind: "workspace", value: "" });
+    expect(classifyMentionRoot("@./foo", WS)).toEqual({ kind: "workspace", value: "" });
+    expect(classifyMentionRoot("@", WS)).toEqual({ kind: "workspace", value: "" });
+  });
+
+  test("parent chains climb the workspace root string", () => {
+    expect(classifyMentionRoot("@../foo", WS)).toEqual({
+      kind: "absolute",
+      value: "/Users/lin/dev",
+    });
+    expect(classifyMentionRoot("@../../x", WS)).toEqual({ kind: "absolute", value: "/Users/lin" });
+    expect(classifyMentionRoot("@../../../../../../x", WS)).toEqual({
+      kind: "absolute",
+      value: "/",
     });
   });
 
-  test("candidate label uses the basename even for nested paths", () => {
-    expect(buildMentionCandidate("/repo/src/deep/file.rs", false)).toMatchObject({
-      value: "@/repo/src/deep/file.rs",
-      label: "file.rs",
-      isDirectory: false,
+  test("home and absolute roots never expand client-side", () => {
+    expect(classifyMentionRoot("@~/Doc", WS)).toEqual({ kind: "home", value: "~" });
+    expect(classifyMentionRoot("@~", WS)).toEqual({ kind: "home", value: "~" });
+    expect(classifyMentionRoot("@/usr/lo", WS)).toEqual({ kind: "absolute", value: "/" });
+  });
+
+  test("quoted and backslash forms normalize before classifying", () => {
+    expect(classifyMentionRoot('@"../my fo', WS)).toEqual({
+      kind: "absolute",
+      value: "/Users/lin/dev",
     });
+    expect(classifyMentionRoot("@src\\my", WS)).toEqual({ kind: "workspace", value: "" });
+  });
+
+  test("drive letters are a Windows-only form (mirrors the Rust cfg gate)", () => {
+    // jsdom's darwin UA must classify `@c:/x` as a workspace token, matching
+    // the host; a spurious drive declaration would fail the equality check.
+    expect(classifyMentionRoot("@c:/x", WS)).toEqual({ kind: "workspace", value: "" });
+  });
+
+  test("mid-word traversal and bad shapes are invalid", () => {
+    expect(classifyMentionRoot("@a/../b", WS)).toBeNull();
+    expect(classifyMentionRoot("@../ok/../bad", WS)).toBeNull();
+    expect(classifyMentionRoot("@~/a/../b", WS)).toBeNull();
+    expect(classifyMentionRoot("@/a/../b", WS)).toBeNull();
+    expect(classifyMentionRoot("no-at", WS)).toBeNull();
+  });
+
+  test("invalid tokens skip the host round-trip", async () => {
+    const transport = { fileMentions: vi.fn(async () => ({ items: [] })) };
+    const search = createHostFileMentionSearch(() => transport);
+    await search(WS, "@a/../b");
+    expect(transport.fileMentions).not.toHaveBeenCalled();
   });
 });

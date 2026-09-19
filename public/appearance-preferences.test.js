@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, test } from "vitest";
 import {
   applyAppearanceToDom,
   CHAT_FONT_SIZE_PX,
+  CODE_FONT_SIZE_PX,
   DEFAULT_FONT_SIZE_LEVEL,
   DEFAULT_PREVIEW_THEME_MODE,
   DEFAULT_SCROLLBACK_LIMIT,
@@ -271,6 +272,36 @@ test("defaultWebglRenderer is ON except on Windows", () => {
   ).toBe(true);
   expect(defaultWebglRenderer("")).toBe(true);
   expect(defaultWebglRenderer(undefined)).toBe(true);
+});
+
+test("code-size table (P4): covers every level, monotonic, 12px floor", () => {
+  expect(Object.keys(CODE_FONT_SIZE_PX).sort()).toEqual([...FONT_SIZE_LEVELS].sort());
+  let previous = -Infinity;
+  for (const level of FONT_SIZE_LEVELS) {
+    const px = CODE_FONT_SIZE_PX[level];
+    expect(Number.isFinite(px)).toBe(true);
+    expect(px).toBeGreaterThanOrEqual(12); // documented floor
+    expect(px).toBeGreaterThan(previous); // monotonic across levels
+    previous = px;
+  }
+  // One step below the chat size at every level (the derivation contract).
+  for (const level of FONT_SIZE_LEVELS) {
+    expect(CODE_FONT_SIZE_PX[level]).toBe(CHAT_FONT_SIZE_PX[level] - 2);
+  }
+});
+
+test("applyAppearanceToDom writes the derived type roles for each level (P4)", () => {
+  for (const level of FONT_SIZE_LEVELS) {
+    applyAppearanceToDom({
+      chatFontSize: level,
+      previewFontSize: DEFAULT_FONT_SIZE_LEVEL,
+      previewTheme: "system",
+      picotThemeIsDark: false,
+    });
+    const root = document.documentElement;
+    expect(root.style.getPropertyValue("--text-markdown")).toBe(`${CHAT_FONT_SIZE_PX[level]}px`);
+    expect(root.style.getPropertyValue("--text-code")).toBe(`${CODE_FONT_SIZE_PX[level]}px`);
+  }
 });
 
 test("applyAppearanceToDom sets font variables and the resolved preview theme", () => {

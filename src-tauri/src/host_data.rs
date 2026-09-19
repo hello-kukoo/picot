@@ -7,6 +7,22 @@ use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FileMentionCandidate {
+    pub value: String,
+    pub label: String,
+    pub description: String,
+    pub is_directory: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileMentionSearchResult {
+    pub items: Vec<FileMentionCandidate>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileEntry {
     pub name: String,
     pub relative_path: String,
@@ -83,6 +99,12 @@ pub enum HostDataError {
     InvalidRelativePath,
     OutsideWorkspace,
     NotDirectory,
+    /// Upstream mention-query guard: bad token shape (no `@` prefix, NUL,
+    /// mid-word traversal, Windows bare `@/`, root declaration mismatch).
+    InvalidMentionQuery,
+    /// Wide-root search root does not exist or is unreachable (missing drive,
+    /// UNC timeout) — contract E distinguishes this from "no matches".
+    MentionRootUnavailable(String),
     Io(String),
 }
 
@@ -538,21 +560,42 @@ impl HostDataPlane {
         }
     }
 
-    pub fn file_mentions(
+    /// Mention search (2026-09-19 spec): step 1 upstream parity plus step 2
+    /// wide roots (`@../`, `@~/`, `@/`, `@C:/`, `@//server/share/`). The host
+    /// is the sole root authority: the frame's declared root must equal what
+    /// the query itself resolves to, else `InvalidMentionQuery`.
+    pub fn search_file_mentions(
         &self,
         workspace_id: &str,
         query: &str,
-    ) -> Result<Vec<FileEntry>, HostDataError> {
-        const MAX_ENTRIES: usize = 10_000;
-        const MAX_RESULTS: usize = 20;
-        const MAX_MILLIS: u128 = 500;
+        declared_root: Option<(&str, &str)>,
+    ) -> Result<FileMentionSearchResult, HostDataError> {
         let root = self.workspace_root(workspace_id)?;
-        let needle = query.trim().trim_start_matches('@').to_lowercase();
-        if needle.is_empty() {
-            // ponytail: bare `@` lists the workspace root's first level (dot
-            // entries skipped, name-sorted) so typing `@` immediately shows
-            // files — the pi TUI affordance. Upgrade to a gitignore-aware
-            // recursive walk only if drilling from the bare list matters.
+        if !query.starts_with('@') || query.contains('\0') {
+            return Err(HostDataError::InvalidMentionQuery);
+        }
+        let raw = query.strip_prefix('@').unwrap_or_default();
+        let (is_quoted, body) = if let Some(rest) = raw.strip_prefix('"') {
+            (true, rest.strip_suffix('"').unwrap_or(rest))
+        } else {
+            (false, raw)
+        };
+        let normalized = body.replace('\\', "/");
+        let plan = classify_mention_body(&normalized, &root)?;
+        if let Some((declared_kind, declared_value)) = declared_root {
+            let (kind, value) = plan.declaration();
+            if kind != declared_kind || value != declared_value {
+                return Err(HostDataError::InvalidMentionQuery);
+            }
+        }
+        let root = match plan.resolve_search_root()? {
+            Some(resolved) => resolved,
+            None => root, // workspace kind: the registered root IS the root
+        };
+        // v3 special case (spec contract B): bare `@` lists the workspace
+        // root's first level immediately — dot entries skipped, name-sorted.
+        // (An empty body always classifies as the workspace root.)
+        if normalized.is_empty() {
             let mut root_entries: Vec<std::fs::DirEntry> = std::fs::read_dir(&root)
                 .map(|dir| {
                     dir.flatten()
@@ -561,86 +604,78 @@ impl HostDataPlane {
                 })
                 .unwrap_or_default();
             root_entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
-            let results = root_entries
+            let items = root_entries
                 .into_iter()
-                .take(MAX_RESULTS)
+                .take(MAX_MENTION_RESULTS)
                 .map(|entry| {
-                    let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    FileEntry {
-                        kind: if is_dir {
-                            FileKind::Directory
-                        } else {
-                            FileKind::File
-                        },
-                        relative_path: name.clone(),
-                        name,
-                    }
+                    let is_directory = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                    let display = entry.file_name().to_string_lossy().into_owned();
+                    build_file_mention_candidate(
+                        &display,
+                        is_directory,
+                        is_quoted_display(is_quoted, &display),
+                    )
                 })
                 .collect();
-            return Ok(results);
+            return Ok(FileMentionSearchResult {
+                items,
+                truncated: false,
+            });
         }
-        let started = std::time::Instant::now();
-        let mut visited = 0usize;
-        let mut results = Vec::new();
-        fn walk(
-            root: &Path,
-            dir: &Path,
-            needle: &str,
-            visited: &mut usize,
-            results: &mut Vec<FileEntry>,
-            started: std::time::Instant,
-        ) {
-            if *visited >= MAX_ENTRIES
-                || results.len() >= MAX_RESULTS
-                || started.elapsed().as_millis() >= MAX_MILLIS
-            {
-                return;
-            }
-            let Ok(entries) = std::fs::read_dir(dir) else {
-                return;
-            };
-            for entry in entries.flatten() {
-                if *visited >= MAX_ENTRIES
-                    || results.len() >= MAX_RESULTS
-                    || started.elapsed().as_millis() >= MAX_MILLIS
-                {
-                    break;
-                }
-                *visited += 1;
-                let path = entry.path();
-                let Ok(file_type) = entry.file_type() else {
-                    continue;
-                };
-                let Ok(canonical) = path.canonicalize() else {
-                    continue;
-                };
-                if !canonical.starts_with(root) {
-                    continue;
-                }
-                let relative = canonical
-                    .strip_prefix(root)
-                    .unwrap_or(&canonical)
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                if relative.to_lowercase().contains(needle) {
-                    results.push(FileEntry {
-                        name: entry.file_name().to_string_lossy().into_owned(),
-                        relative_path: relative.clone(),
-                        kind: if file_type.is_dir() {
-                            FileKind::Directory
-                        } else {
-                            FileKind::File
-                        },
-                    });
-                }
-                if file_type.is_dir() {
-                    walk(root, &canonical, needle, visited, results, started);
-                }
-            }
+        // The filesystem join uses the BARE scope base (relative to the
+        // resolved search root); the display form keeps the user's prefix.
+        let (join_base, display_base, fuzzy) = match plan.scope.rsplit_once('/') {
+            Some((base, fuzzy)) => (
+                base.to_string(),
+                format!("{}{base}/", plan.display_prefix),
+                fuzzy.to_owned(),
+            ),
+            None => (
+                String::new(),
+                plan.display_prefix.clone(),
+                plan.scope.clone(),
+            ),
+        };
+        if plan
+            .scope
+            .split('/')
+            .filter(|part| !part.is_empty() && *part != ".")
+            .any(is_ignored_mention_dir)
+        {
+            return Ok(FileMentionSearchResult {
+                items: Vec::new(),
+                truncated: false,
+            });
         }
-        walk(&root, &root, &needle, &mut visited, &mut results, started);
-        Ok(results)
+        let base_dir = match safe_join(&root, &join_base) {
+            Ok(path) => path,
+            Err(HostDataError::Io(_)) | Err(HostDataError::NotDirectory) => {
+                return Ok(FileMentionSearchResult {
+                    items: Vec::new(),
+                    truncated: false,
+                });
+            }
+            Err(error) => return Err(error),
+        };
+        // Containment is per-search-root now (wide roots walk outside the
+        // workspace by design; the walk still never leaves its own root).
+        let mut walk = FileMentionWalk::new(root.as_path(), fuzzy.to_lowercase(), is_quoted);
+        walk.collect(&base_dir, &display_base, 1)?;
+        walk.collected.sort_by(|left, right| {
+            right
+                .0
+                .cmp(&left.0)
+                .then_with(|| left.1.description.cmp(&right.1.description))
+        });
+        Ok(FileMentionSearchResult {
+            items: walk
+                .collected
+                .into_iter()
+                .take(MAX_MENTION_RESULTS)
+                .map(|(_, item)| item)
+                .collect(),
+            truncated: walk.truncated,
+        })
     }
 
     /// Session root directory for compat handlers that validate absolute
@@ -1667,6 +1702,404 @@ fn message_text(content: Option<&serde_json::Value>) -> Option<String> {
     }
 }
 
+// ─── @ mention search machinery (upstream parity + spec additions) ────────────
+
+const MAX_MENTION_RESULTS: usize = 20;
+const MAX_MENTION_VISITED: usize = 10_000;
+const MAX_MENTION_COLLECTED: usize = 200;
+const MAX_MENTION_DEPTH: usize = 4;
+const MAX_MENTION_MILLIS: u128 = 500;
+
+const IGNORED_MENTION_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    "dist",
+    "build",
+    "target",
+    ".next",
+    ".nuxt",
+    ".cache",
+    "coverage",
+    ".venv",
+    "venv",
+    "__pycache__",
+];
+
+fn is_ignored_mention_dir(name: &str) -> bool {
+    IGNORED_MENTION_DIRS.contains(&name)
+}
+
+/// Parsed mention query: which root kind the user's prefix selects, the
+/// remaining scope under it, and the display prefix that inserted values keep.
+pub struct MentionQueryPlan {
+    kind: &'static str,
+    /// Declaration value mirrored by the frontend classifier (audit field).
+    declared_value: String,
+    /// Scope base + fuzzy remainder under the resolved root ("" allowed).
+    scope: String,
+    /// Inserted tokens keep this prefix ("../", "~/", "/", "C:/", "//s/share/",
+    /// or "./" for the explicit-dot workspace form).
+    display_prefix: String,
+    /// None = the registered workspace root (no separate path to resolve).
+    resolved_root: Option<PathBuf>,
+}
+
+impl MentionQueryPlan {
+    /// The wire declaration both sides must agree on (contract D).
+    pub fn declaration(&self) -> (&'static str, &str) {
+        (self.kind, self.declared_value.as_str())
+    }
+
+    /// Resolve the search root to a canonical directory, probing wide roots
+    /// with a bounded timeout so dead drives/UNC shares fail fast. Returns
+    /// Ok(None) for the workspace kind — its root is the registered one.
+    fn resolve_search_root(&self) -> Result<Option<PathBuf>, HostDataError> {
+        let Some(path) = self.resolved_root.as_ref() else {
+            return Ok(None);
+        };
+        if self.kind == "drive" || self.kind == "unc" {
+            let reachable = std::sync::mpsc::channel();
+            let (tx, rx) = reachable;
+            let target = path.clone();
+            std::thread::spawn(move || {
+                let ok = std::fs::metadata(&target)
+                    .map(|meta| meta.is_dir())
+                    .unwrap_or(false);
+                let _ = tx.send(ok);
+            });
+            return match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                Ok(true) => path
+                    .canonicalize()
+                    .map(Some)
+                    .map_err(|error| HostDataError::MentionRootUnavailable(error.to_string())),
+                Ok(false) => Err(HostDataError::MentionRootUnavailable(
+                    "search root is not a reachable directory".into(),
+                )),
+                Err(_) => Err(HostDataError::MentionRootUnavailable(
+                    "search root probe timed out".into(),
+                )),
+            };
+        }
+        path.canonicalize()
+            .map(Some)
+            .map_err(|error| HostDataError::MentionRootUnavailable(error.to_string()))
+    }
+}
+
+/// Pure classification of the normalized mention body (no filesystem access):
+/// selects the search root kind, strips its prefix, and guards mid-word
+/// traversal. Mirrored by the frontend `classifyMentionRoot` — the wire
+/// declaration must match this exactly.
+fn classify_mention_body(
+    normalized: &str,
+    workspace_root: &Path,
+) -> Result<MentionQueryPlan, HostDataError> {
+    // Home: `~` or `~/…` — expanded by the host only, never the browser.
+    if normalized == "~" || normalized.starts_with("~/") {
+        let scope = normalized.strip_prefix("~/").unwrap_or("").to_string();
+        if scope.split('/').any(|part| part == "..") {
+            return Err(HostDataError::InvalidMentionQuery);
+        }
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                HostDataError::MentionRootUnavailable("home directory unavailable".into())
+            })?;
+        return Ok(MentionQueryPlan {
+            kind: "home",
+            declared_value: "~".into(),
+            scope,
+            display_prefix: "~/".into(),
+            resolved_root: Some(home),
+        });
+    }
+    // Windows named drive: `C:/…` (bare `@/` stays illegal on Windows — no
+    // single filesystem root). POSIX falls through to the absolute branch.
+    #[cfg(target_os = "windows")]
+    if let Some(rest) = drive_prefix(normalized) {
+        let (letter, scope) = rest;
+        if scope.split('/').any(|part| part == "..") {
+            return Err(HostDataError::InvalidMentionQuery);
+        }
+        let root = format!("{letter}:/");
+        return Ok(MentionQueryPlan {
+            kind: "drive",
+            declared_value: root.clone(),
+            scope: scope.to_string(),
+            display_prefix: format!("{root}"),
+            resolved_root: Some(PathBuf::from(root)),
+        });
+    }
+    #[cfg(target_os = "windows")]
+    if normalized.starts_with('/') {
+        // UNC `//server/share/…` is the only legal `@/` form on Windows.
+        if let Some(rest) = normalized.strip_prefix("//") {
+            let mut parts = rest.splitn(3, '/');
+            let server = parts.next().unwrap_or_default();
+            let share = parts.next().unwrap_or_default();
+            let scope = parts.next().unwrap_or_default();
+            if scope.split('/').any(|part| part == "..") {
+                return Err(HostDataError::InvalidMentionQuery);
+            }
+            if server.is_empty() || share.is_empty() {
+                return Err(HostDataError::InvalidMentionQuery);
+            }
+            let root = format!("//{server}/{share}");
+            return Ok(MentionQueryPlan {
+                kind: "unc",
+                declared_value: root.clone(),
+                scope: scope.to_string(),
+                display_prefix: format!("{root}/"),
+                resolved_root: Some(PathBuf::from(root)),
+            });
+        }
+        return Err(HostDataError::InvalidMentionQuery);
+    }
+    // POSIX absolute: `@/…` searches from the filesystem root.
+    #[cfg(not(target_os = "windows"))]
+    if let Some(scope) = normalized.strip_prefix('/') {
+        if scope.split('/').any(|part| part == "..") {
+            return Err(HostDataError::InvalidMentionQuery);
+        }
+        return Ok(MentionQueryPlan {
+            kind: "absolute",
+            declared_value: "/".into(),
+            scope: scope.to_string(),
+            display_prefix: "/".into(),
+            resolved_root: Some(PathBuf::from("/")),
+        });
+    }
+    // Parent chain: one leading `../` per level (multi-level allowed; the
+    // climb floors at the filesystem/drive root). Mid-word `..` stays illegal.
+    let mut levels = 0usize;
+    let mut rest = normalized;
+    while let Some(tail) = rest.strip_prefix("../") {
+        levels += 1;
+        rest = tail;
+    }
+    if rest == ".." {
+        levels += 1;
+        rest = "";
+    }
+    if levels > 0 {
+        if rest.split('/').any(|part| part == "..") {
+            return Err(HostDataError::InvalidMentionQuery);
+        }
+        let workspace_str = workspace_root.to_string_lossy().replace('\\', "/");
+        let mut components: Vec<&str> =
+            workspace_str.split('/').filter(|c| !c.is_empty()).collect();
+        let floor = if cfg!(target_os = "windows") { 1 } else { 0 };
+        while components.len() > floor && levels > 0 {
+            components.pop();
+            levels -= 1;
+        }
+        let mut climbed = String::new();
+        for component in &components {
+            climbed.push('/');
+            climbed.push_str(component);
+        }
+        if climbed.is_empty() {
+            climbed = if cfg!(target_os = "windows") {
+                // Single remaining component = the drive root itself.
+                format!("/{}", components.first().copied().unwrap_or_default())
+            } else {
+                "/".to_string()
+            };
+        }
+        let mut display_prefix = String::new();
+        for _ in 0..count_parent_levels(normalized) {
+            display_prefix.push_str("../");
+        }
+        return Ok(MentionQueryPlan {
+            kind: "absolute",
+            declared_value: climbed.clone(),
+            scope: rest.to_string(),
+            display_prefix,
+            resolved_root: Some(PathBuf::from(climbed)),
+        });
+    }
+    // Workspace form, optionally with an explicit `./` prefix.
+    let (scope, display_prefix) = if let Some(rest) = normalized.strip_prefix("./") {
+        (rest.to_string(), "./".to_string())
+    } else {
+        (normalized.to_string(), String::new())
+    };
+    if scope.split('/').any(|part| part == "..") {
+        return Err(HostDataError::InvalidMentionQuery);
+    }
+    Ok(MentionQueryPlan {
+        kind: "workspace",
+        declared_value: String::new(),
+        scope,
+        display_prefix,
+        resolved_root: None,
+    })
+}
+
+/// Number of leading `../` segments in the normalized body (display prefix).
+fn count_parent_levels(normalized: &str) -> usize {
+    let mut count = 0usize;
+    let mut rest = normalized;
+    while let Some(tail) = rest.strip_prefix("../") {
+        count += 1;
+        rest = tail;
+    }
+    if rest == ".." {
+        count += 1;
+    }
+    count
+}
+
+struct FileMentionWalk<'a> {
+    root: &'a Path,
+    fuzzy: String,
+    is_quoted: bool,
+    started: std::time::Instant,
+    visited: usize,
+    collected: Vec<(u16, FileMentionCandidate)>,
+    truncated: bool,
+}
+
+impl<'a> FileMentionWalk<'a> {
+    fn new(root: &'a Path, fuzzy: String, is_quoted: bool) -> Self {
+        Self {
+            root,
+            fuzzy,
+            is_quoted,
+            started: std::time::Instant::now(),
+            visited: 0,
+            collected: Vec::new(),
+            truncated: false,
+        }
+    }
+
+    fn budget_hit(&self) -> bool {
+        self.visited >= MAX_MENTION_VISITED
+            || self.collected.len() >= MAX_MENTION_COLLECTED
+            || self.started.elapsed().as_millis() >= MAX_MENTION_MILLIS
+    }
+
+    fn collect(
+        &mut self,
+        dir: &Path,
+        display_base: &str,
+        depth: usize,
+    ) -> Result<(), HostDataError> {
+        if self.budget_hit() {
+            self.truncated = true;
+            return Ok(());
+        }
+        // Wide roots routinely contain unreadable directories (`@/` from the
+        // filesystem root, protected system dirs); skip them instead of
+        // aborting the whole search. Workspace-relative walks are unaffected.
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Ok(());
+        };
+        for entry in entries.filter_map(Result::ok) {
+            if self.budget_hit() {
+                self.truncated = true;
+                return Ok(());
+            }
+            self.visited += 1;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let is_directory = file_type.is_dir();
+            if !is_directory && !file_type.is_file() {
+                continue;
+            }
+            // Spec contract C: hidden entries (dot-prefixed) are skipped in
+            // addition to the upstream IGNORED directory table.
+            if name.starts_with('.') {
+                continue;
+            }
+            if is_directory && is_ignored_mention_dir(&name) {
+                continue;
+            }
+            let display_path = format!("{display_base}{name}");
+            let score = score_mention(&display_path, &name, &self.fuzzy, is_directory);
+            if score > 0 {
+                self.collected.push((
+                    score,
+                    build_file_mention_candidate(
+                        &display_path,
+                        is_directory,
+                        is_quoted_display(self.is_quoted, &display_path),
+                    ),
+                ));
+            }
+            if is_directory && depth < MAX_MENTION_DEPTH {
+                let path = entry.path();
+                if path.starts_with(self.root) {
+                    self.collect(&path, &format!("{display_path}/"), depth + 1)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn score_mention(display_path: &str, name: &str, fuzzy: &str, is_directory: bool) -> u16 {
+    let base = if fuzzy.is_empty() {
+        if is_directory {
+            11
+        } else {
+            1
+        }
+    } else {
+        let name = name.to_lowercase();
+        if name == fuzzy {
+            100
+        } else if name.starts_with(fuzzy) {
+            80
+        } else if name.contains(fuzzy) {
+            50
+        } else if display_path.to_lowercase().contains(fuzzy) {
+            30
+        } else {
+            0
+        }
+    };
+    if base > 0 && is_directory {
+        base + 10
+    } else {
+        base
+    }
+}
+
+fn is_quoted_display(was_quoted: bool, display_path: &str) -> bool {
+    was_quoted || display_path.contains(' ')
+}
+
+fn build_file_mention_candidate(
+    display_path: &str,
+    is_directory: bool,
+    needs_quotes: bool,
+) -> FileMentionCandidate {
+    let value_path = if is_directory {
+        format!("{display_path}/")
+    } else {
+        display_path.to_owned()
+    };
+    let value = if needs_quotes {
+        format!("@\"{value_path}\"")
+    } else {
+        format!("@{value_path}")
+    };
+    let label = Path::new(display_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(display_path);
+    FileMentionCandidate {
+        value,
+        label: format!("{label}{}", if is_directory { "/" } else { "" }),
+        description: display_path.to_owned(),
+        is_directory,
+    }
+}
+
 fn safe_join(root: &Path, relative_path: &str) -> Result<PathBuf, HostDataError> {
     let relative = Path::new(relative_path);
     if relative.is_absolute()
@@ -1758,20 +2191,180 @@ mod tests {
         let (data, workspace_id) = test_data(&workspace);
 
         // Bare `@` must list files immediately (pi TUI affordance): the root's
-        // first level, dot entries skipped, deterministic name order.
-        let entries = data.file_mentions(&workspace_id, "@").unwrap();
-        let names: Vec<String> = entries.iter().map(|entry| entry.name.clone()).collect();
-        assert!(names.contains(&"package.json".to_string()), "got {names:?}");
-        assert!(names.contains(&"README.md".to_string()), "got {names:?}");
-        assert!(names.contains(&"src".to_string()), "got {names:?}");
-        assert!(!names.iter().any(|name| name.starts_with('.')));
-        let src = entries.iter().find(|entry| entry.name == "src").unwrap();
-        assert!(matches!(src.kind, FileKind::Directory));
+        // first level, dot entries skipped, deterministic name order. Values
+        // are RELATIVE candidates now (value/label/description, not FileEntry).
+        let result = data.search_file_mentions(&workspace_id, "@", None).unwrap();
+        let labels: Vec<String> = result.items.iter().map(|item| item.label.clone()).collect();
+        assert!(
+            labels.contains(&"package.json".to_string()),
+            "got {labels:?}"
+        );
+        assert!(labels.contains(&"README.md".to_string()), "got {labels:?}");
+        assert!(labels.contains(&"src/".to_string()), "got {labels:?}");
+        assert!(!labels.iter().any(|label| label.starts_with('.')));
+        let src = result
+            .items
+            .iter()
+            .find(|item| item.label == "src/")
+            .unwrap();
+        assert!(src.is_directory);
+        assert_eq!(src.value, "@src/");
+        assert!(!result.truncated);
 
-        // Non-empty queries keep the substring walk semantics.
-        let filtered = data.file_mentions(&workspace_id, "@pack").unwrap();
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].name, "package.json");
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn file_mentions_upstream_alignment_relative_scope_and_guards() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-mention-align-{nonce}"));
+        let workspace = temp.join("workspace");
+        fs::create_dir_all(workspace.join("src/deep")).unwrap();
+        fs::write(workspace.join("package.json"), "{}").unwrap();
+        fs::write(workspace.join("src/note.md"), "x").unwrap();
+        fs::write(workspace.join("src/my file.txt"), "x").unwrap();
+        fs::write(workspace.join(".env"), "x").unwrap();
+        fs::create_dir_all(workspace.join("node_modules/pkg")).unwrap();
+        fs::write(workspace.join("node_modules/pkg/index.js"), "x").unwrap();
+        let (data, workspace_id) = test_data(&workspace);
+
+        // Guards (upstream parity): no @ prefix, absolute prefix, traversal,
+        // and NUL are invalid mention queries.
+        assert!(matches!(
+            data.search_file_mentions(&workspace_id, "pack", None),
+            Err(HostDataError::InvalidMentionQuery)
+        ));
+        assert!(matches!(
+            data.search_file_mentions(&workspace_id, "@/etc/passwd/../../x", None),
+            Err(HostDataError::InvalidMentionQuery)
+        ));
+        assert!(matches!(
+            data.search_file_mentions(&workspace_id, "@a/../b", None),
+            Err(HostDataError::InvalidMentionQuery)
+        ));
+        assert!(matches!(
+            data.search_file_mentions(&workspace_id, "@a\u{0}b", None),
+            Err(HostDataError::InvalidMentionQuery)
+        ));
+
+        // Fuzzy name match yields a RELATIVE value; the description is the
+        // visible (workspace-relative) form.
+        let result = data
+            .search_file_mentions(&workspace_id, "@pack", None)
+            .unwrap();
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].value, "@package.json");
+        assert_eq!(result.items[0].description, "package.json");
+        assert!(!result.items[0].is_directory);
+
+        // Scope split: "@src/no" only walks src/, yielding src-prefixed paths.
+        let result = data
+            .search_file_mentions(&workspace_id, "@src/no", None)
+            .unwrap();
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].value, "@src/note.md");
+        assert_eq!(result.items[0].description, "src/note.md");
+
+        // Space in path (found via scoped search) quotes the inserted token.
+        let result = data
+            .search_file_mentions(&workspace_id, "@src/my fi", None)
+            .unwrap();
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].value, "@\"src/my file.txt\"");
+        assert_eq!(result.items[0].description, "src/my file.txt");
+
+        // Unterminated opening quote is tolerated mid-typing (upstream).
+        let result = data
+            .search_file_mentions(&workspace_id, "@\"src/my fi", None)
+            .unwrap();
+        assert_eq!(result.items.len(), 1);
+
+        // Hidden entries and IGNORED directories never surface.
+        let result = data
+            .search_file_mentions(&workspace_id, "@env", None)
+            .unwrap();
+        assert!(result.items.is_empty());
+        let result = data
+            .search_file_mentions(&workspace_id, "@index", None)
+            .unwrap();
+        assert!(result.items.is_empty(), "node_modules must be skipped");
+
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn file_mentions_wide_roots_parent_absolute_and_declaration() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-mention-wide-{nonce}"));
+        let workspace = temp.join("workspace");
+        fs::create_dir_all(workspace.join("src")).unwrap();
+        fs::write(workspace.join("inside.ts"), "x").unwrap();
+        fs::write(temp.join("outside.ts"), "x").unwrap();
+        let (data, workspace_id) = test_data(&workspace);
+
+        // `@../out` searches the workspace PARENT; the inserted token keeps
+        // the ../ display prefix.
+        let result = data
+            .search_file_mentions(&workspace_id, "@../out", None)
+            .unwrap();
+        assert_eq!(result.items.len(), 1, "got {:?}", result.items);
+        assert_eq!(result.items[0].value, "@../outside.ts");
+        assert_eq!(result.items[0].description, "../outside.ts");
+
+        // Declaration must mirror the host's own parse (contract D): a
+        // mismatched value is rejected, the matching one passes.
+        assert!(matches!(
+            data.search_file_mentions(&workspace_id, "@../out", Some(("absolute", "/nope"))),
+            Err(HostDataError::InvalidMentionQuery)
+        ));
+        // Declaration mirrors the host parse: climb from the CANONICAL
+        // registered root (macOS: /var → /private/var), forward slashes.
+        let canonical_workspace = workspace
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let parent_declared = canonical_workspace
+            .rsplit_once('/')
+            .map(|(parent, _)| parent.to_string())
+            .unwrap_or_else(|| "/".to_string());
+        assert!(data
+            .search_file_mentions(
+                &workspace_id,
+                "@../out",
+                Some(("absolute", parent_declared.as_str()))
+            )
+            .is_ok());
+
+        // A missing declaration is fine for direct calls (host_server
+        // enforces presence), but POSIX `@/` now resolves the fs root and
+        // mid-word traversal inside the scope stays illegal.
+        #[cfg(not(target_os = "windows"))]
+        {
+            let result = data
+                .search_file_mentions(&workspace_id, "@/etc/host", None)
+                .unwrap();
+            assert!(
+                result.items.iter().any(|item| item.value.contains("hosts")),
+                "got {:?}",
+                result.items
+            );
+        }
+
+        // `@../..` multi-level is legal; mid-word `..` after the prefix is not.
+        assert!(data
+            .search_file_mentions(&workspace_id, "@../../x", None)
+            .is_ok());
+        assert!(matches!(
+            data.search_file_mentions(&workspace_id, "@../ok/../bad", None),
+            Err(HostDataError::InvalidMentionQuery)
+        ));
 
         fs::remove_dir_all(temp).unwrap();
     }

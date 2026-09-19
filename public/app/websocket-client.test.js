@@ -421,6 +421,45 @@ describe("WebSocketClient broker routing", () => {
     expect(client.send({ type: "prompt", message: "later" })).toBeNull();
   });
 
+  test("sendRuntimeWithId exposes the requestId beside the correlated response", async () => {
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
+    const sent = [];
+    client.setRoutingContext({
+      workspaceId: "workspace-a",
+      sessionId: "session-a",
+      instanceId: "47821",
+    });
+    client.ws = { readyState: WebSocket.OPEN, send: (m) => sent.push(JSON.parse(m)) };
+
+    const { requestId, response } = client.sendRuntimeWithId({ type: "prompt", message: "hi" });
+    expect(requestId).toBe("req-1");
+    expect(sent[0]).toMatchObject({
+      type: "runtime_request",
+      requestId: "req-1",
+      command: { type: "prompt", message: "hi" },
+    });
+
+    client.handleMessage({
+      type: "runtime_response",
+      requestId: "req-1",
+      response: { success: true },
+    });
+    await expect(response).resolves.toEqual({ success: true });
+  });
+
+  test("sendRuntimeWithId rejects the response promise on failure replies", async () => {
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
+    client.ws = { readyState: WebSocket.OPEN, send: () => {} };
+    const { requestId, response } = client.sendRuntimeWithId({ type: "prompt", message: "hi" });
+
+    client.handleMessage({
+      type: "runtime_response",
+      requestId,
+      response: { success: false, error: "no active run" },
+    });
+    await expect(response).resolves.toMatchObject({ success: false, error: "no active run" });
+  });
+
   test("structured runtime errors reject pending requests", async () => {
     const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
     client.ws = { readyState: WebSocket.OPEN, send: () => {} };

@@ -125,17 +125,17 @@
     "removeScoped": "スコープ済みモデルから削除"
   },
   "queue": {
-    "queued": "キュー中",
-    "cancelTitle": "キャンセル",
     "steering": "誘導",
-    "followUp": "フォローアップ"
+    "followUp": "フォローアップ",
+    "clearQueue": "キューを削除",
+    "unconfirmedSend": "送信未確認 — クリックで復元"
   },
   "input": {
     "typeMessage": "メッセージ… / でコマンド、@ でファイルを入力",
     "attachImage": "画像を添付",
     "commands": "コマンド",
     "switchModel": "モデルを切り替え",
-    "send": "メッセージを送信",
+    "send": "今すぐメッセージを送信",
     "abort": "中止 (Esc)",
     "messagePlaceholder": "メッセージ… / でコマンド、@ でファイルを入力",
     "mirrorReadOnly": "履歴セッションを表示中（読み取り専用）",
@@ -153,7 +153,8 @@
     "pasteDetected": "貼り付けたテキスト（{size}）",
     "pasteAsFile": "ファイルとして添付",
     "keepInline": "インラインを維持",
-    "pasteOffloadFailed": "貼り付けたテキストを保存できませんでした"
+    "pasteOffloadFailed": "貼り付けたテキストを保存できませんでした",
+    "typeMessageFollowUpHint": "、実行中は ⌥/Alt+Enter でキュー"
   },
   "tools": {
     "copyOutput": "出力をコピー",
@@ -255,7 +256,9 @@
     "customAnswerPlaceholder": "入力してください。"
   },
   "todoMirror": {
-    "title": { "todos": "Todos" },
+    "title": {
+      "todos": "Todos"
+    },
     "showAll": "残り {count} 件を表示",
     "collapse": "折りたたむ",
     "clear": "クリア",
@@ -443,10 +446,22 @@
     "processToolCalls": "{count} ツール呼び出し",
     "scrollToBottom": "最新のメッセージまでスクロール",
     "turnFiles": "このターンで変更されたファイル（{count}）：",
+    "turnFilesAdded": "追加",
+    "turnFilesModified": "変更",
+    "turnFilesUntracked": "未追跡",
+    "turnFilesUnavailable": "統計は利用できません",
+    "turnFilesAtLeast": "+≥{count}",
+    "turnFilesCaliber": "統計は HEAD からの作業ツリー累計のため、未コミットの変更も含みます。コミット済みの変更は数値を表示しません。",
+    "turnFilesHistoryNote": "履歴には統計が含まれません。",
     "expand": "展開",
     "collapse": "折りたたむ",
     "forkSession": "セッションをフォーク",
-    "editMessage": "メッセージを編集"
+    "editMessage": "メッセージを編集",
+    "turnWorking": "エージェント実行中",
+    "turnWorkedFor": "所要時間 {duration}",
+    "conversationNavigator": "会話ナビゲーター",
+    "loadOlderHistory": "過去の履歴を読み込む",
+    "loadAllHistory": "すべての履歴を読み込む"
   },
   "onboarding": {
     "openProject": "チャットを始めるためにプロジェクトを開いてください。",
@@ -1074,11 +1089,12 @@
     "statusDisconnected": "切断済み"
   },
   "fileMention": {
-    "listLabel": "ファイル"
+    "listLabel": "ファイル",
+    "invalidQuery": "無効なメンションパスです",
+    "rootUnavailable": "検索先に到達できません"
   },
   "slashCommands": {
-    "listLabel": "コマンド",
-    "emptyLabel": "一致するコマンドがありません"
+    "listLabel": "コマンド"
   },
   "workspace": {
     "focus": "フォーカスモードに入る",
@@ -1128,5 +1144,10 @@
     "qrAlt": "モバイルアクセス用QRコード",
     "hint": "スマートフォンでスキャンして同じネットワーク上でPicotを開く",
     "openLink": "リンクを開く"
+  },
+  "composer": {
+    "splitSend": {
+      "caretTitle": "遅延送信"
+    }
   }
 }

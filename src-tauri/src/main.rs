@@ -1705,6 +1705,28 @@ async fn dispatch_git_host_operation(
         Value::Null
     };
     match operation {
+        // Turn files card (2026-09-19 spec): per-file working-tree stats for
+        // the files a turn wrote. Request/response (unlike the snapshot-based
+        // git_status/git_diff events); errors bubble as a failed host op so
+        // the WebView degrades to a stats-free card.
+        "git_turn_stats" => {
+            let paths = args
+                .get("paths")
+                .and_then(Value::as_array)
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect::<Vec<_>>()
+                })
+                .ok_or("git_turn_stats requires a paths array")?;
+            match git_service::turn_stats(&root, &paths) {
+                Ok(stats) => Ok(serde_json::json!({
+                    "files": stats.files,
+                    "dropped": stats.dropped,
+                })),
+                Err(error) => Err(error),
+            }
+        }
         "git_status" => match service.status(owner.as_str(), &root, generation) {
             Ok(snapshot) => {
                 emit(serde_json::json!({

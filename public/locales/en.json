@@ -125,17 +125,17 @@
     "removeScoped": "Remove from scoped models"
   },
   "queue": {
-    "queued": "Queued",
-    "cancelTitle": "Cancel",
     "steering": "Steer",
-    "followUp": "Follow-up"
+    "followUp": "Follow-up",
+    "clearQueue": "Clear queue",
+    "unconfirmedSend": "Send not confirmed — click to restore"
   },
   "input": {
     "typeMessage": "Message… Type / for commands, @ for files",
     "attachImage": "Attach image",
     "commands": "Commands",
     "switchModel": "Switch model",
-    "send": "Send message",
+    "send": "Send message now",
     "abort": "Abort (Esc)",
     "messagePlaceholder": "Message...",
     "mirrorReadOnly": "Viewing historical session (read-only)",
@@ -153,7 +153,8 @@
     "pasteDetected": "Pasted text ({size})",
     "pasteAsFile": "Attach as file",
     "keepInline": "Keep inline",
-    "pasteOffloadFailed": "Could not save pasted text"
+    "pasteOffloadFailed": "Could not save pasted text",
+    "typeMessageFollowUpHint": ", ⌥/Alt+Enter queues while running"
   },
   "tools": {
     "copyOutput": "Copy output",
@@ -255,7 +256,9 @@
     "customAnswerPlaceholder": "Type something."
   },
   "todoMirror": {
-    "title": { "todos": "Todos" },
+    "title": {
+      "todos": "Todos"
+    },
     "showAll": "Show all {count} more",
     "collapse": "Collapse",
     "clear": "Clear",
@@ -443,10 +446,22 @@
     "processToolCall": "{count} tool call",
     "processToolCalls": "{count} tool calls",
     "turnFiles": "Files changed this turn ({count}):",
+    "turnFilesAdded": "Added",
+    "turnFilesModified": "Modified",
+    "turnFilesUntracked": "Untracked",
+    "turnFilesUnavailable": "Stats unavailable",
+    "turnFilesAtLeast": "+≥{count}",
+    "turnFilesCaliber": "Stats are the workspace total against HEAD, so they include your own uncommitted changes; files committed since the turn show no numbers.",
+    "turnFilesHistoryNote": "Rebuilt history does not carry stats.",
     "expand": "Expand",
     "collapse": "Collapse",
     "forkSession": "Fork session",
-    "editMessage": "Edit message"
+    "editMessage": "Edit message",
+    "turnWorking": "Agent working",
+    "turnWorkedFor": "Worked for {duration}",
+    "conversationNavigator": "Conversation navigator",
+    "loadOlderHistory": "Load older history",
+    "loadAllHistory": "Load all history"
   },
   "onboarding": {
     "openProject": "Open a project to start chatting.",
@@ -1075,11 +1090,12 @@
     "statusDisconnected": "Disconnected"
   },
   "fileMention": {
-    "listLabel": "Files"
+    "listLabel": "Files",
+    "invalidQuery": "Invalid mention path",
+    "rootUnavailable": "Search location is unavailable"
   },
   "slashCommands": {
-    "listLabel": "Commands",
-    "emptyLabel": "No matching commands"
+    "listLabel": "Commands"
   },
   "workspace": {
     "focus": "Enter focus mode",
@@ -1129,5 +1145,10 @@
     "qrAlt": "QR code for mobile access",
     "hint": "Scan with your phone to open Picot on the same network",
     "openLink": "Open Link"
+  },
+  "composer": {
+    "splitSend": {
+      "caretTitle": "Delayed send"
+    }
   }
 }

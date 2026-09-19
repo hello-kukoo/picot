@@ -1,23 +1,18 @@
 // ABOUTME: Slash-trigger completion menu listing expansion-type commands (prompts + skills).
 // ABOUTME: Selection inserts `/name `; Pi expands the command natively on send.
-
+// Router-driven: the composer trigger router owns the listeners and calls
+// update(trigger)/handleKeydown(event); the menu opens only when the resolved
+// query has at least one candidate (C2 — an unresolvable query stays prose).
 import { t } from "../i18n.js";
 import { createIcon } from "../icons.js";
+import { resolveActiveTrigger } from "./composer-triggers.js";
 
 function titleCaseSkillName(name) {
-  return name
+  return String(name)
     .split(/[-_]/)
     .filter(Boolean)
     .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
     .join(" ");
-}
-
-function activeSlashQuery(input) {
-  const cursor = input.selectionStart ?? input.value.length;
-  const beforeCursor = input.value.slice(0, cursor);
-  const match = beforeCursor.match(/^\/([^\s/]*)$/);
-  if (!match) return null;
-  return { query: match[1].toLowerCase(), end: cursor };
 }
 
 function scopeLabel(scope) {
@@ -37,6 +32,9 @@ export function setupSkillSlashCommand({ input, container, loadSkills }) {
   let selectedIndex = 0;
   let open = false;
   let updateGeneration = 0;
+  // The token span the menu is currently anchored to (start/end are indices
+  // into the composer value; select() replaces exactly this span).
+  let activeToken = null;
 
   container.setAttribute("role", "listbox");
   container.setAttribute("aria-label", t("slashCommands.listLabel"));
@@ -46,6 +44,7 @@ export function setupSkillSlashCommand({ input, container, loadSkills }) {
     open = false;
     matches = [];
     selectedIndex = 0;
+    activeToken = null;
     container.classList.add("hidden");
     container.replaceChildren();
     input.removeAttribute("aria-activedescendant");
@@ -53,13 +52,13 @@ export function setupSkillSlashCommand({ input, container, loadSkills }) {
   }
 
   function select(index) {
-    const skill = matches[index];
-    const slash = activeSlashQuery(input);
-    if (!skill || !slash) return;
-    const suffix = input.value.slice(slash.end);
-    const nextValue = `${skill.command} ${suffix}`;
-    input.value = nextValue;
-    input.setSelectionRange(skill.command.length + 1, skill.command.length + 1);
+    const entry = matches[index];
+    if (!entry || !activeToken) return;
+    const before = input.value.slice(0, activeToken.start);
+    const after = input.value.slice(activeToken.end);
+    input.value = `${before}${entry.command} ${after}`;
+    const caret = activeToken.start + entry.command.length + 1;
+    input.setSelectionRange(caret, caret);
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.focus();
     close();
@@ -78,68 +77,55 @@ export function setupSkillSlashCommand({ input, container, loadSkills }) {
     }
   }
 
-  function render() {
-    const slash = activeSlashQuery(input);
-    if (!slash) {
+  function render(token) {
+    const query = token.query || "";
+    matches = skills.filter((entry) => {
+      if (!query) return true;
+      return (
+        entry.name.toLowerCase().includes(query.toLowerCase()) ||
+        entry.command.toLowerCase().includes(query.toLowerCase()) ||
+        entry.description.toLowerCase().includes(query.toLowerCase())
+      );
+    });
+    if (matches.length === 0) {
+      // C2: an unresolvable query is plain prose; no menu, no empty state.
       close();
       return;
     }
-
-    matches = skills.filter((skill) => {
-      if (!slash.query) return true;
-      return (
-        skill.name.toLowerCase().includes(slash.query) ||
-        skill.command.toLowerCase().includes(slash.query) ||
-        skill.description.toLowerCase().includes(slash.query)
-      );
-    });
-    selectedIndex = Math.min(selectedIndex, Math.max(matches.length - 1, 0));
+    selectedIndex = Math.min(selectedIndex, matches.length - 1);
 
     container.replaceChildren();
-    container.setAttribute("aria-label", t("slashCommands.listLabel"));
-    const heading = document.createElement("div");
-    heading.className = "skill-slash-heading";
-    heading.textContent = t("slashCommands.listLabel");
-    container.appendChild(heading);
-
-    if (matches.length === 0) {
-      const empty = document.createElement("div");
-      empty.className = "skill-slash-empty";
-      empty.textContent = t("slashCommands.emptyLabel");
-      container.appendChild(empty);
-    } else {
-      matches.forEach((skill, index) => {
-        const option = document.createElement("button");
-        option.type = "button";
-        option.id = `skill-slash-option-${index}`;
-        option.className = "skill-slash-option";
-        option.dataset.kind = skill.kind || "skill";
-        option.classList.toggle("selected", index === selectedIndex);
-        option.setAttribute("role", "option");
-        option.setAttribute("aria-selected", String(index === selectedIndex));
-        const icon = document.createElement("span");
-        icon.className = "skill-slash-icon";
-        const iconSvg = kindIcon(skill.kind, document);
-        if (iconSvg) icon.appendChild(iconSvg);
-        const name = document.createElement("span");
-        name.className = "skill-slash-name";
-        name.textContent = titleCaseSkillName(skill.name);
-        const description = document.createElement("span");
-        description.className = "skill-slash-description";
-        description.textContent = skill.description;
-        const scope = document.createElement("span");
-        scope.className = "skill-slash-scope";
-        scope.textContent = scopeLabel(skill.scope);
-        option.append(icon, name, description, scope);
-        option.addEventListener("mouseenter", () => {
-          selectedIndex = index;
-          updateSelection();
-        });
-        option.addEventListener("mousedown", (event) => event.preventDefault());
-        option.addEventListener("click", () => select(index));
-        container.appendChild(option);
+    matches.forEach((entry, index) => {
+      const option = document.createElement("button");
+      option.type = "button";
+      option.id = `skill-slash-option-${index}`;
+      option.className = "skill-slash-option";
+      option.dataset.kind = entry.kind || "skill";
+      option.classList.toggle("selected", index === selectedIndex);
+      option.setAttribute("role", "option");
+      option.setAttribute("aria-selected", String(index === selectedIndex));
+      const icon = document.createElement("span");
+      icon.className = "skill-slash-icon";
+      const iconSvg = kindIcon(entry.kind, document);
+      if (iconSvg) icon.appendChild(iconSvg);
+      const name = document.createElement("span");
+      name.className = "skill-slash-name";
+      name.textContent = titleCaseSkillName(entry.name);
+      const description = document.createElement("span");
+      description.className = "skill-slash-description";
+      description.textContent = entry.description;
+      const scope = document.createElement("span");
+      scope.className = "skill-slash-scope";
+      scope.textContent = scopeLabel(entry.scope);
+      option.append(icon, name, description, scope);
+      option.addEventListener("mouseenter", () => {
+        selectedIndex = index;
+        updateSelection();
       });
-    }
+      option.addEventListener("mousedown", (event) => event.preventDefault());
+      option.addEventListener("click", () => select(index));
+      container.appendChild(option);
+    });
 
     open = true;
     container.classList.remove("hidden");
@@ -168,49 +154,71 @@ export function setupSkillSlashCommand({ input, container, loadSkills }) {
     }
   }
 
-  async function update() {
+  function slashTokenFromInput() {
+    const trigger = resolveActiveTrigger(input.value, input.selectionStart ?? input.value.length);
+    return trigger?.kind === "slash" ? trigger : null;
+  }
+
+  // Router contract: update(trigger) with a resolved trigger object. A bare
+  // update() re-resolves from the input (kept for direct tests).
+  async function update(trigger) {
     const generation = ++updateGeneration;
-    if (!activeSlashQuery(input)) {
+    const token = trigger && trigger.kind === "slash" ? { ...trigger } : slashTokenFromInput();
+    if (!token) {
       close();
       return;
     }
+    activeToken = { start: token.start, end: token.end };
     const loaded = await ensureSkills();
-    if (loaded && generation === updateGeneration && activeSlashQuery(input)) render();
+    if (!loaded || generation !== updateGeneration) return;
+    // Stale-query guard (C2): the query may have changed (or emptied) while
+    // the catalog was loading — re-resolve and render only what is still live.
+    const current = slashTokenFromInput();
+    if (!current) {
+      close();
+      return;
+    }
+    activeToken = { start: current.start, end: current.end };
+    if (generation === updateGeneration) render(current);
   }
 
-  input.setAttribute("aria-autocomplete", "list");
-  input.setAttribute("aria-controls", container.id);
-  input.setAttribute("aria-expanded", "false");
-  input.addEventListener("input", update);
-  input.addEventListener("click", update);
-  input.addEventListener("keydown", (event) => {
-    const isImeComposing = event.isComposing;
-    if (isImeComposing) return;
-    if (event.key === "Escape" && (open || activeSlashQuery(input))) {
+  /**
+   * Consume a keydown while the menu is open (router only calls this when
+   * isOpen() reports true). Returns true when the key was consumed.
+   */
+  function handleKeydown(event) {
+    if (event.isComposing) return false;
+    if (!open) return false;
+    if (event.key === "Escape") {
       event.preventDefault();
       event.stopImmediatePropagation();
       close();
-      return;
+      return true;
     }
-    if (!open) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       event.stopImmediatePropagation();
-      if (matches.length === 0) return;
+      if (matches.length === 0) return true;
       const delta = event.key === "ArrowDown" ? 1 : -1;
       selectedIndex = (selectedIndex + delta + matches.length) % matches.length;
       updateSelection();
-      return;
+      return true;
     }
     if ((event.key === "Enter" || event.key === "Tab") && matches.length > 0) {
       event.preventDefault();
       event.stopImmediatePropagation();
       select(selectedIndex);
+      return true;
     }
-  });
+    return false;
+  }
+
+  input.setAttribute("aria-autocomplete", "list");
+  input.setAttribute("aria-controls", container.id);
+  input.setAttribute("aria-expanded", "false");
   input.addEventListener("blur", () => queueMicrotask(close));
 
-  return { close, update };
+  return { close, update, isOpen: () => open, handleKeydown };
 }
 
-export { activeSlashQuery, titleCaseSkillName };
+export { titleCaseSkillName };

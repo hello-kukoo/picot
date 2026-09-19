@@ -16,7 +16,7 @@
   background: transparent;
   cursor: pointer;
   user-select: none;
-  font-size: var(--font-size-sm);
+  font-size: var(--text-ui-label);
   color: var(--text-dim);
 }
 

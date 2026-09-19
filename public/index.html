@@ -530,6 +530,7 @@
               class="conv-nav hidden"
               id="conv-nav"
               aria-label="Conversation navigator"
+              data-i18n-aria-label="messages.conversationNavigator"
             >
               <div class="conv-nav-track" id="conv-nav-track"></div>
             </nav>
@@ -676,6 +677,16 @@
                         id="send-btn"
                         title="Send message"
                         data-i18n-title="input.send"
+                        tabindex="-1"
+                      ></button>
+                      <button
+                        type="button"
+                        id="send-caret-btn"
+                        class="send-caret-btn"
+                        title="Delayed send"
+                        aria-label="Delayed send"
+                        data-i18n-title="composer.splitSend.caretTitle"
+                        data-i18n-aria-label="composer.splitSend.caretTitle"
                         tabindex="-1"
                       ></button>
                       <button

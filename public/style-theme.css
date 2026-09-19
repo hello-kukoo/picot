@@ -8,6 +8,14 @@
   --font-size-xl: 20px;
   --font-size-2xl: 24px;
 
+  /* Semantic type roles (spec P4): mapped onto the existing scale — no new
+     scale, no colour change (D4: no themes added). Runtime-derived values
+     (--text-markdown, --text-code) are written by applyAppearanceToDom. */
+  --text-markdown: var(--chat-font-size, var(--font-size-lg));
+  --text-code: var(--font-size-md);
+  --text-meta: var(--font-size-sm);
+  --text-ui-label: var(--font-size-sm);
+
   /* Spacing — 4px base scale with compact desktop increments */
   --space-0: 0;
   --space-0-5: 2px;

@@ -421,6 +421,43 @@ export class WebSocketClient extends EventTarget {
     );
   }
 
+  // Runtime command whose correlated reply drives the composer's delivery
+  // record: exposes the generated requestId together with the response
+  // promise so prompt acceptance/rejection can be tracked per send.
+  sendRuntimeWithId(command, targetOrOptions = null, options = {}) {
+    const requestId = `req-${++this.requestCounter}`;
+    const response = this._sendRequestFixedId(
+      requestId,
+      () => {
+        const hasExplicitTarget =
+          targetOrOptions &&
+          typeof targetOrOptions === "object" &&
+          "workspaceId" in targetOrOptions &&
+          "sessionId" in targetOrOptions &&
+          "instanceId" in targetOrOptions;
+        const target = hasExplicitTarget ? targetOrOptions : this._wireTarget();
+        const requestOptions = hasExplicitTarget ? options : (targetOrOptions ?? {});
+        const { timeoutMs, idempotencyKey } = requestOptions;
+        return {
+          type: "runtime_request",
+          protocolVersion: 2,
+          requestId,
+          target,
+          command,
+          idempotencyKey: idempotencyKey || `ui-${requestId}`,
+        };
+      },
+      {
+        label: `Runtime command "${command?.type || "unknown"}"`,
+        timeoutMs: options.timeoutMs,
+        // No unwrap: the delivery record needs the raw `{ success, ... }`
+        // envelope, not Pi's inner data payload.
+        rejectOnFailure: false,
+      },
+    );
+    return { requestId, response };
+  }
+
   // Runtime command with a correlated `runtime_response`. A caller may bind
   // the request to a prepared target so a same-workspace session adoption
   // cannot race with another routing-context change.
@@ -454,14 +491,22 @@ export class WebSocketClient extends EventTarget {
     );
   }
 
-  _sendRequest(envelopeFor, { label, timeoutMs, unwrap, rejectOnFailure = false }) {
+  _sendRequest(envelopeFor, options) {
+    const requestId = `req-${++this.requestCounter}`;
+    return this._sendRequestFixedId(requestId, () => envelopeFor(requestId), options);
+  }
+
+  _sendRequestFixedId(
+    requestId,
+    envelopeFor,
+    { label, timeoutMs, unwrap, rejectOnFailure = false },
+  ) {
     const deliver = () =>
       new Promise((resolve, reject) => {
         if (!this.ws || this.ws.readyState !== WS_OPEN) {
           reject(new Error(`WebSocket not connected; cannot send ${label}`));
           return;
         }
-        const requestId = `req-${++this.requestCounter}`;
         const effectiveTimeout = typeof timeoutMs === "number" ? timeoutMs : this.controlTimeoutMs;
         const entry = {
           resolve: (payload) => {

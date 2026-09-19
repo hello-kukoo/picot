@@ -164,9 +164,26 @@ export function setupComposerImageAttachments(opts) {
     return out;
   }
 
+  // Remove exact pending-image objects (identity match). Delivery acceptance
+  // consumes only the attachments captured at dispatch time; anything attached
+  // afterwards stays pending.
+  function removePendingImages(targets) {
+    if (!Array.isArray(targets) || targets.length === 0) return;
+    pendingImages = pendingImages.filter((img) => !targets.includes(img));
+    renderPreviews();
+  }
+
+  // Replace the whole pending set (session switch restores a stashed set).
+  function replacePendingImages(images) {
+    pendingImages = Array.isArray(images) ? [...images] : [];
+    renderPreviews();
+  }
+
   return {
     getPendingImages: () => pendingImages,
     consumePendingImages,
+    removePendingImages,
+    replacePendingImages,
     renderPreviews,
     destroy: () => {
       attachBtn.removeEventListener("click", onAttachClick);

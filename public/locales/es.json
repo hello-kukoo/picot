@@ -125,17 +125,17 @@
     "removeScoped": "Quitar de los modelos con alcance"
   },
   "queue": {
-    "queued": "En cola",
-    "cancelTitle": "Cancelar",
     "steering": "Dirigir",
-    "followUp": "Seguimiento"
+    "followUp": "Seguimiento",
+    "clearQueue": "Vaciar cola",
+    "unconfirmedSend": "Envío sin confirmar — clic para restaurar"
   },
   "input": {
     "typeMessage": "Mensaje… Escribe / para comandos, @ para archivos",
     "attachImage": "Adjuntar imagen",
     "commands": "Comandos",
     "switchModel": "Cambiar modelo",
-    "send": "Enviar mensaje",
+    "send": "Enviar mensaje ahora",
     "abort": "Cancelar (Esc)",
     "messagePlaceholder": "Mensaje… Escribe / para comandos, @ para archivos",
     "mirrorReadOnly": "Viendo sesión histórica (solo lectura)",
@@ -153,7 +153,8 @@
     "pasteDetected": "Texto pegado ({size})",
     "pasteAsFile": "Adjuntar como archivo",
     "keepInline": "Mantener en línea",
-    "pasteOffloadFailed": "No se pudo guardar el texto pegado"
+    "pasteOffloadFailed": "No se pudo guardar el texto pegado",
+    "typeMessageFollowUpHint": ", ⌥/Alt+Enter encola durante la ejecución"
   },
   "tools": {
     "copyOutput": "Copiar salida",
@@ -255,7 +256,9 @@
     "customAnswerPlaceholder": "Escribe algo."
   },
   "todoMirror": {
-    "title": { "todos": "Tareas" },
+    "title": {
+      "todos": "Tareas"
+    },
     "showAll": "Mostrar {count} más",
     "collapse": "Contraer",
     "clear": "Borrar",
@@ -443,10 +446,22 @@
     "processToolCalls": "{count} llamadas a herramientas",
     "scrollToBottom": "Desplazarse al último mensaje",
     "turnFiles": "Archivos modificados en este turno ({count}):",
+    "turnFilesAdded": "Añadido",
+    "turnFilesModified": "Modif.",
+    "turnFilesUntracked": "Sin seguimiento",
+    "turnFilesUnavailable": "Estadísticas no disponibles",
+    "turnFilesAtLeast": "+≥{count}",
+    "turnFilesCaliber": "Las estadísticas son el total del árbol de trabajo frente a HEAD, así que incluyen tus cambios sin confirmar; los archivos ya confirmados no muestran cifras.",
+    "turnFilesHistoryNote": "El historial reconstruido no incluye estadísticas.",
     "expand": "Expandir",
     "collapse": "Contraer",
     "forkSession": "Bifurcar sesión",
-    "editMessage": "Editar mensaje"
+    "editMessage": "Editar mensaje",
+    "turnWorking": "Agente trabajando",
+    "turnWorkedFor": "Trabajó durante {duration}",
+    "conversationNavigator": "Navegador de conversaciones",
+    "loadOlderHistory": "Cargar historial anterior",
+    "loadAllHistory": "Cargar todo el historial"
   },
   "onboarding": {
     "openProject": "Abre un proyecto para comenzar a chatear.",
@@ -1074,11 +1089,12 @@
     "statusDisconnected": "Desconectado"
   },
   "fileMention": {
-    "listLabel": "Archivos"
+    "listLabel": "Archivos",
+    "invalidQuery": "Ruta de mención no válida",
+    "rootUnavailable": "La ubicación de búsqueda no está disponible"
   },
   "slashCommands": {
-    "listLabel": "Comandos",
-    "emptyLabel": "Sin comandos coincidentes"
+    "listLabel": "Comandos"
   },
   "workspace": {
     "focus": "Entrar en modo de enfoque",
@@ -1128,5 +1144,10 @@
     "qrAlt": "Código QR para acceso móvil",
     "hint": "Escanea con tu teléfono para abrir Picot en la misma red",
     "openLink": "Abrir enlace"
+  },
+  "composer": {
+    "splitSend": {
+      "caretTitle": "Envío diferido"
+    }
   }
 }

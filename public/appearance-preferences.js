@@ -13,6 +13,12 @@ export const FONT_SIZE_LEVELS = ["small", "normal", "medium", "large", "xlarge"]
 export const DEFAULT_FONT_SIZE_LEVEL = "normal";
 
 export const CHAT_FONT_SIZE_PX = { small: 14, normal: 16, medium: 18, large: 20, xlarge: 22 };
+/**
+ * Code-role sizes (spec P4/D5): derived from the chat level — one step below
+ * the chat size, floored at 12px. No separate Appearance knob; the role token
+ * makes one a one-line change later.
+ */
+export const CODE_FONT_SIZE_PX = { small: 12, normal: 14, medium: 16, large: 18, xlarge: 20 };
 export const PREVIEW_FONT_SIZE_PX = { small: 11, normal: 13, medium: 15, large: 17, xlarge: 19 };
 export const TERMINAL_FONT_SIZE_PX = { small: 12, normal: 15, medium: 18, large: 22, xlarge: 26 };
 
@@ -171,10 +177,11 @@ export function applyAppearanceToDom({
   picotThemeIsDark,
 }) {
   const root = document.documentElement;
-  root.style.setProperty(
-    "--chat-font-size",
-    `${CHAT_FONT_SIZE_PX[normalizeFontLevel(chatFontSize)]}px`,
-  );
+  const chatLevel = normalizeFontLevel(chatFontSize);
+  root.style.setProperty("--chat-font-size", `${CHAT_FONT_SIZE_PX[chatLevel]}px`);
+  // Semantic type roles (spec P4): the derived roles ride the same write.
+  root.style.setProperty("--text-markdown", `${CHAT_FONT_SIZE_PX[chatLevel]}px`);
+  root.style.setProperty("--text-code", `${CODE_FONT_SIZE_PX[chatLevel]}px`);
   root.style.setProperty(
     "--preview-font-size",
     `${PREVIEW_FONT_SIZE_PX[normalizeFontLevel(previewFontSize)]}px`,

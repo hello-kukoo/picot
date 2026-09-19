@@ -1,13 +1,34 @@
 import { JSDOM } from "jsdom";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { t } from "../i18n.js";
-import {
-  activeSlashQuery,
-  setupSkillSlashCommand,
-  titleCaseSkillName,
-} from "./skill-slash-command.js";
+import { createTriggerRouter } from "./composer-triggers.js";
+import { setupSkillSlashCommand, titleCaseSkillName } from "./skill-slash-command.js";
 
-describe("skill slash command", () => {
+const SKILLS = [
+  {
+    command: "/skill:code-review",
+    name: "code-review",
+    description: "Review a diff",
+    scope: "personal",
+    kind: "skill",
+  },
+  {
+    command: "/skill:research",
+    name: "research",
+    description: "Investigate primary sources",
+    scope: "project",
+    kind: "skill",
+  },
+  {
+    command: "/review",
+    name: "review",
+    description: "Review staged git changes",
+    scope: "project",
+    kind: "prompt",
+  },
+];
+
+describe("skill slash command (router-driven)", () => {
   let dom;
   let input;
   let container;
@@ -35,38 +56,24 @@ describe("skill slash command", () => {
     delete globalThis.queueMicrotask;
   });
 
-  test("recognizes a slash query only at the start of the composer", () => {
-    input.value = "/code";
-    input.setSelectionRange(5, 5);
-    expect(activeSlashQuery(input)).toEqual({ query: "code", end: 5 });
+  function makePicker(loadSkills = async () => SKILLS) {
+    return setupSkillSlashCommand({ input, container, loadSkills });
+  }
 
-    input.value = "please /code";
-    input.setSelectionRange(input.value.length, input.value.length);
-    expect(activeSlashQuery(input)).toBeNull();
-  });
-
-  test("renders and filters skills by name or description", async () => {
-    const picker = setupSkillSlashCommand({
+  function mountRouter(picker) {
+    return createTriggerRouter({
       input,
-      container,
-      loadSkills: vi.fn(async () => [
-        {
-          command: "/skill:code-review",
-          name: "code-review",
-          description: "Review a diff",
-          scope: "personal",
-        },
-        {
-          command: "/skill:research",
-          name: "research",
-          description: "Investigate primary sources",
-          scope: "project",
-        },
-      ]),
+      pickers: [{ kind: "slash", ...picker }],
     });
+  }
 
-    input.value = "/diff";
-    input.setSelectionRange(5, 5);
+  const keydown = (opts) =>
+    input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { cancelable: true, ...opts }));
+
+  test("opens for a slash token mid-prompt after whitespace (D3 rule)", async () => {
+    const picker = makePicker();
+    input.value = "please /diff";
+    input.setSelectionRange(12, 12);
     await picker.update();
 
     expect(container.classList.contains("hidden")).toBe(false);
@@ -75,92 +82,137 @@ describe("skill slash command", () => {
     expect(container.textContent).toContain("Personal");
   });
 
-  test("supports keyboard selection and inserts the native Pi command", async () => {
-    const send = vi.fn();
-    const picker = setupSkillSlashCommand({
-      input,
-      container,
-      loadSkills: async () => [
-        {
-          command: "/skill:code-review",
-          name: "code-review",
-          description: "Review a diff",
-          scope: "personal",
-        },
-        {
-          command: "/skill:research",
-          name: "research",
-          description: "Investigate primary sources",
-          scope: "project",
-        },
-      ],
-    });
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") send();
-    });
-
-    input.value = "/";
-    input.setSelectionRange(1, 1);
+  test("whole-input slash still opens and filters", async () => {
+    const picker = makePicker();
+    input.value = "/skill:res";
+    input.setSelectionRange(input.value.length, input.value.length);
     await picker.update();
-    input.dispatchEvent(
-      new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", cancelable: true }),
-    );
-    input.dispatchEvent(
-      new dom.window.KeyboardEvent("keydown", { key: "Enter", cancelable: true }),
-    );
 
-    expect(input.value).toBe("/skill:research ");
+    expect(container.querySelectorAll(".skill-slash-option")).toHaveLength(1);
+    expect(container.textContent).toContain("Research");
+  });
+
+  test("renders prompt templates alongside skills with kind markers", async () => {
+    const picker = makePicker();
+    input.value = "/review";
+    input.setSelectionRange(input.value.length, input.value.length);
+    await picker.update();
+
+    const options = container.querySelectorAll(".skill-slash-option");
+    expect(options).toHaveLength(2);
+    expect(options[0].dataset.kind).toBe("skill");
+    expect(options[1].dataset.kind).toBe("prompt");
+    // Visual distinction rides on the icon: file-text renders 5 paths, box 3.
+    expect(options[0].querySelectorAll(".skill-slash-icon path")).toHaveLength(3);
+    expect(options[1].querySelectorAll(".skill-slash-icon path")).toHaveLength(5);
+  });
+
+  test("C2: an unresolvable query opens nothing and renders no empty state", async () => {
+    const picker = makePicker();
+    input.value = "/zzz-nomatch";
+    input.setSelectionRange(input.value.length, input.value.length);
+    await picker.update();
+
+    expect(container.classList.contains("hidden")).toBe(true);
+    expect(container.children).toHaveLength(0);
+    // The heading and "No matching skills" empty state are dead UI (C2).
+    expect(container.querySelector(".skill-slash-heading")).toBeNull();
+    expect(container.querySelector(".skill-slash-empty")).toBeNull();
+  });
+
+  test("C2: a query that narrows to zero matches closes an open menu", async () => {
+    const picker = makePicker();
+    input.value = "/re";
+    input.setSelectionRange(3, 3);
+    await picker.update();
+    expect(container.classList.contains("hidden")).toBe(false);
+
+    input.value = "/rezzz";
+    input.setSelectionRange(6, 6);
+    await picker.update();
+    expect(container.classList.contains("hidden")).toBe(true);
+  });
+
+  test("C2: a slow catalog load does not reopen for a stale or emptied query", async () => {
+    let resolveSkills;
+    const picker = makePicker(
+      () =>
+        new Promise((resolve) => {
+          resolveSkills = resolve;
+        }),
+    );
+    input.value = "/re";
+    input.setSelectionRange(3, 3);
+    const pending = picker.update();
+    await Promise.resolve();
+    // User keeps typing into a non-matching token and empties the slash span.
+    input.value = "plain prose now";
+    input.setSelectionRange(input.value.length, input.value.length);
+    resolveSkills(SKILLS);
+    await pending;
+
+    expect(container.classList.contains("hidden")).toBe(true);
+  });
+
+  test("keyboard selection through the router inserts the command in place", async () => {
+    const picker = makePicker();
+    mountRouter(picker);
+    const send = vi.fn();
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.defaultPrevented) send();
+    });
+
+    input.value = "run / now";
+    input.setSelectionRange(5, 5);
+    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    await vi.waitFor(() => expect(container.classList.contains("hidden")).toBe(false));
+    expect(container.querySelectorAll(".skill-slash-option")).toHaveLength(3);
+
+    keydown({ key: "ArrowDown" });
+    keydown({ key: "Enter" });
+
+    // The token (not the whole input) is replaced; surrounding prose stays.
+    expect(input.value).toBe("run /skill:research  now");
+    expect(input.selectionStart).toBe("/skill:research ".length + 4);
     expect(container.classList.contains("hidden")).toBe(true);
     expect(send).not.toHaveBeenCalled();
   });
 
-  test("does not select a skill while IME composition is active", async () => {
-    const picker = setupSkillSlashCommand({
-      input,
-      container,
-      loadSkills: async () => [
-        {
-          command: "/skill:research",
-          name: "research",
-          description: "Investigate primary sources",
-          scope: "project",
-        },
-      ],
+  test("router: Enter falls through and sends when no menu is open", async () => {
+    const picker = makePicker();
+    mountRouter(picker);
+    const send = vi.fn();
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.defaultPrevented) send();
     });
 
+    input.value = "hello there";
+    keydown({ key: "Enter" });
+    expect(send).toHaveBeenCalledOnce();
+  });
+
+  test("does not select while IME composition is active", async () => {
+    const picker = makePicker();
+    mountRouter(picker);
     input.value = "/";
     input.setSelectionRange(1, 1);
-    await picker.update();
-    input.dispatchEvent(
-      new dom.window.KeyboardEvent("keydown", {
-        key: "Enter",
-        cancelable: true,
-        isComposing: true,
-      }),
-    );
+    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    await vi.waitFor(() => expect(container.classList.contains("hidden")).toBe(false));
+
+    keydown({ key: "Enter", isComposing: true });
+    keydown({ key: "Enter", keyCode: 229 });
 
     expect(input.value).toBe("/");
     expect(container.classList.contains("hidden")).toBe(false);
   });
 
-  test("retries loading skills after a transient failure", async () => {
+  test("retries loading commands after a transient failure", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     let attempts = 0;
-    const picker = setupSkillSlashCommand({
-      input,
-      container,
-      loadSkills: async () => {
-        attempts += 1;
-        if (attempts === 1) throw new Error("Pi is reloading");
-        return [
-          {
-            command: "/skill:research",
-            name: "research",
-            description: "Investigate primary sources",
-            scope: "project",
-          },
-        ];
-      },
+    const picker = makePicker(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("Pi is reloading");
+      return SKILLS;
     });
 
     input.value = "/";
@@ -173,16 +225,14 @@ describe("skill slash command", () => {
     expect(warn).toHaveBeenCalledOnce();
   });
 
-  test("does not reopen after blur while skills are loading", async () => {
+  test("does not reopen after blur while the catalog is loading", async () => {
     let resolveSkills;
-    const picker = setupSkillSlashCommand({
-      input,
-      container,
-      loadSkills: () =>
+    const picker = makePicker(
+      () =>
         new Promise((resolve) => {
           resolveSkills = resolve;
         }),
-    });
+    );
 
     input.value = "/";
     input.setSelectionRange(1, 1);
@@ -190,124 +240,18 @@ describe("skill slash command", () => {
     const pendingUpdate = picker.update();
     await Promise.resolve();
     input.blur();
-    resolveSkills([
-      {
-        command: "/skill:research",
-        name: "research",
-        description: "Investigate primary sources",
-        scope: "project",
-      },
-    ]);
+    resolveSkills(SKILLS);
     await pendingUpdate;
 
     expect(container.classList.contains("hidden")).toBe(true);
   });
 
-  test("filters when the user types the native skill prefix", async () => {
-    const picker = setupSkillSlashCommand({
-      input,
-      container,
-      loadSkills: async () => [
-        {
-          command: "/skill:research",
-          name: "research",
-          description: "Investigate primary sources",
-          scope: "project",
-        },
-      ],
-    });
-
-    input.value = "/skill:res";
-    input.setSelectionRange(input.value.length, input.value.length);
-    await picker.update();
-
-    expect(container.querySelectorAll(".skill-slash-option")).toHaveLength(1);
-    expect(container.textContent).toContain("Research");
+  test("aria wiring uses the slashCommands i18n namespace", () => {
+    makePicker();
+    expect(container.getAttribute("aria-label")).toBe(t("slashCommands.listLabel"));
   });
 
   test("formats kebab-case names for display", () => {
     expect(titleCaseSkillName("agent-evaluation")).toBe("Agent Evaluation");
-  });
-
-  test("renders prompt templates alongside skills with kind markers", async () => {
-    const picker = setupSkillSlashCommand({
-      input,
-      container,
-      loadSkills: async () => [
-        {
-          command: "/review",
-          name: "review",
-          description: "Review staged git changes",
-          scope: "project",
-          kind: "prompt",
-        },
-        {
-          command: "/skill:research",
-          name: "research",
-          description: "Investigate primary sources",
-          scope: "personal",
-          kind: "skill",
-        },
-      ],
-    });
-
-    input.value = "/";
-    input.setSelectionRange(1, 1);
-    await picker.update();
-
-    const options = container.querySelectorAll(".skill-slash-option");
-    expect(options).toHaveLength(2);
-    expect(options[0].dataset.kind).toBe("prompt");
-    expect(options[1].dataset.kind).toBe("skill");
-    // Visual distinction rides on the icon: file-text renders 5 paths, box 3.
-    expect(options[0].querySelectorAll(".skill-slash-icon path")).toHaveLength(5);
-    expect(options[1].querySelectorAll(".skill-slash-icon path")).toHaveLength(3);
-    expect(container.textContent).toContain("Review");
-    expect(container.textContent).toContain("Project");
-  });
-
-  test("headings and empty state use the slashCommands i18n namespace", async () => {
-    const picker = setupSkillSlashCommand({
-      input,
-      container,
-      loadSkills: async () => [],
-    });
-
-    input.value = "/";
-    input.setSelectionRange(1, 1);
-    await picker.update();
-
-    expect(container.getAttribute("aria-label")).toBe(t("slashCommands.listLabel"));
-    expect(container.querySelector(".skill-slash-heading").textContent).toBe(
-      t("slashCommands.listLabel"),
-    );
-    expect(container.querySelector(".skill-slash-empty").textContent).toBe(
-      t("slashCommands.emptyLabel"),
-    );
-  });
-
-  test("keyboard selection inserts a prompt template command", async () => {
-    const picker = setupSkillSlashCommand({
-      input,
-      container,
-      loadSkills: async () => [
-        {
-          command: "/review",
-          name: "review",
-          description: "Review staged git changes",
-          scope: "project",
-          kind: "prompt",
-        },
-      ],
-    });
-
-    input.value = "/";
-    input.setSelectionRange(1, 1);
-    await picker.update();
-    input.dispatchEvent(
-      new dom.window.KeyboardEvent("keydown", { key: "Enter", cancelable: true }),
-    );
-
-    expect(input.value).toBe("/review ");
   });
 });

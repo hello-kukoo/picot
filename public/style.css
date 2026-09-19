@@ -876,7 +876,6 @@ body.landing-mode #landing {
 .workspace-focus-btn svg,
 .focus-back-icon svg,
 .settings-nav-back-icon svg,
-.queued-msg-cancel svg,
 .image-preview-remove svg,
 .terminal-tab-restart svg {
   display: block;
@@ -3875,24 +3874,27 @@ body.landing-mode #landing {
   flex-shrink: 0;
 }
 
-.queued-msg-cancel {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+/* pi queue header: the clear-all affordance (clear_queue RPC, Q2-A) */
+.pi-queue-header {
+  display: flex;
+  justify-content: flex-end;
+  padding-bottom: var(--space-1);
+}
+
+.pi-queue-clear {
   background: none;
   border: none;
   color: var(--text-dim);
   cursor: pointer;
+  font-size: var(--font-size-sm);
   padding: var(--space-0-5) var(--space-1);
-  font-size: var(--font-size-md);
-  line-height: 1;
   border-radius: var(--radius-xs);
-  flex-shrink: 0;
-  transition: color 0.15s;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
-.queued-msg-cancel:hover {
-  color: var(--error, #f87171);
+.pi-queue-clear:hover {
+  color: var(--error);
 }
 
 .swatch-colors {
@@ -3906,6 +3908,86 @@ body.landing-mode #landing {
   height: 12px;
   border-radius: 50%;
   border: 1px solid var(--border);
+}
+
+/* ── History fold gate (spec P2): one centred batch control ── */
+.history-gate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+}
+
+.history-gate-btn {
+  border: 1px solid var(--border);
+  background: var(--bg-glass);
+  color: var(--text-primary);
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition:
+    background var(--duration) var(--ease),
+    border-color var(--duration) var(--ease);
+}
+
+.history-gate-btn:hover {
+  background: var(--bg-glass-hover);
+  border-color: var(--border-hover);
+}
+
+.history-gate-all {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.history-gate-all:hover {
+  color: var(--text-primary);
+}
+
+/* ── Turn section (spec P1): one section per agent turn ── */
+.turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+}
+
+.turn-status {
+  min-height: 22px; /* fixed height: phase text changes never reflow */
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-meta);
+  color: var(--text-secondary);
+  padding-left: var(--space-1);
+}
+
+.turn-status-spinner {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+  flex: none;
+}
+
+.turn-status.settled .turn-status-spinner {
+  display: none;
+}
+
+.turn .turn-rail {
+  margin-left: var(--space-1);
+}
+
+.turn-answer > .message.assistant:last-child {
+  margin-bottom: 0;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -3925,7 +4007,6 @@ body.landing-mode #landing {
   display: flex;
   flex-direction: column;
   gap: var(--space-1-5);
-  scroll-behavior: smooth;
 }
 
 .messages::-webkit-scrollbar {
@@ -4043,7 +4124,7 @@ body.landing-mode #landing {
   border-radius: var(--radius-lg);
   word-wrap: break-word;
   overflow-wrap: break-word;
-  font-size: var(--chat-font-size, var(--font-size-lg));
+  font-size: var(--text-markdown);
   line-height: 1.6;
 }
 
@@ -4373,6 +4454,14 @@ code {
   color: var(--accent-text);
 }
 
+/* Code role (spec P4): code blocks and inline code stop inheriting the chat
+   size — --text-code derives from the chat font level one step down. */
+.message-content code,
+.message-content pre,
+.message-content pre code {
+  font-size: var(--text-code);
+}
+
 /* Streaming cursor */
 .message-content.streaming::after {
   content: "▋";
@@ -4550,38 +4639,153 @@ body.hide-thinking .thinking-block {
 }
 
 /* Per-turn written-file chips under the final assistant message. */
-.turn-file-chips {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-1-5);
-  margin: var(--space-1-5) 0 var(--space-1);
-}
-
-.turn-file-chips-label {
-  color: var(--text-dim);
-  font-size: var(--font-size-xs);
-}
-
-.turn-file-chip {
-  max-width: 220px;
-  padding: var(--space-0-5) var(--space-1-5);
+/* ── Turn files card (2026-09-19 spec): thinking-block shell, one row per
+   written file with frozen git badges and +N -M stats ── */
+.turn-files-card {
+  background: var(--thinking-bg);
   border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  background: var(--bg-glass);
-  color: var(--text-secondary);
-  font-size: var(--font-size-xs);
+  border-radius: var(--radius);
+  margin: 2px 0;
+  overflow: hidden;
+  align-self: stretch;
+}
+
+.turn-files-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: none;
+  border: none;
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--font-size-sm);
+  color: var(--text-dim);
+  transition: background var(--duration) var(--ease);
+}
+
+.turn-files-toggle:hover {
+  background: var(--bg-glass-hover);
+}
+
+/* Stats-unavailable marker: weak, and never pushes the count out of view. */
+.turn-files-note {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: 0.8;
+}
+
+.turn-files-toggle .chevron {
+  display: inline-flex;
+  transition: transform var(--duration) var(--ease);
+}
+
+.turn-files-card.expanded .turn-files-toggle .chevron {
+  transform: rotate(90deg);
+}
+
+.turn-files-body {
+  display: none;
+  padding: 0 var(--space-2) var(--space-2);
+}
+
+.turn-files-card.expanded .turn-files-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  /* One turn can touch dozens of files, so cap the expanded list and let the
+     card scroll internally rather than pushing the answer off screen. Same cap
+     as .tool-output. */
+  max-height: 260px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.turn-files-body::-webkit-scrollbar {
+  width: 4px;
+}
+
+.turn-files-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.turn-files-body::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: var(--radius-xs);
+}
+
+.turn-files-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.turn-files-row:hover {
+  background: var(--bg-glass-hover);
+}
+
+.turn-files-badge {
+  flex: none;
+  min-width: 52px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-sm);
+  text-align: center;
+  border: 1px solid var(--border);
+}
+
+.turn-files-badge--none {
+  visibility: hidden; /* keeps rows aligned when a file has no badge */
+}
+
+.turn-files-badge--added {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+}
+
+.turn-files-badge--modified {
+  color: var(--accent-text);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.turn-files-badge--untracked {
+  color: var(--text-dim);
+}
+
+.turn-files-name {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
-  cursor: pointer;
+  white-space: nowrap;
+  direction: rtl; /* long paths keep their tail (filename) visible */
+  text-align: left;
 }
 
-.turn-file-chip:hover,
-.turn-file-chip:focus-visible {
-  border-color: var(--border-hover);
-  color: var(--text-primary);
-  background: var(--bg-glass-hover);
+.turn-files-stats {
+  flex: none;
+  display: flex;
+  gap: var(--space-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.turn-files-stat--add {
+  color: var(--success);
+}
+
+.turn-files-stat--del {
+  color: var(--error);
 }
 
 .tool-file-ref:hover,
@@ -5061,6 +5265,12 @@ body.hide-thinking .thinking-block {
   -webkit-backdrop-filter: blur(calc(var(--blur) * 1.5));
 }
 
+.at-file-mention-error {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-sm);
+  color: var(--error);
+}
+
 .at-file-mention-option {
   display: grid;
   grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
@@ -5313,6 +5523,28 @@ body.hide-thinking .thinking-block {
 :root[data-theme="terracotta"] .composer-card:not(:focus-within):not(.streaming),
 :root[data-theme="sage"] .composer-card:not(:focus-within):not(.streaming) {
   border-color: var(--border-hover);
+}
+
+.send-caret-btn {
+  width: 20px;
+  height: 32px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition:
+    color var(--duration) var(--ease),
+    background var(--duration) var(--ease);
+}
+
+.send-caret-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-glass-hover);
 }
 
 #send-btn,
@@ -5777,16 +6009,28 @@ body.hide-thinking .thinking-block {
 
 /* Individual tick — button is the (large) hit target; ::after is the visual line */
 .conv-nav-dot {
-  width: 28px; /* wide hit target */
-  height: 14px; /* tall hit target, well beyond the thin visual line */
+  /* P5.3: ticks are non-interactive visuals — the track is the one hit
+     surface (role=listbox); pointer-events stay off the ticks themselves. */
+  width: 28px;
+  height: 14px;
   display: flex;
   align-items: center;
-  justify-content: flex-start; /* bar hugs the left/rail edge */
+  justify-content: flex-start;
   background: transparent;
   border: none;
   padding: 0;
-  cursor: pointer;
+  pointer-events: none;
   flex-shrink: 0;
+}
+
+.conv-nav-track {
+  outline: none;
+}
+
+.conv-nav-track:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .conv-nav-dot::after {
@@ -5955,7 +6199,7 @@ body.hide-thinking .thinking-block {
 /* Timestamp + cost share one styling: same font size, colour, tabular numerals. */
 .message-time,
 .message-usage {
-  font-size: var(--font-size-sm);
+  font-size: var(--text-meta);
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;

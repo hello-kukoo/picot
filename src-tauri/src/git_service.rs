@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
+use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, TryLockError};
 use std::thread;
@@ -1862,6 +1863,325 @@ fn git_os(root: &Path, args: &[OsString]) -> Result<Vec<u8>, String> {
         Err(String::from_utf8_lossy(&stderr).to_string())
     }
 }
+// ─── Turn files card stats (2026-09-19 spec) ─────────────────────────────────
+
+/// Spec bounds for one `git_turn_stats` call.
+const TURN_STATS_MAX_PATHS: usize = 200;
+const TURN_STATS_MAX_PATH_CHARS: usize = 4096;
+/// Untracked line counting stops at the first of these (spec: 256 KiB / 5 万行).
+const TURN_STATS_MAX_UNTRACKED_BYTES: usize = 256 * 1024;
+const TURN_STATS_MAX_UNTRACKED_LINES: u64 = 50_000;
+const TURN_STATS_READ_CHUNK: usize = 8 * 1024;
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnFileStat {
+    /// Path exactly as the caller supplied it (the card keys rows by it).
+    path: String,
+    /// "added" | "modified" | "untracked" | "deleted" | "clean" | "unavailable".
+    /// `deleted` and `unavailable` rows carry no stats; the card renders every
+    /// status except `deleted`.
+    status: String,
+    additions: u64,
+    deletions: u64,
+    /// True when untracked counting stopped before EOF, so `additions` is a
+    /// lower bound and the card renders `+≥N`.
+    additions_capped: bool,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnStats {
+    pub files: Vec<TurnFileStat>,
+    /// Caller-supplied paths whose containment could not be decided (outside
+    /// the workspace, or containing `..`). They are still listed with
+    /// `status = "unavailable"`; this count exists so tests and diagnostics can
+    /// tell a deliberate rejection from a silent pathspec miss.
+    pub dropped: usize,
+}
+
+/// Map one caller-supplied path to the workspace-relative pathspec for it, or
+/// `None` when containment cannot be decided (root escape, `..`, root itself).
+///
+/// Deliberately lexical, unlike `assert_workspace_root`'s `fs::canonicalize`:
+/// canonicalization fails for paths that no longer exist and resolves
+/// in-workspace symlinks that point outside, so it would misclassify legitimate
+/// writes. Containment is decided per component, never by string prefix
+/// (`docs/engineering-lessons.md` #3).
+fn workspace_relative_spec(
+    root: &Path,
+    canonical_root: Option<&Path>,
+    input: &str,
+) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = Path::new(trimmed);
+    let relative = if path.is_absolute() {
+        // The same workspace reaches us both canonicalized (`/private/var/…` on
+        // macOS) and as the caller spelled it (`/var/…`); accept either spelling
+        // so a canonical write path is not misread as an escape. The canonical
+        // root is resolved once per call, not once per path.
+        path.strip_prefix(root)
+            .ok()
+            .or_else(|| canonical_root.and_then(|canonical| path.strip_prefix(canonical).ok()))?
+    } else {
+        path
+    };
+    let mut parts: Vec<String> = Vec::new();
+    for component in relative.components() {
+        match component {
+            Component::Normal(part) => parts.push(part.to_string_lossy().into_owned()),
+            Component::CurDir => {}
+            // `ParentDir` (and any root/prefix component in a relative path) is
+            // not decidable inside the workspace.
+            _ => return None,
+        }
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts.join("/"))
+}
+
+/// Count lines in the head of an untracked file, bounded by the spec caps and
+/// by `deadline`. Returns `(lines, capped)`; a NUL byte means binary, which is
+/// never counted. The final line counts when the file has no trailing newline.
+///
+/// Recovery here is deliberately local: the path was untracked when git listed
+/// it, so it can be gone by now, or be a link this walk refuses to follow. The
+/// row still renders, only without numbers.
+fn count_untracked_lines(path: &Path, deadline: Instant) -> (u64, bool) {
+    // `symlink_metadata` on purpose: counting lines is not a reason to open a
+    // link that may point outside the workspace.
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return (0, false);
+    };
+    if !metadata.is_file() {
+        return (0, false);
+    }
+    let expected_len = metadata.len();
+    let Ok(mut file) = fs::File::open(path) else {
+        return (0, false);
+    };
+    let mut buffer = [0u8; TURN_STATS_READ_CHUNK];
+    let mut lines = 0u64;
+    let mut bytes = 0usize;
+    let mut last_byte = None;
+    let mut reached_eof = false;
+    loop {
+        let count = match file.read(&mut buffer) {
+            Ok(0) => {
+                reached_eof = true;
+                break;
+            }
+            Ok(count) => count,
+            Err(_) => break,
+        };
+        let chunk = &buffer[..count];
+        if chunk.contains(&0) {
+            return (0, false);
+        }
+        lines += chunk.iter().filter(|byte| **byte == b'\n').count() as u64;
+        last_byte = Some(chunk[count - 1]);
+        bytes += count;
+        if bytes >= TURN_STATS_MAX_UNTRACKED_BYTES
+            || lines >= TURN_STATS_MAX_UNTRACKED_LINES
+            || Instant::now() >= deadline
+        {
+            break;
+        }
+    }
+    let trailing = u64::from(matches!(last_byte, Some(byte) if byte != b'\n'));
+    if reached_eof || bytes as u64 >= expected_len {
+        // EOF, or the cap landed exactly on the end of the file: exact count.
+        return (lines + trailing, false);
+    }
+    // A cap (or the shared deadline) stopped us mid-file: report a lower bound.
+    (lines, true)
+}
+
+/// Working-tree stats for the files a turn wrote (cumulative vs HEAD, frozen at
+/// turn end per the 2026-09-19 spec): porcelain v1 XY classification plus
+/// numstat (vs HEAD; `--cached` when HEAD is unborn, mirroring `change_stats`).
+/// Untracked files count their head line count as additions.
+pub fn turn_stats(root: &Path, paths: &[String]) -> Result<TurnStats, String> {
+    assert_workspace_root(root)?;
+    if paths.len() > TURN_STATS_MAX_PATHS {
+        return Err(format!(
+            "too many paths ({} > {TURN_STATS_MAX_PATHS})",
+            paths.len()
+        ));
+    }
+    if paths
+        .iter()
+        .any(|path| path.chars().count() > TURN_STATS_MAX_PATH_CHARS)
+    {
+        return Err(format!(
+            "path longer than {TURN_STATS_MAX_PATH_CHARS} chars"
+        ));
+    }
+    if paths.is_empty() {
+        return Ok(TurnStats {
+            files: Vec::new(),
+            dropped: 0,
+        });
+    }
+    // One wall-clock budget for the whole call: the per-file byte cap bounds IO,
+    // this bounds it further on slow volumes (network shares, dead mounts).
+    let deadline = Instant::now() + GIT_READ_DEADLINE;
+    let canonical_root = fs::canonicalize(root).ok();
+
+    // Containment gate first: an undecidable path never reaches git as a
+    // pathspec, and is reported as `unavailable` so the row still renders.
+    let specs: Vec<Option<String>> = paths
+        .iter()
+        .map(|input| workspace_relative_spec(root, canonical_root.as_deref(), input))
+        .collect();
+    let dropped = specs.iter().filter(|spec| spec.is_none()).count();
+    let accepted: Vec<&str> = specs.iter().flatten().map(String::as_str).collect();
+
+    // XY classification from `status --porcelain -z --` (records are NUL
+    // separated: "XY path"; renames carry a second, header-less record).
+    let mut classes: HashMap<String, char> = HashMap::new();
+    if !accepted.is_empty() {
+        let mut status_args: Vec<&str> =
+            vec!["--literal-pathspecs", "status", "--porcelain", "-z", "--"];
+        status_args.extend(accepted.iter().copied());
+        let status_out = git(root, &status_args)?;
+        let mut skip_rename_tail = false;
+        for record in status_out.split(|byte| *byte == 0) {
+            if record.is_empty() {
+                continue;
+            }
+            if skip_rename_tail {
+                skip_rename_tail = false;
+                // `-z` lists the rename source after the target record: it no
+                // longer exists in the worktree, so it is a deleted row.
+                let source = String::from_utf8_lossy(record).to_string();
+                if !source.is_empty() {
+                    classes.insert(source, 'D');
+                }
+                continue;
+            }
+            let text = String::from_utf8_lossy(record).to_string();
+            if text.len() < 4 {
+                continue;
+            }
+            let xy = &text[..2];
+            let path = text[3..].to_string();
+            if xy.starts_with('R') || xy.starts_with('C') {
+                skip_rename_tail = true;
+            }
+            // `D` wins over `A`: `AD`/`MD` mean the worktree file is gone.
+            let class = if xy == "??" {
+                'U'
+            } else if xy.contains('D') {
+                'D'
+            } else if xy.contains('A') {
+                'A'
+            } else {
+                'M'
+            };
+            classes.insert(path, class);
+        }
+    }
+
+    // numstat for tracked changes (added/modified); untracked is absent there.
+    let tracked: Vec<&str> = specs
+        .iter()
+        .flatten()
+        .filter(|rel| matches!(classes.get(rel.as_str()), Some('A') | Some('M')))
+        .map(String::as_str)
+        .collect();
+    let mut numstat: HashMap<String, (u64, u64)> = HashMap::new();
+    if !tracked.is_empty() {
+        let mut diff_args: Vec<&str> =
+            vec!["--literal-pathspecs", "diff", "HEAD", "--numstat", "--"];
+        diff_args.extend(tracked.iter().copied());
+        let out = match git(root, &diff_args) {
+            Ok(out) => out,
+            Err(_) => {
+                // Unborn HEAD: the index-to-be basis mirrors change_stats.
+                let mut cached: Vec<&str> =
+                    vec!["--literal-pathspecs", "diff", "--cached", "--numstat", "--"];
+                cached.extend(tracked.iter().copied());
+                git(root, &cached)?
+            }
+        };
+        for line in String::from_utf8_lossy(&out).lines() {
+            let mut parts = line.split('\t');
+            let (Some(a), Some(d), Some(p)) = (parts.next(), parts.next(), parts.next()) else {
+                continue;
+            };
+            // Binary numstat columns are `-`, which parses to 0.
+            numstat.insert(
+                p.to_string(),
+                (a.parse().unwrap_or(0), d.parse().unwrap_or(0)),
+            );
+        }
+    }
+
+    let mut files = Vec::with_capacity(paths.len());
+    for (input, spec) in paths.iter().zip(specs.iter()) {
+        let Some(rel) = spec else {
+            files.push(TurnFileStat {
+                path: input.clone(),
+                status: "unavailable".into(),
+                additions: 0,
+                deletions: 0,
+                additions_capped: false,
+            });
+            continue;
+        };
+        match classes.get(rel.as_str()) {
+            Some('D') => files.push(TurnFileStat {
+                path: input.clone(),
+                status: "deleted".into(),
+                additions: 0,
+                deletions: 0,
+                additions_capped: false,
+            }),
+            Some('U') => {
+                let (additions, additions_capped) =
+                    count_untracked_lines(&root.join(rel), deadline);
+                files.push(TurnFileStat {
+                    path: input.clone(),
+                    status: "untracked".into(),
+                    additions,
+                    deletions: 0,
+                    additions_capped,
+                });
+            }
+            Some('A') | Some('M') => {
+                let (additions, deletions) = numstat.get(rel.as_str()).copied().unwrap_or((0, 0));
+                files.push(TurnFileStat {
+                    path: input.clone(),
+                    status: if classes.get(rel.as_str()) == Some(&'A') {
+                        "added".into()
+                    } else {
+                        "modified".into()
+                    },
+                    additions,
+                    deletions,
+                    additions_capped: false,
+                });
+            }
+            _ => files.push(TurnFileStat {
+                // Clean (committed since the turn) or unmatched by git.
+                path: input.clone(),
+                status: "clean".into(),
+                additions: 0,
+                deletions: 0,
+                additions_capped: false,
+            }),
+        }
+    }
+
+    Ok(TurnStats { files, dropped })
+}
+
 fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     let owned = args.iter().map(OsString::from).collect::<Vec<_>>();
     let (stdout, stderr, success) = run_git(git_command(root, owned), GIT_READ_DEADLINE)?;
@@ -2985,5 +3305,286 @@ mod tests {
         );
         // The unborn repo should now have a HEAD.
         assert!(root.path().join(".git/HEAD").exists());
+    }
+
+    // ── turn_stats (2026-09-19 turn files card spec) ──
+
+    fn git_ok(root: &Path, args: &[&str]) {
+        let output = StdCommand::new("git")
+            .current_dir(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn stats_of(root: &Path, paths: &[String]) -> TurnStats {
+        turn_stats(root, paths).unwrap()
+    }
+
+    fn stat_for<'a>(stats: &'a TurnStats, path: &str) -> &'a TurnFileStat {
+        stats
+            .files
+            .iter()
+            .find(|file| file.path == path)
+            .unwrap_or_else(|| panic!("no stat for {path}"))
+    }
+
+    fn abs(root: &Path, relative: &str) -> String {
+        root.join(relative).to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn turn_stats_classifies_porcelain_states() {
+        let (_dir, root) = test_repo();
+        test_commit(&root, "kept.ts", "let a = 1;\n", "init");
+        test_commit(&root, "gone.ts", "remove me\n", "second");
+        std::fs::write(root.join("kept.ts"), "let a = 2;\nlet b = 3;\n").unwrap();
+        std::fs::write(root.join("added.ts"), "new file\n").unwrap();
+        git_ok(&root, &["add", "added.ts"]);
+        std::fs::write(root.join("untracked.ts"), "one\ntwo\n").unwrap();
+        std::fs::remove_file(root.join("gone.ts")).unwrap();
+        // Narrow pathspec on purpose: `git add -A` would stage untracked.ts too.
+        git_ok(&root, &["add", "gone.ts"]);
+
+        let stats = stats_of(
+            &root,
+            &[
+                abs(&root, "kept.ts"),
+                abs(&root, "added.ts"),
+                abs(&root, "untracked.ts"),
+                abs(&root, "gone.ts"),
+            ],
+        );
+
+        assert_eq!(stat_for(&stats, &abs(&root, "kept.ts")).status, "modified");
+        assert!(stat_for(&stats, &abs(&root, "kept.ts")).additions >= 2);
+        assert_eq!(stat_for(&stats, &abs(&root, "added.ts")).status, "added");
+        let untracked = stat_for(&stats, &abs(&root, "untracked.ts"));
+        assert_eq!(untracked.status, "untracked");
+        assert_eq!(untracked.additions, 2);
+        assert_eq!(stat_for(&stats, &abs(&root, "gone.ts")).status, "deleted");
+        assert_eq!(stats.files.len(), 4);
+        assert_eq!(stats.dropped, 0);
+    }
+
+    #[test]
+    fn turn_stats_reports_rename_as_modified() {
+        let (_dir, root) = test_repo();
+        test_commit(&root, "before.ts", "line\n", "init");
+        git_ok(&root, &["mv", "before.ts", "after.ts"]);
+
+        // Both paths are requested because git only pairs a rename when the
+        // pathspec covers the pair; the target is modified, the source gone.
+        let stats = stats_of(&root, &[abs(&root, "after.ts"), abs(&root, "before.ts")]);
+        assert_eq!(stat_for(&stats, &abs(&root, "after.ts")).status, "modified");
+        assert_eq!(stat_for(&stats, &abs(&root, "before.ts")).status, "deleted");
+        assert_eq!(stats.files.len(), 2);
+    }
+
+    #[test]
+    fn turn_stats_prefers_deleted_over_added() {
+        let (_dir, root) = test_repo();
+        test_commit(&root, "seed.ts", "seed\n", "init");
+        std::fs::write(root.join("fresh.ts"), "temp\n").unwrap();
+        git_ok(&root, &["add", "fresh.ts"]);
+        std::fs::remove_file(root.join("fresh.ts")).unwrap();
+
+        let stats = stats_of(&root, &[abs(&root, "fresh.ts")]);
+        assert_eq!(stat_for(&stats, &abs(&root, "fresh.ts")).status, "deleted");
+    }
+
+    #[test]
+    fn turn_stats_matches_paths_with_spaces_and_cjk() {
+        let (_dir, root) = test_repo();
+        test_commit(&root, "seed.ts", "seed\n", "init");
+        let relative = "my docs/报告 1.md";
+        std::fs::create_dir_all(root.join("my docs")).unwrap();
+        std::fs::write(root.join(relative), "one\ntwo\nthree\n").unwrap();
+
+        let stats = stats_of(&root, &[abs(&root, relative)]);
+        let stat = stat_for(&stats, &abs(&root, relative));
+        assert_eq!(stat.status, "untracked");
+        assert_eq!(stat.additions, 3);
+    }
+
+    #[test]
+    fn turn_stats_falls_back_to_cached_numstat_on_unborn_head() {
+        let (_dir, root) = test_repo();
+        std::fs::write(root.join("first.ts"), "a\nb\nc\n").unwrap();
+        git_ok(&root, &["add", "first.ts"]);
+
+        let stats = stats_of(&root, &[abs(&root, "first.ts")]);
+        let stat = stat_for(&stats, &abs(&root, "first.ts"));
+        assert_eq!(stat.status, "added");
+        assert_eq!(stat.additions, 3);
+    }
+
+    #[test]
+    fn turn_stats_reports_escape_paths_as_unavailable() {
+        let (_dir, root) = test_repo();
+        test_commit(&root, "seed.ts", "seed\n", "init");
+        let sibling = format!("{}-evil/other.ts", root.to_string_lossy());
+        let parent = root
+            .join("..")
+            .join("outside.ts")
+            .to_string_lossy()
+            .into_owned();
+
+        let stats = stats_of(&root, &[sibling.clone(), parent.clone()]);
+        assert_eq!(stat_for(&stats, &sibling).status, "unavailable");
+        assert_eq!(stat_for(&stats, &parent).status, "unavailable");
+        assert_eq!(stats.files.len(), 2);
+        assert_eq!(stats.dropped, 2);
+    }
+
+    #[test]
+    fn turn_stats_accepts_relative_paths_and_rejects_parent_dir() {
+        let (_dir, root) = test_repo();
+        test_commit(&root, "seed.ts", "seed\n", "init");
+        std::fs::write(root.join("loose.ts"), "x\n").unwrap();
+
+        let stats = stats_of(&root, &["loose.ts".to_string(), "../escape.ts".to_string()]);
+        assert_eq!(stat_for(&stats, "loose.ts").status, "untracked");
+        assert_eq!(stat_for(&stats, "../escape.ts").status, "unavailable");
+        assert_eq!(stats.dropped, 1);
+    }
+
+    #[test]
+    fn turn_stats_accepts_canonical_root_spelling() {
+        let (_dir, root) = test_repo();
+        test_commit(&root, "seed.ts", "seed\n", "init");
+        std::fs::write(root.join("edited.ts"), "x\n").unwrap();
+        git_ok(&root, &["add", "edited.ts"]);
+        let canonical = std::fs::canonicalize(&root).unwrap();
+        let spelled = canonical.join("edited.ts").to_string_lossy().into_owned();
+
+        let stats = stats_of(&root, std::slice::from_ref(&spelled));
+        assert_eq!(stat_for(&stats, &spelled).status, "added");
+        assert_eq!(stats.dropped, 0);
+    }
+
+    #[test]
+    fn turn_stats_skips_binary_and_counts_unterminated_lines() {
+        let (_dir, root) = test_repo();
+        test_commit(&root, "seed.ts", "seed\n", "init");
+        std::fs::write(root.join("blob.bin"), b"a\0b\nc\n").unwrap();
+        std::fs::write(root.join("no-newline.txt"), "one\ntwo").unwrap();
+
+        let stats = stats_of(
+            &root,
+            &[abs(&root, "blob.bin"), abs(&root, "no-newline.txt")],
+        );
+        let blob = stat_for(&stats, &abs(&root, "blob.bin"));
+        assert_eq!(blob.status, "untracked");
+        assert_eq!(blob.additions, 0);
+        assert!(!blob.additions_capped);
+        let text = stat_for(&stats, &abs(&root, "no-newline.txt"));
+        assert_eq!(text.additions, 2);
+        assert!(!text.additions_capped);
+    }
+
+    #[test]
+    fn turn_stats_caps_large_untracked_files() {
+        let (_dir, root) = test_repo();
+        test_commit(&root, "seed.ts", "seed\n", "init");
+        let mut contents = String::with_capacity(600_000);
+        for _ in 0..300_000 {
+            contents.push_str("x\n");
+        }
+        std::fs::write(root.join("big.txt"), contents).unwrap();
+
+        let stats = stats_of(&root, &[abs(&root, "big.txt")]);
+        let stat = stat_for(&stats, &abs(&root, "big.txt"));
+        assert!(stat.additions_capped, "expected capped: {stat:?}");
+        assert!(stat.additions >= TURN_STATS_MAX_UNTRACKED_LINES);
+    }
+
+    #[test]
+    fn turn_stats_rejects_non_git_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = turn_stats(dir.path(), &["a.ts".to_string()]).unwrap_err();
+        assert!(error.contains("git"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn turn_stats_rejects_oversized_input() {
+        let (_dir, root) = test_repo();
+        test_commit(&root, "seed.ts", "seed\n", "init");
+        let many: Vec<String> = (0..=TURN_STATS_MAX_PATHS)
+            .map(|index| format!("path-{index}.ts"))
+            .collect();
+        assert!(turn_stats(&root, &many).is_err());
+        let long = "a".repeat(TURN_STATS_MAX_PATH_CHARS + 1);
+        assert!(turn_stats(&root, &[long]).is_err());
+    }
+
+    #[test]
+    fn turn_stats_preserves_input_order_and_length() {
+        let (_dir, root) = test_repo();
+        test_commit(&root, "seed.ts", "seed\n", "init");
+        std::fs::write(root.join("loose.ts"), "x\n").unwrap();
+        let first = abs(&root, "seed.ts");
+        let second = "../outside.ts".to_string();
+        let third = abs(&root, "loose.ts");
+
+        let stats = stats_of(&root, &[first.clone(), second.clone(), third.clone()]);
+        assert_eq!(stats.files.len(), 3);
+        assert_eq!(stats.files[0].path, first);
+        assert_eq!(stats.files[1].path, second);
+        assert_eq!(stats.files[2].path, third);
+        assert_eq!(stats.dropped, 1);
+    }
+
+    #[test]
+    fn turn_stats_does_not_cap_a_file_that_ends_at_the_read_limit() {
+        let (_dir, root) = test_repo();
+        test_commit(&root, "seed.ts", "seed\n", "init");
+        // One padded line filling exactly the byte cap: the count is exact.
+        let mut contents = "x".repeat(TURN_STATS_MAX_UNTRACKED_BYTES - 1);
+        contents.push('\n');
+        std::fs::write(root.join("exact.txt"), &contents).unwrap();
+        assert_eq!(contents.len(), TURN_STATS_MAX_UNTRACKED_BYTES);
+
+        let stats = stats_of(&root, &[abs(&root, "exact.txt")]);
+        let stat = stat_for(&stats, &abs(&root, "exact.txt"));
+        assert!(!stat.additions_capped, "unexpected cap: {stat:?}");
+        assert_eq!(stat.additions, 1);
+    }
+
+    #[test]
+    fn turn_stats_caps_one_byte_past_the_read_limit() {
+        let (_dir, root) = test_repo();
+        test_commit(&root, "seed.ts", "seed\n", "init");
+        let mut contents = "x".repeat(TURN_STATS_MAX_UNTRACKED_BYTES - 1);
+        contents.push('\n');
+        contents.push('y');
+        std::fs::write(root.join("over.txt"), &contents).unwrap();
+
+        let stats = stats_of(&root, &[abs(&root, "over.txt")]);
+        let stat = stat_for(&stats, &abs(&root, "over.txt"));
+        assert!(stat.additions_capped, "expected a cap: {stat:?}");
+        assert_eq!(stat.additions, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn turn_stats_does_not_follow_untracked_symlinks() {
+        let (_dir, root) = test_repo();
+        test_commit(&root, "seed.ts", "seed\n", "init");
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("target.txt"), "a\nb\nc\n").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("target.txt"), root.join("link.txt"))
+            .unwrap();
+
+        let stats = stats_of(&root, &[abs(&root, "link.txt")]);
+        let stat = stat_for(&stats, &abs(&root, "link.txt"));
+        assert_eq!(stat.status, "untracked");
+        assert_eq!(stat.additions, 0);
+        assert!(!stat.additions_capped);
     }
 }

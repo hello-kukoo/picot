@@ -2705,14 +2705,43 @@ async fn dispatch(
                 .unwrap_or("");
             match Some(operation) {
                 Some("file_mentions") => {
-                    let query = frame.get("query").and_then(Value::as_str).unwrap_or("");
-                    let entries = state
-                        .data
-                        .file_mentions(workspace_id, query)
-                        .map_err(host_data_error)?;
-                    Ok(
-                        json!({ "type": "data_response", "requestId": request_id, "operation": "file_mentions", "entries": entries }),
-                    )
+                    let query = frame
+                        .get("query")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    // Contract D: the declared root is required and must equal
+                    // what the host itself parses from the query.
+                    let declared = frame.get("root").and_then(|root| {
+                        let kind = root.get("kind").and_then(Value::as_str)?;
+                        let value = root.get("value").and_then(Value::as_str)?;
+                        Some((kind.to_string(), value.to_string()))
+                    });
+                    let Some(declared) = declared else {
+                        return Err(host_data_error(HostDataError::InvalidMentionQuery));
+                    };
+                    // The walk is synchronous fs recursion bounded by the
+                    // 500ms/10k budgets — wide roots (`@/`, `@~/`) can spend
+                    // the whole budget, so it must not sit on an async worker.
+                    let data_plane = state.data.clone();
+                    let workspace = workspace_id.to_string();
+                    let result = tokio::task::spawn_blocking(move || {
+                        data_plane.search_file_mentions(
+                            &workspace,
+                            &query,
+                            Some((declared.0.as_str(), declared.1.as_str())),
+                        )
+                    })
+                    .await
+                    .map_err(|error| ("mention_search_failed", error.to_string()))?
+                    .map_err(host_data_error)?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "file_mentions",
+                        "items": result.items,
+                        "truncated": result.truncated,
+                    }))
                 }
                 Some("workspace_info") => {
                     let root = state
@@ -3061,6 +3090,11 @@ fn host_data_error(error: HostDataError) -> (&'static str, String) {
             "not_a_directory",
             "Requested path is not a directory".into(),
         ),
+        HostDataError::InvalidMentionQuery => (
+            "invalid_mention_query",
+            "Mention query has invalid syntax".into(),
+        ),
+        HostDataError::MentionRootUnavailable(message) => ("mention_root_unavailable", message),
         HostDataError::Io(message) => ("file_access_failed", message),
     }
 }

@@ -6,6 +6,7 @@
 
 import { onLocaleChange, t } from "../i18n.js";
 import { createIcon, setButtonIcon } from "../icons.js";
+import { createScrollOwner } from "../session/scroll-ownership.js";
 import { renderMarkdown, renderStreamingMarkdown, renderUserMarkdown } from "./markdown.js";
 
 const USER_MESSAGE_COLLAPSE_CHAR_THRESHOLD = 400;
@@ -70,22 +71,16 @@ export class MessageRenderer {
    *   so ephemeral surfaces (Quick/Side Chat) and the native runtime keep the
    *   default `false` and render no inert controls.
    */
-  constructor(container, { sessionTreeActions = false } = {}) {
+  constructor(container, { sessionTreeActions = false, scrollOwner = null } = {}) {
     this.container = container;
     this.sessionTreeActions = sessionTreeActions;
-    this.isNearBottom = true;
+    // Scroll ownership (spec P3): one authority decides whether renders may
+    // follow the bottom. A caller may share one owner with the tool-card
+    // renderer; without one the view owns its own.
+    this.scrollOwner = scrollOwner ?? createScrollOwner({ container });
+    this._ownsScrollOwner = !scrollOwner;
     this.lastWelcomeOptions = null;
     this._destroyed = false;
-
-    // Track scroll position for smart auto-scroll. Store the handler so destroy()
-    // can remove it; an anonymous listener would leak across view recreations.
-    this._scrollHandler = () => {
-      const threshold = 100;
-      this.isNearBottom =
-        this.container.scrollHeight - this.container.scrollTop - this.container.clientHeight <
-        threshold;
-    };
-    this.container.addEventListener("scroll", this._scrollHandler);
 
     // Update already-rendered DOM when the locale changes without re-rendering
     // streaming content.
@@ -116,7 +111,7 @@ export class MessageRenderer {
     // Session switches reuse the same renderer instance. If the previous session
     // left the viewport away from bottom, keep new renders from inheriting that
     // stale anchor state (which can suppress auto-scroll until the user scrolls).
-    this.isNearBottom = true;
+    this.scrollOwner?.followBottom();
   }
 
   clearSearchHighlights() {
@@ -205,7 +200,7 @@ export class MessageRenderer {
     this.container.replaceChildren(welcome);
   }
 
-  renderUserMessage(message, isHistory = false) {
+  renderUserMessage(message, isHistory = false, targetContainer = null) {
     // Remove welcome message if present
     const welcome = this.container.querySelector(".welcome");
     if (welcome) welcome.remove();
@@ -240,7 +235,10 @@ export class MessageRenderer {
     if (actions) {
       div.appendChild(actions);
     }
-    this.container.appendChild(div);
+    // P2: the history fold gate mounts older turns into a fragment host
+    // before the batch control; default appends stay on the container.
+    const host = targetContainer ?? this.container;
+    host.appendChild(div);
     this._setupCodeCopyButtons(div);
     this._setupCopyBtn(div);
     if (!isHistory) this.scrollToBottom();
@@ -354,6 +352,34 @@ export class MessageRenderer {
     });
   }
 
+  /**
+   * P1 rail-hosted streaming thinking: one .thinking-block element kept in
+   * `host` (the turn rail), updated in place. Unlike the legacy in-content
+   * variant, the element is standalone and never prefixes .message-content.
+   */
+  renderStreamingThinkingInto(host, thinking) {
+    if (!host) return;
+    let thinkingDiv = host.querySelector(":scope > .thinking-block.streaming-thinking");
+    if (!thinkingDiv) {
+      thinkingDiv = document.createElement("div");
+      thinkingDiv.className = "thinking-block streaming-thinking";
+      const markup = `
+        <div class="thinking-toggle expanded" data-thinking-toggle="true" role="button" tabindex="0">
+          <span class="chevron"><svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><path d="M2 1l4 3-4 3z"/></svg></span>
+          <span class="thinking-label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M12 5v13"/><path d="M6.5 9h11"/><path d="M7 13h10"/></svg> <span class="thinking-label-text"></span></span>
+        </div>
+        <div class="thinking-content expanded"></div>`;
+      this._appendMarkup(thinkingDiv, markup);
+      host.appendChild(thinkingDiv);
+      this._setupThinkingToggles(thinkingDiv);
+    }
+    const contentEl = thinkingDiv.querySelector(".thinking-content");
+    if (contentEl) {
+      contentEl.textContent = thinking;
+      this.scrollToBottom();
+    }
+  }
+
   updateStreamingThinking(messageElement, thinking) {
     let thinkingDiv = messageElement.querySelector(".streaming-thinking");
     if (!thinkingDiv) {
@@ -431,6 +457,7 @@ export class MessageRenderer {
     // finishes. The finalize timestamp is Date.now() — the completion moment
     // — matching the real-time assistant contract in the message-toolbar spec.
     if (
+      !messageElement.dataset.turnDemoted &&
       this._copyableText(messageElement).trim() &&
       !messageElement.querySelector(".message-actions")
     ) {
@@ -771,11 +798,7 @@ export class MessageRenderer {
   }
 
   scrollToBottom() {
-    if (this.isNearBottom && this.container) {
-      requestAnimationFrame(() => {
-        if (this.container) this.container.scrollTop = this.container.scrollHeight;
-      });
-    }
+    this.scrollOwner?.scrollToBottom();
   }
 
   // Tear down listeners and release the container reference. Idempotent:
@@ -784,14 +807,14 @@ export class MessageRenderer {
   destroy() {
     if (this._destroyed) return;
     this._destroyed = true;
-    if (this.container && this._scrollHandler) {
-      this.container.removeEventListener("scroll", this._scrollHandler);
+    if (this._ownsScrollOwner && this.scrollOwner) {
+      this.scrollOwner.destroy();
     }
+    this.scrollOwner = null;
     if (typeof this.unsubscribeLocaleChange === "function") {
       this.unsubscribeLocaleChange();
       this.unsubscribeLocaleChange = null;
     }
-    this._scrollHandler = null;
     this.container = null;
   }
 }

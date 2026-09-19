@@ -125,17 +125,17 @@
     "removeScoped": "从范围模型移除"
   },
   "queue": {
-    "queued": "排队中",
-    "cancelTitle": "取消",
     "steering": "转向",
-    "followUp": "后续"
+    "followUp": "后续",
+    "clearQueue": "清空队列",
+    "unconfirmedSend": "发送未确认 — 点击取回"
   },
   "input": {
     "typeMessage": "消息…输入 / 使用命令，输入 @ 查找文件",
     "attachImage": "附加图片",
     "commands": "命令",
     "switchModel": "切换模型",
-    "send": "发送消息",
+    "send": "即时发送消息",
     "abort": "终止 (Esc)",
     "messagePlaceholder": "消息...",
     "mirrorReadOnly": "正在查看历史会话（只读）",
@@ -153,7 +153,8 @@
     "pasteDetected": "已粘贴文本（{size}）",
     "pasteAsFile": "作为文件附加",
     "keepInline": "保持内联",
-    "pasteOffloadFailed": "无法保存粘贴的文本"
+    "pasteOffloadFailed": "无法保存粘贴的文本",
+    "typeMessageFollowUpHint": "，⌥/Alt+Enter 运行中入队"
   },
   "tools": {
     "copyOutput": "复制输出",
@@ -255,7 +256,9 @@
     "customAnswerPlaceholder": "输入其他内容。"
   },
   "todoMirror": {
-    "title": { "todos": "待办" },
+    "title": {
+      "todos": "待办"
+    },
     "showAll": "显示其余 {count} 项",
     "collapse": "收起",
     "clear": "清除",
@@ -443,10 +446,22 @@
     "processToolCall": "{count} 次工具调用",
     "processToolCalls": "{count} 次工具调用",
     "turnFiles": "本轮修改的文件（{count}）：",
+    "turnFilesAdded": "新增",
+    "turnFilesModified": "修改",
+    "turnFilesUntracked": "未跟踪",
+    "turnFilesUnavailable": "统计不可用",
+    "turnFilesAtLeast": "+≥{count}",
+    "turnFilesCaliber": "统计为自 HEAD 的工作区累计，含你在该工作区的未提交改动；已提交的本轮改动显示为无数字行。",
+    "turnFilesHistoryNote": "历史记录不含统计。",
     "expand": "展开",
     "collapse": "收起",
     "forkSession": "复制会话",
-    "editMessage": "编辑消息"
+    "editMessage": "编辑消息",
+    "turnWorking": "Agent 工作中",
+    "turnWorkedFor": "用时 {duration}",
+    "conversationNavigator": "会话导航器",
+    "loadOlderHistory": "载入更早的历史",
+    "loadAllHistory": "载入全部历史"
   },
   "onboarding": {
     "openProject": "打开一个项目以开始对话。",
@@ -1075,11 +1090,12 @@
     "statusDisconnected": "已断开"
   },
   "fileMention": {
-    "listLabel": "文件"
+    "listLabel": "文件",
+    "invalidQuery": "提及路径无效",
+    "rootUnavailable": "搜索位置不可用"
   },
   "slashCommands": {
-    "listLabel": "命令",
-    "emptyLabel": "没有匹配的命令"
+    "listLabel": "命令"
   },
   "workspace": {
     "focus": "进入专注模式",
@@ -1129,5 +1145,10 @@
     "qrAlt": "用于手机访问的二维码",
     "hint": "用手机扫描以在同一网络中打开 Picot",
     "openLink": "打开链接"
+  },
+  "composer": {
+    "splitSend": {
+      "caretTitle": "延时发送"
+    }
   }
 }

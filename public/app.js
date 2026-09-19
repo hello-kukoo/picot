@@ -5,7 +5,10 @@
  * Main App - Ties everything together
  */
 
+import { createComposerDraftStore } from "./app/composer-draft-store.js";
+import { resolveComposerSessionIdentity } from "./app/composer-session-identity.js";
 import { installHostOriginFetch } from "./app/host-origin.js";
+import { createPromptDelivery } from "./app/prompt-delivery.js";
 import { StateManager } from "./app/state.js";
 import { initTransport } from "./app/transport.js";
 import { createAppUpdater } from "./app/updater.js";
@@ -31,6 +34,7 @@ import {
 import { setEditorHighlightTheme } from "./code-editor.js";
 import { createCompactCoordinator } from "./compact-coordinator.js";
 import { setupComposerCommandMenu } from "./composer-command-menu.js";
+import { planFollowUpSend, planSteeringSend } from "./composer-follow-up.js";
 import { setupComposerImageAttachments } from "./composer-image-attachments.js";
 import { setupComposerPasteOffload } from "./composer-paste-offload.js";
 import { EphemeralChatView } from "./ephemeral-chat-view.js";
@@ -78,6 +82,7 @@ import {
   shouldSuppressFileBrowserRefresh,
 } from "./session/routing.js";
 import { anchorHistoryToBottom } from "./session/scroll-anchor.js";
+import { createScrollOwner } from "./session/scroll-ownership.js";
 import { setupSessionInfo } from "./session/session-info.js";
 import { SessionUiStateStore } from "./session-ui-state.js";
 import { ConfigGateway, consumeConfigResponseFrame } from "./settings/config-gateway.js";
@@ -128,21 +133,32 @@ import {
   TerminalTab,
 } from "./terminal-tab.js";
 import { applyTheme, getCurrentTheme, themes } from "./themes.js";
-import { renderTurnFileChips } from "./turn-file-chips.js";
 import { createHostFileMentionSearch, setupAtFileMention } from "./ui/at-file-mention.js";
+import { createTriggerRouter } from "./ui/composer-triggers.js";
 import { repaintContextViz, setupContextViz } from "./ui/context-viz.js";
+import { createConversationNav } from "./ui/conversation-nav.js";
 import { DialogHandler } from "./ui/dialogs.js";
 import { createHeaderStatusBar } from "./ui/header-status-bar.js";
 import { initImageLightbox } from "./ui/image-lightbox.js";
 import { setupMessagesInsets } from "./ui/layout-insets.js";
 import { MessageRenderer } from "./ui/message-renderer.js";
-import { createProcessDetailsGroup, summarizeProcessGroup } from "./ui/process-group.js";
+import { summarizeProcessGroup } from "./ui/process-group.js";
 import { QuestionnaireCard } from "./ui/questionnaire-card.js";
 import { setupResizablePanel } from "./ui/resizable-panel.js";
 import { isRpivTodoCommandNotify, RpivTodoMirrorPanel } from "./ui/rpiv-todo-mirror.js";
 import { setupSessionSearchDialog } from "./ui/session-search-dialog.js";
 import { setupSkillSlashCommand } from "./ui/skill-slash-command.js";
 import { ToolCardRenderer } from "./ui/tool-card.js";
+import { createTurnSection } from "./ui/turn.js";
+import { mountTurnFilesCard, renderTurnFilesCard } from "./ui/turn-files-card.js";
+import {
+  assistantHasText,
+  HISTORY_FULL_MOUNT_TURNS,
+  HISTORY_REVEAL_BATCH_TURNS,
+  resolveTurnDurationMs,
+  splitFinalAssistantBlocks,
+  summarizeTurnRail,
+} from "./ui/turn-model.js";
 import { createWidgetMirrorRegistry, runtimeIdForTarget } from "./ui/widget-mirror-registry.js";
 import { WindowCloseCoordinator } from "./window-close-coordinator.js";
 import {
@@ -473,6 +489,7 @@ function resolveAndApplyFocus() {
 // boots fresh; consumeNavState() restores scroll, sidebar expansion, search,
 // and the input draft so session/workspace switches feel continuous.
 function snapshotUiStateForNavigation() {
+  flushDraftNow(); // a pending debounce timer is not a saved draft (C4)
   try {
     snapshotNavState({
       messageScroll: messagesContainer ? messagesContainer.scrollTop : null,
@@ -553,6 +570,11 @@ const wsClient = new WebSocketClient(wsUrl);
 // through HostServer v2 WebSocket. Pi runtime commands use runtime_request;
 // host lifecycle uses host_request.
 const transport = initTransport({ wsClient, env: window });
+
+// One shared client serves startup reconciliation, user-initiated persistence,
+// and the composer draft store; created early because the draft store (C4)
+// reads it during session-restore code that can run before late init.
+const preferencesClient = createPreferencesClient({ transport });
 // Settings data-plane runtime adapter: /picot-config prompts ride the same v2
 // runtime_request channel as chat; sendRuntime resolves with Pi's reply data.
 const settingsRuntime = {
@@ -618,8 +640,28 @@ const state = new StateManager();
 const messagesElement = document.getElementById("messages");
 // sessionTreeActions: the main chat is the only persisted-session surface;
 // its Fork/Edit buttons dispatch to app.js's transport handlers below.
-const messageRenderer = new MessageRenderer(messagesElement, { sessionTreeActions: true });
-const toolCardRenderer = new ToolCardRenderer(messagesElement, { enableFileRefs: true });
+// Scroll ownership (spec P3): one owner for the messages viewport, shared by
+// both renderers so a user reading history is never fought by auto-follow.
+const messagesScrollOwner = createScrollOwner({ container: messagesElement });
+// Turn rendering is opted in via TURNS_RENDERING (see the live-turn block);
+// the renderer itself stays surface-agnostic.
+const messageRenderer = new MessageRenderer(messagesElement, {
+  sessionTreeActions: true,
+  scrollOwner: messagesScrollOwner,
+});
+const toolCardRenderer = new ToolCardRenderer(messagesElement, {
+  enableFileRefs: true,
+  scrollOwner: messagesScrollOwner,
+});
+
+// The scroll-to-bottom control re-arms following explicitly (rule 5). This
+// button previously had no handler at all — the badge showed but did nothing.
+const scrollBottomBtn = document.getElementById("scroll-bottom-btn");
+scrollBottomBtn?.addEventListener("click", () => {
+  messagesScrollOwner.followBottom();
+  scrollBottomBtn.classList.add("hidden");
+  scrollBottomBadge.classList.add("hidden");
+});
 initImageLightbox(messagesElement);
 const dialogHandler = new DialogHandler({
   container: document.getElementById("dialog-container"),
@@ -634,6 +676,18 @@ const questionnaireCard = new QuestionnaireCard({
 });
 
 function clearConversationRenderers() {
+  // P5.1: the registry is session-scoped state; a view reset drops it so the
+  // rail never lists another session's turns. Refresh immediately or the
+  // rail keeps rendering the cleared registry's stale ticks until the next
+  // registration happens to fire.
+  turnRegistry.clear();
+  convNav?.refresh();
+  // P1.3: a session switch clears the pending optimistic bubble reference and
+  // settles any still-open turn — a stale bubble can never cross sessions.
+  closeLiveTurn();
+  pendingUserEl = null;
+  pendingUserKey = null;
+  pendingPromptPreview = "";
   messageRenderer.clear();
   toolCardRenderer.clear();
 }
@@ -659,6 +713,10 @@ const sidebar = new SessionSidebar(
       } else {
         console.warn("[Sidebar] session notice:", message);
       }
+    },
+    // C4: a deleted session's composer draft goes with it.
+    onSessionDeleted: (filePath) => {
+      if (filePath) void composerDraftStore.clearForSessionFile(filePath);
     },
     isFocusActive: () => currentFocusProject !== null,
     getFocusWorkspacePath: () => currentFocusProject?.path || null,
@@ -714,7 +772,7 @@ const statusText = document.getElementById("status-text");
 const skillSlashMenu = document.getElementById("skill-slash-menu");
 const atFileMentionMenu = document.getElementById("at-file-mention-menu");
 
-setupSkillSlashCommand({
+const skillSlashPicker = setupSkillSlashCommand({
   input: messageInput,
   container: skillSlashMenu,
   loadSkills: async () => {
@@ -726,13 +784,22 @@ setupSkillSlashCommand({
   },
 });
 
-// @-file mention completion must be wired before the main Enter-to-send
-// listener (registered later) so its keydown can intercept Enter/Tab/Escape.
-setupAtFileMention({
+// @-file mention completion runs router-driven on the main composer: the
+// trigger router owns the only keydown listener (wired before the main
+// Enter-to-send listener) so at most one picker can consume any key.
+const atFileMentionPicker = setupAtFileMention({
   input: messageInput,
   container: atFileMentionMenu,
   getWorkspaceRoot: () => getCurrentWorkspacePath(),
   searchFiles: createHostFileMentionSearch(() => transport),
+  router: true,
+});
+createTriggerRouter({
+  input: messageInput,
+  pickers: [
+    { kind: "slash", ...skillSlashPicker },
+    { kind: "mention", ...atFileMentionPicker },
+  ],
 });
 
 const addProjectBtn = document.getElementById("add-project-btn");
@@ -2099,9 +2166,11 @@ async function handleResumeBranch(entryId) {
     // not exist in pi 0.84.2.
     await bridgeData("navigate_tree", { targetId: entryId, summarize: false });
     // Per the design, resuming clears the composer because the old branch's
-    // unsent input does not belong to the resumed branch.
+    // unsent input does not belong to the resumed branch. C4: the branch's
+    // stored draft must go too, or C3's restore paths could resurrect it.
     messageInput.value = "";
     messageInput.style.height = "auto";
+    void composerDraftStore.clear(composerIdentity());
     await reanchorAfterTreeNavigation();
   } catch (err) {
     messageRenderer.renderError(t("errors.treeNavigateFailed", { error: err }));
@@ -2116,6 +2185,8 @@ if (infoPanelEl) {
     onNavigateLeaf: (entryId) => void handleResumeBranch(entryId),
     onSelectEntry: (entryId) => selectInfoEntry(entryId),
     isStreaming: () => state.isStreaming,
+    // P2: a gate-folded turn reveals before the Info row locates its anchor.
+    ensureEntryMounted: (entryId) => ensureEntryMounted(entryId),
   });
 }
 
@@ -2185,35 +2256,120 @@ document.addEventListener("visibilitychange", () => {
 
 // Build the list of conversations: each entry is the user message el + its
 // immediately following assistant message el (may be null mid-stream).
-function getConversations() {
-  const turns = [];
-  let node = messagesContainer.firstElementChild;
-  while (node) {
-    if (node.classList?.contains("message") && node.classList.contains("user")) {
-      const next = node.nextElementSibling;
-      const reply =
-        next?.classList?.contains("message") && next.classList.contains("assistant") ? next : null;
-      turns.push({ user: node, assistant: reply });
-    }
-    node = node.nextElementSibling;
-  }
-  return turns;
+// ── Conversation navigator rail (spec P5) ─────────────────────────────────
+// Registry-sourced turns replace the DOM walk: the rail lists every turn of
+// the session regardless of what is mounted, settled turns carry their answer
+// preview again (the DOM pairing was dead), and one keyboard-reachable
+// listbox owns the hit surface with windowed, constant-pitch ticks.
+const turnRegistry = new Map();
+
+function registerTurn(entry) {
+  const existing = turnRegistry.get(entry.id) || {};
+  turnRegistry.set(entry.id, {
+    ...existing,
+    ...entry,
+    promptPreview: entry.promptPreview ?? existing.promptPreview ?? "",
+    answerPreview: entry.answerPreview ?? existing.answerPreview ?? "",
+    entryId: entry.entryId ?? existing.entryId ?? null,
+    mountedElement: entry.mountedElement ?? existing.mountedElement ?? null,
+  });
+  convNav?.refresh();
 }
 
-// Returns the index of the conversation whose user-message is the topmost
-// partially-visible one. The header floats above the scroller, so the true
-// visible top is the header's bottom edge.
-function getActiveConvIndex(turns) {
-  if (_navLockedIdx >= 0 && _navLockedIdx < turns.length) return _navLockedIdx;
-  const visibleTop = Math.max(
-    messagesContainer.getBoundingClientRect().top,
-    headerEl?.getBoundingClientRect().bottom || 0,
-  );
-  for (let i = turns.length - 1; i >= 0; i--) {
-    if (turns[i].user.getBoundingClientRect().top <= visibleTop + 4) return i;
-  }
-  return 0;
+function registryTurns() {
+  return [...turnRegistry.values()];
 }
+
+/** Reveal turns so that turn index `turnIdx` is mounted; shared by the rail
+ *  jump seam and the Info-panel entry seam. No-op when the gate is open. */
+function revealTurnsUpTo(turnIdx) {
+  const gate = historyGate;
+  if (!gate?.control?.isConnected || !gate.renderTurn) return;
+  if (turnIdx < 0 || turnIdx >= gate.turnCount) return;
+  const needed = gate.turnCount - turnIdx; // turns from turnIdx to the end
+  const previous = gate.revealedCount;
+  gate.revealedCount = Math.max(gate.revealedCount, needed);
+  const from = Math.max(0, gate.turnCount - gate.revealedCount);
+  const to = gate.turnCount - previous;
+  if (to > from) {
+    const fragment = document.createDocumentFragment();
+    for (let i = from; i < to; i++) gate.renderTurn(gate.turns[i], fragment);
+    insertTurnFragmentBeforeControl(fragment);
+    updateHistoryGateControl();
+  }
+}
+
+// P2/P5 seam: a folded turn reveals through the gate, then its mounted
+// element resolves for the rail's jump. Registry-mounted turns short-circuit.
+function ensureTurnMounted(turnId) {
+  const entry = turnRegistry.get(turnId);
+  if (entry?.mountedElement?.isConnected) return Promise.resolve(entry.mountedElement);
+  const index = registryTurns().findIndex((turn) => turn.id === turnId);
+  if (index >= 0) revealTurnsUpTo(index);
+  return Promise.resolve(turnRegistry.get(turnId)?.mountedElement ?? null);
+}
+
+/** Entry-id seam: any entry (user, answer, folded retry) reveals its turn. */
+function ensureEntryMounted(entryId) {
+  const gate = historyGate;
+  if (!gate?.control?.isConnected || !gate.renderTurn) return Promise.resolve();
+  if (typeof entryId !== "string" || !entryId) return Promise.resolve();
+  const idx = (gate.messageEntryIds ?? []).indexOf(entryId);
+  if (idx < 0) return Promise.resolve();
+  const turnIdx = gate.turns.findIndex(([s, e]) => idx >= s && idx < e);
+  if (turnIdx >= 0) revealTurnsUpTo(turnIdx);
+  return Promise.resolve();
+}
+
+const convNav = createConversationNav({
+  navEl: convNavEl,
+  trackEl: convNavTrack,
+  tooltipEl: convNavTooltip,
+  tooltipQEl: convNavTooltipQ,
+  tooltipAEl: convNavTooltipA,
+  tooltipSepEl: convNavTooltipSep,
+  container: messagesContainer,
+  headerEl,
+  getTurns: registryTurns,
+  ensureTurnMounted,
+  onSelectTurn: (turn) => {
+    if (turn.mountedElement?.isConnected) flashJumpHighlight(turn.mountedElement);
+    if (turn.entryId) selectInfoEntry(turn.entryId, { scroll: true });
+  },
+  scrollOwner: messagesScrollOwner,
+  t,
+});
+
+function jumpToPreviousUserMessage() {
+  const idx = convNav.getActiveIndex();
+  if (idx > 0) void convNav.jumpTo(idx - 1);
+}
+
+// Jumps to the next conversation's user message. At (or past) the last turn
+// it scrolls all the way to the bottom instead — so the full final reply is
+// visible without an extra click.
+function jumpToNextConversationOrBottom() {
+  const turns = registryTurns();
+  const nextIdx = convNav.getActiveIndex() + 1;
+  if (nextIdx <= turns.length - 1) {
+    void convNav.jumpTo(nextIdx);
+  } else {
+    messagesScrollOwner.followBottom();
+    scrollBottomBadge.classList.add("hidden");
+  }
+}
+
+// ── Scroll wiring: the new-message badge stays distance-based; the rail
+// owns its own coalesced spy (module) and refreshes via mutation/resize.
+messagesContainer.addEventListener("scroll", () => {
+  const threshold = 150;
+  const atBottom =
+    messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight <
+    threshold;
+  isScrolledUp = !atBottom;
+  if (atBottom) scrollBottomBadge.classList.add("hidden");
+});
+window.addEventListener("resize", () => convNav.refresh());
 
 function flashJumpHighlight(target) {
   target.classList.remove("message-jump-highlight");
@@ -2229,194 +2385,6 @@ function selectInfoEntry(entryId, { scroll = false } = {}) {
   if (scroll) infoPanel?.scrollToSelectedEntry();
 }
 
-function jumpToConversation(turn, idx) {
-  // Lock active index immediately so dot highlights right away, even before
-  // the smooth scroll settles (or if the scroll ends up being a no-op).
-  if (idx !== undefined) {
-    _navLockedIdx = idx;
-    clearTimeout(_navLockTimer);
-    _navLockTimer = setTimeout(() => {
-      _navLockedIdx = -1;
-      rebuildNavDots();
-    }, 800);
-  }
-  // Use an explicit scrollTo instead of turn.user.scrollIntoView(): scrollIntoView's
-  // "start" alignment is computed against the raw scroll container, not the space
-  // the floating sticky header covers, and its target can land within a few px of
-  // the current position (e.g. when only a couple of short conversations exist and
-  // the max scroll range is tiny) — some webviews then silently skip the scroll
-  // instead of nudging to it. Computing the delta ourselves guarantees a real,
-  // header-aware scrollTo happens every time.
-  const visibleTop =
-    headerEl?.getBoundingClientRect().bottom || messagesContainer.getBoundingClientRect().top;
-  const delta = turn.user.getBoundingClientRect().top - visibleTop;
-  const maxScrollTop = messagesContainer.scrollHeight - messagesContainer.clientHeight;
-  const targetScrollTop = Math.max(0, Math.min(messagesContainer.scrollTop + delta, maxScrollTop));
-  messagesContainer.scrollTo({ top: targetScrollTop, behavior: "smooth" });
-  const entryId = turn.user?.dataset.entryId;
-  if (entryId) selectInfoEntry(entryId, { scroll: true });
-  flashJumpHighlight(turn.user);
-  rebuildNavDots();
-}
-
-function jumpToPreviousUserMessage() {
-  const turns = getConversations();
-  if (!turns.length) return;
-  const idx = getActiveConvIndex(turns);
-  if (idx > 0) jumpToConversation(turns[idx - 1], idx - 1);
-}
-
-// Jumps to the next conversation's user message. If that next conversation
-// is the last one (or there's no next one at all), scroll all the way to the
-// bottom instead — so the full final reply is visible without an extra click.
-function jumpToNextConversationOrBottom() {
-  const turns = getConversations();
-  const lastIdx = turns.length - 1;
-  const idx = getActiveConvIndex(turns);
-  const nextIdx = idx + 1;
-  if (nextIdx <= lastIdx - 1) {
-    jumpToConversation(turns[nextIdx], nextIdx);
-  } else {
-    messagesContainer.scrollTo({ top: messagesContainer.scrollHeight, behavior: "smooth" });
-    scrollBottomBadge.classList.add("hidden");
-  }
-}
-
-// ── Dot track ──────────────────────────────────────────
-let _tooltipHideTimer = null;
-let _navLockedIdx = -1;
-let _navLockTimer = null;
-let _navHoverIdx = -1;
-
-// Minimum height (px) the nav needs to be useful:
-const CONV_NAV_MAX_HEIGHT = 560;
-const CONV_NAV_BASE_WIDTH = 7;
-const CONV_NAV_HOVER_PEAK_WIDTH = 22;
-const CONV_NAV_HOVER_SIGMA = 2.4;
-
-function rebuildNavDots() {
-  const turns = getConversations();
-  const hasConvs = turns.length > 1;
-  convNavEl.classList.toggle("hidden", !hasConvs);
-  if (!hasConvs) return;
-
-  const activeIdx = getActiveConvIndex(turns);
-  // Add missing dots
-  while (convNavTrack.children.length < turns.length) {
-    const dot = document.createElement("button");
-    dot.className = "conv-nav-dot";
-    dot.setAttribute("aria-label", `Jump to conversation ${convNavTrack.children.length + 1}`);
-    convNavTrack.appendChild(dot);
-  }
-  // Remove extra dots
-  while (convNavTrack.children.length > turns.length) {
-    convNavTrack.removeChild(convNavTrack.lastChild);
-  }
-
-  if (_navHoverIdx >= turns.length) {
-    _navHoverIdx = -1;
-  }
-
-  [...convNavTrack.children].forEach((dot, i) => {
-    dot.classList.toggle("active", i === activeIdx);
-    dot.setAttribute("aria-label", `Jump to conversation ${i + 1}`);
-    dot.onclick = () => jumpToConversation(turns[i], i);
-    dot.onmouseenter = () => {
-      _navHoverIdx = i;
-      rebuildNavDots();
-      showNavTooltip(dot, turns[i]);
-    };
-    dot.onmouseleave = () => {
-      _navHoverIdx = -1;
-      rebuildNavDots();
-      hideNavTooltip();
-    };
-    const dist = _navHoverIdx >= 0 ? Math.abs(i - _navHoverIdx) : null;
-    const w =
-      dist === null
-        ? CONV_NAV_BASE_WIDTH
-        : Math.round(
-            CONV_NAV_BASE_WIDTH +
-              (CONV_NAV_HOVER_PEAK_WIDTH - CONV_NAV_BASE_WIDTH) *
-                Math.exp(-(dist * dist) / (2 * CONV_NAV_HOVER_SIGMA * CONV_NAV_HOVER_SIGMA)),
-          );
-    dot.style.setProperty("--nav-w", `${w}px`);
-    dot.style.setProperty("--nav-color", "var(--accent)");
-  });
-
-  // Scale the track down if all dots would exceed the max height.
-  const naturalHeight = convNavTrack.scrollHeight;
-  const scale = naturalHeight > CONV_NAV_MAX_HEIGHT ? CONV_NAV_MAX_HEIGHT / naturalHeight : 1;
-  convNavTrack.style.transform = scale < 1 ? `scale(${scale})` : "";
-  convNavTrack.style.transformOrigin = scale < 1 ? "top left" : "";
-  // Keep the nav's layout height in sync with the scaled visual size.
-  convNavEl.style.height = scale < 1 ? `${naturalHeight * scale}px` : "";
-}
-
-function showNavTooltip(dotEl, turn) {
-  clearTimeout(_tooltipHideTimer);
-  const q = turn.user.textContent.trim().slice(0, 120);
-  const a = turn.assistant
-    ? turn.assistant.textContent.trim().replace(/\s+/g, " ").slice(0, 180)
-    : "";
-  convNavTooltipQ.textContent = q;
-  convNavTooltipA.textContent = a;
-  convNavTooltipA.style.display = a ? "" : "none";
-  convNavTooltipSep.style.display = a ? "" : "none";
-
-  // Show first so offsetHeight is measurable, then position vertically on the dot
-  convNavTooltip.classList.remove("hidden");
-  const dotRect = dotEl.getBoundingClientRect();
-  const tipHeight = convNavTooltip.offsetHeight || 90;
-  const tipWidth = convNavTooltip.offsetWidth || 260;
-  const top = Math.max(
-    8,
-    Math.min(dotRect.top + dotRect.height / 2 - tipHeight / 2, window.innerHeight - tipHeight - 8),
-  );
-  convNavTooltip.style.top = `${top}px`;
-  // Anchor the tooltip to the right of the dot (the rail sits on the chat's
-  // left edge), following the dot so panels never displace or cover it.
-  convNavTooltip.style.left = `${Math.min(dotRect.right + 8, window.innerWidth - tipWidth - 8)}px`;
-
-  // Trigger slide-in animation on every fresh hover
-  convNavTooltip.classList.remove("animating");
-  void convNavTooltip.offsetWidth; // reflow so animation re-fires
-  convNavTooltip.classList.add("animating");
-  convNavTooltip.addEventListener(
-    "animationend",
-    () => convNavTooltip.classList.remove("animating"),
-    {
-      once: true,
-    },
-  );
-}
-
-function hideNavTooltip() {
-  _tooltipHideTimer = setTimeout(() => convNavTooltip.classList.add("hidden"), 120);
-}
-
-convNavTooltip.onmouseenter = () => clearTimeout(_tooltipHideTimer);
-convNavTooltip.onmouseleave = () => hideNavTooltip();
-
-// ── Scroll + mutation wiring ────────────────────────────
-messagesContainer.addEventListener("scroll", () => {
-  const threshold = 150;
-  const atBottom =
-    messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight <
-    threshold;
-  isScrolledUp = !atBottom;
-  if (atBottom) scrollBottomBadge.classList.add("hidden");
-  rebuildNavDots();
-});
-
-// Rebuild whenever messages are added or removed (session switch, history load,
-// streaming new assistant message, etc.) without threading a callback into every
-// call-site in MessageRenderer.
-new MutationObserver(rebuildNavDots).observe(messagesContainer, { childList: true });
-
-// Re-evaluate space availability whenever the window is resized.
-window.addEventListener("resize", rebuildNavDots);
-
 // ── Session fork via "Fork from here" button on user messages ──────────────
 // Tool-card file references dispatch "previewfile" bubbles from the message
 // container; open (or refresh) the file preview for that path.
@@ -2426,10 +2394,10 @@ messagesContainer.addEventListener("previewfile", (event) => {
 });
 // Turn file chips live in the transcript too; clicking one opens the file.
 messagesContainer.addEventListener("click", (event) => {
-  const chip = event.target.closest(".turn-file-chip");
-  if (!chip?.dataset.path) return;
+  const row = event.target.closest(".turn-files-row");
+  if (!row?.dataset.path) return;
   event.stopPropagation();
-  void filePreviewFollow.openPath(chip.dataset.path).catch(() => {});
+  void filePreviewFollow.openPath(row.dataset.path).catch(() => {});
 });
 messagesContainer.addEventListener("messagefork", async (e) => {
   const { entryId, text } = e.detail || {};
@@ -2537,6 +2505,9 @@ wsClient.addEventListener("disconnected", () => {
       state.setStreaming(false);
       showTypingIndicator(false);
       updateUI();
+      // The run's agent_end will never re-fire; settle the live turn so no
+      // spinner or 1s status timer survives the disconnect.
+      if (activeTurn) settleLiveTurn();
     }
   }, 3000);
 });
@@ -2548,17 +2519,8 @@ wsClient.addEventListener("reconnectFailed", () => {
 
 wsClient.addEventListener("runtimeError", (e) => {
   const { requestId, code, message } = e.detail || {};
-  const pending = requestId ? inFlightPrompts.get(requestId) : null;
-  if (!pending) return;
-  clearTimeout(pending.timer);
-  inFlightPrompts.delete(requestId);
-  state.setStreaming(false);
-  showTypingIndicator(false);
-  messageRenderer.renderError(t("errors.messageNotDelivered", { detail: message || code }));
-  if (pending.message && !messageInput.value.trim()) {
-    messageInput.value = pending.message;
-    messageInput.style.height = "auto";
-  }
+  if (!requestId || !promptDelivery.get(requestId)) return;
+  promptDelivery.rejectByRequestId(requestId, { code, message });
 });
 
 wsClient.addEventListener("runtimeEvent", (e) => {
@@ -2572,6 +2534,7 @@ wsClient.addEventListener("runtimeEvent", (e) => {
     ...frame.event,
     __target: frame.target,
     __sequence: frame.sequence,
+    __turnId: frame.turnId ?? frame.event?.turnId ?? null,
   });
 });
 
@@ -2871,6 +2834,107 @@ function getCurrentLiveSessionFile(event = null) {
   );
 }
 
+// ── Live turn orchestration (spec P1) ──────────────────────────────────────
+// The main window renders each agent run into one <section class="turn">:
+// optimistic user bubble + status header + rail (thinking/tools/demoted text)
+// + final answer. This replaces collapseCompletedTurn()'s post-hoc surgery —
+// content lands in the right slot as it arrives.
+const TURNS_RENDERING = true; // opt-in; reverting restores flat rendering
+
+let activeTurn = null;
+let activeTurnStartedAt = null;
+let pendingUserEl = null; // optimistic user bubble awaiting agent_start claim
+let pendingUserKey = null; // runtime key the bubble was rendered under
+let pendingPromptPreview = ""; // prompt text for the turn registry at open
+let turnRailSteps = 0;
+let turnRailToolCalls = 0;
+
+function runtimeKeyOf(target) {
+  if (!target?.workspaceId || !target?.sessionId) return "route";
+  return `${target.workspaceId}/${target.sessionId}/${target.instanceId ?? "primary"}`;
+}
+
+function closeLiveTurn({ settled = false } = {}) {
+  if (!activeTurn) return;
+  if (!settled) {
+    // A turn that never saw agent_end (reconnect, session switch): settle it
+    // with no duration rather than leaving a live spinner behind.
+    activeTurn.status.setSettled(null);
+  }
+  activeTurn.rail.setLabel(summarizeTurnRail(turnRailSteps, turnRailToolCalls));
+  activeTurn.rail.setDisclosure(false);
+  activeTurn.status.destroy();
+  activeTurn = null;
+  activeTurnStartedAt = null;
+  pendingUserEl = null;
+  pendingUserKey = null;
+}
+
+function openLiveTurn(event = null) {
+  if (!TURNS_RENDERING) return;
+  closeLiveTurn();
+  activeTurnStartedAt = Date.now();
+  activeTurn = createTurnSection({
+    turnId: event?.__turnId ?? null,
+    modelLabel: currentModelId || "",
+    startedAt: activeTurnStartedAt,
+  });
+  // Claim the optimistic user bubble only when it was rendered under the
+  // runtime this event belongs to; otherwise this is an assistant-origin turn
+  // and the stale bubble stays flat (cleared on session switch/agent end).
+  if (pendingUserEl?.isConnected) {
+    const eventKey = runtimeKeyOf(event?.__target || wsClient.getRuntimeTarget());
+    if (!pendingUserKey || !eventKey || pendingUserKey === eventKey) {
+      activeTurn.claimUserElement(pendingUserEl);
+    }
+  }
+  pendingUserEl = null;
+  pendingUserKey = null;
+  messagesElement.appendChild(activeTurn.element);
+  activeTurn.status.setLive();
+  turnRailSteps = 0;
+  turnRailToolCalls = 0;
+  registerTurn({
+    id: activeTurn.id,
+    promptPreview: pendingPromptPreview,
+    mountedElement: activeTurn.element,
+  });
+  pendingPromptPreview = "";
+}
+
+function settleLiveTurn() {
+  if (!activeTurn) return;
+  const duration = resolveTurnDurationMs({
+    startedAt: activeTurnStartedAt,
+    completedAt: Date.now(),
+  });
+  activeTurn.status.setSettled(duration);
+  registerTurn({
+    id: activeTurn.id,
+    answerPreview: activeTurn.answer.host.textContent ?? "",
+  });
+  closeLiveTurn({ settled: true });
+}
+
+/**
+ * Live expression of classifyTurnSegments: when a tool call starts, the
+ * answer slot's open text segment is demoted into the rail (at most once per
+ * element), preserving arrival order exactly like history rendering.
+ */
+function demoteAnswerSegmentIntoRail() {
+  if (!activeTurn) return;
+  const host = activeTurn.answer.host;
+  const el = host.lastElementChild;
+  if (!el?.classList?.contains("assistant") || el.dataset.turnDemoted) return;
+  el.dataset.turnDemoted = "true";
+  // Rail rows carry no toolbar and use the settled (history) styling — the
+  // same contract history rail rows render under.
+  el.querySelector(".message-actions")?.remove();
+  el.classList.add("history");
+  activeTurn.rail.host.appendChild(el);
+  turnRailSteps += 1;
+}
+
 function handleAgentSettled() {
   // 兜底：agent_end 正常已处理；此处仅在其未到达（如重连后不再重发）时
   // 确保 streaming/typing 状态归位。幂等，无副作用（不重复通知/markUnread）。
@@ -2878,68 +2942,19 @@ function handleAgentSettled() {
   showTypingIndicator(false);
   const live = getCurrentLiveSessionFile();
   if (live) sidebar.setStreaming(live, false);
-  // Fold the just-finished turn's thinking + tool noise into a collapsed
-  // "Process details" row so chat history stays scannable. Live turn stays
-  // expanded while streaming; collapse is purely post-hoc.
-  collapseCompletedTurn();
-}
-
-/**
- * Walk the just-finished turn's children in the messages container (everything
- * after the last .user message) and pack any thinking blocks and tool cards
- * into a collapsed process-details group. The user prompt and final assistant
- * answer stay visible; everything else gets folded away.
- */
-function collapseCompletedTurn() {
-  const children = Array.from(messagesElement.children);
-  let lastUserIdx = -1;
-  for (let i = children.length - 1; i >= 0; i--) {
-    if (children[i].classList.contains("user")) {
-      lastUserIdx = i;
-      break;
-    }
-  }
-  const afterUser = children.slice(lastUserIdx + 1);
-  if (afterUser.length === 0) return;
-
-  const group = createProcessDetailsGroup();
-  let stepCount = 0;
-  let toolCallCount = 0;
-  let inserted = false;
-  const insertGroupBefore = (el) => {
-    if (inserted) return;
-    el.before(group.wrapper);
-    inserted = true;
-  };
-
-  for (const el of afterUser) {
-    if (el.classList.contains("tool-card")) {
-      insertGroupBefore(el);
-      group.body.appendChild(el);
-      stepCount += 1;
-      toolCallCount += 1;
-      continue;
-    }
-    if (el.classList.contains("assistant")) {
-      const thinkingEl = el.querySelector(".thinking-block");
-      if (!thinkingEl) continue;
-      insertGroupBefore(el);
-      thinkingEl.remove();
-      group.body.appendChild(thinkingEl);
-      stepCount += 1;
-      const contentEl = el.querySelector(".message-content");
-      const hasRemainingContent = Boolean(contentEl?.textContent.trim());
-      if (!hasRemainingContent) el.remove();
-    }
-  }
-
-  if (group.body.children.length === 0) return; // nothing to fold away; wrapper was never inserted
-  group.setLabel(summarizeProcessGroup(stepCount, toolCallCount));
+  // The turn's fold now happens structurally at settle time (P1): if
+  // agent_end was missed, settle whatever turn is still open.
+  if (activeTurn) settleLiveTurn();
+  // Files-card fallback for a missed agent_end. settleTurnWrites() drains, so
+  // whichever path runs first renders the card and the second sees an empty
+  // list and returns: the two paths are idempotent by construction.
+  void appendTurnFilesCard();
 }
 
 function handleAgentStart(event = null) {
   state.setStreaming(true);
   showTypingIndicator(true);
+  openLiveTurn(event);
   // A fresh run is under way — clear any prior error latch so a normal turn
   // isn't treated as "stuck on a failed model" by the model switcher.
   lastTurnErrored = false;
@@ -2997,18 +3012,22 @@ function handleAgentEnd(event = null) {
     document.title = `(${unreadCount}) ● ${originalTitle}`;
   }
 
-  // Fold the just-finished turn's thinking + tool noise into a collapsed
-  // "Process details" row so chat history stays scannable. The live turn
-  // stays expanded while streaming; collapse is purely post-hoc and runs
-  // once the agent settles. agent_end is the normal completion path;
-  // handleAgentSettled covers the reconnect fallback when agent_end is
-  // never re-delivered.
-  collapseCompletedTurn();
-  appendTurnFileChips();
+  // P1: the finished turn settles structurally — status header gets its
+  // duration, the rail folds to its summary label. agent_end is the normal
+  // completion path; handleAgentSettled covers a missed agent_end.
+  settleLiveTurn();
+  void appendTurnFilesCard();
 }
 
 let lastTurnAssistantElement = null;
-function appendTurnFileChips() {
+/**
+ * Turn files card (2026-09-19 spec): the turn's written files render as a
+ * collapsed card after the answer, one row per file with frozen-at-turn-end
+ * git stats. Stats come from ONE host query (working-tree cumulative); any
+ * failure — non-git workspace, git error, transport down — degrades to a
+ * plain file list, never blocking the transcript.
+ */
+async function appendTurnFilesCard() {
   const writes = state.settleTurnWrites();
   if (!writes.length) {
     lastTurnAssistantElement = null;
@@ -3017,8 +3036,24 @@ function appendTurnFileChips() {
   const host = lastTurnAssistantElement?.isConnected ? lastTurnAssistantElement : null;
   lastTurnAssistantElement = null;
   if (!host) return;
-  const row = renderTurnFileChips(writes);
-  if (row) host.insertAdjacentElement("afterend", row);
+  let statsByPath = null;
+  let statsUnavailable = false;
+  try {
+    const result = await transport.gitTurnStats(writes.map((entry) => entry.filePath));
+    // The op echoes one entry per requested path, so a short or absent array is
+    // a contract violation: a failed read, not "nothing changed".
+    if (Array.isArray(result?.files) && result.files.length === writes.length) {
+      statsByPath = new Map(result.files.map((file) => [file.path, file]));
+    } else {
+      statsUnavailable = true;
+    }
+  } catch {
+    // Non-git workspace, git failure, or timeout: the card says the stats are
+    // unavailable rather than looking like "nothing changed" (2026-09-19 spec).
+    statsUnavailable = true;
+  }
+  const card = renderTurnFilesCard({ writes, statsByPath, statsUnavailable });
+  if (card && host.isConnected) mountTurnFilesCard(host, card);
 }
 
 let currentStreamingThinking = "";
@@ -3027,7 +3062,13 @@ function handleMessageStart(message) {
   if (message.role === "assistant") {
     currentStreamingText = "";
     currentStreamingThinking = "";
-    currentStreamingElement = messageRenderer.renderAssistantMessage({ content: "" }, true);
+    // P1: a live turn's new assistant segment opens in the answer slot.
+    currentStreamingElement = messageRenderer.renderAssistantMessage(
+      { content: "" },
+      true,
+      false,
+      activeTurn?.answer?.host ?? null,
+    );
   } else if (message.role === "user") {
     if (!lastSentMessage || getMessageText(message) !== lastSentMessage) {
       const content = getMessageText(message);
@@ -3089,9 +3130,21 @@ function ensureStreamingAssistantElement(message = null) {
   if (currentStreamingElement) return currentStreamingElement;
   currentStreamingText = getAssistantText(message);
   currentStreamingThinking = getAssistantThinking(message);
-  currentStreamingElement = messageRenderer.renderAssistantMessage({ content: "" }, true);
+  // P1: with a live turn open, the assistant segment renders into the turn's
+  // answer slot; demotion moves it into the rail when a tool call follows.
+  const turnHost = activeTurn?.answer?.host ?? null;
+  currentStreamingElement = messageRenderer.renderAssistantMessage(
+    { content: "" },
+    true,
+    false,
+    turnHost,
+  );
   if (currentStreamingThinking) {
-    messageRenderer.updateStreamingThinking(currentStreamingElement, currentStreamingThinking);
+    if (activeTurn) {
+      messageRenderer.renderStreamingThinkingInto(activeTurn.rail.host, currentStreamingThinking);
+    } else {
+      messageRenderer.updateStreamingThinking(currentStreamingElement, currentStreamingThinking);
+    }
   }
   if (currentStreamingText) {
     messageRenderer.updateStreamingMessage(currentStreamingElement, currentStreamingText);
@@ -3108,7 +3161,10 @@ function handleMessageUpdate(event) {
   if (assistantMessageEvent.type === "thinking_delta") {
     currentStreamingThinking =
       getAssistantThinking(message) || currentStreamingThinking + assistantMessageEvent.delta;
-    if (currentStreamingElement) {
+    if (activeTurn) {
+      // P1: thinking renders into the rail, never inside .message-content.
+      messageRenderer.renderStreamingThinkingInto(activeTurn.rail.host, currentStreamingThinking);
+    } else if (currentStreamingElement) {
       messageRenderer.updateStreamingThinking(currentStreamingElement, currentStreamingThinking);
     }
   } else if (assistantMessageEvent.type === "text_delta") {
@@ -3155,11 +3211,13 @@ function handleMessageEnd(message, eventSessionFile = null, entryId = null) {
   if (currentStreamingElement) {
     // Pass usage info for cost display
     const usage = message?.usage || null;
-    // Pass thinking content so finalize can render the thinking block
+    // P1: with a live turn open the rail already owns the thinking block —
+    // finalize must not rebuild it inside .message-content (duplicate render
+    // of the same thinking in rail AND answer). Flat rendering keeps it.
     messageRenderer.finalizeStreamingMessage(
       currentStreamingElement,
       usage,
-      currentStreamingThinking,
+      activeTurn ? "" : currentStreamingThinking,
     );
     // Remember the turn's latest assistant element; agent_end settles the
     // turn's writes and renders the chips row under it (a turn may contain
@@ -3206,7 +3264,14 @@ function handleToolExecutionStart(event) {
     status: "pending",
   });
 
-  toolCardRenderer.createToolCard(state.getToolExecution(toolCallId));
+  if (activeTurn) {
+    demoteAnswerSegmentIntoRail();
+    turnRailSteps += 1;
+    turnRailToolCalls += 1;
+    toolCardRenderer.createToolCard(state.getToolExecution(toolCallId), activeTurn.rail.host);
+  } else {
+    toolCardRenderer.createToolCard(state.getToolExecution(toolCallId));
+  }
   filePreviewFollow.onToolStart(event);
 }
 
@@ -3312,6 +3377,15 @@ messageInput.addEventListener("keydown", (e) => {
   const isImeComposing = e.isComposing || e.keyCode === 229;
   if (isImeComposing) return;
 
+  // Option/Alt+Enter queues a follow-up while a run is streaming (C5). The
+  // interception must precede the plain-Enter branch, which would otherwise
+  // treat Alt+Enter as a normal send.
+  if (e.key === "Enter" && e.altKey && !e.shiftKey) {
+    e.preventDefault();
+    void sendFollowUp();
+    return;
+  }
+
   // Enter sends, Shift+Enter inserts newline
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
@@ -3319,10 +3393,11 @@ messageInput.addEventListener("keydown", (e) => {
   }
 });
 
-// Auto-resize textarea without persisting unsent text per session.
+// Auto-resize textarea; unsent text persists per session as a C4 draft.
 messageInput.addEventListener("input", () => {
   messageInput.style.height = "auto";
   messageInput.style.height = `${Math.min(messageInput.scrollHeight, 160)}px`;
+  scheduleDraftSave();
 });
 
 // ═══════════════════════════════════════
@@ -3392,19 +3467,150 @@ composerCard.addEventListener(
 // Send message (with images)
 // ═══════════════════════════════════════
 
-const messageQueue = [];
+// Direct sends are delivery-recorded (C3): the composer's text and attachments
+// are released only on Pi's correlated acceptance, restored on rejection, and
+// surfaced as an unconfirmed pill when no reply arrives within 8s.
+const attachmentCommandImage = (img) => ({
+  type: "image",
+  data: img.data,
+  mimeType: img.mimeType || "image/png",
+});
 
-// Prompts are sent fire-and-forget over the WebSocket. The broker replies with
-// `command_undeliverable` (correlated by requestId) when it cannot route the
-// command to a live pi process. We track in-flight prompt requestIds here so the
-// Runtime errors are correlated by requestId so a dropped prompt restores its
-// text instead of silently disappearing. Entries self-expire after dispatch.
-const inFlightPrompts = new Map();
+function composerIdentity() {
+  return resolveComposerSessionIdentity({
+    activeUiSessionFile,
+    runtimeTarget: wsClient.getRuntimeTarget(),
+  });
+}
 
-function trackPromptDelivery(requestId, message) {
-  if (!requestId) return;
-  const timer = setTimeout(() => inFlightPrompts.delete(requestId), 8000);
-  inFlightPrompts.set(requestId, { message, timer });
+const promptDelivery = createPromptDelivery({
+  send: (cmd) => wsClient.sendRuntimeWithId(cmd),
+  onAccept: (record, { late }) => {
+    updateUI();
+    // A pull-back already restored the text on purpose; never fight it.
+    if (late && record.pulledBack) return;
+    if (messageInput.value === record.textAtSend) {
+      messageInput.value = "";
+      messageInput.style.height = "auto";
+    }
+    if (record.imageSources.length > 0) {
+      mainImageAttachments.removePendingImages(record.imageSources);
+      // A session switch stashed the same image objects for the sending
+      // identity; consume them there too or switching back would resurrect
+      // already-accepted attachments.
+      if (record.sessionIdentity && attachmentStash.has(record.sessionIdentity)) {
+        const remaining = attachmentStash
+          .get(record.sessionIdentity)
+          .filter((img) => !record.imageSources.includes(img));
+        if (remaining.length > 0) attachmentStash.set(record.sessionIdentity, remaining);
+        else attachmentStash.delete(record.sessionIdentity);
+      }
+    }
+    if (record.sessionIdentity) {
+      const stored = composerDraftStore.get(record.sessionIdentity);
+      if (stored === record.textAtSend || stored === record.text) {
+        void composerDraftStore.clear(record.sessionIdentity);
+      }
+    }
+    renderQueuedMessages();
+  },
+  onReject: (record, reason) => {
+    updateUI();
+    // Only a rejection of a send dispatched while idle may unlock the
+    // streaming UI: that run never started. A dispatch made mid-run
+    // (follow_up, or a direct send racing a run) must not end another
+    // run's streaming state.
+    if (record.streamingAtDispatch === false) {
+      state.setStreaming(false);
+      showTypingIndicator(false);
+    }
+    messageRenderer.renderError(
+      t("errors.messageNotDelivered", { detail: reason?.message || reason?.code || "" }),
+    );
+    if (record.pulledBack) return; // text already back in the composer
+    if (record.sessionIdentity && record.sessionIdentity !== composerIdentity()) {
+      // The visible composer now belongs to another session: never touch its
+      // DOM. The failed text goes back to the sending identity's draft store,
+      // and only where it cannot overwrite a newer draft (an empty store, or
+      // one still holding exactly the failed send's own text).
+      const stored = composerDraftStore.get(record.sessionIdentity);
+      if (!stored || stored === record.textAtSend) {
+        void composerDraftStore.save(record.sessionIdentity, record.text);
+      }
+      renderQueuedMessages();
+      return;
+    }
+    const current = messageInput.value;
+    if (!current.trim()) {
+      messageInput.value = record.text;
+    } else if (current !== record.textAtSend) {
+      // Newer draft wins position; the failed text is appended after it.
+      messageInput.value = `${current}\n${record.text}`;
+    }
+    renderQueuedMessages();
+  },
+  onUnconfirmed: () => {
+    updateUI();
+    renderQueuedMessages();
+  },
+});
+
+// ── Per-session composer drafts (C4) ──────────────────────────────────────
+// Drafts are keyed by the composer session identity, debounced while typing,
+// and force-saved at every edge where the page may stop running. Attachments
+// are stashed in memory per identity (persisting image bytes is out of scope).
+const composerDraftStore = createComposerDraftStore({ preferences: preferencesClient });
+void composerDraftStore.loadAll();
+const attachmentStash = new Map(); // identity -> pending image objects
+let draftSaveTimer = null;
+
+function scheduleDraftSave() {
+  if (draftSaveTimer) clearTimeout(draftSaveTimer);
+  draftSaveTimer = setTimeout(() => {
+    draftSaveTimer = null;
+    const text = messageInput.value;
+    if (text.trim()) void composerDraftStore.save(composerIdentity(), text);
+    else void composerDraftStore.clear(composerIdentity());
+  }, 300);
+}
+
+function flushDraftNow() {
+  if (draftSaveTimer) {
+    clearTimeout(draftSaveTimer);
+    draftSaveTimer = null;
+  }
+  const text = messageInput.value;
+  if (text.trim()) void composerDraftStore.save(composerIdentity(), text);
+  else void composerDraftStore.clear(composerIdentity());
+}
+
+window.addEventListener("pagehide", flushDraftNow);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flushDraftNow();
+});
+
+// Session switch: the outgoing identity's draft/attachments are captured
+// synchronously (a pending timer is not a saved draft), then the incoming
+// identity's state restores. The composer text is REPLACED unconditionally:
+// whatever it held belongs to the outgoing identity, so keeping it would leak
+// (and let the user send) one session's draft while authoring for another.
+// A cross-page swap-navigation draft was already force-saved for its own
+// identity before navigation; the incoming session's own draft is what shows.
+function switchComposerIdentityState(previousIdentity) {
+  if (draftSaveTimer) {
+    clearTimeout(draftSaveTimer);
+    draftSaveTimer = null;
+  }
+  const outgoing = messageInput.value;
+  if (outgoing.trim()) void composerDraftStore.save(previousIdentity, outgoing);
+  else void composerDraftStore.clear(previousIdentity);
+  const outgoingImages = mainImageAttachments.getPendingImages();
+  if (outgoingImages.length > 0) attachmentStash.set(previousIdentity, outgoingImages);
+  else attachmentStash.delete(previousIdentity);
+
+  const nextIdentity = composerIdentity();
+  mainImageAttachments.replacePendingImages(attachmentStash.get(nextIdentity) || []);
+  setComposerDraft(composerDraftStore.get(nextIdentity) || "");
 }
 
 function refreshSidebarAfterUserPrompt() {
@@ -3431,75 +3637,201 @@ function subscribeToLiveRuntimeTargets() {
 function sendMessage() {
   if (mainPasteOffload.isBusy()) return;
   if (!currentOnboardingState().canQuery) return;
+  // One correlated send at a time: the delivery record owns the input until
+  // acceptance/rejection settles, so a second Enter cannot double-send.
+  if (promptDelivery.hasAwaiting()) return;
 
   const message = messageInput.value.trim();
   if (!message) return;
 
-  messageInput.value = "";
-  messageInput.style.height = "auto";
   const cmd = {
     type: "prompt",
     message,
   };
 
-  const images = mainImageAttachments.consumePendingImages();
-  if (images.length > 0) {
-    cmd.images = images;
+  // Snapshot pending attachments without consuming them: previews stay up,
+  // acceptance removes exactly these, and a rejection leaves them pending.
+  const imageSources = [...mainImageAttachments.getPendingImages()];
+  if (imageSources.length > 0) {
+    cmd.images = imageSources.map(attachmentCommandImage);
   }
 
   if (state.isStreaming) {
-    // Queue it — show as bubble above input
-    messageQueue.push(cmd);
-    lastSentMessage = message;
-    renderQueuedMessages();
+    // Streaming-Enter sends REAL steering (2026-09-19 steering spec): the
+    // local client-side queue is gone — the message goes to pi now and is
+    // injected between tool calls; the "Steer" pill comes from queue_update.
+    void sendSteering();
     return;
   }
 
   lastSentMessage = message;
-  // Direct sends bypass flushQueue(). Mark a fresh runtime here too, or its
+  // Direct sends are immediate. Mark a fresh runtime here too, or its
   // first persisted JSONL never triggers refreshSidebarForNewSession() and
   // appears only after the user manually refreshes the sidebar.
   markPendingNewSessionRefresh();
-  renderNavigableUserMessage({ content: message, images: cmd.images, timestamp: Date.now() });
-  trackPromptDelivery(wsClient.send(cmd), message);
+  const optimisticEl = renderNavigableUserMessage({
+    content: message,
+    images: cmd.images,
+    timestamp: Date.now(),
+  });
+  // P1: the bubble awaits agent_start's claim into the open turn; the key
+  // stops a stale bubble from crossing sessions/runtimes.
+  pendingUserEl = optimisticEl;
+  pendingUserKey = runtimeKeyOf(wsClient.getRuntimeTarget());
+  pendingPromptPreview = message;
+  promptDelivery.dispatch(cmd, {
+    kind: "prompt",
+    text: message,
+    textAtSend: messageInput.value,
+    images: cmd.images || [],
+    imageSources,
+    sessionIdentity: composerIdentity(),
+    streamingAtDispatch: state.isStreaming,
+  });
+}
+
+// ── Follow-up queue send (C5) ──────────────────────────────────────────────
+// `follow_up` only queues inside pi; extension commands cannot be queued
+// (they execute immediately even mid-run), so the send intent consults the
+// same get_commands registry the composer menu reads.
+let extensionCommandNames = null; // Set<string> | null (null = registry not loaded)
+
+async function loadExtensionCommandNames() {
+  if (extensionCommandNames) return extensionCommandNames;
+  try {
+    const data = await wsRequest({ type: "get_commands" }, RUNTIME_GET_COMMANDS_TIMEOUT_MS);
+    extensionCommandNames = new Set(
+      (Array.isArray(data?.commands) ? data.commands : [])
+        .filter((command) => command?.source === "extension" && typeof command?.name === "string")
+        .map((command) => command.name.replace(/^\//, "").toLowerCase()),
+    );
+  } catch {
+    extensionCommandNames = new Set(); // unknown registry: degrade to queueable
+  }
+  return extensionCommandNames;
+}
+
+function firstCommandToken(message) {
+  const match = String(message).match(/^\/([^\s]+)/);
+  return match ? match[1].toLowerCase() : null;
+}
+
+/**
+ * Streaming-Enter send (2026-09-19 steering spec): plain text goes as
+ * `prompt + streamingBehavior:"steer"` (delivered between tool calls, before
+ * the next LLM call — genuine mid-run course correction); an extension
+ * command goes as a bare prompt (the protocol executes those immediately
+ * even mid-run). No optimistic bubble — the "Steer" pill renders from
+ * queue_update; delivery rides the C3 record like every other send.
+ */
+async function sendSteering() {
+  if (mainPasteOffload.isBusy()) return;
+  if (!currentOnboardingState().canQuery) return;
+  if (promptDelivery.hasAwaiting()) return;
+  const message = messageInput.value.trim();
+  if (!message) return;
+
+  const token = firstCommandToken(message);
+  const extensionCommand = token ? (await loadExtensionCommandNames()).has(token) : false;
+  const intent = planSteeringSend({ streaming: state.isStreaming, extensionCommand });
+  if (intent === "direct") {
+    sendMessage(); // not streaming (or fell idle between keypress and here)
+    return;
+  }
+
+  const cmd = { type: "prompt", message };
+  if (intent === "steer") cmd.streamingBehavior = "steer";
+  // intent === "prompt-now": extension commands execute immediately, even
+  // during streaming — a bare prompt is the protocol-sanctioned form.
+  const imageSources = [...mainImageAttachments.getPendingImages()];
+  if (imageSources.length > 0) {
+    cmd.images = imageSources.map(attachmentCommandImage);
+  }
+  promptDelivery.dispatch(cmd, {
+    kind: intent === "steer" ? "steer" : "prompt",
+    text: message,
+    textAtSend: messageInput.value,
+    images: cmd.images || [],
+    imageSources,
+    sessionIdentity: composerIdentity(),
+  });
+}
+
+async function sendFollowUp() {
+  if (mainPasteOffload.isBusy()) return;
+  if (!currentOnboardingState().canQuery) return;
+  if (promptDelivery.hasAwaiting()) return;
+  const message = messageInput.value.trim();
+  if (!message) return;
+
+  const token = firstCommandToken(message);
+  const extensionCommand = token ? (await loadExtensionCommandNames()).has(token) : false;
+  if (planFollowUpSend({ streaming: state.isStreaming, extensionCommand }) === "direct") {
+    // Idle (user intent is delivery) or an extension command (executes
+    // immediately): the plain Enter path is the correct behavior.
+    sendMessage();
+    return;
+  }
+
+  const cmd = { type: "follow_up", message };
+  const imageSources = [...mainImageAttachments.getPendingImages()];
+  if (imageSources.length > 0) {
+    cmd.images = imageSources.map(attachmentCommandImage);
+  }
+  // No optimistic user bubble and no lastSentMessage accounting: the queued
+  // message surfaces via queue_update → renderPiQueue (queue.followUp label).
+  // Delivery follows the C3 record: acceptance releases the composer.
+  promptDelivery.dispatch(cmd, {
+    kind: "follow_up",
+    text: message,
+    textAtSend: messageInput.value,
+    images: cmd.images || [],
+    imageSources,
+    sessionIdentity: composerIdentity(),
+    streamingAtDispatch: state.isStreaming,
+  });
 }
 
 const queuedMessagesEl = document.getElementById("queued-messages");
 
 function renderQueuedMessages() {
+  // The local client-side queue is gone (2026-09-19 steering spec): this
+  // area renders only C3's unconfirmed-delivery pills now.
   queuedMessagesEl.replaceChildren();
-  if (messageQueue.length === 0) {
+  const unconfirmedRecords = promptDelivery.unconfirmed();
+  if (unconfirmedRecords.length === 0) {
     queuedMessagesEl.classList.add("hidden");
     return;
   }
   queuedMessagesEl.classList.remove("hidden");
-  messageQueue.forEach((cmd, i) => {
+  for (const record of unconfirmedRecords) {
     const item = document.createElement("div");
-    item.className = "queued-msg";
+    item.className = "queued-msg unconfirmed-msg";
+    item.title = t("queue.unconfirmedSend");
     const label = document.createElement("span");
     label.className = "queued-msg-label";
-    label.textContent = t("queue.queued");
+    label.textContent = t("queue.unconfirmedSend");
     const message = document.createElement("span");
     message.className = "queued-msg-text";
-    message.textContent = cmd.message;
-    const cancel = document.createElement("button");
-    cancel.className = "queued-msg-cancel";
-    cancel.title = t("queue.cancelTitle");
-    cancel.setAttribute("aria-label", t("queue.cancelTitle"));
-    const cancelIcon = createIcon("x", { size: 14 });
-    if (cancelIcon) cancel.appendChild(cancelIcon);
-    cancel.addEventListener("click", () => {
-      messageQueue.splice(i, 1);
-      renderQueuedMessages();
+    message.textContent = record.text;
+    item.append(label, message);
+    // Clicking the pill restores its text without sending.
+    item.addEventListener("click", () => {
+      if (!promptDelivery.pullBack(record.requestId)) return;
+      if (!messageInput.value.trim()) messageInput.value = record.text;
+      else if (!messageInput.value.includes(record.text))
+        messageInput.value = `${messageInput.value}\n${record.text}`;
+      messageInput.dispatchEvent(new Event("input", { bubbles: true }));
+      messageInput.focus();
     });
-    item.append(label, message, cancel);
     queuedMessagesEl.appendChild(item);
-  });
+  }
 }
 
 function renderPiQueue(event) {
-  // 只读展示 pi 侧 steer/followUp 队列（来自 queue_update 事件）。
-  // 与本地连发队列（messageQueue / renderQueuedMessages）相互独立，不改其逻辑。
+  // pi 侧 steer/followUp 队列（queue_update 事件）。本地客户端队列已删除
+  // （2026-09-19 steering spec）：Enter=steer、Alt+Enter=follow_up 都排 pi 队列，
+  // 这里是唯一的队列展示面，pill 只读；清空走 clear_queue（Q2-A）。
   const steering = Array.isArray(event?.steering) ? event.steering : [];
   const followUp = Array.isArray(event?.followUp) ? event.followUp : [];
   const el = getOrCreatePiQueueEl();
@@ -3513,6 +3845,19 @@ function renderPiQueue(event) {
     return;
   }
   el.classList.remove("hidden");
+  // Header with the one protocol-supported cancel: clear_queue removes ALL
+  // queued steering+followUp and returns their text, which lands back in the
+  // composer (Q2-A — per-item removal does not exist).
+  const header = document.createElement("div");
+  header.className = "pi-queue-header";
+  const clear = document.createElement("button");
+  clear.type = "button";
+  clear.className = "pi-queue-clear";
+  clear.textContent = t("queue.clearQueue");
+  clear.setAttribute("aria-label", t("queue.clearQueue"));
+  clear.addEventListener("click", () => void clearPiQueueAndRestore());
+  header.appendChild(clear);
+  el.appendChild(header);
   for (const { kind, msg } of items) {
     const item = document.createElement("div");
     item.className = "queued-msg pi-queued-msg";
@@ -3536,17 +3881,6 @@ function getOrCreatePiQueueEl() {
     queuedMessagesEl.insertAdjacentElement("afterend", el);
   }
   return el;
-}
-
-function flushQueue() {
-  if (messageQueue.length > 0 && !state.isStreaming) {
-    markPendingNewSessionRefresh();
-
-    const cmd = messageQueue.shift();
-    renderNavigableUserMessage({ content: cmd.message, images: cmd.images, timestamp: Date.now() });
-    renderQueuedMessages();
-    trackPromptDelivery(wsClient.send(cmd), cmd.message);
-  }
 }
 
 abortBtn.addEventListener("click", () => {
@@ -3586,15 +3920,34 @@ const commands = [
     icon: "chevrons-down",
     label: t("input.expandAllTools"),
     desc: t("input.expandAllToolsDesc"),
-    action: () => toolCardRenderer.expandAll(),
+    action: () => {
+      setAllProcessRailsExpanded(true);
+      toolCardRenderer.expandAll();
+    },
   },
   {
     icon: "chevrons-up",
     label: t("input.collapseAllTools"),
     desc: t("input.collapseAllToolsDesc"),
-    action: () => toolCardRenderer.collapseAll(),
+    action: () => {
+      setAllProcessRailsExpanded(false);
+      toolCardRenderer.collapseAll();
+    },
   },
 ];
+
+/**
+ * Expand/collapse every process rail on screen. A collapsed rail group hides
+ * all of its cards, so card-level expansion alone has no visible effect —
+ * the group wrappers must toggle too (covers live .turn-rail and history
+ * .process-details-group alike; both share the process-details base class).
+ */
+function setAllProcessRailsExpanded(expanded) {
+  messagesElement.querySelectorAll(".process-details-group").forEach((el) => {
+    el.classList.toggle("expanded", expanded);
+    el.querySelector(".process-details-toggle")?.setAttribute("aria-expanded", String(expanded));
+  });
+}
 const mainCommandMenu = setupComposerCommandMenu({
   button: commandBtn,
   menu: commandPalette,
@@ -3605,6 +3958,14 @@ const mainCommandMenu = setupComposerCommandMenu({
   createIcon,
 });
 commandPaletteOverlay.addEventListener("click", mainCommandMenu.close);
+
+// Split send button (2026-09-19 manual review): the caret beside Send is a
+// DIRECT delayed-send control — no dropdown, no floating widget. The click
+// shares sendFollowUp with Option/Alt+Enter, so idle degrades to a direct
+// send and extension commands take the normal path automatically.
+const sendCaretBtn = document.getElementById("send-caret-btn");
+setButtonIcon(sendCaretBtn, "chevron-up", { size: 12 });
+sendCaretBtn.addEventListener("click", () => void sendFollowUp());
 
 // Commands the embedded Pi RPC protocol answers directly (pi `docs/rpc.md`).
 // The native runtime forwards these as a v2 `runtime_request`; there is no
@@ -3769,32 +4130,21 @@ async function rpcCommand(cmd, statusMsg, silent = false) {
 }
 
 async function rpcExportHtml() {
-  const sessionFile = mirrorActiveSessionFile || sidebar.activeSessionFile || null;
-  const session = sidebar.projects
-    .flatMap((project) => project.sessions || [])
-    .find((candidate) => candidate.filePath === sessionFile);
-  const sessionId = session?.id || (sessionFile && !sessionFile.includes("/") ? sessionFile : null);
-  if (!sessionId) {
-    statusText.textContent = t("status.failed");
-    return;
-  }
   try {
     statusText.textContent = t("status.exporting");
-    const result = await transport.exportSession(sessionId);
-    const exportUrl = result?.exportUrl;
-    if (!exportUrl) throw new Error("Session export URL unavailable");
-    const response = await fetch(exportUrl);
-    if (!response.ok) throw new Error(`Session export failed (${response.status})`);
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `${sessionId}.html`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
+    // pi's export_html RPC writes the file itself (rpc.md) — by default into
+    // the workspace cwd — and returns its path. Opening happens in Picot's
+    // own HTML preview: the system opener on a file:// URL would use the
+    // .html default HANDLER (an editor on dev machines), not the browser.
+    const result = await rpcCommand({ type: "export_html" }, null, true);
+    const exportedPath = result?.success ? result.data?.path : null;
+    if (!exportedPath) throw new Error(result?.error || "Session export returned no path");
     statusText.textContent = t("status.done");
+    const opened = await filePreviewFollow.openPath(exportedPath).catch(() => null);
+    if (!opened) {
+      // Preview unavailable: surface where the file landed instead.
+      messageRenderer.renderSystemMessage(exportedPath);
+    }
   } catch (error) {
     console.error("session export failed:", error);
     statusText.textContent = t("status.failed");
@@ -3808,7 +4158,10 @@ async function showSessionStats() {
   let data;
   try {
     statusText.textContent = t("status.loadingStats");
-    data = await wsRequest({ type: "get_session_stats" });
+    // rpcCommand re-wraps the runtime reply into { success, data } — the
+    // bare wsRequest shape (already-unwrapped data) never matched the old
+    // envelope check, so stats silently never rendered.
+    data = await rpcCommand({ type: "get_session_stats" }, null, true);
   } catch (error) {
     console.error("session stats failed:", error);
     statusText.textContent = t("status.failed");
@@ -4470,8 +4823,10 @@ function restoreSessionUiState(sessionFile) {
   // repeated restores of the same session don't needlessly invalidate an
   // in-flight profile restore.
   if (next !== activeUiSessionFile) {
+    const previousIdentity = composerIdentity();
     activeUiSessionFile = next;
     uiSessionGeneration += 1;
+    switchComposerIdentityState(previousIdentity);
   }
 }
 
@@ -5280,28 +5635,8 @@ function updateMirrorInputState() {
 // ═══════════════════════════════════════
 
 /** True when an assistant message has at least one text block worth showing. */
-function assistantHasText(content) {
-  if (typeof content === "string") return content.trim().length > 0;
-  if (!Array.isArray(content)) return false;
-  return content.some((b) => b?.type === "text" && String(b.text ?? "").trim().length > 0);
-}
-
-/**
- * Split the final assistant message of a turn into the steps that should be
- * folded away (everything up to and including the last non-text block —
- * thinking/tool-calls) and the final answer (trailing text blocks).
- */
-function splitFinalAssistantBlocks(content) {
-  if (!Array.isArray(content)) return { processBlocks: [], answerBlocks: [] };
-  let lastNonTextIdx = -1;
-  for (let i = 0; i < content.length; i++) {
-    if (content[i]?.type !== "text") lastNonTextIdx = i;
-  }
-  return {
-    processBlocks: content.slice(0, lastNonTextIdx + 1),
-    answerBlocks: content.slice(lastNonTextIdx + 1),
-  };
-}
+// assistantHasText / splitFinalAssistantBlocks moved to ui/turn-model.js so
+// the live segment classifier and history rendering share one implementation.
 
 /**
  * Render an assistant message's tool-call blocks as history cards. With a
@@ -5347,8 +5682,62 @@ function renderHistoryToolCallBlocks(blocks, toolResults, targetContainer) {
   return count;
 }
 
+// ── History fold gate (spec P2) ─────────────────────────────────────────────
+// Only the newest HISTORY_FULL_MOUNT_TURNS settled turns mount; older turns
+// sit behind one centred batch control. Revealing mounts incrementally before
+// the control, preserving the viewport anchor; a search render mounts
+// everything; the gate re-applies on the next plain render.
+const HISTORY_GATE_BATCH_TURNS = 10; // load-all chunk size per frame
+
+let historyGate = null;
+
+function historyGateKey() {
+  return activeUiSessionFile ?? mirrorActiveSessionFile ?? "transient";
+}
+
+function buildHistoryGateControl({ remaining, onOlder, onAll }) {
+  const control = document.createElement("div");
+  control.className = "history-gate";
+  const older = document.createElement("button");
+  older.type = "button";
+  older.className = "history-gate-btn";
+  older.textContent = `${t("messages.loadOlderHistory")} (${remaining})`;
+  older.addEventListener("click", onOlder);
+  const all = document.createElement("button");
+  all.type = "button";
+  all.className = "history-gate-all";
+  all.textContent = t("messages.loadAllHistory");
+  all.addEventListener("click", onAll);
+  control.append(older, all);
+  return control;
+}
+
+/** Insert a rendered turn fragment before the gate control, anchored. */
+function insertTurnFragmentBeforeControl(fragment) {
+  const before = messagesElement.scrollHeight;
+  const anchorTop = messagesElement.scrollTop;
+  historyGate.control.parentNode.insertBefore(fragment, historyGate.control);
+  const delta = messagesElement.scrollHeight - before;
+  if (delta > 0) messagesElement.scrollTop = anchorTop + delta;
+}
+
+function updateHistoryGateControl() {
+  const gate = historyGate;
+  if (!gate?.control?.isConnected) return;
+  const remaining = gate.turnCount - gate.revealedCount;
+  if (remaining <= 0) {
+    gate.control.remove();
+    return;
+  }
+  const btn = gate.control.querySelector(".history-gate-btn");
+  if (btn) btn.textContent = `${t("messages.loadOlderHistory")} (${remaining})`;
+}
+
 function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {}) {
   console.log(`[History] Rendering ${entries.length} entries`);
+  // P5.1: the rail's turn source is this registry, rebuilt per render. A
+  // session switch therefore resets it with the transcript.
+  turnRegistry.clear();
   let userCount = 0,
     assistantCount = 0,
     toolCardCount = 0,
@@ -5401,7 +5790,7 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
   }
   turns.push([turnStart, messages.length]);
 
-  const renderUserFromMsg = (msg, entryId = null) => {
+  const renderUserFromMsg = (msg, entryId = null, host = null) => {
     const content =
       typeof msg.content === "string"
         ? msg.content
@@ -5419,22 +5808,41 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
       : [];
     if (content || images.length > 0) {
       userCount++;
-      const el = renderNavigableUserMessage({
-        content: content || "",
-        images: images.length > 0 ? images : undefined,
-        isHistory: true,
-        timestamp: msg.timestamp,
-      });
+      const el = messageRenderer.renderUserMessage(
+        {
+          content: content || "",
+          images: images.length > 0 ? images : undefined,
+          timestamp: msg.timestamp,
+        },
+        true,
+        host,
+      );
       // Pi entry anchor: the Info tree scrolls the chat to these.
       if (el && entryId) el.dataset.entryId = entryId;
+      return el ?? null;
     }
+    return null;
   };
 
-  for (const [start, end] of turns) {
+  // One turn's history render, hostable: the initial pass appends to the
+  // messages element; gate reveals render into a fragment inserted before the
+  // batch control. Folding only affects mounting — entry ids, the Info tree
+  // and file chips render exactly as before (spec P2).
+  // P1: each turn renders through the same turn section the live stream uses
+  // (spec: "one turn model that both the live stream and history rendering
+  // use"), minus the status header — the session log carries no run duration
+  // and a live status is not reconstructable. The section is the registry's
+  // mounted anchor, so ensureTurnMounted returns a real [data-turn-id]
+  // element whose top is the user bubble's top.
+  const renderHistoryTurnInto = ([start, end], host) => {
     const anchor = messages[start];
     let bodyStart = start;
+    let turnUserEl = null;
+    const turnId = messageEntryIds[start] ?? `hist-${start}`;
+    const turnSection = createTurnSection({ turnId, withStatus: false });
+    host.appendChild(turnSection.element);
     if (anchor?.role === "user") {
-      renderUserFromMsg(anchor, messageEntryIds[start]);
+      turnUserEl = renderUserFromMsg(anchor, messageEntryIds[start], turnSection.element);
       bodyStart = start + 1;
     }
 
@@ -5453,10 +5861,8 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
     let toolCallCount = 0;
     const ensureGroup = () => {
       if (!group) {
-        group = createProcessDetailsGroup();
-        // Insert immediately so later appends (the final answer, or the next
-        // turn's user message) land after it in DOM order.
-        messagesElement.appendChild(group.wrapper);
+        group = turnSection.rail;
+        group.setDisclosure(false); // history rails render folded
       }
       return group;
     };
@@ -5472,7 +5878,7 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
             { content: processBlocks, usage: msg.usage },
             false,
             true,
-            ensureGroup().body,
+            ensureGroup().host,
             /* suppressToolbar */ true,
           );
           if (el) stepCount += 1;
@@ -5481,7 +5887,7 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
           toolCallCount += renderHistoryToolCallBlocks(
             processBlocks,
             toolResults,
-            ensureGroup().body,
+            ensureGroup().host,
           );
         }
         if (answerBlocks.length > 0) {
@@ -5489,17 +5895,25 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
             { content: answerBlocks, usage: msg.usage, timestamp: msg.timestamp },
             false,
             true,
+            turnSection.answer.host,
           );
           assistantCount++;
           if (finalEl) {
+            registerTurn({ id: turnId, answerPreview: finalEl.textContent ?? "" });
             // Pi entry anchor for the turn's final answer (Info tree target).
             const answerEntryId = messageEntryIds[i];
             if (answerEntryId) finalEl.dataset.entryId = answerEntryId;
             // Rebuild the turn's written-file chips from history so returning to
             // a session shows the same affordance the live turn had.
             const writes = historyTurnWrites(messages, bodyStart, end, toolResults);
-            const row = renderTurnFileChips(writes);
-            if (row) finalEl.insertAdjacentElement("afterend", row);
+            // History cards list files only — frozen stats are never
+            // persisted (spec Q3-A).
+            const row = renderTurnFilesCard({
+              writes,
+              statsByPath: null,
+              history: true,
+            });
+            if (row) mountTurnFilesCard(finalEl, row);
           }
         }
         if (msg.usage?.input) {
@@ -5511,25 +5925,151 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
           msg,
           false,
           true,
-          ensureGroup().body,
+          ensureGroup().host,
           /* suppressToolbar */ true,
         );
         if (el) stepCount += 1;
         toolCallCount += renderHistoryToolCallBlocks(
           msg.content ?? [],
           toolResults,
-          group?.body ?? ensureGroup().body,
+          group?.host ?? ensureGroup().host,
         );
       }
     }
 
     if (group) {
-      if (group.body.children.length > 0) {
+      if (group.host.children.length > 0) {
         group.setLabel(summarizeProcessGroup(stepCount, toolCallCount));
       } else {
         group.wrapper.remove();
       }
     }
+
+    // P5.1: every rendered turn enters the registry with the turn section as
+    // its mounted anchor — the section top is the user bubble's top, so rail
+    // jumps and the reading-line spy behave exactly as before.
+    registerTurn({
+      id: turnId,
+      promptPreview: turnUserEl?.textContent ?? "",
+      entryId: messageEntryIds[start] ?? null,
+      mountedElement: turnSection.element,
+    });
+  };
+
+  // P5.1: the registry is COMPLETE — folded turns register too (mountedElement
+  // null until revealed), extracted from the raw messages so the rail never
+  // loses turns to the fold gate. Mounted renders merge their DOM anchors in.
+  const textOf = (msg) => {
+    if (typeof msg?.content === "string") return msg.content;
+    if (!Array.isArray(msg?.content)) return "";
+    return msg.content
+      .filter((b) => b?.type === "text")
+      .map((b) => b.text)
+      .join("\n");
+  };
+  for (const [start, end] of turns) {
+    let answerPreview = "";
+    for (let i = end - 1; i > start; i -= 1) {
+      if (messages[i]?.role === "assistant" && assistantHasText(messages[i].content)) {
+        const { answerBlocks } = splitFinalAssistantBlocks(messages[i].content);
+        answerPreview = answerBlocks
+          .filter((b) => b?.type === "text")
+          .map((b) => b.text)
+          .join(" ");
+        break;
+      }
+    }
+    registerTurn({
+      id: messageEntryIds[start] ?? `hist-${start}`,
+      promptPreview: textOf(messages[start]),
+      answerPreview,
+      entryId: messageEntryIds[start] ?? null,
+      mountedElement: null,
+    });
+  }
+
+  // ── P2 fold gate: which turns mount ──
+  const searchRender = Boolean(searchQuery);
+  const gateSessionKey = historyGateKey();
+  if (!historyGate || historyGate.sessionKey !== gateSessionKey || historyGate.forceReset) {
+    historyGate = {
+      sessionKey: gateSessionKey,
+      revealedCount: HISTORY_FULL_MOUNT_TURNS,
+      forceReset: false,
+      turnCount: turns.length,
+      control: null,
+      renderTurn: renderHistoryTurnInto,
+      turns,
+      messageEntryIds,
+      loadToken: 0,
+    };
+  } else {
+    historyGate.turnCount = turns.length;
+    historyGate.renderTurn = renderHistoryTurnInto;
+    historyGate.turns = turns;
+    historyGate.messageEntryIds = messageEntryIds;
+  }
+  const revealedCount = searchRender
+    ? turns.length
+    : Math.min(historyGate.revealedCount, turns.length);
+  const gateApplies = turns.length > revealedCount && !searchRender;
+
+  // Batch control first, then the newest revealed turns.
+  if (gateApplies) {
+    const mountOlder = (count) => {
+      const previous = historyGate.revealedCount;
+      historyGate.revealedCount = Math.min(
+        historyGate.turnCount,
+        Math.max(historyGate.revealedCount + count, count),
+      );
+      const from = Math.max(0, historyGate.turnCount - historyGate.revealedCount);
+      const to = historyGate.turnCount - previous;
+      const fragment = document.createDocumentFragment();
+      for (let i = from; i < to; i++) historyGate.renderTurn(turns[i], fragment);
+      insertTurnFragmentBeforeControl(fragment);
+      updateHistoryGateControl();
+    };
+    const mountAll = () => {
+      const token = ++historyGate.loadToken;
+      const mountChunk = () => {
+        const gate = historyGate;
+        if (!gate?.control?.isConnected || token !== gate.loadToken) return;
+        const previous = gate.revealedCount;
+        gate.revealedCount = Math.min(
+          gate.turnCount,
+          gate.revealedCount + HISTORY_GATE_BATCH_TURNS,
+        );
+        const from = Math.max(0, gate.turnCount - gate.revealedCount);
+        const to = gate.turnCount - previous;
+        // Cancellable rAF batches at the control's position, anchored (spec P2).
+        const fragment = document.createDocumentFragment();
+        for (let i = from; i < to; i++) gate.renderTurn(gate.turns[i], fragment);
+        insertTurnFragmentBeforeControl(fragment);
+        updateHistoryGateControl();
+        if (gate.revealedCount < gate.turnCount) requestAnimationFrame(mountChunk);
+      };
+      requestAnimationFrame(mountChunk);
+    };
+    historyGate.control = buildHistoryGateControl({
+      remaining: turns.length - revealedCount,
+      onOlder: () => mountOlder(HISTORY_REVEAL_BATCH_TURNS),
+      onAll: mountAll,
+    });
+    messagesElement.appendChild(historyGate.control);
+  } else {
+    historyGate.control = null;
+    historyGate.loadToken += 1; // cancel any in-flight load-all batches
+  }
+  historyGate.revealedCount = searchRender
+    ? historyGate.revealedCount // a search render never shrinks the reveal
+    : revealedCount;
+
+  for (let i = turns.length - revealedCount; i < turns.length; i++) {
+    renderHistoryTurnInto(turns[i], messagesElement);
+  }
+  if (searchRender) {
+    // The gate re-applies on the next plain render (spec P2).
+    historyGate.forceReset = true;
   }
 
   toolCardCount = toolCardRenderer.toolCards.size;
@@ -5573,8 +6113,45 @@ function showTypingIndicator(show) {
   typingIndicator.classList.toggle("hidden", !show);
 }
 
+/**
+ * Clear pi's queued steering/followUp and restore the returned text to the
+ * composer (Q2-A/Q3-A). Empty-result merge keeps newer drafts untouched.
+ * Returns the cleared text (empty string when nothing was queued or the call
+ * failed — the caller proceeds with abort regardless, per spec).
+ */
+async function clearPiQueueAndRestore() {
+  let cleared = "";
+  try {
+    const result = await rpcCommand({ type: "clear_queue" }, null, true);
+    if (result?.success) {
+      const texts = [
+        ...(Array.isArray(result.data?.steering) ? result.data.steering : []),
+        ...(Array.isArray(result.data?.followUp) ? result.data.followUp : []),
+      ];
+      cleared = texts.filter((text) => typeof text === "string" && text.trim()).join("\n");
+    }
+  } catch {
+    /* fall through: abort must proceed even when clearing fails */
+  }
+  if (cleared) {
+    if (!messageInput.value.trim()) messageInput.value = cleared;
+    else if (!messageInput.value.includes(cleared))
+      messageInput.value = `${messageInput.value}\n${cleared}`;
+    messageInput.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  // pi re-emits queue_update on clear; also clear locally so the pills drop
+  // immediately even if that event races the click.
+  document.getElementById("pi-queue")?.classList.add("hidden");
+  return cleared;
+}
+
 function abortCurrentRun() {
-  wsClient.send({ type: "abort" });
+  // Q3-A: abort alone would let pi CONTINUE with queued steer/followUp
+  // ("abort continues queued messages"). Clear first, restore the text to
+  // the composer, then abort — Esc means "really stop", and no text is lost.
+  if (state.isStreaming)
+    void clearPiQueueAndRestore().finally(() => wsClient.send({ type: "abort" }));
+  else wsClient.send({ type: "abort" });
   messageRenderer.renderError(t("errors.abortedByUser"));
   showTypingIndicator(false);
 
@@ -5587,6 +6164,10 @@ function abortCurrentRun() {
     currentStreamingThinking = "";
     updateUI();
   }
+  // A delayed/missing agent_end must not leave a live turn behind: close it
+  // (settled with no duration — an aborted run never completed) so the rail
+  // folds and the status timer stops.
+  if (activeTurn) closeLiveTurn();
 }
 
 function updateTokenUsage() {
@@ -5712,19 +6293,22 @@ function updateUI() {
   }
 
   messageInput.disabled = !onboarding.canType;
-  sendBtn.disabled = !onboarding.canQuery;
+  sendBtn.disabled = !onboarding.canQuery || promptDelivery.hasAwaiting();
 
   if (isStreaming) {
     abortBtn.classList.remove("hidden");
     sendBtn.classList.add("hidden");
+    // The caret (delayed send) only exists while a run is active — the
+    // follow-up it sends is meaningless when idle (2026-09-19 spec).
+    sendCaretBtn.classList.remove("hidden");
   } else {
     abortBtn.classList.add("hidden");
     sendBtn.classList.remove("hidden");
-    flushQueue();
+    sendCaretBtn.classList.add("hidden");
   }
 
   if (onboarding.canQuery) {
-    messageInput.placeholder = t("input.typeMessage");
+    messageInput.placeholder = `${t("input.typeMessage")}${t("input.typeMessageFollowUpHint")}`;
   }
 }
 
@@ -5924,6 +6508,10 @@ wsClient.addEventListener("registryChanged", () => {
 
 wsClient.addEventListener("hostCapabilities", () => {
   refreshHeaderOpenAppButton();
+  // C4 drafts: the startup loadAll ran before hello_ack, when the native
+  // capability was false. Retry now that the DB channel is real (idempotent;
+  // in-memory drafts written during the gap win over stale DB rows).
+  void composerDraftStore.loadAll();
   void loadHeaderOpenApps();
   void updater.initUpdaterUI();
   mountTerminalPanelIfNative();
@@ -5947,9 +6535,8 @@ wsClient.addEventListener("hostCapabilities", () => {
 // DB is the durable preference truth; cookies are only the render cache that
 // bootstrap reads synchronously before this async reconciliation runs.
 let preferencesReconciled = false;
-// One shared client serves both the startup reconciliation and user-initiated
-// theme/locale persistence (SPEC §6.2/§6.3).
-const preferencesClient = createPreferencesClient({ transport });
+// One shared client serves startup reconciliation and user-initiated
+// theme/locale persistence (SPEC §6.2/§6.3); constructed near `transport`.
 async function reconcilePreferencesOnce() {
   if (preferencesReconciled || !nativeAvailable()) return;
   preferencesReconciled = true;

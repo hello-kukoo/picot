@@ -5,6 +5,7 @@
 // ABOUTME: Copy output uses the shared action-icon registry.
 
 import { setButtonIcon } from "../icons.js";
+import { createScrollOwner } from "../session/scroll-ownership.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -24,6 +25,11 @@ export class ToolCardRenderer {
     this.container = container;
     this.toolCards = new Map(); // toolCallId -> element
     this._destroyed = false;
+    // Scroll ownership (spec P3): delegates to the shared owner when the
+    // caller provides one (the main chat shares it with MessageRenderer);
+    // otherwise this renderer owns its own.
+    this.scrollOwner = options.scrollOwner ?? createScrollOwner({ container });
+    this._ownsScrollOwner = !options.scrollOwner;
     // The file-reference button next to a path arg dispatches a bubbling
     // "previewfile" event that only the main chat view listens for (app.js).
     // Ephemeral and native views have no preview panel, so the button is
@@ -112,7 +118,7 @@ export class ToolCardRenderer {
     });
   }
 
-  createToolCard(toolExecution) {
+  createToolCard(toolExecution, targetContainer = null) {
     const { toolCallId, toolName, args, status } = toolExecution;
 
     const card = document.createElement("div");
@@ -177,7 +183,10 @@ export class ToolCardRenderer {
     body.appendChild(outputWrapper);
 
     card.append(header, body);
-    this.container.appendChild(card);
+    // P1: live tool cards land in the open turn's rail when a host is given
+    // (mirrors createHistoryCard's targetContainer contract).
+    const host = targetContainer ?? this.container;
+    host.appendChild(card);
     this.toolCards.set(toolCallId, card);
     this.scrollToBottom();
 
@@ -479,18 +488,7 @@ export class ToolCardRenderer {
   }
 
   scrollToBottom() {
-    if (this.container) {
-      const threshold = 100;
-      const isNear =
-        this.container.scrollHeight - this.container.scrollTop - this.container.clientHeight <
-        threshold;
-      if (isNear) {
-        requestAnimationFrame(() => {
-          if (!this.container) return;
-          this.container.scrollTop = this.container.scrollHeight;
-        });
-      }
-    }
+    this.scrollOwner?.scrollToBottom();
   }
 
   expandAll() {
@@ -520,6 +518,10 @@ export class ToolCardRenderer {
   destroy() {
     if (this._destroyed) return;
     this._destroyed = true;
+    if (this._ownsScrollOwner && this.scrollOwner) {
+      this.scrollOwner.destroy();
+    }
+    this.scrollOwner = null;
     if (typeof this.unsubscribeLocaleChange === "function") {
       this.unsubscribeLocaleChange();
       this.unsubscribeLocaleChange = null;

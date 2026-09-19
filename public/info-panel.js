@@ -44,13 +44,23 @@ export class InfoPanel {
    *   isStreaming: () => boolean,
    * }} options
    */
-  constructor({ panel, actions, t, onNavigateLeaf, onSelectEntry, isStreaming }) {
+  constructor({
+    panel,
+    actions,
+    t,
+    onNavigateLeaf,
+    onSelectEntry,
+    isStreaming,
+    ensureEntryMounted = null,
+  }) {
     this.panel = panel;
     this.actions = actions;
     this.t = t;
     this.onNavigateLeaf = onNavigateLeaf || (() => {});
     this.onSelectEntry = onSelectEntry || (() => {});
     this.isStreaming = isStreaming || (() => false);
+    // P2 seam: reveals a gate-folded turn before anchor lookup (app.js).
+    this.ensureEntryMounted = ensureEntryMounted;
     this.workspacePath = "";
     this.expandedBranches = new Set();
     this.tree = null;
@@ -419,6 +429,20 @@ export class InfoPanel {
       );
     };
     let target = findAnchor(entryId);
+    if (!target && typeof this.ensureEntryMounted === "function" && !this._revealAttempted) {
+      // The history fold gate (P2) may hold this turn unmounted; reveal it
+      // through the app seam, then locate the anchor it just mounted. The
+      // one-shot flag keeps the retry from recursing when no anchor exists
+      // even after the reveal (the parent walk handles that case).
+      this._revealAttempted = true;
+      Promise.resolve(this.ensureEntryMounted(entryId))
+        .catch(() => {})
+        .then(() => {
+          this._revealAttempted = false;
+          this._scrollToMessage(entryId);
+        });
+      return;
+    }
     if (!target) {
       // Folded rows — error-retry assistants on the active path — have no
       // anchor of their own (the transcript anchors one row per turn).

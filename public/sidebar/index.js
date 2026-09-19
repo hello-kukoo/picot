@@ -70,6 +70,7 @@ export class SessionSidebar {
     this.onOpenProject = options.onOpenProject || null;
     this.onRegisterWorkspace = options.onRegisterWorkspace || null;
     this.onSessionNotice = options.onSessionNotice || null;
+    this.onSessionDeleted = options.onSessionDeleted || null;
     this.getLiveInstances = options.getLiveInstances || null;
     this.getFocusWorkspacePath = options.getFocusWorkspacePath || null;
     this.isFocusActive = options.isFocusActive || null;
@@ -253,6 +254,7 @@ export class SessionSidebar {
         project.sessions.some((session) => session?.filePath === filePath),
     );
     if (owner?.source === "registry") this.invalidateWorkspaceSessions(owner.path);
+    this.onSessionDeleted?.(filePath);
     await this.refresh();
     return true;
   }
@@ -1249,6 +1251,9 @@ export class SessionSidebar {
     // Batch deletes must invalidate this workspace's cache or the reload
     // below would restore the deleted sessions from it (ghost entries).
     this.invalidateWorkspaceSessions(workspace?.path);
+    for (const filePath of filePaths) {
+      if (!(data.errors || []).includes(filePath)) this.onSessionDeleted?.(filePath);
+    }
     await this.refresh({ workspacePath: currentWorkspace.path });
     const refreshedWorkspace = this.projects.find(
       (project) => workspacePathKey(project.path) === workspacePathKey(currentWorkspace.path),
