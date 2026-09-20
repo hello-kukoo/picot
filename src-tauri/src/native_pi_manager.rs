@@ -209,6 +209,9 @@ fn remove_closed_runtime(inner: &NativePiManagerInner, instance_id: &str) {
     };
     if let Some(process) = &mut runtime.process {
         let _ = process.kill();
+        if let Some(pid) = process.pid() {
+            crate::child_supervision::forget_runtime(pid);
+        }
     }
     let target = runtime.target.lock().ok().map(|target| target.clone());
     if let Some(target) = target {
@@ -348,6 +351,16 @@ impl NativePiManager {
             .spawn()
             .map_err(|error| format!("Cannot start embedded Pi native RPC process: {error}"))?;
         let (bridge, mut process) = PiRpcBridge::attach(child, MAX_RPC_FRAME_BYTES)?;
+        // Leave a record of this runtime: a Picot that is killed outright runs
+        // no teardown, and a wedged pi never notices the stdin EOF that would
+        // otherwise stop it. The next launch sweeps what this leaves behind.
+        // Recorded after attach: the identity probe shells out to `ps`, and a
+        // child that exits immediately (a stub command in tests, a broken pi)
+        // must not be reported as a group-identity mismatch before the bridge
+        // has even taken ownership of it.
+        if let Some(pid) = process.pid() {
+            crate::child_supervision::record_runtime(pid);
+        }
         let observer = process.observer();
         if let Err(error) = self
             .inner
@@ -356,6 +369,9 @@ impl NativePiManager {
             .map_err(|_| "Runtime coordinator lock poisoned".to_string())?
             .register(target.clone(), RuntimeState::Starting)
         {
+            if let Some(pid) = process.pid() {
+                crate::child_supervision::forget_runtime(pid);
+            }
             let _ = process.kill();
             return Err(format!("Cannot register Pi runtime: {error:?}"));
         }
@@ -1044,11 +1060,15 @@ impl NativePiManager {
 
         let mut cleanup_error = None;
         if let Some(process) = &mut runtime.process {
+            let pid = process.pid();
             if let Err(error) = process.kill() {
                 cleanup_error = Some(error);
             }
             if let Err(error) = process.wait() {
                 cleanup_error.get_or_insert(error);
+            }
+            if let Some(pid) = pid {
+                crate::child_supervision::forget_runtime(pid);
             }
         }
         self.record_cleanup(target, NativeCleanupStage::ProcessTreeTerminated);

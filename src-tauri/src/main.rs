@@ -4,6 +4,7 @@
 
 // Host runtime modules are compiled into one native transport path.
 // Retired compatibility handlers remain explicit and fail closed where needed.
+mod child_supervision;
 mod fff_config;
 mod host_capability;
 #[allow(dead_code)]
@@ -717,6 +718,26 @@ fn find_existing_runtime_for_prepare(
     })
 }
 
+/// The runtime a manual restart targets: the owner's live runtime in the
+/// CURRENT workspace only. Stale runtimes the owner keeps alive in other
+/// workspaces (cross-workspace switch semantics) must never be picked —
+/// `running_targets()` order is a HashMap artifact, so a bare owner match
+/// restarts an arbitrary workspace. Multiple live sessions in one workspace
+/// resolve to the newest generation (the one the WebView is bound to).
+fn restart_target_for_owner(
+    runtimes: &NativePiManager,
+    owner_id: &str,
+    workspace_id: &str,
+) -> Option<RuntimeTarget> {
+    runtimes
+        .running_targets()
+        .into_iter()
+        .filter(|target| {
+            target.owner_id.as_deref() == Some(owner_id) && target.workspace_id == workspace_id
+        })
+        .max_by_key(|target| target.workspace_generation)
+}
+
 /// Running-runtime summaries for every registered workspace regardless of
 /// owner: a page viewing workspace B still sees workspace A's live sessions
 /// (sidebar streaming/unread dots). Runtimes whose workspace or session file
@@ -789,9 +810,10 @@ mod tests {
     use super::{
         cancel_should_stop_target, filter_session_delete_paths, find_existing_runtime_for_prepare,
         image_mime_from_path, new_session_menu_enabled, persisted_session_id_for_workspace,
-        quick_chat_snapshot, resolve_static_dir, runtime_instance_summaries,
-        should_stop_owner_runtimes_on_transition, side_chat_startup_rpc_commands,
-        skill_scope_context, touch_registered_workspace, workspace_snapshot_for,
+        quick_chat_snapshot, resolve_static_dir, restart_target_for_owner,
+        runtime_instance_summaries, should_stop_owner_runtimes_on_transition,
+        side_chat_startup_rpc_commands, skill_scope_context, touch_registered_workspace,
+        workspace_snapshot_for,
     };
     use crate::metadata_store::{MetadataStore, SharedMetadataStore};
     use serde_json::json;
@@ -1085,6 +1107,72 @@ mod tests {
             Some(workspace.as_path()),
             Some(PathBuf::from("/other-workspace").as_path()),
         ));
+    }
+
+    #[tokio::test]
+    async fn restart_targets_only_the_current_workspaces_runtime() {
+        use crate::native_pi_manager::NativePiManager;
+        use crate::runtime_coordinator::RuntimeTarget;
+
+        let manager = NativePiManager::new(8);
+        // The owner keeps a stale runtime alive in workspace A (generation 1)
+        // after switching to workspace B, where the current runtime lives.
+        manager
+            .register_in_memory(RuntimeTarget::with_owner(
+                "workspace-a",
+                "session-a",
+                "instance-a",
+                "owner-x",
+                1,
+            ))
+            .unwrap();
+        manager
+            .register_in_memory(RuntimeTarget::with_owner(
+                "workspace-b",
+                "session-b",
+                "instance-b",
+                "owner-x",
+                5,
+            ))
+            .unwrap();
+        // A second live session in the current workspace: the newest
+        // generation is the one the WebView is bound to.
+        manager
+            .register_in_memory(RuntimeTarget::with_owner(
+                "workspace-b",
+                "session-b-old",
+                "instance-b-old",
+                "owner-x",
+                4,
+            ))
+            .unwrap();
+        // Another owner's runtime in the same workspace is never a candidate.
+        manager
+            .register_in_memory(RuntimeTarget::with_owner(
+                "workspace-b",
+                "session-other",
+                "instance-other",
+                "owner-y",
+                9,
+            ))
+            .unwrap();
+
+        assert_eq!(
+            restart_target_for_owner(&manager, "owner-x", "workspace-b"),
+            Some(RuntimeTarget::with_owner(
+                "workspace-b",
+                "session-b",
+                "instance-b",
+                "owner-x",
+                5,
+            )),
+            "restart must pick the current workspace's newest runtime, never A's"
+        );
+        assert_eq!(
+            restart_target_for_owner(&manager, "owner-x", "workspace-c"),
+            None,
+            "no live runtime in an unbound workspace means no restart target"
+        );
     }
 
     #[tokio::test]
@@ -1909,6 +1997,48 @@ async fn dispatch_git_host_operation(
                 }
                 Err(error) => Ok(failed(error)),
             }
+        }
+        "git_push" => {
+            // Push crosses the network and can legitimately outlive the host
+            // request timeout, so it runs detached and reports through owner
+            // events — the same shape as the AI commit-message job above.
+            let owner = owner.clone();
+            let registry = owner_registry.clone();
+            let events = host_events.clone();
+            let request_id = request_id.to_string();
+            let root = root.clone();
+            let service = service.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                if registry.workspace_transition_in_progress(&owner) {
+                    events.send_owner_event(
+                        &owner,
+                        serde_json::json!({
+                            "type": "git_push_failed",
+                            "requestId": request_id,
+                            "workspaceGeneration": generation,
+                            // Stable code, not prose: the panel localizes it.
+                            "error": "workspace_transition",
+                        }),
+                    );
+                    return;
+                }
+                let value = match service.push(&root) {
+                    Ok(outcome) => serde_json::json!({
+                        "type": "git_push",
+                        "requestId": request_id,
+                        "workspaceGeneration": generation,
+                        "outcome": outcome,
+                    }),
+                    Err(error) => serde_json::json!({
+                        "type": "git_push_failed",
+                        "requestId": request_id,
+                        "workspaceGeneration": generation,
+                        "error": error,
+                    }),
+                };
+                events.send_owner_event(&owner, value);
+            });
+            Ok(Value::Null)
         }
         "git_ai_commit_message" => {
             let snapshot = match service.prepare_ai_snapshot(owner.as_str(), &root, generation) {
@@ -2900,13 +3030,16 @@ fn install_control_handler(
                         if owner_registry.workspace_transition_in_progress(owner) {
                             return Err("workspace transition is in progress".to_string());
                         }
-                        // A runtime restart is workspace-scoped: Registered-only.
-                        let (_, workspace_cwd, _) = registered_workspace(&owner_registry, owner)?;
-                        let old_target = runtimes
-                            .running_targets()
-                            .into_iter()
-                            .find(|t| t.owner_id.as_deref() == Some(owner.as_str()))
-                            .ok_or("no running runtime for owner")?;
+                        // A runtime restart is workspace-scoped: Registered-only,
+                        // and the target is derived from the owner's CURRENT
+                        // workspace — never from client-supplied ids and never
+                        // from a stale live runtime the owner keeps in another
+                        // workspace.
+                        let (workspace_id, workspace_cwd, _) =
+                            registered_workspace(&owner_registry, owner)?;
+                        let old_target =
+                            restart_target_for_owner(&runtimes, owner.as_str(), &workspace_id)
+                                .ok_or("no running runtime for the current workspace")?;
                         runtimes.mark_host_restart("manual restart")?;
                         runtimes.stop(&old_target)?;
                         let launch = pi_launch::native_launch_spec(
@@ -3761,6 +3894,13 @@ fn main() {
         eprintln!("[picot] failed to sync PATH and provider environment from login shell: {err}");
     }
 
+    // Runtimes left behind by a Picot that was killed outright: no teardown of
+    // ours ran for those, so this is the only chance to collect them.
+    let swept = child_supervision::sweep_orphans();
+    if swept > 0 {
+        log::info!("[picot-native] cleaned up {swept} orphaned pi runtime(s) from a previous run");
+    }
+
     #[cfg(target_os = "macos")]
     disable_press_and_hold_accents();
 
@@ -3847,6 +3987,9 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle: &tauri::AppHandle, event| {
+            if let tauri::RunEvent::Ready = event {
+                install_termination_handlers(app_handle.clone());
+            }
             if let tauri::RunEvent::Exit = event {
                 if let Some(manager) = app_handle.try_state::<NativePiManagerState>() {
                     manager.stop_for_app_exit();
@@ -3854,9 +3997,46 @@ fn main() {
                 if let Some(terminal_manager) = app_handle.try_state::<TerminalManagerState>() {
                     terminal_manager.kill_all();
                 }
+                child_supervision::clear_registry();
             }
         });
 }
+
+/// Tear runtimes down on the signals that otherwise skip `RunEvent::Exit`
+/// entirely: Ctrl-C under `tauri dev`, a logout or shutdown (SIGTERM), and a
+/// closing terminal (SIGHUP). SIGKILL cannot be caught — the startup sweep
+/// exists for that case.
+#[cfg(unix)]
+fn install_termination_handlers(app_handle: tauri::AppHandle) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static INSTALLED: AtomicBool = AtomicBool::new(false);
+    if INSTALLED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    for signal in [
+        tokio::signal::unix::SignalKind::terminate(),
+        tokio::signal::unix::SignalKind::interrupt(),
+        tokio::signal::unix::SignalKind::hangup(),
+    ] {
+        let app_handle = app_handle.clone();
+        tauri::async_runtime::spawn(async move {
+            let Ok(mut stream) = tokio::signal::unix::signal(signal) else {
+                return;
+            };
+            if stream.recv().await.is_none() {
+                return;
+            }
+            if let Some(manager) = app_handle.try_state::<NativePiManagerState>() {
+                manager.stop_for_app_exit();
+            }
+            child_supervision::clear_registry();
+            app_handle.exit(0);
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn install_termination_handlers(_app_handle: tauri::AppHandle) {}
 
 #[cfg(test)]
 mod startup_tests {
