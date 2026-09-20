@@ -60,7 +60,12 @@ fn mobile_lan_access_enabled(metadata: &crate::metadata_store::SharedMetadataSto
         .and_then(|store| store.pref_get("mobile.lanAccessEnabled").ok())
         .flatten()
         .and_then(|value| value.as_bool())
-        .unwrap_or(true)
+        // Absent preference must mean loopback-only: the LAN bind is an
+        // opt-in mobile feature (D4). This briefly defaulted to `true`
+        // (8bd24c8, 2026-09-03; reverted 2026-09-20) — a default-on
+        // 0.0.0.0 bind contradicts the loopback promise above and
+        // ARCHITECTURE.md's security boundary.
+        .unwrap_or(false)
 }
 
 /// Best-effort primary LAN URL for the running host, discovered with a
@@ -4765,6 +4770,29 @@ mod tests {
         assert!(bind_is_loopback("127.0.0.1".parse().unwrap()));
         assert!(bind_is_loopback("::1".parse().unwrap()));
         assert!(!bind_is_loopback("192.168.1.10".parse().unwrap()));
+    }
+
+    #[test]
+    fn absent_lan_preference_defaults_to_loopback() {
+        // The LAN bind is opt-in: a fresh install with no stored preference
+        // must stay loopback-only (see `mobile_lan_access_enabled`).
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-lan-default-{nonce}"));
+        fs::create_dir_all(&temp).unwrap();
+        let metadata = Arc::new(Mutex::new(
+            MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
+        ));
+        assert!(!super::mobile_lan_access_enabled(&metadata));
+        metadata
+            .lock()
+            .unwrap()
+            .pref_set("mobile.lanAccessEnabled", &serde_json::json!(true))
+            .unwrap();
+        assert!(super::mobile_lan_access_enabled(&metadata));
+        let _ = fs::remove_dir_all(temp);
     }
 
     #[tokio::test]
