@@ -3,6 +3,7 @@
 > 状态：已决策，实施未完成；目标是恢复跨 workspace 切换时运行中的 Pi 不停止，完整 transition 链路、验收和发布前验证尚未完成（2026-09-18，Dr. Lin 拍板）。
 > 参照：`~/tmp/PI/picot-public-v3.3` 的用户可见生命周期，以及
 > `~/tmp/PI/picot` 的 session 行绿/蓝点语义。
+> 评审：`reviews/2026-09-18-cross-workspace-runtime-lifecycle-divergence.review.md`（2026-09-20，含事件边界拍板记录）。
 >
 > 本文第 1 节记录待恢复的旧行为；第 2 节记录可复用的工作树进度，不能视为功能完成；第 3–5 节定义恢复目标、剩余实现和验收。
 
@@ -73,6 +74,8 @@ workspace 或 session file 的 target 留在 host 内部。
 发出最小化 activity event，并停止转发原始 background event；在那之前不得把该能力称为
 只读状态通道。
 
+**2026-09-20 拍板（Dr. Lin）：接受宽通道。**desktop capability 即内容可见边界：本机窗口可订阅其他 live runtime 的全部非阻塞事件，第 4 节第 7 项按原文执行。activity-only 收窄不再是待选路径；未来若出现明确产品需求（演示模式、多用户），按新 spec 重新立项，并将第 4 节第 7 项改写为拒绝内容 payload。
+
 ### 2.3 前端状态
 
 恢复方案复用既有分发，不新增状态机：
@@ -118,19 +121,26 @@ workspace 或 session file 的 target 留在 host 内部。
    边界；若未来收窄为 activity-only，这条测试必须改为拒绝内容 payload。
 8. 同 workspace transition、窗口销毁、owner revoke、app exit 和 explicit restart 的既有清理
    语义回归不变。
+9. `restart_runtime` 必须按当前 workspace 选靶：owner 在多个 workspace 留有 live runtime 时，
+   重载只停当前 workspace 的实例，不得误停其他 workspace 的 runtime。这是旧 runtime 留活引入的
+   回归面——原实现按 owner 首个命中选靶（HashMap 遍历序不定），建立在「每 owner 单 live
+   runtime」的旧前提上。**已修（2026-09-20）**：选靶改为 `restart_target_for_owner`
+   （main.rs），workspace 从 owner 注册表当前绑定派生（不信任前端传参），同 workspace 多
+   live session 取最新 generation；单测 `restart_targets_only_the_current_workspaces_runtime`
+   覆盖跨 workspace 不误停与未绑定 workspace 无靶两分支。
 
 ### 前端
 
-9. background `agent_start` / `agent_end` 对 session 行调用 `setStreaming` / `markUnread`，且
+10. background `agent_start` / `agent_end` 对 session 行调用 `setStreaming` / `markUnread`，且
    选中行清除 unread。
-10. 切到 B 时 A 的 background event 不渲染进 B 的 transcript；其 session 行状态仍更新。
-11. A 的 blocking dialog 在 B 不出现，返回 A 后 pending replay 只呈现一次。
+11. 切到 B 时 A 的 background event 不渲染进 B 的 transcript；其 session 行状态仍更新。
+12. A 的 blocking dialog 在 B 不出现，返回 A 后 pending replay 只呈现一次。
 
 ### 手工 e2e
 
-12. 在 A 让 agent 执行一段可观察的长任务，切到 B，再回 A：任务不中断、同一 session 继续输出；
+13. 在 A 让 agent 执行一段可观察的长任务，切到 B，再回 A：任务不中断、同一 session 继续输出；
     B 侧栏中的 A 行先绿后蓝。
-13. 在 A 打开 blocking questionnaire 后切到 B：B 不弹问卷；回到 A 后可继续回答。
+14. 在 A 打开 blocking questionnaire 后切到 B：B 不弹问卷；回到 A 后可继续回答。
 
 运行 `bun run check:rust`、`bun run check`、相关 focused tests，最后运行 `bun run test`。当前
 `cross_workspace_return_reuses_the_prior_runtime` 仅覆盖 helper 级 rebind，且曾出现
@@ -141,3 +151,7 @@ workspace 或 session file 的 target 留在 host 内部。
 `ARCHITECTURE.md` 必须保持以下事实：workspace transition 使旧 generation 的授权、操作和
 导出令牌失效；旧 runtime 进程留活但在当前 workspace 下不可达，直到窗口销毁、owner 撤销、
 app 退出、显式 restart，或回到原 workspace 后 rebind。
+
+显式 restart 指 `restart_runtime` 控制面命令（main.rs）：Registered owner 经 Settings 包管理页
+「重载」按钮手动触发，`mark_host_restart` 后 stop 旧实例并以新 instanceId respawn，
+workspace/session/generation 不变。
