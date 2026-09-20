@@ -4133,8 +4133,11 @@ body.landing-mode #landing {
   background: var(--user-bubble);
   color: var(--user-bubble-text);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  /* design-token-ignore: user bubble keeps a bespoke 12px radius between --radius-md and --radius */
+  border-radius: 12px;
   border-bottom-right-radius: 6px;
+  /* design-token-ignore: tighter bubble padding than the panel default */
+  padding: var(--space-1) var(--space-2);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   box-shadow: var(--shadow-sm);
@@ -6198,7 +6201,8 @@ body.hide-thinking .thinking-block {
 
 /* Timestamp + cost share one styling: same font size, colour, tabular numerals. */
 .message-time,
-.message-usage {
+.message-usage,
+.message-duration {
   font-size: var(--text-meta);
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
@@ -6553,6 +6557,7 @@ body.hide-thinking .thinking-block {
 }
 .git-panel-refresh,
 .git-panel-commit,
+.git-panel-push,
 .git-group-actions button {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -6579,6 +6584,29 @@ body.hide-thinking .thinking-block {
 .git-panel-commit:disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+.git-panel-push:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+/* A failed push reports git's own stderr, which can be a long multi-line
+   transcript; wrap it instead of letting it widen the panel. */
+.git-panel-push-error {
+  margin: var(--space-1) 0 0;
+  color: var(--danger, #ff6b6b);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+/* A successful push reports git's own stderr too (progress + summary). */
+.git-panel-push-result {
+  margin: var(--space-1) 0 0;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 .git-panel section:not(.git-history-section) {
   border-top: 1px solid var(--border);

@@ -131,6 +131,9 @@
   color: var(--text-dim);
   font-size: var(--font-size-sm);
   border: 1px dashed var(--border);
+  /* Declared after the shorthand: the dashed accent border is the add action's
+     resting affordance, not only its hover state. */
+  border-color: var(--accent);
 }
 
 .models-provider-add:hover {

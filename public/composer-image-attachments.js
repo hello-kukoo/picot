@@ -2,6 +2,7 @@
 // ABOUTME: preview rendering, paste handler, and pending-image collection with cleanup.
 
 import { createIcon } from "./icons.js";
+import { initImageLightbox } from "./ui/image-lightbox.js";
 
 /**
  * Wires the attach-button / file-input / preview / paste flow for a composer.
@@ -130,6 +131,9 @@ export function setupComposerImageAttachments(opts) {
       const preview = document.createElement("div");
       preview.className = "image-preview";
       const image = document.createElement("img");
+      // Opt the thumbnail into the shared lightbox so a pending attachment can
+      // be inspected full size before it is sent.
+      image.className = "lightbox-image";
       image.src = `data:${img.mimeType};base64,${img.data}`;
       image.alt = "";
       const removeButton = document.createElement("button");
@@ -147,6 +151,9 @@ export function setupComposerImageAttachments(opts) {
     });
   }
 
+  // Thumbnails live and die with each render, so the delegation is wired once
+  // on the container (initImageLightbox dedupes via a dataset flag).
+  initImageLightbox(imagePreviews);
   attachBtn.addEventListener("click", onAttachClick);
   imageInput.addEventListener("change", onInputChange);
   composerCard.addEventListener("dragover", onDragOver);

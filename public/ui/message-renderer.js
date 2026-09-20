@@ -50,6 +50,30 @@ export function formatMessageTime(timestampMs) {
   return `${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${hhmm}`;
 }
 
+/**
+ * Format a response duration (ms) for the message footer: "3.2s" under a
+ * minute, "1m 05s" above it. Picot times generation client-side (streaming
+ * element created -> message finalized); pi's runtime events carry no duration
+ * of their own. Returns "" for missing/invalid input so callers can render
+ * unconditionally.
+ */
+export function formatDurationLabel(durationMs) {
+  // null / undefined must short-circuit before Number(): Number(null) === 0 is
+  // a finite value and would otherwise render a fake "0.0s" duration.
+  if (durationMs == null) return "";
+  const ms = Number(durationMs);
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  // Round to one decimal before branching: on the unrounded value 59.96s would
+  // render as "60.0s" instead of the minute it rounds into, and rounding the
+  // remainder alone turns 119.6s into "1m 60s".
+  const totalSeconds = Math.round(ms / 100) / 10;
+  if (totalSeconds < 60) return `${totalSeconds.toFixed(1)}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.round(totalSeconds - minutes * 60);
+  if (seconds === 60) return `${minutes + 1}m 00s`;
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
 /** Full timestamp for the hover `title` (screen-reader / exact reference). */
 function fullTimestampTitle(timestampMs) {
   const ms = Number(timestampMs);
@@ -428,7 +452,7 @@ export class MessageRenderer {
     }
   }
 
-  finalizeStreamingMessage(messageElement, usage = null, thinking = "") {
+  finalizeStreamingMessage(messageElement, usage = null, thinking = "", durationMs = null) {
     const contentDiv = messageElement.querySelector(".message-content");
     if (contentDiv) {
       contentDiv.classList.remove("streaming");
@@ -465,6 +489,7 @@ export class MessageRenderer {
         order: "assistant",
         timestamp: Date.now(),
         usage,
+        durationMs,
         copyable: true,
       });
       if (actions) {
@@ -554,6 +579,7 @@ export class MessageRenderer {
     order,
     timestamp = null,
     usage = null,
+    durationMs = null,
     copyable = true,
     expandToggle = null,
     actionText = "",
@@ -587,6 +613,14 @@ export class MessageRenderer {
     } else {
       if (copyBtn) actions.appendChild(copyBtn);
       if (timeLabel) actions.appendChild(timeSpan());
+      const durationLabel = formatDurationLabel(durationMs);
+      if (durationLabel) {
+        const durationSpan = document.createElement("span");
+        durationSpan.className = "message-duration";
+        durationSpan.textContent = durationLabel;
+        durationSpan.title = t("messages.responseTime");
+        actions.appendChild(durationSpan);
+      }
       if (usage?.cost && usage.cost.total > 0) {
         const usageSpan = document.createElement("span");
         usageSpan.className = "message-usage";

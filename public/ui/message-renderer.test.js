@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n, setLocale } from "../i18n.js";
 import {
+  formatDurationLabel,
   formatMessageTime,
   MessageRenderer,
   shouldCollapseUserMessage,
@@ -13,6 +14,7 @@ const enMessages = {
     attachedImage: "Attached image",
     copy: "Copy",
     copied: "Copied!",
+    responseTime: "Response time",
     expand: "Expand",
     collapse: "Collapse",
   },
@@ -30,6 +32,7 @@ const zhMessages = {
     attachedImage: "附件图片",
     copy: "复制",
     copied: "已复制！",
+    responseTime: "响应时长",
     expand: "展开",
     collapse: "收起",
   },
@@ -373,6 +376,57 @@ describe("MessageRenderer teardown", () => {
     // No re-render after destroy: the welcome stays English.
     await setLocale("zh");
     expect(welcomeP.textContent).toBe("Welcome to Picot");
+  });
+});
+
+describe("formatDurationLabel", () => {
+  it("formats sub-minute durations with one decimal place", () => {
+    expect(formatDurationLabel(320)).toBe("0.3s");
+    expect(formatDurationLabel(3200)).toBe("3.2s");
+    expect(formatDurationLabel(59_900)).toBe("59.9s");
+  });
+
+  it("switches to minutes and zero-padded seconds past a minute", () => {
+    expect(formatDurationLabel(60_000)).toBe("1m 00s");
+    expect(formatDurationLabel(65_400)).toBe("1m 05s");
+    expect(formatDurationLabel(3_600_000)).toBe("60m 00s");
+  });
+
+  it("carries a rounded remainder into the next minute", () => {
+    // Rounding the remainder alone would render this as "1m 60s".
+    expect(formatDurationLabel(119_600)).toBe("2m 00s");
+    expect(formatDurationLabel(59_960)).toBe("1m 00s");
+  });
+
+  it("returns an empty label for missing or invalid input", () => {
+    // null must not become "0.0s": Number(null) === 0 is finite.
+    expect(formatDurationLabel(null)).toBe("");
+    expect(formatDurationLabel(undefined)).toBe("");
+    expect(formatDurationLabel(NaN)).toBe("");
+    expect(formatDurationLabel(-1)).toBe("");
+    expect(formatDurationLabel("not-a-number")).toBe("");
+  });
+
+  it("renders the duration span in the finalized assistant footer", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const renderer = new MessageRenderer(container);
+    const element = renderer.renderAssistantMessage({ content: "hi" }, true);
+    renderer.finalizeStreamingMessage(element, null, "", 3200);
+    const span = element.querySelector(".message-duration");
+    expect(span.textContent).toBe("3.2s");
+    expect(span.title).toBe("Response time");
+    container.remove();
+  });
+
+  it("omits the duration span when no duration is known", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const renderer = new MessageRenderer(container);
+    const element = renderer.renderAssistantMessage({ content: "hi" }, true);
+    renderer.finalizeStreamingMessage(element);
+    expect(element.querySelector(".message-duration")).toBeNull();
+    container.remove();
   });
 });
 

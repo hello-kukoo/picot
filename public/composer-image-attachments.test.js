@@ -62,6 +62,26 @@ describe("setupComposerImageAttachments render path", () => {
     expect(chips[0].querySelector("img").src).toContain("data:image/png;base64,AAAA");
   });
 
+  it("marks the thumbnail for the shared lightbox and opens it on click", async () => {
+    const stubFile = { type: "image/png", name: "a.png" };
+    Object.defineProperty(refs.imageInput, "files", {
+      configurable: true,
+      value: [stubFile],
+    });
+    refs.imageInput.dispatchEvent(new globalThis.window.Event("change"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const thumbnail = refs.imagePreviews.querySelector("img");
+    // The delegation selector in image-lightbox.js only reacts to this class.
+    expect(thumbnail.className).toBe("lightbox-image");
+    thumbnail.dispatchEvent(new globalThis.window.MouseEvent("click", { bubbles: true }));
+    const overlay = document.querySelector(".image-lightbox-overlay");
+    expect(overlay).not.toBeNull();
+    expect(overlay.querySelector(".image-lightbox-img").src).toContain(
+      "data:image/png;base64,AAAA",
+    );
+    overlay.remove();
+  });
+
   it("consumePendingImages returns the queued attachments and clears the list", async () => {
     const stubFile = { type: "image/png", name: "a.png" };
     Object.defineProperty(refs.imageInput, "files", {
