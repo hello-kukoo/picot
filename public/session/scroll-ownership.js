@@ -44,6 +44,12 @@ export function createScrollOwner({
     Math.abs(top - programmatic.target) <= tolerancePx &&
     at - programmatic.at <= ttlMs;
 
+  /** The scrollTop a write of `top` will actually produce, after clamping. */
+  const clampScrollTop = (top) => {
+    const max = Math.max(0, container.scrollHeight - container.clientHeight);
+    return Math.min(Math.max(0, top), max);
+  };
+
   const noteProgrammaticTarget = (target) => {
     programmatic = {
       target: Math.max(0, typeof target === "number" ? target : container.scrollHeight),
@@ -99,6 +105,14 @@ export function createScrollOwner({
     /** Should new content follow the bottom? */
     isFollowing: () => following,
 
+    /**
+     * Stop following the bottom without moving the viewport. Scroll-to-bottom
+     * (`followBottom`) re-arms it; a user scroll re-evaluates it.
+     */
+    suspendFollow() {
+      following = false;
+    },
+
     /** Register a user-intent callback (wheel / touch / key / scrollbar). */
     onUserIntent(fn) {
       if (typeof fn === "function") {
@@ -119,7 +133,10 @@ export function createScrollOwner({
     scrollToBottom() {
       if (!following) return false;
       const target = container.scrollHeight;
-      noteProgrammaticTarget(target);
+      // Record what the write will actually land on: scrollTop clamps to
+      // scrollHeight - clientHeight, so recording the raw height would leave the
+      // programmatic-target matcher unreachable outside the jsdom mock.
+      noteProgrammaticTarget(clampScrollTop(target));
       const previousBehavior = container.style.scrollBehavior;
       container.style.scrollBehavior = "auto";
       container.scrollTop = target;
@@ -127,9 +144,14 @@ export function createScrollOwner({
       return true;
     },
 
-    /** User-initiated jump: smooth, token-recorded, never changes follow state. */
+    /**
+     * User-initiated jump: smooth, token-recorded, and suspends following — a
+     * jump is an explicit request to look at something other than the newest
+     * message, so the next streamed chunk must not yank the view back.
+     */
     scrollTo(top, { smooth = true } = {}) {
-      noteProgrammaticTarget(top);
+      following = false;
+      noteProgrammaticTarget(clampScrollTop(top));
       const previousBehavior = container.style.scrollBehavior;
       if (!smooth) container.style.scrollBehavior = "auto";
       if (typeof container.scrollTo === "function") {
@@ -147,8 +169,10 @@ export function createScrollOwner({
      * for user-initiated jumps; content-follow stays instant).
      */
     followBottom() {
-      following = true;
+      // The jump itself suspends following (it is an explicit move), so re-arm
+      // AFTER it: the control's contract is "go to the bottom and keep me there".
       this.scrollTo(container.scrollHeight, { smooth: true });
+      following = true;
       return true;
     },
 

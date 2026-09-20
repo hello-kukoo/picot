@@ -718,13 +718,21 @@ fn find_existing_runtime_for_prepare(
     })
 }
 
-/// The runtime a manual restart targets: the owner's live runtime in the
-/// CURRENT workspace only. Stale runtimes the owner keeps alive in other
-/// workspaces (cross-workspace switch semantics) must never be picked —
-/// `running_targets()` order is a HashMap artifact, so a bare owner match
-/// restarts an arbitrary workspace. Multiple live sessions in one workspace
-/// resolve to the newest generation (the one the WebView is bound to).
-fn restart_target_for_owner(
+/// The foreground runtime of the owner's CURRENT workspace: what a manual
+/// restart targets, and what an owner-scoped extension response is delivered to.
+///
+/// Three properties matter, and each was missing from a bare owner match:
+///  - Stale runtimes the owner keeps alive in OTHER workspaces must never be
+///    picked (cross-workspace switch semantics), so the workspace is part of the
+///    filter rather than left to `running_targets()`'s HashMap order.
+///  - A Side/Quick chat runtime shares the owner's workspace AND its generation
+///    (`host_ephemeral` mints `ephemeral-…` session ids under the registered
+///    workspace), so generation alone cannot break the tie — an ephemeral
+///    runtime is excluded instead of restarting a side chat when the user asked
+///    for the session's runtime.
+///  - Among what remains the newest generation wins, with a stable tie-break so
+///    the choice does not depend on iterator order.
+fn target_for_owner_in_workspace(
     runtimes: &NativePiManager,
     owner_id: &str,
     workspace_id: &str,
@@ -733,9 +741,17 @@ fn restart_target_for_owner(
         .running_targets()
         .into_iter()
         .filter(|target| {
-            target.owner_id.as_deref() == Some(owner_id) && target.workspace_id == workspace_id
+            target.owner_id.as_deref() == Some(owner_id)
+                && target.workspace_id == workspace_id
+                && !target
+                    .session_id
+                    .starts_with(crate::host_ephemeral::EPHEMERAL_SESSION_PREFIX)
         })
-        .max_by_key(|target| target.workspace_generation)
+        .max_by(|a, b| {
+            a.workspace_generation
+                .cmp(&b.workspace_generation)
+                .then_with(|| a.instance_id.cmp(&b.instance_id))
+        })
 }
 
 /// Running-runtime summaries for every registered workspace regardless of
@@ -810,9 +826,9 @@ mod tests {
     use super::{
         cancel_should_stop_target, filter_session_delete_paths, find_existing_runtime_for_prepare,
         image_mime_from_path, new_session_menu_enabled, persisted_session_id_for_workspace,
-        quick_chat_snapshot, resolve_static_dir, restart_target_for_owner,
-        runtime_instance_summaries, should_stop_owner_runtimes_on_transition,
-        side_chat_startup_rpc_commands, skill_scope_context, touch_registered_workspace,
+        quick_chat_snapshot, resolve_static_dir, runtime_instance_summaries,
+        should_stop_owner_runtimes_on_transition, side_chat_startup_rpc_commands,
+        skill_scope_context, target_for_owner_in_workspace, touch_registered_workspace,
         workspace_snapshot_for,
     };
     use crate::metadata_store::{MetadataStore, SharedMetadataStore};
@@ -1158,7 +1174,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            restart_target_for_owner(&manager, "owner-x", "workspace-b"),
+            target_for_owner_in_workspace(&manager, "owner-x", "workspace-b"),
             Some(RuntimeTarget::with_owner(
                 "workspace-b",
                 "session-b",
@@ -1169,9 +1185,68 @@ mod tests {
             "restart must pick the current workspace's newest runtime, never A's"
         );
         assert_eq!(
-            restart_target_for_owner(&manager, "owner-x", "workspace-c"),
+            target_for_owner_in_workspace(&manager, "owner-x", "workspace-c"),
             None,
             "no live runtime in an unbound workspace means no restart target"
+        );
+    }
+
+    /// Side/Quick chat runtimes live in the owner's registered workspace under
+    /// the SAME generation, so `max_by_key(generation)` left the pick to
+    /// HashMap order and a manual restart could stop the side chat instead.
+    #[tokio::test]
+    async fn restart_prefers_the_session_runtime_over_a_same_generation_ephemeral_one() {
+        use crate::native_pi_manager::NativePiManager;
+        use crate::runtime_coordinator::RuntimeTarget;
+
+        let manager = NativePiManager::new(8);
+        manager
+            .register_in_memory(RuntimeTarget::with_owner(
+                "workspace-b",
+                "session-b",
+                "instance-a-main",
+                "owner-x",
+                5,
+            ))
+            .unwrap();
+        manager
+            .register_in_memory(RuntimeTarget::with_owner(
+                "workspace-b",
+                "ephemeral-instance-side",
+                "instance-z-side",
+                "owner-x",
+                5,
+            ))
+            .unwrap();
+
+        assert_eq!(
+            target_for_owner_in_workspace(&manager, "owner-x", "workspace-b").map(|t| t.session_id),
+            Some("session-b".to_string()),
+            "a same-generation side chat must never win the restart target"
+        );
+    }
+
+    /// With only a side chat live there is no session runtime to restart: the
+    /// caller must fail loudly rather than restart the wrong thing.
+    #[tokio::test]
+    async fn restart_reports_no_target_when_only_an_ephemeral_runtime_is_live() {
+        use crate::native_pi_manager::NativePiManager;
+        use crate::runtime_coordinator::RuntimeTarget;
+
+        let manager = NativePiManager::new(8);
+        manager
+            .register_in_memory(RuntimeTarget::with_owner(
+                "workspace-b",
+                "ephemeral-instance-side",
+                "instance-z-side",
+                "owner-x",
+                5,
+            ))
+            .unwrap();
+
+        assert_eq!(
+            target_for_owner_in_workspace(&manager, "owner-x", "workspace-b"),
+            None
         );
     }
 
@@ -1807,7 +1882,16 @@ async fn dispatch_git_host_operation(
                         .collect::<Vec<_>>()
                 })
                 .ok_or("git_turn_stats requires a paths array")?;
-            match git_service::turn_stats(&root, &paths) {
+            // Two git subprocesses (10s read deadline each) plus a file walk:
+            // run them off the websocket worker like git_push and file_mentions
+            // do, so a workspace on a stalled mount cannot pause the socket.
+            let root = root.clone();
+            let stats = tauri::async_runtime::spawn_blocking(move || {
+                git_service::turn_stats(&root, &paths)
+            })
+            .await
+            .map_err(|error| format!("git_turn_stats task failed: {error}"))?;
+            match stats {
                 Ok(stats) => Ok(serde_json::json!({
                     "files": stats.files,
                     "dropped": stats.dropped,
@@ -2319,7 +2403,7 @@ fn install_control_handler(
     host_origin: String,
     static_dir: PathBuf,
     owner_registry: Arc<WindowOwnerRegistry>,
-    ephemeral_registry: Arc<EphemeralRegistry>,
+    _ephemeral_registry: Arc<EphemeralRegistry>,
     git_service: Arc<GitService>,
     session_ui_profiles: Arc<SessionUiProfileStore>,
     metadata: SharedMetadataStore,
@@ -2367,7 +2451,6 @@ fn install_control_handler(
             let static_dir = static_dir.clone();
             let host_events = host_events.clone();
             let owner_registry = owner_registry.clone();
-            let ephemeral_registry = ephemeral_registry.clone();
             let git_service = git_service.clone();
             let session_ui_profiles = session_ui_profiles.clone();
             let metadata = metadata.clone();
@@ -3038,7 +3121,7 @@ fn install_control_handler(
                         let (workspace_id, workspace_cwd, _) =
                             registered_workspace(&owner_registry, owner)?;
                         let old_target =
-                            restart_target_for_owner(&runtimes, owner.as_str(), &workspace_id)
+                            target_for_owner_in_workspace(&runtimes, owner.as_str(), &workspace_id)
                                 .ok_or("no running runtime for the current workspace")?;
                         runtimes.mark_host_restart("manual restart")?;
                         runtimes.stop(&old_target)?;
@@ -3077,11 +3160,14 @@ fn install_control_handler(
                             .owner_id
                             .as_ref()
                             .ok_or("verified window owner required")?;
-                        let target = runtimes
-                            .running_targets()
-                            .into_iter()
-                            .find(|t| t.owner_id.as_deref() == Some(owner.as_str()))
-                            .ok_or("no running runtime for owner")?;
+                        // Same resolution as a manual restart: a bare owner match
+                        // could deliver this answer to a runtime the owner keeps
+                        // alive in another workspace, leaving the blocking dialog
+                        // in the current session unresolved.
+                        let (workspace_id, _, _) = registered_workspace(&owner_registry, owner)?;
+                        let target =
+                            target_for_owner_in_workspace(&runtimes, owner.as_str(), &workspace_id)
+                                .ok_or("no running runtime for the current workspace")?;
                         let response = arg("response");
                         if response.get("type").and_then(Value::as_str)
                             != Some("extension_ui_response")
@@ -3394,15 +3480,8 @@ fn install_control_handler(
                             if let Some(host) = app.try_state::<host_server::HostServer>() {
                                 host.revoke_session_exports(owner.as_str());
                             }
-                            let stray =
-                                ephemeral_registry.side_chat_cleanup_for_transition(&owner, gen);
-                            for lease in stray {
-                                if let Some((path, token)) = &lease.temporary_directory {
-                                    let _ =
-                                        cleanup_quick_chat_dir(&canonical_temp_root(), path, token);
-                                }
-                                ephemeral_registry.finish_cleanup(&lease);
-                            }
+                            ephemeral_hub
+                                .cleanup_side_chat_for_transition(&runtimes, &owner, gen, gen);
                         }
                         let prior_generation = owner_registry
                             .current_workspace_generation(&owner)
@@ -4026,11 +4105,24 @@ fn install_termination_handlers(app_handle: tauri::AppHandle) {
             if stream.recv().await.is_none() {
                 return;
             }
-            if let Some(manager) = app_handle.try_state::<NativePiManagerState>() {
-                manager.stop_for_app_exit();
-            }
-            child_supervision::clear_registry();
-            app_handle.exit(0);
+            // Tear down on a detached thread and put a deadline on this
+            // handler: `stop_for_app_exit` waits on children that ignore
+            // SIGTERM, and the default disposition of these signals is already
+            // taken over — blocking here would leave Picot answering nothing but
+            // SIGKILL. The registry is intentionally NOT cleared on the timeout
+            // path: any runtime the teardown never reached must stay recorded so
+            // the next launch can sweep it.
+            let teardown = app_handle.clone();
+            std::thread::spawn(move || {
+                if let Some(manager) = teardown.try_state::<NativePiManagerState>() {
+                    manager.stop_for_app_exit();
+                }
+                child_supervision::clear_registry();
+                std::process::exit(0);
+            });
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            log::warn!("[picot-native] teardown exceeded its grace period; exiting");
+            std::process::exit(0);
         });
     }
 }

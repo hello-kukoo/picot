@@ -37,32 +37,46 @@ impl ProcessTree {
         }
     }
 
-    pub(crate) fn terminate(&mut self, child: &mut Child) -> Result<(), String> {
+    pub(crate) fn terminate(&mut self, child: &mut Child) -> Result<bool, String> {
         #[cfg(unix)]
         {
             let pid = child.id() as libc::pid_t;
-            if child.try_wait().map_err(|e| e.to_string())?.is_some() {
-                return Ok(());
+            let child_exited = child.try_wait().map_err(|e| e.to_string())?.is_some();
+            if !child_exited && unsafe { libc::getpgid(pid) } != self.pgid {
+                return Err("Pi child process group identity changed before termination".into());
             }
-            if unsafe { libc::getpgid(pid) } != self.pgid {
-                return Err("Pi child identity changed before termination".into());
-            }
-            if unsafe { libc::kill(-self.pgid, libc::SIGTERM) } != 0
-                && unsafe { libc::getpgid(pid) } == self.pgid
-            {
-                return Err(std::io::Error::last_os_error().to_string());
-            }
-            for _ in 0..20 {
-                if child.try_wait().map_err(|e| e.to_string())?.is_some() {
-                    return Ok(());
+            if unsafe { libc::kill(-self.pgid, libc::SIGTERM) } != 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::ESRCH) {
+                    return Ok(false);
                 }
-                std::thread::sleep(Duration::from_millis(10));
+                return Err(error.to_string());
             }
-            if unsafe { libc::getpgid(pid) } == self.pgid
+            if !child_exited {
+                for _ in 0..20 {
+                    if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+                        return Ok(true);
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                if unsafe { libc::kill(-self.pgid, libc::SIGKILL) } != 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.raw_os_error() != Some(libc::ESRCH) {
+                        return Err(error.to_string());
+                    }
+                }
+                let _ = child.wait();
+                return Ok(true);
+            }
+            if Self::process_group_alive(self.pgid)
                 && unsafe { libc::kill(-self.pgid, libc::SIGKILL) } != 0
             {
-                return Err(std::io::Error::last_os_error().to_string());
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ESRCH) {
+                    return Err(error.to_string());
+                }
             }
+            Ok(true)
         }
         #[cfg(windows)]
         {
@@ -71,12 +85,22 @@ impl ProcessTree {
                     format!("{job_error}; direct-child fallback failed: {child_error}")
                 })?;
             }
+            return Ok(true);
         }
         #[cfg(not(any(unix, windows)))]
-        child.kill().map_err(|e| e.to_string())?;
-        Ok(())
+        {
+            child.kill().map_err(|e| e.to_string())?;
+            return Ok(true);
+        }
     }
 
+    #[cfg(unix)]
+    fn process_group_alive(pgid: libc::pid_t) -> bool {
+        unsafe {
+            libc::kill(-pgid, 0) == 0
+                || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+        }
+    }
     pub(crate) fn wait(child: &mut Child) -> Result<ExitStatus, String> {
         child.wait().map_err(|e| e.to_string())
     }
@@ -154,5 +178,27 @@ mod windows_job {
                 Ok(())
             }
         }
+    }
+}
+#[cfg(all(test, unix))]
+mod tests {
+    use super::ProcessTree;
+    use std::process::Command;
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn terminate_signals_process_group_after_direct_child_exits() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30 & exit 0"]);
+        super::configure_child(&mut command);
+        let mut child = command.spawn().unwrap();
+        let pgid = child.id() as libc::pid_t;
+        let mut tree = ProcessTree::attach(&mut child).unwrap();
+        child.wait().unwrap();
+
+        tree.terminate(&mut child).unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(!ProcessTree::process_group_alive(pgid));
     }
 }

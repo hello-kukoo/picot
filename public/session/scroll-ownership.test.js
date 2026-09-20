@@ -102,6 +102,34 @@ describe("createScrollOwner", () => {
     expect(owner.isFollowing()).toBe(true);
   });
 
+  test("a jump suspends following so the next streamed chunk cannot cancel it", () => {
+    const c = track(makeContainer());
+    const owner = createScrollOwner({ container: c.container, now: () => 0 });
+
+    owner.scrollTo(100, { smooth: false });
+
+    expect(owner.isFollowing()).toBe(false);
+    // This is the regression: a chunk arriving right after the jump must not
+    // drag the viewport back to the bottom.
+    expect(owner.scrollToBottom()).toBe(false);
+    expect(c.container.scrollTop).toBe(100);
+
+    // The scroll-to-bottom control still re-arms following.
+    expect(owner.followBottom()).toBe(true);
+    expect(owner.isFollowing()).toBe(true);
+  });
+
+  test("suspendFollow stops following without moving the viewport", () => {
+    const c = track(makeContainer());
+    const owner = createScrollOwner({ container: c.container, now: () => 0 });
+
+    owner.suspendFollow();
+
+    expect(owner.isFollowing()).toBe(false);
+    expect(c.container.scrollTop).toBe(1500);
+    expect(owner.scrollToBottom()).toBe(false);
+  });
+
   test("followBottom re-arms unconditionally (scroll-to-bottom control)", () => {
     const c = track(makeContainer());
     const owner = createScrollOwner({ container: c.container, now: () => 0 });

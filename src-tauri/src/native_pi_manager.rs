@@ -208,9 +208,15 @@ fn remove_closed_runtime(inner: &NativePiManagerInner, instance_id: &str) {
         return;
     };
     if let Some(process) = &mut runtime.process {
-        let _ = process.kill();
+        let signalled = process.kill().unwrap_or(false);
         if let Some(pid) = process.pid() {
-            crate::child_supervision::forget_runtime(pid);
+            if signalled {
+                crate::child_supervision::forget_runtime(pid);
+            } else {
+                log::warn!(
+                    "[picot-native] runtime process group {pid} was not signalled; retaining registry entry"
+                );
+            }
         }
     }
     let target = runtime.target.lock().ok().map(|target| target.clone());
@@ -369,10 +375,10 @@ impl NativePiManager {
             .map_err(|_| "Runtime coordinator lock poisoned".to_string())?
             .register(target.clone(), RuntimeState::Starting)
         {
+            let _ = process.kill();
             if let Some(pid) = process.pid() {
                 crate::child_supervision::forget_runtime(pid);
             }
-            let _ = process.kill();
             return Err(format!("Cannot register Pi runtime: {error:?}"));
         }
         if let Some(owner_id) = target.owner_id.as_ref() {
@@ -1061,14 +1067,27 @@ impl NativePiManager {
         let mut cleanup_error = None;
         if let Some(process) = &mut runtime.process {
             let pid = process.pid();
-            if let Err(error) = process.kill() {
+            let signalled = match process.kill() {
+                Ok(signalled) => signalled,
+                Err(error) => {
+                    cleanup_error = Some(error);
+                    false
+                }
+            };
+            if let Err(error) = process.wait() {
                 cleanup_error = Some(error);
             }
-            if let Err(error) = process.wait() {
-                cleanup_error.get_or_insert(error);
-            }
-            if let Some(pid) = pid {
-                crate::child_supervision::forget_runtime(pid);
+            // Keep the record unless the process group was signalled and
+            // reaping completed. A direct child may already be gone while a
+            // descendant remains alive; the next startup sweep needs this pid.
+            if signalled && cleanup_error.is_none() {
+                if let Some(pid) = pid {
+                    crate::child_supervision::forget_runtime(pid);
+                }
+            } else if let Some(pid) = pid {
+                log::warn!(
+                    "[picot-native] runtime process group {pid} cleanup incomplete; retaining registry entry"
+                );
             }
         }
         self.record_cleanup(target, NativeCleanupStage::ProcessTreeTerminated);

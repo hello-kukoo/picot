@@ -132,6 +132,67 @@ describe("at-file-mention", () => {
     controller.destroy();
   });
 
+  test("a stale response cannot render over a newer request's candidates", async () => {
+    let resolveFirst;
+    const searchFiles = vi
+      .fn()
+      // The abandoned request for `@../..` only answers after the newer one.
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = () =>
+              resolve({
+                items: [
+                  {
+                    value: "@stale.ts",
+                    label: "stale.ts",
+                    description: "stale.ts",
+                    isDirectory: false,
+                  },
+                ],
+                truncated: false,
+              });
+          }),
+      )
+      .mockImplementationOnce(async () => ({
+        items: [
+          {
+            value: "@src/a.ts",
+            label: "a.ts",
+            description: "src/a.ts",
+            isDirectory: false,
+          },
+        ],
+        truncated: false,
+      }));
+    const controller = setupAtFileMention({
+      input,
+      container,
+      getWorkspaceRoot: () => "/repo",
+      searchFiles,
+    });
+
+    input.value = "@../..";
+    setCaret(input, 6);
+    const first = controller.update();
+
+    input.value = "@src/a";
+    setCaret(input, 6);
+    await controller.update();
+
+    // Release the abandoned request last: its guard must compare against ITS
+    // OWN value, not the module-level snapshot the newer request installed.
+    resolveFirst();
+    await first;
+
+    const rendered = [...container.querySelectorAll(".at-file-mention-option")].map(
+      (option) => option.textContent,
+    );
+    expect(rendered.join(" ")).toContain("a.ts");
+    expect(rendered.join(" ")).not.toContain("stale.ts");
+    controller.destroy();
+  });
+
   test("closing the menu aborts the in-flight request", async () => {
     let resolveSearch;
     const searchFiles = vi.fn(

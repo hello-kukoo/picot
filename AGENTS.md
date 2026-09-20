@@ -9,9 +9,6 @@ live in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 - Read the applicable `ARCHITECTURE.md` section and its linked design documents
   before changing UI behavior, persistence, workspace I/O, or cross-process
   communication.
-- For Quick Chat or Side Chat work, read
-  [`docs/superpowers/specs/2026-07-15-quick-and-side-chat-design.md`](docs/superpowers/specs/2026-07-15-quick-and-side-chat-design.md)
-  and the temporary-chat architecture section.
 - Before changing a browser/server adapter, popup/overlay, or shared-state
   rerender behavior, read and apply [`docs/engineering-lessons.md`](docs/engineering-lessons.md).
 - Before fixing any native runtime bug, you MUST inspect the corresponding
@@ -36,7 +33,8 @@ This repo maintains an agent memory bank at `.memory/MEMORY.md` (gitignored,
 local-only). **Read it before starting work** in this repo: it holds decision
 logs, lessons from past mistakes, and a topic index under `.memory/topics/`.
 Batch notes live in `.memory/notes/`. To record new decisions/lessons after a
-work session, use the `update-memory` skill (`.claude/skills/update-memory/SKILL.md`).
+work session, use the `update-memory` skill.
+
 Dr. Lin's hand edits there always win over agent merges.
 
 ## Pi references

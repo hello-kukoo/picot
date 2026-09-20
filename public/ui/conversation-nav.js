@@ -220,10 +220,22 @@ export function createConversationNav({
     renderTicks();
   }
 
+  /** Whitespace-collapsed preview, cut without splitting a surrogate pair. */
+  function truncatePreview(value, limit) {
+    const collapsed = String(value ?? "")
+      .replace(/\s+/g, " ")
+      .trim();
+    const points = Array.from(collapsed);
+    return points.length > limit ? points.slice(0, limit).join("") : collapsed;
+  }
+
   function renderTicks() {
     const list = ticks();
     const hasConvs = list.length > 1;
     navEl.classList.toggle("hidden", !hasConvs);
+    // A hidden rail stays in the DOM (opacity 0, pointer-events none), so it
+    // must leave the tab order too: otherwise Tab lands on an invisible listbox.
+    trackEl.tabIndex = hasConvs ? 0 : -1;
     if (!hasConvs) {
       trackEl.replaceChildren();
       return;
@@ -251,15 +263,16 @@ export function createConversationNav({
       tick.style.setProperty("--nav-w", `${tickWidthFor(distance)}px`);
       tick.style.setProperty("--nav-color", "var(--accent)");
       // The prompt preview labels the tick (P5.5) — truncated, collapsed.
-      const preview = String(list[i].promptPreview ?? "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 80);
+      const preview = truncatePreview(list[i].promptPreview, 80);
       tick.setAttribute("aria-label", preview || `${t("messages.conversationNavigator")} ${i + 1}`);
       tick.title = "";
       trackEl.appendChild(tick);
     }
-    trackEl.setAttribute("aria-activedescendant", activeIndex >= 0 ? tickId(activeIndex) : "");
+    // Only point at a tick that is actually rendered: hovering rebuilds the
+    // window around the hovered tick, so the active one can fall outside it and
+    // leave the attribute dangling on an id that is no longer in the DOM.
+    const activeInWindow = activeIndex >= windowRange.start && activeIndex < windowRange.end;
+    trackEl.setAttribute("aria-activedescendant", activeInWindow ? tickId(activeIndex) : "");
   }
 
   function showTooltip(index) {
@@ -269,13 +282,8 @@ export function createConversationNav({
       clearTimeout(tooltipHideTimer);
       tooltipHideTimer = null;
     }
-    tooltipQEl.textContent = String(turn.promptPreview ?? "")
-      .replace(/\s+/g, " ")
-      .slice(0, 120);
-    const answer = String(turn.answerPreview ?? "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 180);
+    tooltipQEl.textContent = truncatePreview(turn.promptPreview, 120);
+    const answer = truncatePreview(turn.answerPreview, 180);
     // P5.1: the answer preview comes from the registry, so settled turns
     // show question AND answer again (the DOM-walk pairing was dead).
     tooltipAEl.textContent = answer;

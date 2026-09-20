@@ -169,16 +169,45 @@ export function createPromptDelivery({
     return settled;
   }
 
-  /** Unconfirmed pill click: restore the text without sending. */
+  /**
+   * Unconfirmed pill click: restore the text without sending. The record is
+   * dropped rather than marked, so the pill cannot come back on the next render
+   * and a late acceptance finds nothing to act on.
+   */
   function pullBack(requestId) {
     const record = records.get(requestId);
     if (record?.state !== "unconfirmed") return null;
+    if (record.timer) {
+      clearTimeoutFn(record.timer);
+      record.timer = null;
+    }
+    records.delete(requestId);
     record.pulledBack = true;
+    onRecordsChanged(record);
     return record;
   }
 
-  const hasAwaiting = () => Array.from(records.values()).some((r) => r.state === "awaiting");
-  const unconfirmed = () => Array.from(records.values()).filter((r) => r.state === "unconfirmed");
+  /**
+   * Whether a delivery is still awaiting its reply. Scoped to a session identity
+   * when one is given: a send that is in flight in ANOTHER session must not make
+   * this session's composer behave as if it were busy.
+   */
+  const hasAwaiting = (sessionIdentity = null) =>
+    Array.from(records.values()).some(
+      (r) =>
+        r.state === "awaiting" &&
+        (sessionIdentity == null ||
+          r.sessionIdentity == null ||
+          r.sessionIdentity === sessionIdentity),
+    );
+  const unconfirmed = (sessionIdentity = null) =>
+    Array.from(records.values()).filter(
+      (r) =>
+        r.state === "unconfirmed" &&
+        (sessionIdentity == null ||
+          r.sessionIdentity == null ||
+          r.sessionIdentity === sessionIdentity),
+    );
   const get = (requestId) => records.get(requestId) ?? null;
 
   return { dispatch, rejectByRequestId, pullBack, pullBackTexts, hasAwaiting, unconfirmed, get };

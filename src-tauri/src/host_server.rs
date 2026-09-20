@@ -49,6 +49,10 @@ const MAX_HTTP_BODY_BYTES: usize = HTTP_DEFAULT_BODY_BYTES;
 const MAX_PASTE_BODY_BYTES: usize = crate::paste_offload::MAX_PASTE_BYTES * 6 + 64 * 1024;
 const MAX_WS_MESSAGE_BYTES: usize = WS_PHYSICAL_FRAME_BYTES;
 const MAX_CONCURRENT_SESSION_SCANS: usize = 2;
+/// Token typing re-requests on a 20ms debounce and a client abort does not stop
+/// host work, so mention walks need their own small gate: sharing the session
+/// scan permits would let keystrokes stall the sidebar.
+const MAX_CONCURRENT_MENTION_SCANS: usize = 3;
 
 /// D4/LAN preference gate for the mobile entry. Stored in the shared
 /// metadata store so the Settings toggle, the bind decision, and the pairing
@@ -2730,6 +2734,7 @@ async fn dispatch(
                     // the whole budget, so it must not sit on an async worker.
                     let data_plane = state.data.clone();
                     let workspace = workspace_id.to_string();
+                    let _permit = mention_scan_permit().await?;
                     let result = tokio::task::spawn_blocking(move || {
                         data_plane.search_file_mentions(
                             &workspace,
@@ -3080,6 +3085,24 @@ async fn dispatch(
             "requestId": request_id,
         })),
     }
+}
+
+/// Bounded concurrency for mention walks (see MAX_CONCURRENT_MENTION_SCANS).
+/// Process-wide because the walk is a per-keystroke operation rather than
+/// per-connection state.
+fn mention_scan_permits() -> Arc<Semaphore> {
+    static PERMITS: std::sync::OnceLock<Arc<Semaphore>> = std::sync::OnceLock::new();
+    Arc::clone(PERMITS.get_or_init(|| Arc::new(Semaphore::new(MAX_CONCURRENT_MENTION_SCANS))))
+}
+
+async fn mention_scan_permit() -> Result<tokio::sync::OwnedSemaphorePermit, (&'static str, String)>
+{
+    mention_scan_permits().acquire_owned().await.map_err(|_| {
+        (
+            "mention_search_failed",
+            "mention scan gate closed".to_string(),
+        )
+    })
 }
 
 fn host_data_error(error: HostDataError) -> (&'static str, String) {

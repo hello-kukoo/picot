@@ -99,8 +99,33 @@ fn write_registry(path: &Path, registry: &RuntimeRegistry) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(encoded) = serde_json::to_string(registry) {
-        let _ = std::fs::write(path, encoded);
+    let encoded = match serde_json::to_string(registry) {
+        Ok(encoded) => encoded,
+        Err(error) => {
+            log::warn!("[picot-native] cannot encode the runtime registry: {error}");
+            return;
+        }
+    };
+    // Publish atomically. A plain write leaves a window where a concurrent
+    // reader's `read_registry` sees a truncated document, fails to parse it, and
+    // treats the file as garbage — deleting the record of a supervisor that is
+    // alive and merely mid-write, so its runtimes are never swept. The
+    // in-process lock cannot close that window: the other reader is another
+    // Picot process. Renaming a complete file leaves no such window.
+    let temp = path.with_extension("json.tmp");
+    if let Err(error) = std::fs::write(&temp, encoded) {
+        log::warn!(
+            "[picot-native] cannot write the runtime registry {}: {error}",
+            temp.display()
+        );
+        return;
+    }
+    if let Err(error) = std::fs::rename(&temp, path) {
+        log::warn!(
+            "[picot-native] cannot publish the runtime registry {}: {error}",
+            path.display()
+        );
+        let _ = std::fs::remove_file(&temp);
     }
 }
 
@@ -412,6 +437,30 @@ mod tests {
         }
         assert!(reaped, "the swept orphan was still running");
         assert!(!dir.join(format!("{dead_supervisor}.json")).exists());
+    }
+
+    #[test]
+    fn publishing_the_registry_leaves_no_partial_file_behind() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("1234.json");
+        write_registry(
+            &path,
+            &RuntimeRegistry {
+                supervisor_pid: 1234,
+                entries: vec![RuntimeEntry {
+                    pid: 7001,
+                    started_at: "Thu Sep  3 11:59:30 2026".into(),
+                }],
+            },
+        );
+
+        let names = std::fs::read_dir(temp.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        // The temp file must be renamed away, not left for the sweep to skip.
+        assert_eq!(names, vec!["1234.json".to_string()]);
+        assert_eq!(read_registry(&path).unwrap().entries.len(), 1);
     }
 
     #[test]

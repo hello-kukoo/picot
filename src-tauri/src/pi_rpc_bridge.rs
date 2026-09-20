@@ -261,7 +261,7 @@ impl PiRpcProcess {
             .map_err(|error| format!("Cannot wait for Pi RPC process: {error}"))
     }
 
-    pub fn kill(&mut self) -> Result<(), String> {
+    pub fn kill(&mut self) -> Result<bool, String> {
         let mut child = self
             .child
             .lock()

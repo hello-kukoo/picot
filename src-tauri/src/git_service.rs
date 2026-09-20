@@ -1158,6 +1158,12 @@ impl GitService {
         if !user_ssh_command {
             command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
         }
+        // A configured credential helper (macOS keychain, GCM) is deliberately
+        // left in place — removing it would break HTTPS pushes that rely on a
+        // stored token. Only GCM's GUI prompt is switched off: it is the one
+        // prompt that would block, unseen, for the whole deadline while the
+        // per-root write slot is held. Other helpers fail without a TTY.
+        command.env("GCM_INTERACTIVE", "never");
         let (stdout, stderr, success) = run_git(command, PUSH_DEADLINE)?;
         let transcript = if stderr.is_empty() { stdout } else { stderr };
         let output = String::from_utf8_lossy(&transcript)

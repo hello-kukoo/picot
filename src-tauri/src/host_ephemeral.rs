@@ -15,7 +15,7 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
-const EPHEMERAL_SESSION_PREFIX: &str = "ephemeral-";
+pub(crate) const EPHEMERAL_SESSION_PREFIX: &str = "ephemeral-";
 /// Keep the reducer journal bounded: only recent events are replayed and the
 /// snapshot watermark is the authoritative dedupe signal on the client.
 const MAX_MESSAGES: usize = 512;
@@ -785,6 +785,42 @@ impl EphemeralHub {
         });
     }
 
+    pub fn cleanup_side_chat_for_transition(
+        &self,
+        runtimes: &NativePiManager,
+        owner: &OwnerId,
+        transition_generation: u64,
+        workspace_generation: u64,
+    ) {
+        for lease in self
+            .registry
+            .side_chat_cleanup_for_transition(owner, transition_generation)
+        {
+            if let Ok(target) = self.take_target(&lease.instance_id) {
+                let _ = runtimes.stop(&target.target);
+            } else if let Some(target) = runtimes
+                .running_targets()
+                .into_iter()
+                .find(|target| target.instance_id == lease.instance_id)
+            {
+                let _ = runtimes.stop(&target);
+            }
+            if let Some((path, token)) = &lease.temporary_directory {
+                let _ = crate::temp_resources::cleanup_quick_chat_dir(
+                    &crate::temp_resources::canonical_temp_root(),
+                    path,
+                    token,
+                );
+            }
+            self.states
+                .lock()
+                .ok()
+                .map(|mut states| states.remove(&lease.instance_id));
+            self.registry.finish_cleanup(&lease);
+        }
+        self.publish_bootstrap(owner, workspace_generation);
+    }
+
     fn target_of(&self, instance_id: &str) -> Option<RuntimeTargetEntry> {
         self.targets
             .lock()
@@ -1135,6 +1171,23 @@ mod generation_token_tests {
             .unwrap()
             .insert(instance_id.clone(), EphemeralRenderState::new());
         (hub, owner, instance_id, receiver)
+    }
+
+    #[tokio::test]
+    async fn transition_cleanup_stops_side_chat_before_releasing_lease() {
+        let (hub, owner, instance_id, _receiver) = hub_with_record("owner-a", 5);
+        let target = hub
+            .target_of(&instance_id)
+            .expect("target registered")
+            .target;
+        let runtimes = NativePiManager::new(8);
+        runtimes.register_in_memory(target).unwrap();
+
+        hub.cleanup_side_chat_for_transition(&runtimes, &owner, 5, 5);
+
+        assert!(runtimes.target_for_session_id(&instance_id).is_none());
+        assert!(hub.target_of(&instance_id).is_none());
+        assert!(hub.registry.descriptors(&owner).is_empty());
     }
 
     #[tokio::test]

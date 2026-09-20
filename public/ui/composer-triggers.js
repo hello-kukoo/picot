@@ -67,6 +67,12 @@ export function createTriggerRouter({ input, pickers }) {
   const currentTrigger = () =>
     resolveActiveTrigger(input.value, input.selectionStart ?? input.value.length);
 
+  // A key the picker consumed (Escape closing it, arrows moving the highlight)
+  // sends no further input event, so the keyup that follows would re-resolve the
+  // still-present token and reopen the menu the key just dismissed. Swallow
+  // exactly that one keyup.
+  let swallowNextKeyup = false;
+
   const refresh = () => {
     const trigger = currentTrigger();
     for (const [kind, picker] of byKind) {
@@ -83,12 +89,20 @@ export function createTriggerRouter({ input, pickers }) {
     const trigger = currentTrigger();
     const picker = trigger ? byKind.get(trigger.kind) : null;
     if (!picker || typeof picker.isOpen !== "function" || !picker.isOpen()) return;
-    picker.handleKeydown(event);
+    swallowNextKeyup = picker.handleKeydown(event) === true;
+  };
+
+  const onKeyup = (event) => {
+    if (swallowNextKeyup) {
+      swallowNextKeyup = false;
+      return;
+    }
+    refresh(event);
   };
 
   input.addEventListener("input", refresh);
   input.addEventListener("click", refresh);
-  input.addEventListener("keyup", refresh);
+  input.addEventListener("keyup", onKeyup);
   input.addEventListener("keydown", onKeydown);
 
   return {
@@ -96,7 +110,7 @@ export function createTriggerRouter({ input, pickers }) {
     destroy() {
       input.removeEventListener("input", refresh);
       input.removeEventListener("click", refresh);
-      input.removeEventListener("keyup", refresh);
+      input.removeEventListener("keyup", onKeyup);
       input.removeEventListener("keydown", onKeydown);
       for (const picker of byKind.values()) picker.close?.();
       byKind.clear();

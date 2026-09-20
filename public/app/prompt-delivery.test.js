@@ -234,15 +234,34 @@ describe("createPromptDelivery", () => {
     expect(h.delivery.unconfirmed()).toHaveLength(1);
   });
 
-  test("pullBack marks the record so a late accept cannot clear the composer", async () => {
+  test("pullBack frees the record so a late accept cannot touch the composer", async () => {
     const h = makeHarness();
     h.delivery.dispatch(CMD, { text: "hi" });
     h.advance(8000);
+    expect(h.delivery.unconfirmed()).toHaveLength(1);
+
     const record = h.delivery.pullBack("req-1");
     expect(record.pulledBack).toBe(true);
+    // The pill is gone for good: no later render can resurrect it, and the
+    // record (with its captured images) is released instead of being retained
+    // for the page's lifetime by a reply that may never come.
+    expect(h.delivery.unconfirmed()).toHaveLength(0);
+
     h.getPending().resolve({ success: true });
     await h.flush();
-    expect(h.callbacks.accept.mock.calls[0][1].late).toBe(true);
+    // The late reply finds no record, so the composer is structurally safe.
+    expect(h.callbacks.accept).not.toHaveBeenCalled();
+  });
+
+  test("hasAwaiting can be scoped to one session identity", () => {
+    const h = makeHarness();
+    h.delivery.dispatch(CMD, { text: "hi", sessionIdentity: "session-b" });
+
+    // A send in flight in another session must not block this one's composer.
+    expect(h.delivery.hasAwaiting("session-a")).toBe(false);
+    expect(h.delivery.hasAwaiting("session-b")).toBe(true);
+    // Without an identity the gate stays global (single-session callers).
+    expect(h.delivery.hasAwaiting()).toBe(true);
   });
 
   test("rejectByRequestId settles a broker runtimeError correlation", () => {

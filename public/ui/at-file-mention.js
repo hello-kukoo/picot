@@ -168,7 +168,6 @@ export function setupAtFileMention(options) {
   let open = false;
   let abortController = null;
   let timer = null;
-  let snapshot = null;
 
   const baseOptionId = `${container.id || "at-file-mention"}-opt`;
 
@@ -305,11 +304,21 @@ export function setupAtFileMention(options) {
       close();
       return;
     }
-    snapshot = {
+    // Keep this request's own copy: a shared snapshot would be reassigned by
+    // every newer request, so comparing against it would let a slow, abandoned
+    // response pass the staleness check and render candidates for a prefix the
+    // user has already changed.
+    const own = {
       generation: requestGeneration,
       value: input.value,
       cursor: input.selectionStart ?? 0,
     };
+
+    const isCurrent = () =>
+      !destroyed &&
+      own.generation === generation &&
+      own.value === input.value &&
+      own.cursor === (input.selectionStart ?? 0);
 
     if (abortController) abortController.abort();
     abortController = new (
@@ -322,7 +331,7 @@ export function setupAtFileMention(options) {
     try {
       result = await searchFiles(workspaceRoot, active.prefix, abortController.signal);
     } catch (error) {
-      if (destroyed) return;
+      if (!isCurrent()) return;
       if (error?.code === "invalid_mention_query") {
         renderError(t("fileMention.invalidQuery"));
         return;
@@ -335,14 +344,7 @@ export function setupAtFileMention(options) {
       return;
     }
 
-    if (
-      destroyed ||
-      requestGeneration !== generation ||
-      snapshot.value !== input.value ||
-      snapshot.cursor !== (input.selectionStart ?? 0)
-    ) {
-      return;
-    }
+    if (!isCurrent()) return;
     render(result.items ?? []);
   }
 
@@ -402,16 +404,21 @@ export function setupAtFileMention(options) {
     return false;
   }
 
+  // A consumed key sends no further input event, so the keyup that follows would
+  // re-resolve the still-present token and reopen the menu the key dismissed.
+  let swallowNextKeyup = false;
+
   function onKeyDown(event) {
     if (event.isComposing || event.keyCode === 229) return;
     if (event.key === "Escape" && (open || activeAtMention(input))) {
       event.preventDefault();
       event.stopImmediatePropagation();
+      swallowNextKeyup = true;
       close();
       return;
     }
     if (!open) return;
-    handleKeydown(event);
+    swallowNextKeyup = handleKeydown(event) === true;
   }
 
   const onBlur = () => queueMicrotask(close);
@@ -421,7 +428,13 @@ export function setupAtFileMention(options) {
   if (!routerMode) {
     input.addEventListener("input", () => schedule(activeAtMention(input)));
     input.addEventListener("click", () => schedule(activeAtMention(input)));
-    input.addEventListener("keyup", () => schedule(activeAtMention(input)));
+    input.addEventListener("keyup", () => {
+      if (swallowNextKeyup) {
+        swallowNextKeyup = false;
+        return;
+      }
+      schedule(activeAtMention(input));
+    });
     input.addEventListener("keydown", onKeyDown);
   }
   input.addEventListener("blur", onBlur);

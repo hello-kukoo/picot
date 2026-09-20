@@ -604,6 +604,9 @@ impl HostDataPlane {
                 })
                 .unwrap_or_default();
             root_entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
+            // `truncated` is the only signal the contract keeps for a cut list,
+            // so report it here instead of claiming a complete listing.
+            let truncated = root_entries.len() > MAX_MENTION_RESULTS;
             let items = root_entries
                 .into_iter()
                 .take(MAX_MENTION_RESULTS)
@@ -617,10 +620,7 @@ impl HostDataPlane {
                     )
                 })
                 .collect();
-            return Ok(FileMentionSearchResult {
-                items,
-                truncated: false,
-            });
+            return Ok(FileMentionSearchResult { items, truncated });
         }
         // The filesystem join uses the BARE scope base (relative to the
         // resolved search root); the display form keeps the user's prefix.
@@ -1794,6 +1794,39 @@ fn classify_mention_body(
     normalized: &str,
     workspace_root: &Path,
 ) -> Result<MentionQueryPlan, HostDataError> {
+    classify_mention_body_for_platform(normalized, workspace_root, cfg!(target_os = "windows"))
+}
+
+/// Windows drive prefix (`C:/…` / `c:/…`), mirroring the frontend
+/// `classifyMentionRoot` drive branch: the letter is upper-cased for the wire
+/// declaration, so both letter cases name the same root. Returns the letter and
+/// the scope after `X:/` (empty for a bare `C:`).
+///
+/// Platform-independent on purpose: the branch it serves is Windows-only, but a
+/// `#[cfg(windows)]` call site is invisible to a macOS `cargo check`, which is
+/// how this function shipped undefined and broke the Windows build.
+fn drive_prefix(normalized: &str) -> Option<(String, &str)> {
+    let mut chars = normalized.chars();
+    let letter = chars.next()?;
+    if !letter.is_ascii_alphabetic() || chars.next() != Some(':') {
+        return None;
+    }
+    let rest = normalized.get(2..)?;
+    let scope = match rest.strip_prefix('/') {
+        Some(scope) => scope,
+        None if rest.is_empty() => "",
+        None => return None,
+    };
+    Some((letter.to_ascii_uppercase().to_string(), scope))
+}
+
+/// `classify_mention_body` with the platform as a runtime value, so both the
+/// Windows and the POSIX branches compile and run under test on any host.
+fn classify_mention_body_for_platform(
+    normalized: &str,
+    workspace_root: &Path,
+    windows: bool,
+) -> Result<MentionQueryPlan, HostDataError> {
     // Home: `~` or `~/…` — expanded by the host only, never the browser.
     if normalized == "~" || normalized.starts_with("~/") {
         let scope = normalized.strip_prefix("~/").unwrap_or("").to_string();
@@ -1816,23 +1849,22 @@ fn classify_mention_body(
     }
     // Windows named drive: `C:/…` (bare `@/` stays illegal on Windows — no
     // single filesystem root). POSIX falls through to the absolute branch.
-    #[cfg(target_os = "windows")]
-    if let Some(rest) = drive_prefix(normalized) {
-        let (letter, scope) = rest;
-        if scope.split('/').any(|part| part == "..") {
-            return Err(HostDataError::InvalidMentionQuery);
+    if windows {
+        if let Some((letter, scope)) = drive_prefix(normalized) {
+            if scope.split('/').any(|part| part == "..") {
+                return Err(HostDataError::InvalidMentionQuery);
+            }
+            let root = format!("{letter}:/");
+            return Ok(MentionQueryPlan {
+                kind: "drive",
+                declared_value: root.clone(),
+                scope: scope.to_string(),
+                display_prefix: root.clone(),
+                resolved_root: Some(PathBuf::from(root)),
+            });
         }
-        let root = format!("{letter}:/");
-        return Ok(MentionQueryPlan {
-            kind: "drive",
-            declared_value: root.clone(),
-            scope: scope.to_string(),
-            display_prefix: format!("{root}"),
-            resolved_root: Some(PathBuf::from(root)),
-        });
     }
-    #[cfg(target_os = "windows")]
-    if normalized.starts_with('/') {
+    if windows && normalized.starts_with('/') {
         // UNC `//server/share/…` is the only legal `@/` form on Windows.
         if let Some(rest) = normalized.strip_prefix("//") {
             let mut parts = rest.splitn(3, '/');
@@ -1857,18 +1889,19 @@ fn classify_mention_body(
         return Err(HostDataError::InvalidMentionQuery);
     }
     // POSIX absolute: `@/…` searches from the filesystem root.
-    #[cfg(not(target_os = "windows"))]
-    if let Some(scope) = normalized.strip_prefix('/') {
-        if scope.split('/').any(|part| part == "..") {
-            return Err(HostDataError::InvalidMentionQuery);
+    if !windows {
+        if let Some(scope) = normalized.strip_prefix('/') {
+            if scope.split('/').any(|part| part == "..") {
+                return Err(HostDataError::InvalidMentionQuery);
+            }
+            return Ok(MentionQueryPlan {
+                kind: "absolute",
+                declared_value: "/".into(),
+                scope: scope.to_string(),
+                display_prefix: "/".into(),
+                resolved_root: Some(PathBuf::from("/")),
+            });
         }
-        return Ok(MentionQueryPlan {
-            kind: "absolute",
-            declared_value: "/".into(),
-            scope: scope.to_string(),
-            display_prefix: "/".into(),
-            resolved_root: Some(PathBuf::from("/")),
-        });
     }
     // Parent chain: one leading `../` per level (multi-level allowed; the
     // climb floors at the filesystem/drive root). Mid-word `..` stays illegal.
@@ -1889,18 +1922,23 @@ fn classify_mention_body(
         let workspace_str = workspace_root.to_string_lossy().replace('\\', "/");
         let mut components: Vec<&str> =
             workspace_str.split('/').filter(|c| !c.is_empty()).collect();
-        let floor = if cfg!(target_os = "windows") { 1 } else { 0 };
+        let floor = if windows { 1 } else { 0 };
         while components.len() > floor && levels > 0 {
             components.pop();
             levels -= 1;
         }
         let mut climbed = String::new();
-        for component in &components {
+        if windows && components.len() == 1 && components[0].ends_with(':') {
+            climbed.push_str(components[0]);
             climbed.push('/');
-            climbed.push_str(component);
+        } else {
+            for component in &components {
+                climbed.push('/');
+                climbed.push_str(component);
+            }
         }
         if climbed.is_empty() {
-            climbed = if cfg!(target_os = "windows") {
+            climbed = if windows {
                 // Single remaining component = the drive root itself.
                 format!("/{}", components.first().copied().unwrap_or_default())
             } else {
@@ -2122,12 +2160,13 @@ fn safe_join(root: &Path, relative_path: &str) -> Result<PathBuf, HostDataError>
 #[cfg(test)]
 mod tests {
     use super::{
-        should_project_sidebar_file, FileKind, HostDataError, HostDataPlane,
-        SidebarFileClassification,
+        classify_mention_body_for_platform, should_project_sidebar_file, FileKind, HostDataError,
+        HostDataPlane, SidebarFileClassification,
     };
     use crate::metadata_store::MetadataStore;
     use std::fs;
     use std::io::Write;
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -2293,6 +2332,67 @@ mod tests {
         assert!(result.items.is_empty(), "node_modules must be skipped");
 
         fs::remove_dir_all(temp).unwrap();
+    }
+
+    /// The Windows branches used to be `#[cfg(target_os = "windows")]`-only, so
+    /// a macOS `cargo check` never compiled them — which is how a call to the
+    /// undefined `drive_prefix` shipped and broke the Windows build. These run
+    /// the Windows logic on any host.
+    #[test]
+    fn mention_parent_traversal_reaches_windows_drive_root() {
+        let workspace = Path::new("C:/work/project");
+        let plan = classify_mention_body_for_platform("../../foo", workspace, true).unwrap();
+        assert_eq!(plan.declaration(), ("absolute", "C:/"));
+        assert_eq!(plan.scope, "foo");
+        assert_eq!(plan.resolved_root.as_deref(), Some(Path::new("C:/")));
+    }
+
+    #[test]
+    fn mention_drive_form_mirrors_the_frontend_declaration() {
+        let workspace = Path::new("/workspace");
+        // Lowercase input must declare an upper-cased letter, exactly like
+        // `body[0].toUpperCase()` on the browser side; otherwise every `@c:/x`
+        // declaration mismatches and the query is rejected.
+        let plan = classify_mention_body_for_platform("c:/Users/dev/src", workspace, true).unwrap();
+        assert_eq!(plan.declaration(), ("drive", "C:/"));
+        assert_eq!(plan.scope, "Users/dev/src");
+        assert_eq!(plan.display_prefix, "C:/");
+
+        // `C:` alone is the drive root with an empty scope.
+        let plan = classify_mention_body_for_platform("C:", workspace, true).unwrap();
+        assert_eq!(plan.declaration(), ("drive", "C:/"));
+        assert_eq!(plan.scope, "");
+
+        assert!(matches!(
+            classify_mention_body_for_platform("c:/a/../b", workspace, true),
+            Err(HostDataError::InvalidMentionQuery)
+        ));
+
+        // POSIX must keep `c:/x` workspace-relative — the drive form is
+        // Windows-only, mirroring the frontend's `windows` test.
+        let plan = classify_mention_body_for_platform("c:/x", workspace, false).unwrap();
+        assert_eq!(plan.declaration(), ("workspace", ""));
+        assert_eq!(plan.scope, "c:/x");
+    }
+
+    #[test]
+    fn mention_windows_root_forms_differ_from_posix() {
+        let workspace = Path::new("/workspace");
+        // Windows has no single filesystem root: bare `@/etc` is illegal, UNC
+        // is the only legal `@/` form.
+        assert!(matches!(
+            classify_mention_body_for_platform("/etc", workspace, true),
+            Err(HostDataError::InvalidMentionQuery)
+        ));
+        let plan =
+            classify_mention_body_for_platform("//server/share/dir", workspace, true).unwrap();
+        assert_eq!(plan.declaration(), ("unc", "//server/share"));
+        assert_eq!(plan.scope, "dir");
+
+        // POSIX `@/etc` searches the filesystem root.
+        let plan = classify_mention_body_for_platform("/etc", workspace, false).unwrap();
+        assert_eq!(plan.declaration(), ("absolute", "/"));
+        assert_eq!(plan.scope, "etc");
     }
 
     #[test]

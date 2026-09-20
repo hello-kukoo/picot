@@ -158,6 +158,27 @@ describe("createTriggerRouter", () => {
     expect(slash.closes).toBe(0);
   });
 
+  test("a consumed Escape does not reopen the menu on the keyup that follows", () => {
+    const slash = makePicker("slash");
+    createTriggerRouter({ input, pickers: [slash] });
+
+    input.value = "/rev";
+    input.setSelectionRange(4, 4);
+    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    expect(slash.isOpen()).toBe(true);
+    const updatesAfterInput = slash.updates.length;
+
+    // The picker consumes Escape and closes itself; no input event follows, so
+    // the keyup is the only thing that could re-resolve the token.
+    keydown({ key: "Escape" });
+    slash.close();
+
+    input.dispatchEvent(new dom.window.KeyboardEvent("keyup", { key: "Escape" }));
+
+    expect(slash.updates).toHaveLength(updatesAfterInput);
+    expect(slash.isOpen()).toBe(false);
+  });
+
   test("mention gets the trigger when the caret is in an @token", () => {
     const slash = makePicker("slash");
     const mention = makePicker("mention");

@@ -3537,6 +3537,11 @@ const promptDelivery = createPromptDelivery({
     updateUI();
     // A pull-back already restored the text on purpose; never fight it.
     if (late && record.pulledBack) return;
+    // The reply can land after a session switch, where the composer shows the
+    // incoming identity's own draft: mutating it (and its stored draft below)
+    // would delete work that has nothing to do with this send. Same guard as
+    // onReject.
+    if (record.sessionIdentity && record.sessionIdentity !== composerIdentity()) return;
     if (messageInput.value === record.textAtSend) {
       messageInput.value = "";
       messageInput.style.height = "auto";
@@ -3694,7 +3699,7 @@ function sendMessage() {
   if (!currentOnboardingState().canQuery) return;
   // One correlated send at a time: the delivery record owns the input until
   // acceptance/rejection settles, so a second Enter cannot double-send.
-  if (promptDelivery.hasAwaiting()) return;
+  if (promptDelivery.hasAwaiting(composerIdentity())) return;
 
   const message = messageInput.value.trim();
   if (!message) return;
@@ -3793,12 +3798,16 @@ function firstCommandToken(message) {
 async function sendSteering() {
   if (mainPasteOffload.isBusy()) return;
   if (!currentOnboardingState().canQuery) return;
-  if (promptDelivery.hasAwaiting()) return;
+  if (promptDelivery.hasAwaiting(composerIdentity())) return;
   const message = messageInput.value.trim();
   if (!message) return;
 
   const token = firstCommandToken(message);
   const extensionCommand = token ? (await loadExtensionCommandNames()).has(token) : false;
+  // The probe above is a round trip, so another Enter can have taken the
+  // delivery record while it was in flight — dispatching here would deliver the
+  // same steer twice.
+  if (promptDelivery.hasAwaiting(composerIdentity())) return;
   const intent = planSteeringSend({ streaming: state.isStreaming, extensionCommand });
   if (intent === "direct") {
     sendMessage(); // not streaming (or fell idle between keypress and here)
@@ -3829,12 +3838,14 @@ async function sendSteering() {
 async function sendFollowUp() {
   if (mainPasteOffload.isBusy()) return;
   if (!currentOnboardingState().canQuery) return;
-  if (promptDelivery.hasAwaiting()) return;
+  if (promptDelivery.hasAwaiting(composerIdentity())) return;
   const message = messageInput.value.trim();
   if (!message) return;
 
   const token = firstCommandToken(message);
   const extensionCommand = token ? (await loadExtensionCommandNames()).has(token) : false;
+  // Same in-flight window as sendSteering: re-check before dispatching.
+  if (promptDelivery.hasAwaiting(composerIdentity())) return;
   if (planFollowUpSend({ streaming: state.isStreaming, extensionCommand }) === "direct") {
     // Idle (user intent is delivery) or an extension command (executes
     // immediately): the plain Enter path is the correct behavior.
@@ -3891,6 +3902,8 @@ function renderQueuedMessages() {
       else if (!messageInput.value.includes(record.text))
         messageInput.value = `${messageInput.value}\n${record.text}`;
       messageInput.dispatchEvent(new Event("input", { bubbles: true }));
+      // The record is gone, so the pill must not survive this render pass.
+      renderQueuedMessages();
       messageInput.focus();
     });
     queuedMessagesEl.appendChild(item);
@@ -4212,9 +4225,10 @@ async function inheritLastModel() {
     await fetchModelInfo();
     if (generation !== uiSessionGeneration) return;
   }
-  // A model that is no longer available (removed provider, revoked key) must
-  // not wedge startup: skip it and leave pi's default in place.
-  const model = availableModels.find((entry) =>
+  // A model the user has not enabled (or one that is gone with its provider)
+  // must not wedge startup: skip it and leave pi's default in place. Curation
+  // applies to NEW sessions, which is exactly this path.
+  const model = visibleModels.find((entry) =>
     isSelectedModel(entry, { provider: last.provider, modelId: last.modelId }),
   );
   if (!model) {
@@ -4351,7 +4365,14 @@ function updateThinkingBtn() {
 }
 let currentModelProvider = "";
 let currentModelId = "";
+// Every model the registry reports as runnable (credentials present). Used to
+// resolve a session's own model: pinning, restore and profile snapshots must
+// still find a model the user has not enabled, or a pinned session silently
+// falls back to pi's default.
 let availableModels = [];
+// The curated subset the composer picker offers. Visibility is opt-in, so this
+// is what the dropdown renders and what a NEW session may inherit.
+let visibleModels = [];
 // True while the last catalog read failed: an empty picker then means "your
 // list could not be read", not "you enabled nothing".
 let modelsCatalogUnavailable = false;
@@ -4411,9 +4432,10 @@ async function fetchModelInfo() {
     const stateData = stateResult || {};
 
     if (modelsData.success && Array.isArray(modelsData.data?.models)) {
-      availableModels = await filterConfiguredModels(modelsData.data.models);
+      availableModels = modelsData.data.models;
+      visibleModels = await filterConfiguredModels(availableModels);
       hasLoadedAvailableModels = true;
-      if (availableModels.length > 0) {
+      if (visibleModels.length > 0) {
         didAutoOpenEmptyModelsDropdown = false;
       }
     }
@@ -4427,8 +4449,11 @@ async function fetchModelInfo() {
           modelId: currentModelId,
         }),
       );
-      if (!model && availableModels.length > 0) {
-        const fallbackModel = availableModels[0];
+      // pi reports a model the registry does not know (config change, removed
+      // provider). Fall back only within the curated list: picking an
+      // un-enabled model here would move the session off the user's choice.
+      if (!model && visibleModels.length > 0) {
+        const fallbackModel = visibleModels[0];
         const resp = await rpcCommand({
           type: "set_model",
           provider: fallbackModel.provider,
@@ -4471,7 +4496,7 @@ async function fetchModelInfo() {
 function maybeAutoOpenEmptyModelsDropdown() {
   if (
     hasLoadedAvailableModels &&
-    availableModels.length === 0 &&
+    visibleModels.length === 0 &&
     !didAutoOpenEmptyModelsDropdown &&
     modelDropdownMenu.classList.contains("hidden") &&
     settingsPanel.classList.contains("hidden")
@@ -4518,7 +4543,7 @@ function openModelDropdown() {
     // Empty-state: no API keys configured anywhere. Surface this loudly
     // instead of leaving the dropdown blank — empty dropdowns look like
     // a hung load, not a setup problem.
-    if (availableModels.length === 0) {
+    if (visibleModels.length === 0) {
       const empty = document.createElement("div");
       empty.className = "model-dropdown-empty";
       const content = document.createElement("div");
@@ -4546,7 +4571,7 @@ function openModelDropdown() {
       itemsContainer.appendChild(empty);
       return;
     }
-    const matchingModels = availableModels.filter((m) => {
+    const matchingModels = visibleModels.filter((m) => {
       const shortName = m.id.replace(/-\d{8}$/, "");
       const providerStr = m.provider || "";
       return (
@@ -6461,7 +6486,7 @@ function updateUI() {
   }
 
   messageInput.disabled = !onboarding.canType;
-  sendBtn.disabled = !onboarding.canQuery || promptDelivery.hasAwaiting();
+  sendBtn.disabled = !onboarding.canQuery || promptDelivery.hasAwaiting(composerIdentity());
 
   if (isStreaming) {
     abortBtn.classList.remove("hidden");
