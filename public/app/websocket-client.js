@@ -763,6 +763,14 @@ export class WebSocketClient extends EventTarget {
       this.dispatchEvent(new CustomEvent("gitCommandAck", { detail: message }));
       return;
     }
+    if (message.type === "git_push") {
+      this.dispatchEvent(new CustomEvent("gitPush", { detail: message }));
+      return;
+    }
+    if (message.type === "git_push_failed") {
+      this.dispatchEvent(new CustomEvent("gitPushFailed", { detail: message }));
+      return;
+    }
     if (message.type === "git_command_failed" || message.type === "git_ai_commit_message_failed") {
       this.dispatchEvent(new CustomEvent("gitCommandFailed", { detail: message }));
       return;

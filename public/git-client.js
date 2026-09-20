@@ -9,6 +9,7 @@ export class GitClient {
     this.counter = 0;
     this.pending = new Map();
     this.pendingWrites = new Set();
+    this.pendingPushes = new Set();
   }
   setWorkspaceGeneration(value) {
     const generation = Number(value);
@@ -66,6 +67,15 @@ export class GitClient {
   aiCommitMessage() {
     return this.command({}, "git_ai_commit_message");
   }
+  push() {
+    const requestId = this.command({ type: "push" });
+    if (requestId) this.pendingPushes.add(requestId);
+    return requestId;
+  }
+  consumePushOutcome(message) {
+    if (message?.workspaceGeneration !== this.generation) return false;
+    return this.pendingPushes.delete(message?.requestId);
+  }
   commit(snapshotId, message, confirmationToken = null) {
     return this.command({ type: "commit", snapshotId, message, confirmationToken });
   }
@@ -119,6 +129,7 @@ export class GitClient {
     for (const entry of this.pending.values()) entry.resolve(null);
     this.pending.clear();
     this.pendingWrites.clear();
+    this.pendingPushes.clear();
     this.generation = null;
   }
 }

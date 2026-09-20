@@ -22,6 +22,13 @@ const SNAPSHOT_TTL: Duration = Duration::from_secs(300);
 const MAX_SNAPSHOTS_PER_OWNER: usize = 8;
 const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
 const COMMIT_DEADLINE: Duration = Duration::from_secs(300);
+// Push crosses the network, so it needs far more headroom than the 30s write
+// deadline — but still a hard ceiling, because a credential prompt this
+// process cannot answer would otherwise stall the write slot forever.
+const PUSH_DEADLINE: Duration = Duration::from_secs(120);
+const MAX_PUSH_OUTPUT_BYTES: usize = 4 * 1024;
+pub const PUSH_DETACHED_HEAD: &str = "push_detached_head";
+pub const PUSH_NO_REMOTE: &str = "push_no_remote";
 const OUTCOME_TTL: Duration = Duration::from_secs(600);
 #[allow(dead_code)]
 const MAX_STDOUT_BYTES: usize = 4 * 1024 * 1024;
@@ -95,6 +102,17 @@ pub struct GitDiffResponse {
     pub raw_patch: String,
     pub truncated: bool,
     pub fallback_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitPushOutcome {
+    pub remote: String,
+    pub branch: String,
+    pub set_upstream: bool,
+    /// Bounded stderr transcript; git push writes its human-readable result
+    /// there even on success.
+    pub output: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -1059,6 +1077,107 @@ impl GitService {
         args.extend(paths.iter().map(|path| path_arg(path)));
         let _ = git_os(root, &args)?;
         Ok(())
+    }
+
+    /// Push the current branch to its upstream, or to the default remote with
+    /// `--set-upstream` when no upstream is configured yet.
+    ///
+    /// Authentication is strictly non-interactive: the Tauri child has no TTY,
+    /// so any credential or passphrase prompt would hang until `PUSH_DEADLINE`
+    /// kills the process group. `git_command` already sets
+    /// GIT_TERMINAL_PROMPT=0 and a null stdin; this adds askpass suppression
+    /// and SSH BatchMode so a missing credential fails immediately with a
+    /// message the user can act on instead of stalling the panel.
+    pub fn push(&self, root: &Path) -> Result<GitPushOutcome, String> {
+        assert_workspace_root(root)?;
+        // Share the per-root write slot with stage/unstage/discard/commit so a
+        // push never races an index mutation on the same workspace.
+        let write_slot = self.lock_for_write(root);
+        let _slot = match write_slot.try_lock() {
+            Ok(slot) => slot,
+            Err(TryLockError::WouldBlock) => return Err("busy".into()),
+            Err(TryLockError::Poisoned(_)) => return Err("write slot unavailable".into()),
+        };
+        let status =
+            parse_porcelain_v2_z(&git(root, &["status", "--porcelain=v2", "-z", "--branch"])?);
+        let branch = match (status.head_state.as_str(), status.branch.clone()) {
+            ("attached", Some(branch)) if !branch.is_empty() => branch,
+            _ => return Err(PUSH_DETACHED_HEAD.into()),
+        };
+        // The configured upstream owns both the remote and the remote branch.
+        // Deriving the refspec from the local branch name instead would publish
+        // a same-named branch on the remote whenever the two names differ,
+        // leaving the real upstream behind.
+        let (remote, upstream_branch, set_upstream) = match status
+            .upstream
+            .as_deref()
+            .and_then(|upstream| upstream.split_once('/'))
+            .filter(|(remote, branch)| !remote.is_empty() && !branch.is_empty())
+        {
+            Some((remote, upstream_branch)) => {
+                (remote.to_owned(), upstream_branch.to_owned(), false)
+            }
+            None => {
+                let remotes = String::from_utf8_lossy(&git(root, &["remote"])?)
+                    .lines()
+                    .map(|line| line.trim().to_owned())
+                    .filter(|line| !line.is_empty())
+                    .collect::<Vec<_>>();
+                (
+                    remotes.first().cloned().ok_or(PUSH_NO_REMOTE.to_string())?,
+                    String::new(),
+                    true,
+                )
+            }
+        };
+        let mut args = vec![OsString::from("push")];
+        if set_upstream {
+            args.push(OsString::from("--set-upstream"));
+        }
+        args.push(OsString::from(remote.clone()));
+        // `--` ends option parsing: a branch whose name starts with `-` is a
+        // legal ref, but git would otherwise read the refspec as a switch.
+        args.push(OsString::from("--"));
+        if set_upstream {
+            // Publish under the branch's own name; HEAD keeps that name out of
+            // argv and lets git derive it.
+            args.push(OsString::from("HEAD"));
+        } else {
+            args.push(OsString::from(format!("HEAD:{upstream_branch}")));
+        }
+        let mut command = git_command(root, args);
+        // Absent a TTY, these keep git from blocking on a prompt it can never
+        // answer — it fails with an actionable message instead.
+        command.env("GIT_ASKPASS", "").env("SSH_ASKPASS", "");
+        // Impose BatchMode only when the user has no SSH command of their own.
+        // Overriding a configured core.sshCommand would break bespoke setups
+        // (custom keys, jump hosts, ProxyCommand).
+        let user_ssh_command = std::env::var_os("GIT_SSH_COMMAND").is_some()
+            || std::env::var_os("GIT_SSH").is_some()
+            || git(root, &["config", "--get", "core.sshCommand"]).is_ok();
+        if !user_ssh_command {
+            command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
+        }
+        let (stdout, stderr, success) = run_git(command, PUSH_DEADLINE)?;
+        let transcript = if stderr.is_empty() { stdout } else { stderr };
+        let output = String::from_utf8_lossy(&transcript)
+            .trim()
+            .chars()
+            .take(MAX_PUSH_OUTPUT_BYTES)
+            .collect::<String>();
+        if !success {
+            return Err(if output.is_empty() {
+                "git push failed".into()
+            } else {
+                output
+            });
+        }
+        Ok(GitPushOutcome {
+            remote,
+            branch,
+            set_upstream,
+            output,
+        })
     }
 
     pub fn prepare_ai_snapshot(
@@ -3586,5 +3705,173 @@ mod tests {
         assert_eq!(stat.status, "untracked");
         assert_eq!(stat.additions, 0);
         assert!(!stat.additions_capped);
+    }
+
+    #[test]
+    fn push_rejects_a_detached_head() {
+        let (_dir, root) = test_repo();
+        test_commit(&root, "file.txt", "one\n", "init");
+        let service = GitService::new();
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .current_dir(&root)
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        let head = String::from_utf8(run(&["rev-parse", "HEAD"]).stdout)
+            .unwrap()
+            .trim()
+            .to_owned();
+        assert!(run(&["checkout", "-q", &head]).status.success());
+        assert_eq!(
+            service.push(&root).unwrap_err(),
+            PUSH_DETACHED_HEAD.to_string()
+        );
+    }
+
+    #[test]
+    fn push_reports_a_workspace_without_a_remote() {
+        let (_dir, root) = test_repo();
+        test_commit(&root, "file.txt", "one\n", "init");
+        let service = GitService::new();
+        assert_eq!(service.push(&root).unwrap_err(), PUSH_NO_REMOTE.to_string());
+    }
+
+    #[test]
+    fn push_publishes_the_branch_then_reuses_the_upstream() {
+        let (_dir, root) = test_repo();
+        test_commit(&root, "file.txt", "one\n", "init");
+        let remote = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .current_dir(&root)
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        assert!(Command::new("git")
+            .current_dir(remote.path())
+            .args(["init", "-q", "--bare", "-b", "main"])
+            .output()
+            .unwrap()
+            .status
+            .success());
+        assert!(
+            run(&["remote", "add", "origin", remote.path().to_str().unwrap()])
+                .status
+                .success()
+        );
+
+        let service = GitService::new();
+        // No upstream yet: the first push publishes and records one.
+        let first = service.push(&root).unwrap();
+        assert_eq!(first.remote, "origin");
+        assert_eq!(first.branch, "main");
+        assert!(first.set_upstream);
+
+        // The recorded upstream is reused, so nothing is re-published.
+        let second = service.push(&root).unwrap();
+        assert_eq!(second.remote, "origin");
+        assert!(!second.set_upstream);
+    }
+
+    #[test]
+    fn push_refuses_to_run_while_the_write_slot_is_held() {
+        let (_dir, root) = test_repo();
+        test_commit(&root, "file.txt", "one\n", "init");
+        let service = GitService::new();
+        let slot = service.lock_for_write(&root);
+        let _guard = slot.try_lock().unwrap();
+        assert_eq!(service.push(&root).unwrap_err(), "busy".to_string());
+    }
+    #[test]
+    fn push_updates_the_tracked_upstream_branch_when_names_differ() {
+        let (_dir, root) = test_repo();
+        test_commit(&root, "file.txt", "one\n", "init");
+        let remote = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .current_dir(&root)
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        assert!(Command::new("git")
+            .current_dir(remote.path())
+            .args(["init", "-q", "--bare", "-b", "main"])
+            .output()
+            .unwrap()
+            .status
+            .success());
+        let remote_path = remote.path().to_str().unwrap();
+        assert!(run(&["remote", "add", "origin", remote_path])
+            .status
+            .success());
+        // The remote branch is named differently from the local one.
+        assert!(run(&["push", "origin", "HEAD:refs/heads/other"])
+            .status
+            .success());
+        assert!(run(&["fetch", "-q", "origin"]).status.success());
+        assert!(run(&["branch", "-q", "-u", "origin/other", "main"])
+            .status
+            .success());
+        test_commit(&root, "file.txt", "two\n", "second");
+
+        let service = GitService::new();
+        let outcome = service.push(&root).unwrap();
+        assert_eq!(outcome.remote, "origin");
+        assert_eq!(outcome.branch, "main");
+        assert!(!outcome.set_upstream);
+
+        let heads =
+            String::from_utf8(run(&["ls-remote", "origin", "refs/heads/*"]).stdout).unwrap();
+        // A same-named branch must not appear: that would mean the local name
+        // was published and the real upstream left behind.
+        assert!(!heads.contains("refs/heads/main"), "{heads}");
+        let local = String::from_utf8(run(&["rev-parse", "HEAD"]).stdout).unwrap();
+        let upstream = String::from_utf8(run(&["rev-parse", "origin/other"]).stdout).unwrap();
+        assert_eq!(local.trim(), upstream.trim());
+    }
+
+    #[test]
+    fn push_handles_a_branch_name_that_looks_like_a_git_switch() {
+        let (_dir, root) = test_repo();
+        test_commit(&root, "file.txt", "one\n", "init");
+        let remote = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .current_dir(&root)
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        assert!(Command::new("git")
+            .current_dir(remote.path())
+            .args(["init", "-q", "--bare", "-b", "main"])
+            .output()
+            .unwrap()
+            .status
+            .success());
+        let remote_path = remote.path().to_str().unwrap();
+        assert!(run(&["remote", "add", "origin", remote_path])
+            .status
+            .success());
+        // `-evil` is a legal ref name; a refspec built from it would be read as
+        // a git switch without the `--` guard.
+        assert!(run(&["update-ref", "refs/heads/-evil", "HEAD"])
+            .status
+            .success());
+        assert!(run(&["symbolic-ref", "HEAD", "refs/heads/-evil"])
+            .status
+            .success());
+
+        let service = GitService::new();
+        let outcome = service.push(&root).unwrap();
+        assert!(outcome.set_upstream);
+
+        let heads =
+            String::from_utf8(run(&["ls-remote", "origin", "refs/heads/*"]).stdout).unwrap();
+        assert!(heads.contains("refs/heads/-evil"), "{heads}");
     }
 }

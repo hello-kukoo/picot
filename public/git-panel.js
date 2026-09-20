@@ -38,6 +38,10 @@ export class GitPanel {
     this.commitInProgress = false;
     this.pendingCommitRequestId = null;
     this.pendingAiRequestId = null;
+    this.pushInProgress = false;
+    this.pushError = null;
+    this.pushResult = null;
+    this.pendingPushRequestId = null;
     this._subTab = "changes";
     this.subTabBar = document.createElement("div");
     this.subTabBar.className = "git-subtab-bar";
@@ -342,6 +346,46 @@ export class GitPanel {
     this.pendingCommitRequestId = requestId || null;
     return requestId;
   }
+  push() {
+    if (this.pushInProgress) return null;
+    // Clear the previous outcome first so a retry never renders a stale error
+    // next to an in-flight push.
+    this.pushError = null;
+    this.pushResult = null;
+    this.pushInProgress = true;
+    const requestId = this.client?.push();
+    this.pendingPushRequestId = requestId || null;
+    if (!requestId) this.pushInProgress = false;
+    this.render();
+    return requestId;
+  }
+  applyPushResult(result) {
+    this.pushInProgress = false;
+    this.pendingPushRequestId = null;
+    const succeeded = result?.status === "succeeded";
+    this.pushError = succeeded ? null : this.pushErrorText(result?.error);
+    this.pushResult = succeeded ? this.pushResultText(result) : null;
+    this.render();
+  }
+  /** Success detail: git writes its result to stderr even when it succeeds, so
+   *  the transcript is the outcome; "" when there is nothing to report. */
+  pushResultText(result) {
+    const output = typeof result?.output === "string" ? result.output.trim() : "";
+    const upstream = result?.setUpstream
+      ? t("git.pushSetUpstream", { remote: result.remote || "", branch: result.branch || "" })
+      : "";
+    return [output, upstream].filter(Boolean).join("\n");
+  }
+  /** Map the backend's stable failure codes onto localized copy, and pass
+   *  git's own stderr through unchanged when there is no code for it. */
+  pushErrorText(error) {
+    if (error === "push_detached_head") return t("git.pushDetachedHead");
+    if (error === "push_no_remote") return t("git.pushNoRemote");
+    if (error === "busy") return t("git.pushBusy");
+    if (error === "workspace_transition") return t("git.pushWorkspaceTransition");
+    const text = typeof error === "string" ? error.trim() : "";
+    return text || t("git.pushFailed");
+  }
   write(operation, entries = [], contextGroup = null) {
     const snapshotId = this.snapshot?.snapshotId;
     // The caller supplies the group context (the group the user clicked in).
@@ -502,9 +546,31 @@ export class GitPanel {
       binary: snapshot.changeStats?.binaryFileCount || 0,
     });
     details.append(stats);
+    if (this.pushError) {
+      const pushError = document.createElement("p");
+      pushError.className = "git-panel-push-error";
+      pushError.setAttribute("role", "alert");
+      pushError.textContent = this.pushError;
+      details.append(pushError);
+    }
+    if (this.pushResult) {
+      const pushResult = document.createElement("p");
+      pushResult.className = "git-panel-push-result";
+      pushResult.textContent = this.pushResult;
+      details.append(pushResult);
+    }
     toolbar.append(details);
     const actions = document.createElement("div");
     actions.className = "git-panel-toolbar-actions";
+    const push = document.createElement("button");
+    push.type = "button";
+    push.className = "git-panel-push";
+    // Nothing to publish from a detached HEAD, and a push already in flight
+    // holds the workspace write slot.
+    push.disabled = this.pushInProgress || !snapshot.branch;
+    push.textContent = this.pushInProgress ? t("git.pushing") : t("git.push");
+    push.addEventListener("click", () => this.push());
+    actions.append(push);
     const commit = document.createElement("button");
     commit.type = "button";
     commit.className = "git-panel-commit";

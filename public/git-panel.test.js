@@ -26,6 +26,14 @@ setMessages({
     commit: "Commit",
     cancel: "Cancel",
     committing: "Committing...",
+    push: "Push",
+    pushing: "Pushing...",
+    pushFailed: "Push failed",
+    pushDetachedHead: "Detached HEAD",
+    pushNoRemote: "No remote",
+    pushBusy: "Busy",
+    pushSetUpstream: "Tracking {remote}/{branch}",
+    pushWorkspaceTransition: "Switching workspace",
     commitMessageLabel: "Commit message",
     confirmationRequired: "Confirm whole-file commit?",
     discardConfirm: "Discard {count}?",
@@ -495,6 +503,119 @@ describe("GitPanel", () => {
     panel.applyAiFailure("err");
     expect(panel.pendingAiRequestId).toBeNull();
     panel.closeCommitDialog();
+  });
+
+  it("pushes with a pending requestId and renders the in-flight label", () => {
+    const push = vi.fn(() => "push-req-1");
+    const panel = new GitPanel({
+      container: document.querySelector("#panel"),
+      client: { command: vi.fn(), push },
+    });
+    panel.setSnapshot({
+      snapshotId: "snap",
+      branch: "main",
+      entries: [],
+      counts: { staged: 0, conflicted: 0 },
+    });
+    expect(panel.push()).toBe("push-req-1");
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(panel.pendingPushRequestId).toBe("push-req-1");
+    expect(panel.container.querySelector(".git-panel-push").disabled).toBe(true);
+    expect(panel.container.querySelector(".git-panel-push").textContent).toBe("Pushing...");
+  });
+
+  it("maps a failed push back to localized copy and clears the in-flight state", () => {
+    const panel = new GitPanel({
+      container: document.querySelector("#panel"),
+      client: { command: vi.fn(), push: vi.fn(() => "push-req-2") },
+    });
+    panel.setSnapshot({ snapshotId: "snap", branch: "main", entries: [], counts: {} });
+    panel.push();
+    panel.applyPushResult({ status: "failed", error: "push_no_remote" });
+    expect(panel.pushInProgress).toBe(false);
+    expect(panel.pendingPushRequestId).toBeNull();
+    const error = panel.container.querySelector(".git-panel-push-error");
+    expect(error.textContent).toBe("No remote");
+    expect(error.getAttribute("role")).toBe("alert");
+  });
+
+  it("passes git's own stderr through when the failure has no stable code", () => {
+    const panel = new GitPanel({
+      container: document.querySelector("#panel"),
+      client: { command: vi.fn() },
+    });
+    panel.setSnapshot({ snapshotId: "snap", branch: "main", entries: [], counts: {} });
+    panel.applyPushResult({ status: "failed", error: "! [rejected] main -> main" });
+    expect(panel.container.querySelector(".git-panel-push-error").textContent).toBe(
+      "! [rejected] main -> main",
+    );
+  });
+
+  it("renders the success transcript and its upstream note without an error", () => {
+    const panel = new GitPanel({
+      container: document.querySelector("#panel"),
+      client: { command: vi.fn(), push: vi.fn(() => "push-req-4") },
+    });
+    panel.setSnapshot({ snapshotId: "snap", branch: "main", entries: [], counts: {} });
+    panel.push();
+    // The host reports success as the outcome payload, not as a status field.
+    panel.applyPushResult({
+      status: "succeeded",
+      remote: "origin",
+      branch: "main",
+      setUpstream: true,
+      output: "To github.com:x/y.git\n   abc1234..def5678  main -> main",
+    });
+    expect(panel.pushInProgress).toBe(false);
+    expect(panel.container.querySelector(".git-panel-push-error")).toBeNull();
+    const result = panel.container.querySelector(".git-panel-push-result");
+    expect(result.textContent).toContain("To github.com:x/y.git");
+    expect(result.textContent).toContain("Tracking origin/main");
+  });
+
+  it("maps the workspace-transition code instead of showing it raw", () => {
+    const panel = new GitPanel({
+      container: document.querySelector("#panel"),
+      client: { command: vi.fn() },
+    });
+    panel.setSnapshot({ snapshotId: "snap", branch: "main", entries: [], counts: {} });
+    panel.applyPushResult({ status: "failed", error: "workspace_transition" });
+    expect(panel.container.querySelector(".git-panel-push-error").textContent).toBe(
+      "Switching workspace",
+    );
+  });
+
+  it("drops the previous push result when a new push starts", () => {
+    const panel = new GitPanel({
+      container: document.querySelector("#panel"),
+      client: { command: vi.fn(), push: vi.fn(() => "push-req-5") },
+    });
+    panel.setSnapshot({ snapshotId: "snap", branch: "main", entries: [], counts: {} });
+    panel.applyPushResult({ status: "succeeded", output: "To github.com:x/y.git" });
+    expect(panel.pushResult).toContain("To github.com:x/y.git");
+    panel.push();
+    expect(panel.pushResult).toBeNull();
+  });
+
+  it("clears a previous push error when a new push starts", () => {
+    const panel = new GitPanel({
+      container: document.querySelector("#panel"),
+      client: { command: vi.fn(), push: vi.fn(() => "push-req-3") },
+    });
+    panel.setSnapshot({ snapshotId: "snap", branch: "main", entries: [], counts: {} });
+    panel.applyPushResult({ status: "failed", error: "busy" });
+    expect(panel.pushError).toBe("Busy");
+    panel.push();
+    expect(panel.pushError).toBeNull();
+  });
+
+  it("disables the push control on a detached HEAD", () => {
+    const panel = new GitPanel({
+      container: document.querySelector("#panel"),
+      client: { command: vi.fn() },
+    });
+    panel.setSnapshot({ snapshotId: "snap", branch: null, entries: [], counts: {} });
+    expect(panel.container.querySelector(".git-panel-push").disabled).toBe(true);
   });
 
   it("clears pendingCommitRequestId when applyCommitResult succeeds", () => {
