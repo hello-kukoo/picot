@@ -545,7 +545,7 @@ export function setupModelsPage({
       checkHealthBtn.type = "button";
       checkHealthBtn.className = "api-model-check-visible";
       checkHealthBtn.textContent = t("settings.apiKeys.checkHealth");
-      checkHealthBtn.disabled = !models.some((model) => model.visible !== false && model.available);
+      checkHealthBtn.disabled = !models.some((model) => model.visible === true && model.available);
       checkHealthBtn.addEventListener("click", () => checkModelHealth(p.provider));
       actions.appendChild(checkHealthBtn);
     }
@@ -632,7 +632,7 @@ export function setupModelsPage({
     actions.className = "api-model-list-heading-actions";
     const visibilityColumn = document.createElement("label");
     visibilityColumn.className = "api-model-select-all";
-    const enabledModelCount = models.filter((model) => model.visible !== false).length;
+    const enabledModelCount = models.filter((model) => model.visible === true).length;
     const allModelsEnabled = enabledModelCount === models.length;
     const modelsPartiallyEnabled = enabledModelCount > 0 && !allModelsEnabled;
     const visibilityToggle = document.createElement("input");
@@ -738,7 +738,7 @@ export function setupModelsPage({
       "aria-label",
       t("settings.apiKeys.enableModel", { model: model.name || model.id }),
     );
-    visibility.checked = model.visible !== false;
+    visibility.checked = model.visible === true;
     visibility.addEventListener("change", async () => {
       visibility.disabled = true;
       const resp = await call("set_model_visibility", {
@@ -771,7 +771,7 @@ export function setupModelsPage({
   }
 
   function describeProviderSummary(models) {
-    const enabled = models.filter((model) => model.visible !== false).length;
+    const enabled = models.filter((model) => model.visible === true).length;
     const healthy = models.filter((model) => model.health?.status === "healthy").length;
     const issues = models.filter((model) => model.health?.status === "unhealthy").length;
     return t("settings.apiKeys.summary", { enabled, healthy, issues });

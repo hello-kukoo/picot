@@ -37,10 +37,38 @@ describe("model selection", () => {
     expect(filterModelsByCatalogVisibility(models, catalog)).toEqual([models[0]]);
   });
 
-  test("keeps runtime models when the catalog cannot be read", () => {
+  test("hides models the user never enabled, even when the provider is configured", () => {
+    // Opt-in contract: `available` only means the provider has credentials.
+    const models = [
+      { provider: "anthropic", id: "never-toggled" },
+      { provider: "anthropic", id: "enabled" },
+    ];
+    const catalog = {
+      ok: true,
+      data: {
+        providers: [
+          {
+            provider: "anthropic",
+            models: [
+              { provider: "anthropic", id: "never-toggled", available: true, visible: false },
+              { provider: "anthropic", id: "enabled", available: true, visible: true },
+            ],
+          },
+        ],
+      },
+    };
+
+    expect(filterModelsByCatalogVisibility(models, catalog)).toEqual([models[1]]);
+  });
+
+  test("fails closed when the catalog cannot be read", () => {
+    // The user's curation must survive an unreadable catalog: re-exposing every
+    // available model here would undo the opt-in exactly when the bridge is
+    // least trustworthy.
     const models = [{ provider: "anthropic", id: "visible" }];
 
-    expect(filterModelsByCatalogVisibility(models, null)).toBe(models);
+    expect(filterModelsByCatalogVisibility(models, null)).toEqual([]);
+    expect(filterModelsByCatalogVisibility(models, { ok: false })).toEqual([]);
   });
 
   test("splits scoped models first without repeating them in the remaining list", () => {

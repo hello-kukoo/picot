@@ -619,6 +619,189 @@ describe("picot config custom provider operations", () => {
   });
 });
 
+describe("picot config model catalog caching", () => {
+  // The catalog re-probes every provider, and the composer re-reads it on each
+  // session switch; the cache exists so a burst of reads costs one probe. Its
+  // failure mode is a missed invalidation (stale catalog), so that is what
+  // these cover.
+  function fakeRegistry() {
+    return {
+      getAll: () => [
+        {
+          provider: "my-relay",
+          id: "gpt-4o-mini",
+          api: "openai-completions",
+          baseUrl: "https://x/v1",
+        },
+      ],
+      getAvailable: vi.fn(async () => [{ provider: "my-relay", id: "gpt-4o-mini" }]),
+      getProviderAuthStatus: () => ({ configured: true }),
+      getProviderDisplayName: () => "my-relay",
+      refresh: vi.fn(async () => undefined),
+      getApiKeyForProvider: async () => "sk-test",
+    };
+  }
+
+  it("builds the catalog once for repeated reads inside the TTL", async () => {
+    const { handlePicotConfig } = await loadConfigWithTempHome();
+    const registry = fakeRegistry();
+    const ctx = { modelRegistry: registry as never };
+    const first = await handlePicotConfig("list_model_catalog", {}, ctx);
+    const second = await handlePicotConfig("list_model_catalog", {}, ctx);
+    expect(first.ok).toBe(true);
+    expect(second).toEqual(first);
+    // One probe for two reads: the second came from the cache.
+    expect(registry.getAvailable).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides models nobody enabled, and only an explicit true enables one", async () => {
+    const { handlePicotConfig } = await loadConfigWithTempHome();
+    const registry = fakeRegistry();
+    const ctx = { modelRegistry: registry as never };
+
+    const before = await handlePicotConfig("list_model_catalog", {}, ctx);
+    const beforeModels = (before as { data: { providers: { models: { visible: boolean }[] }[] } })
+      .data.providers[0].models;
+    // Opt-in: a model with no stored preference reads as hidden.
+    expect(beforeModels[0].visible).toBe(false);
+
+    // A caller that omits `visible` must not accidentally enable the model.
+    await handlePicotConfig(
+      "set_model_visibility",
+      { provider: "my-relay", modelId: "gpt-4o-mini" },
+      ctx,
+    );
+    const afterOmitted = await handlePicotConfig("list_model_catalog", {}, ctx);
+    expect(
+      (afterOmitted as { data: { providers: { models: { visible: boolean }[] }[] } }).data
+        .providers[0].models[0].visible,
+    ).toBe(false);
+
+    await handlePicotConfig(
+      "set_model_visibility",
+      { provider: "my-relay", modelId: "gpt-4o-mini", visible: true },
+      ctx,
+    );
+    const afterEnable = await handlePicotConfig("list_model_catalog", {}, ctx);
+    expect(
+      (afterEnable as { data: { providers: { models: { visible: boolean }[] }[] } }).data
+        .providers[0].models[0].visible,
+    ).toBe(true);
+  });
+
+  it("invalidates the cache when visibility changes", async () => {
+    const { handlePicotConfig } = await loadConfigWithTempHome();
+    const registry = fakeRegistry();
+    const ctx = { modelRegistry: registry as never };
+    await handlePicotConfig("list_model_catalog", {}, ctx);
+    await handlePicotConfig(
+      "set_model_visibility",
+      { provider: "my-relay", modelId: "gpt-4o-mini", visible: true },
+      ctx,
+    );
+    await handlePicotConfig("list_model_catalog", {}, ctx);
+    expect(registry.getAvailable).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates the cache when an API key write refreshes the registry", async () => {
+    const { handlePicotConfig } = await loadConfigWithTempHome();
+    const registry = fakeRegistry();
+    const ctx = { modelRegistry: registry as never };
+    await handlePicotConfig("list_model_catalog", {}, ctx);
+    await handlePicotConfig("set_api_key", { provider: "my-relay", apiKey: "sk-new" }, ctx);
+    expect(registry.refresh).toHaveBeenCalled();
+    await handlePicotConfig("list_model_catalog", {}, ctx);
+    expect(registry.getAvailable).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("picot config model visibility opt-in migration", () => {
+  function fakeRegistry() {
+    return {
+      getAll: () => [{ provider: "my-relay", id: "gpt-4o-mini", api: "openai-completions" }],
+      getAvailable: vi.fn(async () => [{ provider: "my-relay", id: "gpt-4o-mini" }]),
+      getProviderAuthStatus: () => ({ configured: true }),
+      getProviderDisplayName: () => "my-relay",
+      refresh: vi.fn(async () => undefined),
+      getApiKeyForProvider: async () => "sk-test",
+    };
+  }
+
+  function prefsPath(home: string) {
+    return join(home, ".pi", "agent", "picot-models.json");
+  }
+
+  function firstModelVisible(result: unknown): boolean {
+    return (result as { data: { providers: { models: { visible: boolean }[] }[] } }).data
+      .providers[0].models[0].visible;
+  }
+
+  it("bulk-enables a legacy file's available models exactly once", async () => {
+    const { home, handlePicotConfig } = await loadConfigWithTempHome();
+    // A pre-flip preferences file: health data, no visibility entries, no
+    // marker. Under the old default every available model was visible.
+    mkdirSync(dirname(prefsPath(home)), { recursive: true });
+    writeFileSync(
+      prefsPath(home),
+      JSON.stringify({ health: { "my-relay/gpt-4o-mini": { status: "healthy" } } }),
+      "utf8",
+    );
+    const registry = fakeRegistry();
+    const ctx = { modelRegistry: registry as never };
+
+    const first = await handlePicotConfig("list_model_catalog", {}, ctx);
+    expect(firstModelVisible(first)).toBe(true);
+
+    const stored = JSON.parse(readFileSync(prefsPath(home), "utf8"));
+    expect(stored.migratedOptIn).toBe(true);
+    expect(stored.visibility["my-relay/gpt-4o-mini"]).toBe(true);
+    // The legacy health data survives the migration write.
+    expect(stored.health["my-relay/gpt-4o-mini"]).toEqual({ status: "healthy" });
+  });
+
+  it("never re-enables a model the user disabled before the migration ran", async () => {
+    const { home, handlePicotConfig } = await loadConfigWithTempHome();
+    mkdirSync(dirname(prefsPath(home)), { recursive: true });
+    writeFileSync(
+      prefsPath(home),
+      JSON.stringify({ visibility: { "my-relay/gpt-4o-mini": false } }),
+      "utf8",
+    );
+    const registry = fakeRegistry();
+    const ctx = { modelRegistry: registry as never };
+
+    const first = await handlePicotConfig("list_model_catalog", {}, ctx);
+    expect(firstModelVisible(first)).toBe(false);
+  });
+
+  it("marks a brand-new file without enabling anything, and later models stay opt-in", async () => {
+    const { home, handlePicotConfig } = await loadConfigWithTempHome();
+    const registry = fakeRegistry();
+    const ctx = { modelRegistry: registry as never };
+
+    const first = await handlePicotConfig("list_model_catalog", {}, ctx);
+    expect(firstModelVisible(first)).toBe(false);
+    expect(JSON.parse(readFileSync(prefsPath(home), "utf8")).migratedOptIn).toBe(true);
+
+    // A model appearing after the flip (new key, new release) must not be
+    // bulk-enabled by anything.
+    registry.getAll = () => [
+      { provider: "my-relay", id: "gpt-4o-mini", api: "openai-completions" },
+      { provider: "my-relay", id: "gpt-4.1", api: "openai-completions" },
+    ];
+    registry.getAvailable = vi.fn(async () => [
+      { provider: "my-relay", id: "gpt-4o-mini" },
+      { provider: "my-relay", id: "gpt-4.1" },
+    ]);
+    await handlePicotConfig("set_api_key", { provider: "my-relay", apiKey: "sk-new" }, ctx);
+    const second = await handlePicotConfig("list_model_catalog", {}, ctx);
+    const models = (
+      second as { data: { providers: { models: { id: string; visible: boolean }[] }[] } }
+    ).data.providers[0].models;
+    expect(models.find((model) => model.id === "gpt-4.1")?.visible).toBe(false);
+  });
+});
+
 describe("picot config oauth operations", () => {
   it("rejects oauth_logout for providers outside the codex whitelist (design §3)", async () => {
     const { handlePicotConfig } = await loadConfigWithTempHome();

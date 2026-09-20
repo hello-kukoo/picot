@@ -19,12 +19,16 @@ export function isSelectedModel(model, selection) {
 
 export function filterModelsByCatalogVisibility(models, catalog) {
   if (!Array.isArray(models)) return [];
-  if (!catalog?.ok || !Array.isArray(catalog.data?.providers)) return models;
+  // Visibility is opt-in. A catalog that cannot be read must not silently fall
+  // back to "everything available" — that would undo the user's curation
+  // exactly when the bridge is least trustworthy. Fail closed instead; the
+  // next successful refresh repopulates the picker.
+  if (!catalog?.ok || !Array.isArray(catalog.data?.providers)) return [];
 
   const visibleKeys = new Set();
   for (const provider of catalog.data.providers) {
     for (const model of provider.models ?? []) {
-      if (model.available && model.visible !== false) {
+      if (model.available && model.visible === true) {
         visibleKeys.add(`${model.provider || provider.provider}/${model.id}`);
       }
     }

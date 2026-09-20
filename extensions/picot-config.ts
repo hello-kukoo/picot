@@ -58,6 +58,13 @@ type ModelHealth = {
 type ModelPreferencesFile = {
   visibility?: Record<string, boolean>;
   health?: Record<string, ModelHealth>;
+  /**
+   * One-time migration marker for the opt-in visibility flip: legacy files
+   * predate "visible must be true", so their never-toggled models (which the
+   * old default showed) are bulk-enabled exactly once. New files carry the
+   * marker from the start, so models appearing later stay opt-in.
+   */
+  migratedOptIn?: boolean;
 };
 
 type CatalogModel = {
@@ -344,8 +351,12 @@ class ModelPreferencesStore {
     this.path = filePath;
   }
 
+  fileExisted(): boolean {
+    return fs.existsSync(this.path);
+  }
+
   read(): Required<ModelPreferencesFile> {
-    if (!fs.existsSync(this.path)) return { visibility: {}, health: {} };
+    if (!fs.existsSync(this.path)) return { visibility: {}, health: {}, migratedOptIn: false };
     try {
       const parsed = JSON.parse(fs.readFileSync(this.path, "utf8")) as ModelPreferencesFile;
       return {
@@ -359,9 +370,10 @@ class ModelPreferencesStore {
           parsed.health && typeof parsed.health === "object" && !Array.isArray(parsed.health)
             ? parsed.health
             : {},
+        migratedOptIn: parsed.migratedOptIn === true,
       };
     } catch {
-      return { visibility: {}, health: {} };
+      return { visibility: {}, health: {}, migratedOptIn: false };
     }
   }
 
@@ -370,8 +382,36 @@ class ModelPreferencesStore {
     fs.writeFileSync(this.path, JSON.stringify(next, null, 2), "utf8");
   }
 
+  /**
+   * Visibility is opt-in: a model appears in the composer picker only after
+   * the user enabled it. Anything never toggled reads as hidden, so a provider
+   * whose key is configured no longer floods the picker with every model it
+   * lists (`available` only says the provider can run, not that it is wanted).
+   */
   isVisible(provider: string, modelId: string): boolean {
-    return this.read().visibility[modelPreferenceKey(provider, modelId)] !== false;
+    return this.read().visibility[modelPreferenceKey(provider, modelId)] === true;
+  }
+
+  /**
+   * Run once per preferences file when the opt-in flip ships. A file that
+   * predates the flip belongs to a user whose picker showed every
+   * never-toggled model by default: bulk-enable the currently available set
+   * so the upgrade does not empty their picker. A brand-new file only gets
+   * the marker — models that appear later (new provider keys, new releases)
+   * stay opt-in, which is the point of the flip.
+   */
+  migrateLegacyVisibility(models: { provider: string; id: string }[]): void {
+    const legacyUser = this.fileExisted();
+    const prefs = this.read();
+    if (prefs.migratedOptIn) return;
+    if (legacyUser) {
+      for (const model of models) {
+        const key = modelPreferenceKey(model.provider, model.id);
+        if (prefs.visibility[key] === undefined) prefs.visibility[key] = true;
+      }
+    }
+    prefs.migratedOptIn = true;
+    this.write(prefs);
   }
 
   setVisibility(provider: string, modelId: string, visible: boolean): void {
@@ -391,9 +431,62 @@ class ModelPreferencesStore {
   }
 }
 
+// A short-lived cache around buildModelCatalog. Building the catalog re-probes
+// every provider's auth/availability, and the composer re-reads it on each
+// session switch and Settings > Models open; without the cache those probes
+// repeat for a result that cannot have changed in the last few seconds.
+const MODEL_CATALOG_TTL_MS = 3000;
+let modelCatalogCache: {
+  registry: CatalogRegistry;
+  at: number;
+  value: Awaited<ReturnType<typeof buildModelCatalog>>;
+} | null = null;
+
+/** Drop the cached catalog. Every write that can change its result calls this. */
+function invalidateModelCatalogCache(): void {
+  modelCatalogCache = null;
+}
+
+async function loadModelCatalog(
+  registry: CatalogRegistry,
+  preferences: ModelPreferencesStore,
+): Promise<Awaited<ReturnType<typeof buildModelCatalog>>> {
+  const now = Date.now();
+  // The registry identity is part of the key: a different registry (a new
+  // runtime context) must never be served the previous one's catalog.
+  if (
+    modelCatalogCache &&
+    modelCatalogCache.registry === registry &&
+    now - modelCatalogCache.at < MODEL_CATALOG_TTL_MS
+  ) {
+    return modelCatalogCache.value;
+  }
+  const value = await buildModelCatalog(registry, preferences);
+  modelCatalogCache = { registry, at: Date.now(), value };
+  return value;
+}
+
+/** Refresh the model registry and invalidate the catalog it feeds. */
+async function refreshModelRegistry(registry?: CatalogRegistry | null): Promise<void> {
+  if (!registry) return;
+  await registry.refresh();
+  invalidateModelCatalogCache();
+}
+
 async function buildModelCatalog(registry: CatalogRegistry, preferences: ModelPreferencesStore) {
   const allModels = registry.getAll();
   const availableModels = await registry.getAvailable();
+  // The one-time opt-in migration needs the available set; run it before any
+  // isVisible read below so a legacy user's first catalog already carries
+  // their pre-flip defaults.
+  preferences.migrateLegacyVisibility(
+    availableModels
+      .filter((model) => model.provider && model.id)
+      .map((model) => ({
+        provider: model.provider as string,
+        id: model.id as string,
+      })),
+  );
   const availableKeys = new Set(
     availableModels
       .filter((model) => model.provider && model.id)
@@ -641,6 +734,7 @@ async function runModelHealthCheck(
       error: probe.ok ? undefined : sanitizeHealthError(probe.error || "Health check failed"),
     };
     preferences.setHealth(provider, modelId, result);
+    invalidateModelCatalogCache();
     return result;
   } catch (e: unknown) {
     const result: { provider: string; modelId: string } & ModelHealth = {
@@ -652,6 +746,7 @@ async function runModelHealthCheck(
       error: sanitizeHealthError(e),
     };
     preferences.setHealth(provider, modelId, result);
+    invalidateModelCatalogCache();
     return result;
   }
 }
@@ -708,7 +803,7 @@ async function refreshRegistryBestEffort(registry?: CatalogRegistry): Promise<bo
       timer.unref?.();
     });
     const refresh = (async () => {
-      await registry.refresh();
+      await refreshModelRegistry(registry);
       return true;
     })().catch(() => false);
     return await Promise.race([refresh, timeout]);
@@ -1068,7 +1163,7 @@ export async function handlePicotConfig(
             clearExpiryTimer();
             try {
               emit(oauthLoginManager.complete(oauthOwner, started.operationId));
-              if (registry) await registry.refresh();
+              await refreshModelRegistry(registry);
             } catch {
               // Already removed (cancelled/expired) — nothing to complete.
             }
@@ -1116,7 +1211,7 @@ export async function handlePicotConfig(
         if (provider !== "openai-codex") throw new Error("Unsupported OAuth provider");
         const runtime = await ModelRuntime.create();
         await runtime.logout(provider);
-        if (registry) await registry.refresh();
+        await refreshModelRegistry(registry);
         return { ok: true, data: { provider } };
       }
 
@@ -1153,7 +1248,7 @@ export async function handlePicotConfig(
         return { ok: true, data: { title } };
       }
       case "list_model_catalog": {
-        const catalog = await buildModelCatalog(requireRegistry(), preferences);
+        const catalog = await loadModelCatalog(requireRegistry(), preferences);
         return { ok: true, data: catalog };
       }
 
@@ -1161,8 +1256,9 @@ export async function handlePicotConfig(
         const provider = asString(params.provider);
         const modelId = asString(params.modelId);
         if (!provider || !modelId) throw new Error("provider and modelId are required");
-        const visible = params.visible !== false;
+        const visible = params.visible === true;
         preferences.setVisibility(provider, modelId, visible);
+        invalidateModelCatalogCache();
         return { ok: true, data: { provider, modelId, visible } };
       }
 
@@ -1193,10 +1289,10 @@ export async function handlePicotConfig(
           return availableKeys.has(modelPreferenceKey(provider, model.id as string));
         });
         if (models.length === 0) throw new Error("No matching models available for health check");
-        const results = [];
-        for (const model of models) {
-          results.push(await runModelHealthCheck(reg, model, preferences));
-        }
+        // Parallel: N models used to cost N x the probe latency in series.
+        const results = await Promise.all(
+          models.map((model) => runModelHealthCheck(reg, model, preferences)),
+        );
         return { ok: true, data: { results } };
       }
 
@@ -1206,7 +1302,7 @@ export async function handlePicotConfig(
         if (!provider) throw new Error("provider is required");
         if (!apiKey) throw new Error("apiKey is required");
         await setStoredApiKey(registry, provider, apiKey);
-        if (registry) await registry.refresh();
+        await refreshModelRegistry(registry);
         return { ok: true, data: { provider } };
       }
 
@@ -1214,7 +1310,7 @@ export async function handlePicotConfig(
         const provider = asString(params.provider);
         if (!provider) throw new Error("provider is required");
         await removeStoredApiKey(registry, provider);
-        if (registry) await registry.refresh();
+        await refreshModelRegistry(registry);
         return { ok: true, data: { provider } };
       }
 
