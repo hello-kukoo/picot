@@ -71,7 +71,9 @@ foundation this time).
 ### Renderer
 
 - Transport-only dependency — the section renders in landing settings too
-  (fff precedent; advisor's gateway-gated entry stays landing-hidden).
+  (fff precedent; advisor's gateway-gated entry becomes landing-available
+  once the bridge-service config runtime lands, see
+  `2026-09-18-landing-bridge-runtime-design.md`).
 - Section: line-budget stepper + collapse-key input + fixed hint
   「立即生效」. Save on change with the standard save-status indicator;
   invalid collapseKey rejected before send with an inline error.

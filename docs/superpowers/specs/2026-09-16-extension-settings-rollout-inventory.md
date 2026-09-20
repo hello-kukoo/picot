@@ -28,9 +28,11 @@ the **order**, the **transport split**, and records the **exclusions**.
   these flags; terminal pi's flags are per-instance and unobservable).
 - **Model-catalog dependent (3 entries: plan-mode, safety-guard,
   web-access)** → stay on the bridge (`configGateway`, in-process
-  modelRegistry — advisor's rationale verbatim); sections are
-  workspace-only and landing-hidden, like advisor's. A section split
-  across two transports was considered and rejected.
+  modelRegistry — advisor's rationale verbatim). Landing: plan-mode,
+  safety-guard, and web-access render via the bridge-service config
+  runtime (`2026-09-18-landing-bridge-runtime-design.md`, Dr. Lin
+  2026-09-20), global-only. A section split across two transports was
+  considered and rejected.
 
 ## Excluded (with evidence)
 

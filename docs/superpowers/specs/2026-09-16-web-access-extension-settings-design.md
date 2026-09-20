@@ -7,9 +7,15 @@
 renderer map per the advisor spec. Highest-risk entry — the config file is
 a **credential store**. **Transport: stays on the bridge** —
 the answer-model picker needs the in-process modelRegistry (advisor's
-rationale verbatim); the section is workspace-only and landing-hidden.
-Host-izing the non-model subset was considered and rejected: a section
-split across two transports is worse than an honest landing-hidden page.
+rationale verbatim). **Landing: available** (Dr. Lin, 2026-09-20): on the
+landing page the section rides the bridge-service config runtime
+([`2026-09-18-landing-bridge-runtime-design.md`](2026-09-18-landing-bridge-runtime-design.md) —
+its host loads picot-config, which dispatches these ops), same config file
+and masked ops as the workspace path, global-only; the earlier "host-ize
+the non-model subset" alternative is moot (no transport split arises).
+Secret discipline unchanged — masked get applies at landing too; the
+「重启 Picot 后生效」 hint holds (the first workspace runtime spawned on
+entering a project reads the fresh file).
 
 ## Goal
 
@@ -97,6 +103,8 @@ saved/saveFailed).
 - Renderer tests: masked rows render status not values; clear confirm flow;
   routing list edits produce ordered payloads; answer-model picker parity
   with advisor tests.
+- Landing variant: section renders through the landing config gateway (the
+  config-runtime spec's lazy spawn); masked get and clear-confirm identical.
 - `bun run check`, focused vitest, then `bun run test`; ARCHITECTURE.md
   extension-settings paragraph gains the secrets note.
 

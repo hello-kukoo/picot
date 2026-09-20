@@ -6,8 +6,13 @@
 [`2026-09-16-extension-settings-rollout-inventory.md`](2026-09-16-extension-settings-rollout-inventory.md);
 renderer map per the advisor spec. **Transport: stays on the bridge** —
 the implementation-model picker needs the in-process modelRegistry
-(advisor's rationale verbatim); the section is workspace-only and
-landing-hidden, like advisor's.
+(advisor's rationale verbatim). **Landing: available** (Dr. Lin,
+2026-09-20): on the landing page the section rides the bridge-service
+config runtime
+([`2026-09-18-landing-bridge-runtime-design.md`](2026-09-18-landing-bridge-runtime-design.md) —
+its host loads picot-config, which dispatches these ops), same config
+file and ops as the workspace path, global-only; no per-surface
+divergence.
 
 ## Goal
 
@@ -79,6 +84,8 @@ enum labels, invalid errors, hint, saved/saveFailed).
   fight the migration); 0600.
 - Renderer tests: selects reflect stored values; model picker payload; JSON
   editor rejects malformed input client-side.
+- Landing variant: section renders through the landing config gateway (the
+  config-runtime spec's lazy spawn) and writes the same global file.
 - `bun run check`, focused vitest, then `bun run test`; ARCHITECTURE.md line.
 
 ## Out of scope

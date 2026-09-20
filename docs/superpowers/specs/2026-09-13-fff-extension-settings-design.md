@@ -128,7 +128,10 @@ in-process modelRegistry).
 
 - Registered under `@ff-labs/pi-fff`; depends on **transport only**
   (host control ops), so the section renders in the landing settings as
-  well. Advisor's entry stays gateway-gated and landing-hidden.
+  well. Advisor's gateway-gated entry becomes landing-available too once
+  the bridge-service config runtime lands
+  (`2026-09-18-landing-bridge-runtime-design.md`, Dr. Lin 2026-09-20) —
+  same dispatch path (picot-config), global-only.
 - Flat: mode segmented control, 4 toggles (extensions-page switch
   pattern).
 -「高级」disclosure: the two path text inputs.
