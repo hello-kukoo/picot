@@ -3,7 +3,7 @@
 **Status:** 设计草案，待 Dr. Lin 拍板关键决策点。
 **Date:** 2026-09-18
 **Provenance:** 参照 upstream `picot` main `42e2a06..5e558fd` 的 ACP 实现（commit f207db0 起的系列，作者 ShixinGuo），已核实 `acp_launch.rs`、`acp_manager.rs`、`host_server.rs` ACP 分发与前端 `public/native/acp/`、`composer-agent-menu.js` 源码。
-**关联:** 与 `2026-09-18-subagent-display-design.md`（pi-subagents 路线）正交，两者共存；前置依赖 `2026-09-18-upstream-immediate-migration-design.md` 第 4 节（child_supervision）先落地。
+**关联:** 与 `2026-09-18-subagent-display-design.md`（pi-subagents 路线）正交，两者共存；前置依赖 `2026-09-18-upstream-immediate-migration-design.md` 第 2 节（子进程清扫）先落地。
 
 ## 1. 问题与机会
 
@@ -49,7 +49,7 @@ v3 无 `public/native/` 目录，upstream 前端模块需映射：
 | `public/native/acp/*.js` | `public/acp/`（store、runs、card、css 分文件） |
 | `public/native/composer/composer-agent-menu.js` | `public/composer-agent-menu.js`，接入 `public/app.js` 的 `sendComposerInput` |
 | `acp_launch.rs` / `acp_manager.rs` | 原路径迁入，几乎零改动 |
-| `child_supervision.rs` | 已由迁移 spec 覆盖，先做 |
+| `child_supervision.rs` | 由其注册表/清扫能力覆盖（迁移 spec 第 2 节）；上游的新进程组逻辑在 v3 已存在于 `process_tree.rs`，不重复引入 |
 
 后端（Rust）与 upstream 高度同源，可直接参照实现；前端落点和 `app.js` 接线必须按 v3 自己的编排结构重做，不能照抄。
 
@@ -59,7 +59,7 @@ v3 无 `public/native/` 目录，upstream 前端模块需映射：
 2. **权限请求上屏**：`session/request_permission` 必须呈现给用户，不允许默认放行；无应答请求随 runtime stop 一并清理。
 3. **非交互凭据**：preset 只识别 API key 环境变量与已登录 CLI，不实现任何凭据录入。
 4. **握手与帧上限**：30 秒握手超时、16 MB 帧上限、broadcast 背压，防止 hung adapter 拖垮 host。
-5. **进程监管**：ACP 子进程纳入 child_supervision 注册表（依赖迁移 spec 第 4 节），保证不遗留孤儿。
+5. **进程监管**：ACP 子进程纳入子进程注册表（依赖迁移 spec 第 2 节），保证不遗留孤儿。
 6. **PATH 增强**：spawn 使用与 pi 相同的 augmented PATH，不额外注入用户环境。
 
 ## 5. 决策点（待 Dr. Lin 拍板）

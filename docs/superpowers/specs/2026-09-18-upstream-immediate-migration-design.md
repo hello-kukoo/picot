@@ -1,33 +1,61 @@
-# Upstream 可立即迁移项：Git push、last-model、子进程清扫、模型性能、UI 增补
+# Upstream 可立即迁移项：子进程清扫、Git push、last-model、模型性能、UI 增补
 
-**Status:** 设计定案，待实现。2026-09-18 第二轮评审后修订：§5.3 取 D1b（不动可见性语义）、§6.1 取格式 A（复用 `formatTurnDuration`）、`>1h` 归一已随本批落地。
-**Date:** 2026-09-18
-**Source:** upstream `picot` main 分支 `42e2a06..5e558fd`（PR #63–#66 相关子集），已逐 commit 核实；第二轮修订同时按 v3 工作树实况复核。
-**关联:** ACP 外部代理委派另立 spec（`2026-09-18-acp-external-agent-delegation-design.md`）；本 spec 不含 ACP、SSH 远程工作区。
+**Status:** 设计定案，待实现。
+**Date:** 2026-09-18（评审修订稿）
+**Source:** upstream `picot` main 分支 `42e2a06..5e558fd`（PR #63–#66 相关子集），已逐 commit 核实。
+**Baseline:** v3 `private/features-v3` HEAD `8df9efb`，工作树干净。文中行号仅为定位辅助，实现时以符号名为准——v3 前端正在重构（`public/ui/turn.js`、`turn-model.js`），行号会继续漂移。
+**关联:** ACP 外部代理委派另立 spec（`2026-09-18-acp-external-agent-delegation-design.md`），其 M1 依赖本 spec 第 2 节。本 spec 不含 ACP、SSH 远程工作区。
 
-## 1. 目标
+## 1. 目标与顺序
 
-把 upstream 一批自包含改进落地到 v3：
+把 upstream 一批自包含改进落地到 v3，按下述顺序实现，每项独立提交：
 
-1. Git 面板支持 push。
-2. 新会话跨 app 重启继承上次手动选择的模型。
-3. Picot 被强杀后遗留的 pi 运行时子进程可被清扫。
-4. 模型目录不再每次加载重新探测 provider。
-5. 助手消息 footer 显示响应时长。
-6. Composer 附件缩略图接入 lightbox。
-7. 用户气泡收紧。
+1. **子进程清扫**（纯后端，ACP spec 的前置依赖，与本轮前端重构无冲突）
+2. **Git push**（后端 + git 面板）
+3. **last-model**（新会话继承模型）
+4. **模型目录缓存 + 健康检查并行化**
+5. **助手消息响应时长**
+6. **Composer 附件缩略图接入 lightbox**
+7. **两处样式微调**（用户气泡收紧、「添加 provider」边框顺序）
 
-七项互相独立，可按任意顺序实现，每项独立提交。
+**执行前提：已满足。** 工作树干净，领先 origin 30 个 commit。前端三项（5–7）建议等 turn/composer 重构落定后再动 `app.js`；4 项之前的都在扩展层或 Rust 层，不受影响。
 
-**执行前提：** 2026-09-18 晚实况为 55 个未提交路径（`git status --porcelain`），含 `public/app.js`、`public/ui/turn.js`、`public/ui/message-renderer.js`、`public/style.css`、`public/settings/settings-config.css`、`public/composer-image-attachments.js`、`public/locales/*.json`，与 §2/§3/§6 全面重叠；在途的跨工作区 runtime lifecycle 改动（见 `2026-09-18-cross-workspace-runtime-lifecycle-divergence.md`）落在 `main.rs` 与 `native_pi_manager.rs`，与 §4 重叠。实现本 spec 前必须先提交或处置这批在途工作，避免两个批次混进同一 commit 和同一段代码。
+## 2. 子进程清扫（child_supervision）
 
-## 2. Git push
+### 问题
+
+pi 在 stdin EOF 时会退出，子进程通常随父进程而死。但 wedge 住的子进程永远读不到 EOF：upstream 曾发现一个孤儿子进程在 Picot 消失后仍以 100% CPU 空转九天。SIGKILL/崩溃时 Picot 的 teardown 完全不运行，spawn 时的注册表是唯一幸存的记录。
+
+### 现状（关键：不要重造已有能力）
+
+v3 已有 `src-tauri/src/process_tree.rs`，被 `pi_rpc_bridge.rs` 使用，已实现：
+
+- Unix：`getpgid` 身份校验 + `kill(-pgid, SIGTERM)`，20×10ms 等待后升级 `SIGKILL`；终止前校验进程组身份未变。
+- Windows：`windows_job::create_and_assign` kill-on-close job object。
+
+`windows_child.rs` 只有 hide_console，**不涉及进程组**。因此本节**不新增进程组/job object 逻辑**，只补三件 v3 缺失的事。
+
+### 设计
+
+1. **spawn 时注册**：每个 pi 运行时把 `{ pid, workspace 路径, 启动时间 }` 写入应用数据目录下 `picot-runtimes/`；正常退出时删除对应条目。落盘点跟随现有 pi spawn 路径（`native_pi_manager.rs`）。
+2. **启动清扫 `sweep_orphans()`**：`main` 启动时读注册表，凡不属于本进程的 pid 视为上一次被强杀的 Picot 遗留，用既有进程组终止路径杀掉后清空注册表。日志记录清理数量。
+3. **信号兜底**：`RunEvent::Ready` 时安装 SIGTERM/SIGINT handler，走 `stop_all()` + 清注册表，覆盖不触发 `RunEvent::Exit` 的退出路径；`RunEvent::Exit` 上补 `clear_registry()`。
+4. **Windows**：复用 `process_tree.rs` 的 job object，不重复实现。
+
+**范围**：只覆盖 pi 运行时（`native_pi_manager.rs` 的 spawn/stop 路径）。terminal 与 git 子进程不纳入；若实现时发现同一条 kill 路径可零成本复用，单独提出再扩。
+
+### 测试
+
+- Rust 单测：注册表读写、`sweep_orphans` 只清本进程外的条目、路径解析拒绝越界（tempfile）。
+- 手工验证：kill -9 Picot 后重启，确认遗留 pi 进程被杀。
+
+## 3. Git push
 
 ### 现状
 
-- `src-tauri/src/git_service.rs` 有 status/diff/log/stage/commit，无 push。
-- Git 命令由 `main.rs` 的 `dispatch_git_host_operation`（`main.rs:1683`）分发，入口是 `main.rs:2244` 的 `command.starts_with("git_")` 分支；`host_server.rs` 只在重连时回放 detached commit 的 `git_commit_result`（`host_server.rs:1540`）。v3 无 upstream 的 `host_git.rs`。
-- 前端 `public/git-panel.js` + `public/git-client.js`，无 push 入口；工具栏 details 区已存在（`git-panel.js:480`），push 错误提示有落点。
+- `src-tauri/src/git_service.rs` 有 status/diff/log/stage/commit，无 push。可直接复用：`lock_for_write`（每 root 写槽）、写槽 `try_lock` 模式、`git_command`（已设 `GIT_TERMINAL_PROMPT=0`）、`git()` helper、`parse_porcelain_v2_z`。
+- **Git 命令分发在 `src-tauri/src/main.rs`**（`"git_status" =>`、`"git_diff" =>`、`"git_turn_stats"` 等 match 臂，约 1700–1750 行）。`host_server.rs` 只持有 `GitService` 句柄（`set_git_service`），不参与分发。
+- 前端 `public/git-panel.js`（面板）与 `public/git-client.js`（`GitClient` 类），无 push 入口。v3 的 git UI 拆为 git-panel / git-history-panel / git-diff-renderer 三个模块。
 
 ### 设计
 
@@ -36,33 +64,35 @@
 - `GitPushOutcome { remote, branch, set_upstream, output }`。`output` 是有上限（4 KB）的 stderr 摘录——git push 连成功时也把人类可读结果写 stderr。
 - 无 upstream 配置时 push 到默认 remote 并加 `--set-upstream`。
 - 错误码：`push_detached_head`、`push_no_remote`。
-- 与 stage/unstage/discard/commit 共享 per-root 写槽，push 不会和 index 变更竞态；槽被占用立即返回 `busy`。
+- 与 stage/unstage/discard/commit 共享 per-root 写槽；槽被占用立即返回 `busy`。
 - 超时 120 秒（`PUSH_DEADLINE`），超时杀整个进程组。120 秒的理由：push 走网络，比 30 秒写槽 deadline 需要更多余量；但仍要有硬上限，因为本进程无法应答凭据提示，没有上限会把写槽永久占死。
 
 **认证严格非交互**：Tauri 子进程无 TTY，任何凭据/passphrase 提示都会挂到超时。`git_command` 已设 `GIT_TERMINAL_PROMPT=0` 和 null stdin，push 补充 askpass 抑制与 `GIT_SSH_COMMAND` 的 BatchMode，缺凭据时立即以可读错误失败，而不是挂住面板。
 
-**`main.rs`** 在 `dispatch_git_host_operation` 新增 `"push"` 分支。push 走网络，与 upstream 一致拆两帧：`git_push_started` 同步 ack（在 `spawn_blocking` 之前返回），随后 `git_push_result` 事件带 `status: "succeeded" | "failed"`，成功时含 `remote` / `branch` / `setUpstream` / `output`。前端的 `pushInProgress` 由 started 置位、result 清位；合并成单帧会让按钮在整个 push 期间没有反馈。这与既有 `git_commit_started` / `git_commit_result` 同构（`main.rs:1983`）。
+**`main.rs` 的 git match 新增 `"push"` 臂**，返回 `git_push` 帧（含 outcome 或错误码）。
 
-**前端**：`git-panel.js` 增加 push 按钮；`git-client.js` 增加 push 请求；结果区展示 stderr 摘录与「已设置 upstream」状态。i18n 四语言（zh/en/ja/es）补 6 个 key：`git.push`、`git.pushing`（按钮）、`git.pushDetachedHead`、`git.pushNoRemote`、`git.pushBusy`、`git.pushFailed`。
+**capability/permission 检查**：v3 有 `src-tauri/capabilities/default.json` 与 `permissions/default.toml`，`bun run test` 含 Tauri capability validation。实现时确认新增的 host 命令是否需要登记（当前 default.json 无 git 条目，可能无需改动）——不确认就报「已通过」等于没验证。
 
-**push 错误提示区**（参照 upstream git-panel 实现）：
+**前端**：
 
-- 工具栏 details 区在 `pushError` 非空时渲染 `git-panel-push-error` 段落：`role="alert"`、红色文本、自动换行。
+- `git-panel.js` 增加 push 按钮（图标 `arrow-up`），`git-client.js` 增加 push 请求；结果区展示 stderr 摘录与「已设置 upstream」状态。
+- **push 错误提示区**：工具栏 details 区在 `pushError` 非空时渲染 `git-panel-push-error` 段落——`role="alert"`、红色文本、自动换行。
 - 错误码映射为本地化文案：`push_detached_head` → `git.pushDetachedHead`、`push_no_remote` → `git.pushNoRemote`、`busy` → `git.pushBusy`；其余字符串透传 git 的 stderr（已截断），空值回落 `git.pushFailed`。
-- push 进行中（`pushInProgress`）与 detached HEAD（`!snapshot.branch`）时按钮禁用；重试前先清空上一次错误，避免 in-flight push 旁边挂着过期错误。
+- push 进行中（`pushInProgress`）与 detached HEAD（无 branch）时按钮禁用；重试前先清空上一次错误，避免 in-flight push 旁边挂着过期错误。
+- i18n 四语言（`public/locales/{zh,en,ja,es}.json`，`"git"` 段）补 key。
 
 ### 测试
 
 - `git_service.rs`：detached head 拒绝、无 remote 拒绝、outcome 序列化（沿用现有 Rust 测试风格）。
-- `git-panel.test.js`：push 按钮触发请求、结果与错误渲染。
-- 真实 push 行为不做自动化（需远端凭据），以手工验证记录收尾。
+- `git-panel.test.js`：push 按钮触发请求、结果与错误渲染、busy 禁用。
+- 真实 push 不做自动化（需远端凭据），以手工验证记录收尾。
 
-## 3. last-model（新会话继承模型）
+## 4. last-model（新会话继承模型）
 
 ### 现状
 
-- v3 无 `public/native/`；模型选择逻辑在 `public/app.js`（`set_model` 调用见 3866、4187、4804 行）与 `public/models/selection.js`。
-- v3 已按 session 持久化 `SessionUiProfile{provider, modelId, thinkingLevel}`（`src-tauri/src/session_ui_profile_store.rs`，经 `session_ui_profile_load` / `_save` 读写）。`app.js:4740` 的 `applySessionUiProfile` 对无 profile 的会话执行 `snapshotReportedProfile(currentModelProvider, currentModelId)`，而这两个变量在手动 `set_model` 成功后即更新（`app.js:4812`）。所以**单次运行内**新会话已经继承上次选择；回落 pi 内置默认只发生在**跨 app 重启**之后，且仅限重启前未被 snapshot 过的会话。本项补的是这条路。
+- 模型选择逻辑在 `public/app.js` 与 `public/models/selection.js`（provider-scoped 匹配）。v3 无 `public/native/`（原生入口已在 `b27c5f4` 移除）。
+- 新建空会话总是回落到 pi 内置默认模型，用户每次都要重选。
 
 ### 设计
 
@@ -70,137 +100,108 @@
 
 - `getLastModel()` / `setLastModel(model)`，localStorage key `picot.composer.lastModel`，存 `{ provider, modelId }`。
 - 所有读写 try/catch：storage 不可用时静默降级为 pi 默认，不得抛错影响会话加载。
-- 依 v3 上轮已迁入的 provider-scoped 语义，键含 provider。
+- 键含 provider，沿用 v3 已落地的 provider-scoped 语义。
 
 **接入 `public/app.js`（两处）**：
 
 1. 手动切换模型成功后调用 `setLastModel(model)`。
 2. 快照加载时：会话无消息且 pi 未带回模型（或与记录不一致）时，发 `set_model { provider, modelId }` 继承；有历史的会话沿用 pi 从 session record 恢复的模型，不发送。
 
-两个时序约束：
-
-- 继承必须发生在 `applySessionUiProfile` 内 `loadProfile()` 返回 null 之后、`snapshotReportedProfile(reported)` 之前。否则 snapshot 会立刻把当前值写成该会话的显式 profile，localStorage 记录与实际状态分叉。
-- 继承前先确认目标模型在当前 `availableModels` 中可用（沿用 `hasLoadedAvailableModels` 守卫）。pi 对未认证 provider 的 `set_model` 会返回失败或 `false`，此时保留 pi 默认并在 console 记录，不要把会话切到一个用不了的模型。
-
-v3 的 `set_model` 会重写 pi 全局默认（见 app.js 4728–4789 注释），继承路径必须只在空会话触发，避免污染其他会话的 restore 行为。
+**风险（必须遵守）**：v3 的 `set_model` / `set_thinking_level` 会重写 pi 的**全局**配置（`app.js` 内相关注释与 transcript restore 分支已说明：回放这些命令会改写全局，因此 restore 路径刻意不发）。继承路径只在空会话触发，否则会污染其他会话的 restore。
 
 ### 测试
 
 - `last-model-store.test.js`：合法存取、非法输入忽略、storage 异常不抛。
-- `app.js` 接线测试：手动选择后写入；空会话发送继承 set_model；非空会话不发送。
-
-## 4. 子进程清扫（child_supervision）
-
-### 问题
-
-pi 在 stdin EOF 时会退出，子进程通常随父进程而死。但 wedge 住的子进程永远读不到 EOF：upstream 曾发现一个孤儿子进程在 Picot 消失后仍以 100% CPU 空转九天。SIGKILL/崩溃时 Picot 的 teardown 代码完全不运行，spawn 时的注册表是唯一幸存的记录。
-
-### 现状
-
-- 进程树已受管：spawn 经 `configure_child_process`（`native_pi_manager.rs:1610-1615`，调用点 `native_pi_manager.rs:338`）做 `setpgid(0,0)`；`pi_rpc_bridge.rs:75` 再以 `ProcessTree::attach` 接管该子进程。`process_tree.rs` 持有 unix pgid 与 Windows kill-on-close job object，terminate 前校验 `getpgid(pid) == pgid`，先 SIGTERM（20×10ms）再 SIGKILL。`windows_child.rs` 只管隐藏控制台，不是进程树归属地。
-- 真正缺三件：spawn 时落盘的注册表、启动清扫、信号兜底。
-
-### 设计
-
-新增 `src-tauri/src/child_supervision.rs`，参照 upstream：
-
-1. **spawn 时注册**：写入 `~/.pi/picot-runtimes/<supervisor_pid>.json`，条目为 `{ pid, started_at }`，`started_at` 取自 `ps -o lstart=`；退出时移除自身条目，条目清空则删文件。workspace 路径不入注册表——清扫只需要 pid 身份，写路径只会扩大误杀面。
-2. **启动清扫 `sweep_orphans()`**：main 启动时遍历注册表目录，逐条判定。三条守卫缺一不可：
-   - 该注册表的 `supervisor_pid` 仍是活进程 → 跳过（另一个 Picot 实例仍拥有这些 runtime）；
-   - 条目 pid 已死 → 跳过；
-   - 条目的 `started_at` 与当前同名 pid 的 `lstart` 不一致 → 跳过（重启或 pid wrap 后该 pid 属于别的进程，杀错比漏杀更糟）。
-   全部通过才杀：Unix `killpg(-pid, SIGKILL)` 加 `kill(pid, SIGKILL)`，随后删除该注册表文件。
-3. **信号兜底**：`RunEvent::Ready` 时安装 SIGTERM / SIGINT / SIGHUP handler，走 `stop_all()` + 清注册表，覆盖不触发 `RunEvent::Exit` 的退出路径（`tauri dev` 的 Ctrl-C、登出/关机、终端关闭）。
-4. **Windows**：kill-on-close job object 已由 `process_tree.rs` 提供，不重复实现，也不搬到 `windows_child.rs`。
-
-**范围**：本 spec 只覆盖 pi 运行时（`native_pi_manager.rs` 的 spawn/stop 路径与 `pi_rpc_bridge.rs` 的 `ProcessTree`）。terminal 走自己的 `terminal_manager.rs:684/1099 kill_process_tree`，git 子进程由 `git_command` 独立 `setpgid`，两者不纳入；若实现时发现同一条 kill 路径可零成本复用，单独提出再扩。
-
-### 测试
-
-- Rust 单测（把存活探测与 kill 注入成回调，测试里不真杀进程）：注册表读写、清空即删文件；`sweep_orphans` 跳过 supervisor 仍存活的注册表；跳过 `started_at` 不匹配的条目；只杀全部守卫通过的条目；非 `.json` 文件不处理（沿用 upstream 测试思路，用 tempfile）。
-- 手工验证：kill -9 Picot 后重启，确认遗留 pi 进程被杀。
+- 接线测试：手动选择后写入；空会话发送继承 `set_model`；非空会话不发送。
 
 ## 5. 模型性能
 
 ### 5.1 模型目录缓存
 
-`extensions/picot-config.ts` 的 `list_model_catalog` 每次调用都从零 `buildModelCatalog`，重复探测各 provider 的 auth/availability——每次切会话或打开 Settings > Models 都触发一次。
+`extensions/picot-config.ts` 的 `list_model_catalog` 每次调用都从零 `buildModelCatalog`，重复探测各 provider 的 auth/availability。前端调用点：`public/app.js`（`loadModelCatalog` / `filterModelsByCatalogVisibility` 处）与 `public/settings/models-page.js`。
 
-**前端已缓存**：dropdown 侧有 `app.js:4120 hasLoadedAvailableModels`，`get_available_models` 只在未加载时发一次（`app.js:4161`）。本项只补后端。
+**设计**：给 `buildModelCatalog` 加 3 秒短 TTL 缓存；凡是可能改变结果的写入路径都要失效缓存：
 
-**设计**：给 `buildModelCatalog` 加 3 秒短 TTL 缓存；凡是可能改变结果的写入路径都要失效缓存——`set_model_visibility`（`picot-config.ts:1160`）、健康检查写入，以及全部 5 处 `registry.refresh()` 调用点：`picot-config.ts:711`、`1071`、`1119`、`1209`、`1217`。
+- `set_model_visibility`（`extensions/picot-config.ts` 的处理分支）
+- 健康检查写入
+- 每一处 `registry.refresh()` 调用点（当前 5 处：约 711、1071、1119、1209、1217 行——API key 变更、OAuth 登录/登出、配置编辑）
 
 失效必须穷举写入点，这是本项的主要风险；遗漏任何一处会让 UI 显示过期 catalog。
 
 ### 5.2 健康检查并行化
 
-`check_model_health` 目前 for 循环逐个 `await runModelHealthCheck`，N 个模型耗时 N × 单次延迟。改为 `Promise.all`。结果聚合顺序不受影响（map 保序）。
+`check_model_health` 在 `extensions/picot-config.ts` 中确认为串行：`const results = []; for (...) results.push(await runModelHealthCheck(...))`，N 个模型耗时 N × 单次延迟。改为 `Promise.all`（map 保序，结果聚合顺序不变）。
 
-### 5.3 模型可见性 opt-in —— 已拍板：D1b（本次不动语义）
+**注意**：upstream 同时改了 `/tui` 侧（不存在于 v3），只取 `check_model_health` 这一处。
 
-upstream 把可见性语义从「默认可见、显式才隐藏」反转为「默认不可见、显式才显示」（`isVisible` 由 `!== false` 改 `=== true`，commit `e4add1f`）。动机：配了 API key 的 provider 下所有模型都涌入 composer，噪音大。
+### 5.3 模型可见性 opt-in —— 已定案 D1a（2026-09-20，已实现）
 
-**决定：本次只迁 5.1 的缓存与 5.2 的并行化，不动可见性语义。** 理由与代价记录如下，供日后单独决策：
+**决策**：可见性变为 opt-in——未设置过的模型默认**不出现**在 composer 选择器里，用户需在 Settings 里开启（列表头已有 per-provider 全选开关，不必逐个点）。理由：`available` 只表示 provider 配好了凭据（「能不能跑」），可见性才是用户的策展清单（「想不想看到」）；provider 配好 key 后其全部模型涌入下拉是噪音来源。
 
-- 「现有用户从未显式设置过任何可见性标记」不成立。本机 `~/.pi/agent/picot-models.json` 有 691 条 visibility 记录（21 true / 670 false）；打开过 Settings > Models 的用户都有记录。
-- 反转后的可见集合等于显式 `true` 的并集。本机当前 catalog（`~/.pi/agent/models.json` 的 26 个模型）中 8 个 true、15 个显式 false、3 个无记录，后者会消失；此后每个新增模型也静默隐藏，直到用户去 Settings 勾选。
-- prefs 文件全空（首次安装、从未进过 Models 页）时，反转后可见模型数为 0，composer 空到用户手动开启为止。
-- 这不是两行改动：谓词出现在 2 处后端（`picot-config.ts:374`、`1164`）与 5 处前端（`models/selection.js:27`、`settings/models-page.js:548`、`635`、`741`、`774`），前后端必须同时翻，否则 composer 与 Models 页各说一套；`models-page.js:548` 还决定「检查健康」按钮的禁用态。
-- 若日后做 D1a，必须配一次性 seed：升级时把当前 available 且无记录的模型写入 `visibility: true`，此后新模型仍 opt-in。seed 只消除第一类悬崖，不改变「新模型静默不出现」这一长期成本，而那才是需要拍的产品取舍。
+**语义**：`visible === true` 才可见。已改动的 7 处：
 
-## 6. UI 增补（2026-09-18 第二轮核对补充）
+- `extensions/picot-config.ts`：`ModelPreferencesStore.isVisible()`、`set_model_visibility` 处理分支（`params.visible === true`，缺参不再误开）。
+- `public/models/selection.js`：`filterModelsByCatalogVisibility` 的 `available && visible === true`。
+- `public/settings/models-page.js`：4 处（健康检查按钮可用性、「已启用 N 个」计数 ×2、行内开关初值）。
+- `public/app.js`：`filterConfiguredModels` 的异常分支。
+
+**fail-closed 回退（与 upstream 一致）**：catalog 读不到（`!catalog.ok` 或桥调用抛错）时返回**空列表**，而不是「回退显示全部」。理由：读不到用户清单时把全部可用模型放回下拉，等于在最不可信的时刻取消用户的策展；宁可暂时为空，由下一次成功刷新重填。
+
+**已知代价（接受）**：升级后现有安装的 composer 下拉会先空掉，需在 Settings 里开启所需模型；冷启动若遇到 registry 未就绪的瞬时窗口，下拉短暂为空并自愈。若要改回 fail-open，仅需 `selection.js` 与 `app.js` 两处 `return []` 改回 `return models`。
+
+**验证**：`extensions/picot-config.test.ts`（默认隐藏 + 缺参不误开 + 显式 true 生效）、`public/models/selection.test.js`（默认隐藏、fail-closed）。
+
+## 6. UI 增补
 
 ### 6.1 助手消息响应时长
 
-**现状**：`message-renderer.js` 的 `finalizeStreamingMessage`（`message-renderer.js:431`）只渲染时间戳；pi 事件不带时长，需要客户端计时。v3 没有 `public/native/`，流式状态内联在 `app.js`（`currentStreamingElement` / `currentStreamingThinking`，事件分支见 `app.js:2597` / `2612` / `2615`）。时长格式化已有 `formatTurnDuration`（`public/ui/turn-model.js:84`），`turn.js:86` 已用它渲染每条 turn 的完成标签（i18n `messages.turnWorkedFor`）。
+**现状（已核实）**：流式渲染由 `public/app.js` 的 `message_update` 分支驱动（`const { assistantMessageEvent, message } = event`，`text_delta` / `thinking_delta` 累积进 `currentStreamingText` / `currentStreamingThinking`，元素由 `ensureStreamingAssistantElement` 创建）。`finalizeStreamingMessage` 全仓只有一处定义（`public/ui/message-renderer.js:431`）和一处调用（`public/app.js:3239`）。pi 事件不带时长，需要客户端计时。
 
 **设计**：
 
-- **复用 `formatTurnDuration`，不新增 formatter**（已拍板：格式 A）。同一 transcript 里 turn 标签与消息 footer 必须是同一套写法。upstream 的 `formatDurationLabel` 另起小数格式，且其 `≥60s` 分支先取小数余数再取整，会把 119.6s 渲染成 `1m 60s`，不移植。
-- `formatTurnDuration` 已随本批归一 `>1h`：输出 `1h 00m 00s`（原为 `60m 00s`）。实现保持「先四舍五入到整秒，再拆单位」，避免 59.6s 的余数进位成 `60s`。
-- footer 在时间戳旁追加 `.message-duration` span（`title` 用 `messages.responseTime` i18n key，四语言补齐）。
-- 计时挂点在 `app.js`：首个 `message_update` 记 start，`message_end` 算时长，`app.js:3156` 调 `finalizeStreamingMessage` 时传入。只有完整收到 `message_end` 的助手消息显示；中断/重渲染不显示。
-- `finalizeStreamingMessage` 签名追加第 4 参 `durationMs = null`，默认值保证既有调用不破坏。
-- 判空必须先判 `null` 再转数字：`Number(null) === 0` 会渲染出假的 `0s`。该守卫已在 `formatTurnDuration` 内，调用点不要绕过。
-
-**测试**：`turn-model.test.js` 已覆盖 `0s` / `12s` / `1m 04s` / `1h 00m 00s` 与非法输入；`message-renderer.test.js` 补 footer span 的有/无时长两例；`app.js` 接线测试确认中断路径不显示时长。
+- `formatDurationLabel(durationMs)`：`<60s` 显示 `"3.2s"`，超过显示 `"1m 05s"`；null/负数/非有限值返回空串——注意 `Number(null) === 0`，必须先判 null 再转数字，否则渲染假 `"0.0s"`。
+- footer 在时间戳旁追加 `.message-duration` span（`title` 用 `messages.responseTime` i18n key）。
+- 计时起点挂在首个 `text_delta`（或 `ensureStreamingAssistantElement` 创建元素处），终点在 `finalizeStreamingMessage` 的调用点（`app.js:3239`）传入时长。只有完整走到 finalize 的消息显示；中断、历史回放、切换会话不显示。
+- `finalizeStreamingMessage(messageElement, usage = null, thinking = "", durationMs = null)`：第 4 参带默认值，既有调用不破坏。
+- **实现前先确认 finalize 调用点数量**：v3 正在重构 turn（`public/ui/turn.js`、`turn-model.js`），若重构后新增了 finalize 路径，计时与传参必须一并覆盖，否则部分消息会静默丢失时长。
 
 ### 6.2 Composer 附件缩略图接入 lightbox
 
-**现状**：v3 的 lightbox 用容器点击委托，`dataset.lightboxWired` 防重复挂（`image-lightbox.js:76`），已挂在消息区（`app.js:664`）。但它匹配的是 `img.message-image, img.inline-image`（`image-lightbox.js:81`），**没有** `.lightbox-image`。`composer-image-attachments.js` 的缩略图（`composer-image-attachments.js:132`）既不带 class，也不在选择器内，所以附件图点不开。
+**现状**：v3 已有完整 lightbox 基建——`public/ui/image-lightbox.js` 的容器点击委托 + `.lightbox-image` class 机制，已挂在消息区（`app.js` 的 `initImageLightbox(messagesElement)`）；`public/composer-image-attachments.js` 创建缩略图（`.image-preview`）时未挂 class，附件图不可放大。
 
-**设计**（三处缺一不可）：
+**设计**：
 
-- `image-lightbox.js:81` 选择器追加 `, img.lightbox-image`。只给缩略图加 class 而不改选择器，点击依然不触发。
-- `composer-image-attachments.js` 渲染缩略图时给 `img` 加 `lightbox-image` class。
-- 在附件预览容器 `imagePreviews` 上初始化委托（`initImageLightbox(imagePreviews)`）。容器由 `renderPreviews()` 内的 `replaceChildren()` 清空而非替换，委托因此跨重渲染存活；移除按钮是 `img` 的兄弟节点，不会命中委托。
+- `composer-image-attachments.js` 渲染缩略图时加 `.lightbox-image` class。
+- 在附件预览容器上初始化 lightbox 委托（`initImageLightbox(previewContainer)`，内部 `dataset.lightboxWired` 防重复挂）。
 
-### 6.3 用户气泡收紧（Dr. Lin 已确认迁入）
+### 6.3 纯样式微调（Dr. Lin 已确认迁入）
 
-- `public/style.css` `.message.user .message-content`（`style.css:4130`）：`border-radius` 由 `var(--radius-lg)` 改为 `12px`；加 `padding: var(--space-1) var(--space-2)`；`border-bottom-right-radius: 6px` 保留。该规则当前没有 `padding` 声明，先核出现值再改。
-- `12px` 不在 design check 的 radius token 集合内（`scripts/check-design-css.mjs:50` 只有 4/6/10/16/24/999），必须写成同行或上一行的 `/* design-token-ignore: 收紧用户气泡圆角，取自 upstream 301f2c0 */`。豁免机制已确认存在（同脚本 `103`、`171`）。
+**用户气泡收紧**（upstream 301f2c0 + 432584a）：
 
-**已从本 spec 删除的原第 7 项**：「添加 provider」边框顺序。复核 v3 实况后不存在该缺陷——`public/settings/settings-config.css:127-139` 是 `border: 1px dashed var(--border)` 配 `:hover { border-color: var(--accent) }`，没有「`border-color` 在前被 `border` 覆盖」的问题。不迁。
+- `public/style.css` 的 `.message.user .message-content`：`border-radius` 由 `var(--radius-lg)` 改为 `12px`（介于 md 与 lg 之间的定制值；upstream 带 `design-token-ignore` 注释，v3 需按 design check 的实际规则处理豁免）；`padding: var(--space-1) var(--space-2)`；`border-bottom-right-radius: 6px` 保留。
+
+**「添加 provider」边框顺序修正**：
+
+- `public/settings/settings-config.css` 的 `.models-provider-add`：`border-color: var(--accent)` 当前声明在 `border: 1px dashed var(--border)` 之前，被后者覆盖；把 `border-color` 挪到 `border` 之后，恢复 dashed 边框的 accent 色。
 
 ## 7. 排除项
 
 - ACP 外部代理（另立 spec）。
 - SSH 远程工作区、SSH host 管理（未选）。
-- 会话路径查询缓存（`5900f7f` 的 `host_data.rs` session-path index）：v3 的 session 解析走 `session_ui_profile_store` 与 `ephemeral_registry` 各自路径，不依赖目录遍历，YAGNI。lightbox composer 预览已由 6.2 收编，不再排除。
+- 会话路径查询缓存（`5900f7f` 混入项，价值低，YAGNI）。lightbox composer 预览已由 6.2 收编，不再排除。
 - task failure alerts、贡献者头像。
-- conv-nav 整条 rail 可点：v3 自己的 `conversation-nav.js` 已是全 track 点击委托（`trackEl` click + `pointerTickIndex` 映射最近刻度），同一效果不同实现，无需迁移。
-- `sanitize-markup.js` 抽取：v3 `_sanitizeMarkup` 内联且只有一个调用方，YAGNI；等 ACP spec M2 出现第二个消费方再抽。
+- conv-nav 整条 rail 可点：v3 自己的 `public/ui/conversation-nav.js` 已是全 track 点击委托（`trackEl` click + `pointerTickIndex` 映射最近刻度），同一效果不同实现，无需迁移。
+- `sanitize-markup.js` 抽取：v3 的 `_sanitizeMarkup` 内联在 `message-renderer.js` 且只有一个调用方，YAGNI；等 ACP spec M2 出现第二个消费方再抽。
 - slash 菜单 agent 选择器布局：依赖 composer-agent-menu，归 ACP spec 的 M2。
 - 侧边栏折叠箭头 SVG 14px：v3 sidebar 无对应结构，不适用。
-- 模型可见性 opt-in（§5.3 的 D1a）：本次不动语义，理由与代价见 §5.3。
-- upstream `5c92645` 的 model selection 测试：v3 已有 `public/models/selection.test.js` 覆盖同形断言，不重复迁。
 
 ## 8. 验证
 
-每项落地后运行：
+每项落地后运行对应命令：
 
-- `bun run check`（含前端 lint/format/design check）
-- `bun run check:rust`（cargo check + clippy + fmt + 单测）
-- `bun run test`（最终收尾跑全量）
+- 改 `extensions/`（5.1、5.2）：`bun run build:extensions` + `bun run check`。
+- 改前端（3、4、6）：`bun run check`，先跑聚焦测试再跑相关套件。
+- 改 Rust（2、3）：`bun run check:rust`（cargo check + clippy + fmt + 单测）。
+- 收尾：`bun run test` 全量（含 Tauri capability validation）。
 
-完成后 `ARCHITECTURE.md` 需同步：`## 运行时生命周期`（已存在，`ARCHITECTURE.md:123`）补子进程注册表与启动清扫；Git 没有独立小节，push 契约加进 `## 模块清单` 的 `git_service.rs` 行（`ARCHITECTURE.md:175`）。
+完成后 `ARCHITECTURE.md` 相应小节需同步：Git 集成（push 契约）、运行时生命周期（子进程注册表与启动清扫）。

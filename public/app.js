@@ -55,6 +55,7 @@ import { createIcon, replaceButtonGlyph, setButtonIcon } from "./icons.js";
 import { processImageFile, processImagePayload } from "./image-attachments.js";
 import { InfoPanel } from "./info-panel.js";
 import { setupLanQr } from "./lan-qr.js";
+import { getLastModel, setLastModel } from "./models/last-model-store.js";
 import {
   filterModelsByCatalogVisibility,
   isSelectedModel,
@@ -906,6 +907,9 @@ async function requestTodoClear() {
 
 // State tracking
 let currentStreamingElement = null;
+// When the live assistant element was created; the footer shows the
+// elapsed time at finalize (pi's events carry no duration of their own).
+let currentStreamingStartedAt = null;
 let currentStreamingText = "";
 // True while pi's auto-retry is re-hitting the same model after a transient
 // error (429/overload/5xx). During this window the session stays bound to the
@@ -1578,6 +1582,12 @@ wsClient.addEventListener("ownerBootstrap", async (event) => {
     gitPanel.historyPanel?.clearSession();
     gitPanel.notGitRepo = false;
     gitPanel.gitUnavailable = false;
+    // Push state belongs to the workspace that started it: a failure from the
+    // previous one must not render as this one's.
+    gitPanel.pushError = null;
+    gitPanel.pushResult = null;
+    gitPanel.pushInProgress = false;
+    gitPanel.pendingPushRequestId = null;
     void gitPanel.refresh();
     if (terminalPanel.toggleEl) terminalClient.requestList();
   }
@@ -1663,6 +1673,19 @@ wsClient.addEventListener("gitCommandAck", (event) => {
   if (!gitResponseMatchesGeneration(event.detail)) return;
   if (!gitClient.consumeWriteAck(event.detail)) return;
   void gitPanel.refresh();
+});
+wsClient.addEventListener("gitPush", (event) => {
+  if (!gitResponseMatchesGeneration(event.detail)) return;
+  if (!gitClient.consumePushOutcome(event.detail)) return;
+  gitPanel.applyPushResult({ status: "succeeded", ...event.detail?.outcome });
+  // A push moves the branch's ahead/behind counts; refresh so the panel does
+  // not keep showing the pre-push divergence.
+  void gitPanel.refresh();
+});
+wsClient.addEventListener("gitPushFailed", (event) => {
+  if (!gitResponseMatchesGeneration(event.detail)) return;
+  if (!gitClient.consumePushOutcome(event.detail)) return;
+  gitPanel.applyPushResult({ status: "failed", error: event.detail?.error });
 });
 wsClient.addEventListener("gitCommandFailed", (event) => {
   console.warn("[git] command failed", event.detail);
@@ -3161,6 +3184,7 @@ function ensureStreamingAssistantElement(message = null) {
     false,
     turnHost,
   );
+  currentStreamingStartedAt = Date.now();
   if (currentStreamingThinking) {
     if (activeTurn) {
       messageRenderer.renderStreamingThinkingInto(activeTurn.rail.host, currentStreamingThinking);
@@ -3240,6 +3264,7 @@ function handleMessageEnd(message, eventSessionFile = null, entryId = null) {
       currentStreamingElement,
       usage,
       activeTurn ? "" : currentStreamingThinking,
+      currentStreamingStartedAt === null ? null : Date.now() - currentStreamingStartedAt,
     );
     // Remember the turn's latest assistant element; agent_end settles the
     // turn's writes and renders the chips row under it (a turn may contain
@@ -3248,6 +3273,7 @@ function handleMessageEnd(message, eventSessionFile = null, entryId = null) {
     if (entryId) lastTurnAssistantElement.dataset.entryId = entryId;
     currentStreamingElement = null;
     currentStreamingThinking = "";
+    currentStreamingStartedAt = null;
 
     // Track current-context usage only. Session aggregate cost/tokens have a
     // single owner in headerStatusBar and are never derived from rendering.
@@ -4146,6 +4172,68 @@ function nativeRpcCommand(cmd) {
   return Promise.resolve({ success: false, error: `Unknown command: ${type}` });
 }
 
+/**
+ * Adopt a just-selected model in the composer: labels, thinking level, and the
+ * context-window bookkeeping. Shared by the model dropdown and the
+ * fresh-session inheritance path so both leave identical state behind.
+ */
+function applySelectedComposerModel(selectedModel) {
+  currentModelProvider = selectedModel.provider || "";
+  currentModelId = selectedModel.id;
+  if (selectedModel.thinkingLevel) {
+    currentThinkingLevel = selectedModel.thinkingLevel;
+  }
+  saveCurrentSessionProfile();
+  updateThinkingBtn();
+  updateModelLabel();
+  if (selectedModel.contextWindow) {
+    contextWindowSize = selectedModel.contextWindow;
+    updateTokenUsage();
+  }
+}
+
+/**
+ * Give a brand-new session the model the user picked last, instead of pi's
+ * built-in default. Only called for sessions with no history of their own:
+ * replaying set_model into a session that has one would rewrite the harness
+ * state pi just restored from that session's record.
+ */
+async function inheritLastModel() {
+  if (!isMirrorMode || !wsClient.getRuntimeTarget()) return;
+  const last = getLastModel();
+  if (!last) return;
+  if (last.provider === currentModelProvider && last.modelId === currentModelId) return;
+  // The enabled list is only filled by fetchModelInfo(). Without this wait a
+  // cold start looks the model up in an empty list and silently skips the very
+  // inheritance this exists for; the generation guard drops the work if the
+  // session moved on while the list was loading.
+  const generation = uiSessionGeneration;
+  if (!hasLoadedAvailableModels) {
+    await fetchModelInfo();
+    if (generation !== uiSessionGeneration) return;
+  }
+  // A model that is no longer available (removed provider, revoked key) must
+  // not wedge startup: skip it and leave pi's default in place.
+  const model = availableModels.find((entry) =>
+    isSelectedModel(entry, { provider: last.provider, modelId: last.modelId }),
+  );
+  if (!model) {
+    console.warn(
+      "[Models] last selected model is not in the enabled list; keeping pi's default:",
+      `${last.provider}/${last.modelId}`,
+    );
+    return;
+  }
+  // Reuse the dropdown's switch path: it retries while a cold session is still
+  // starting up ("No context available") and reports failures the same way.
+  await selectModel({
+    model,
+    rpcCommand,
+    refreshModelInfo: fetchModelInfo,
+    applySelectedModel: applySelectedComposerModel,
+  });
+}
+
 async function rpcCommand(cmd, statusMsg, silent = false) {
   try {
     if (statusMsg && !silent) statusText.textContent = statusMsg;
@@ -4264,6 +4352,9 @@ function updateThinkingBtn() {
 let currentModelProvider = "";
 let currentModelId = "";
 let availableModels = [];
+// True while the last catalog read failed: an empty picker then means "your
+// list could not be read", not "you enabled nothing".
+let modelsCatalogUnavailable = false;
 let hasLoadedAvailableModels = false;
 let didAutoOpenEmptyModelsDropdown = false;
 let currentThinkingLevel = "off";
@@ -4295,10 +4386,18 @@ function updateOnboardingUI() {
 
 async function filterConfiguredModels(models) {
   try {
-    return filterModelsByCatalogVisibility(models, await configGateway.call("list_model_catalog"));
+    const visible = filterModelsByCatalogVisibility(
+      models,
+      await configGateway.call("list_model_catalog"),
+    );
+    modelsCatalogUnavailable = false;
+    return visible;
   } catch (error) {
     console.warn("[Models] Failed to load configured model visibility:", error);
-    return models;
+    // Fail closed: an unreadable catalog must not re-expose every available
+    // model after the user curated the list. The next refresh repopulates it.
+    modelsCatalogUnavailable = true;
+    return [];
   }
 }
 
@@ -4426,9 +4525,13 @@ function openModelDropdown() {
       content.style.cssText = "padding:14px;color:var(--text-dim);font-size:12px;line-height:1.5";
       const title = document.createElement("div");
       title.style.cssText = "color:var(--text-primary);margin-bottom:6px";
-      title.textContent = t("models.emptyTitle");
+      title.textContent = modelsCatalogUnavailable
+        ? t("models.unavailableTitle")
+        : t("models.emptyTitle");
       const help = document.createElement("div");
-      help.textContent = t("models.emptyHelp");
+      help.textContent = modelsCatalogUnavailable
+        ? t("models.unavailableHelp")
+        : t("models.emptyHelp");
       const settingsButton = document.createElement("button");
       settingsButton.type = "button";
       settingsButton.className = "btn-primary";
@@ -4522,18 +4625,9 @@ function openModelDropdown() {
             rpcCommand,
             refreshModelInfo: fetchModelInfo,
             applySelectedModel: (selectedModel) => {
-              currentModelProvider = selectedModel.provider || "";
-              currentModelId = selectedModel.id;
-              if (selectedModel.thinkingLevel) {
-                currentThinkingLevel = selectedModel.thinkingLevel;
-              }
-              saveCurrentSessionProfile();
-              updateThinkingBtn();
-              updateModelLabel();
-              if (selectedModel.contextWindow) {
-                contextWindowSize = selectedModel.contextWindow;
-                updateTokenUsage();
-              }
+              // Remember the manual pick so future new sessions inherit it.
+              setLastModel(selectedModel);
+              applySelectedComposerModel(selectedModel);
             },
           });
           if (!result?.success) {
@@ -5556,6 +5650,10 @@ function handleMirrorSync(data) {
     });
   } else {
     renderWorkspaceWelcome();
+    // A brand-new session has no record of its own, so it inherits the last
+    // manually selected model instead of falling back to pi's default.
+    // Sessions with history keep whatever pi restored from their own record.
+    void inheritLastModel();
   }
 
   // Snapshot messages carry no entry ids — they cannot build the session

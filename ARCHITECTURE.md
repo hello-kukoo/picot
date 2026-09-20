@@ -163,6 +163,10 @@ Normal and Focus share `public/sidebar/session-tree-model.js`: missing parents a
 
 已知实现边界：host-wide 的两个完整扫描 permit 当前只包住 `workspace_sessions`；兼容/独立的 `list_sessions` 与 `search_sessions` 仍各自 `spawn_blocking`，不共享该上限。sidebar 的 registry count warmup 由 WebView 对所有 registry rows 并行发起，冷启动通过 `requestIdleCallback({ timeout: 800 })` 调度，空闲不足时也会在该上限到期后执行。它们是性能债务，不是 session 数据一致性或授权依据；若扩大 workspace 数量或搜索频率，应先将这些路径纳入统一 scan scheduler，再提高任何并发上限。
 
+### 子进程注册表与孤儿清扫
+
+pi runtime 的存活不依赖 Picot 的 teardown：`pi` 在 stdin EOF 时退出，但卡死的 runtime 读不到 EOF，而 Picot 被 SIGKILL/崩溃时根本不会执行清理。因此每次 spawn 成功后，host 把 `{pid, 启动时间}` 写入 `~/.pi/picot-runtimes/<supervisor-pid>.json`（`child_supervision.rs`），正常 stop 时删除对应条目、全部清空时删除文件。启动时 `sweep_orphans()` 扫描该目录：supervisor 进程已不存在且条目 pid 仍存活、且 OS 报告的启动时间与登记值一致的条目，才按进程组 `SIGKILL`，随后删除该注册表文件——启动时间是必需的身份校验，避免 pid 复用后误杀无关进程。SIGTERM/SIGINT/SIGHUP 另有信号兜底（`RunEvent::Ready` 时安装），走与正常退出相同的 `stop_for_app_exit()` + 清注册表路径；SIGKILL 无法捕获，正是清扫要覆盖的场景。进程组/Job Object 的终止语义仍由 `process_tree.rs` 负责，本注册表不重复实现。
+
 ### 操作注册表（OperationRegistry）
 
 - 逻辑 scope `(owner, workspace, session, generation)`
@@ -191,11 +195,12 @@ Normal and Focus share `public/sidebar/session-tree-model.js`: missing parents a
 | `window_owner.rs` | 窗口 owner 注册与 capability |
 | `remote_auth.rs` | 远程设备配对与 device token |
 | `ephemeral_registry.rs` | Side/Quick chat 生命周期 |
-| `git_service.rs` | owner-scoped Git status, diff, history, and commit operations |
+| `git_service.rs` | owner-scoped Git status, diff, history, commit, and push operations；push 与写操作共享 per-root 写槽，认证严格非交互（GIT_TERMINAL_PROMPT=0 + askpass 抑制 + SSH BatchMode），超时 120s 后按进程组终止 |
 
 | `pi_launch.rs` | 启动契约共享基底（binary/args/env/extensions） |
 | `telemetry.rs` | D10 匿名遥测 schema（Stage 0 接线） |
 | `process_tree.rs` | 进程树管理（Unix pgid / Windows Job Object） |
+| `child_supervision.rs` | 运行时注册表 + 启动孤儿清扫 + 终止信号兜底（复用 process_tree 的终止语义） |
 
 ## Widget mirror registry
 
@@ -246,8 +251,9 @@ Pi 以 `~/.pi/agent/trust.json`（键为 canonical 路径，值为 true/false/nu
 
 ## 安全边界
 
-1. **Loopback-only**：HostServer 拒绝非 loopback 绑定
+1. **Loopback 默认**：HostServer 默认只绑 loopback；`mobile.lanAccessEnabled` 显式开启后才绑全部网卡（D4 移动接入；缺省一律 loopback，配对 token 仅桌面端可铸造）
 2. **Owner capability**：每个桌面窗口持唯一 32 字节随机 capability
 3. **Workspace containment**：所有文件读写限制在注册根目录内；`file_mentions` 的列举按上表根分级可越出（仅 desktop，读写不受影响）
-4. **Generation 失效**：workspace transition 使旧代授权、操作与导出令牌全部失效；旧代 runtime 进程保留存活但不可达（授权闸门拒收），至窗口销毁/owner 撤销/app 退出或返回 rebind
-5. **匿名遥测**：仅 allowlisted 粗粒度字段，无 per-user/per-token 维度
+4. **Generation 失效**：workspace transition 使旧代授权、操作与导出令牌全部失效；旧代 runtime 进程保留存活但不可达（授权闸门拒收），至窗口销毁/owner 撤销/app 退出、显式 restart（`restart_runtime` 控制面命令，Registered owner 经 Settings 触发）或返回 rebind
+5. **跨 workspace 事件可见性**（2026-09-20 拍板）：持有 desktop capability 的本机窗口可订阅任意 live runtime 的全部非阻塞事件（消息正文、tool 输出、widget、notify）；阻塞式 `extension_ui_request`（select/confirm/input/editor）仍只投 `authorize_target` 通过的订阅者。desktop capability 只由原生窗口 owner registry 铸发，LAN 配对设备（Browser 类客户端）拿不到。
+6. **匿名遥测**：仅 allowlisted 粗粒度字段，无 per-user/per-token 维度
