@@ -41,6 +41,7 @@ mod host_models;
 mod host_skills;
 mod lens_config;
 mod pi_launch;
+mod pi_path;
 mod pi_rpc_bridge;
 mod ponytail_config;
 #[allow(dead_code)]
@@ -1677,6 +1678,42 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
         .map_err(|error| format!("Cannot resolve Picot app data directory: {error}"))?
         .join("picot.sqlite3");
     let shared_metadata = Arc::new(Mutex::new(MetadataStore::open(&metadata_path)?));
+    // Q8 self-heal: when the PATH toggle is on, re-verify the managed marker
+    // after upgrades or app moves and refresh a stale path. Release-only and
+    // advisory: a failure logs and never blocks startup.
+    {
+        let metadata = shared_metadata.clone();
+        let static_dir_for_heal = static_dir.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let enabled = metadata
+                .lock()
+                .ok()
+                .and_then(|store| store.pref_get(pi_path::PREF_KEY).ok().flatten())
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            if !enabled || cfg!(debug_assertions) {
+                return;
+            }
+            match pi_path::bundled_pi_dir(&static_dir_for_heal) {
+                Ok(pi_dir) => {
+                    #[cfg(target_os = "windows")]
+                    let outcome = pi_path::apply_windows(&pi_dir.to_string_lossy());
+                    #[cfg(not(target_os = "windows"))]
+                    let outcome = std::env::var("SHELL")
+                        .ok()
+                        .and_then(|shell| dirs::home_dir().map(|home| (home, shell)))
+                        .map(|(home, shell)| {
+                            pi_path::apply_posix(&home, &shell, &pi_dir.to_string_lossy())
+                        })
+                        .unwrap_or_else(|| Err("SHELL or home directory unavailable".into()));
+                    if let Err(message) = outcome {
+                        log::warn!("pi path self-heal skipped: {message}");
+                    }
+                }
+                Err(message) => log::warn!("pi path self-heal skipped: {message}"),
+            }
+        });
+    }
     // Cold start creates NO default workspace, NO session target, and NO Pi
     // runtime. The registry is untouched; the landing page is the first view.
     let runtimes = NativePiManager::new(256);
@@ -2720,6 +2757,71 @@ fn install_control_handler(
                             .to_string(),
                     ),
                     "get_pi_version" => Ok(Value::from(locked_pi_version())),
+                    "pi_path_status" => {
+                        // Toggle surface for Settings → General: the toggle
+                        // lives everywhere (landing included) but is release-
+                        // only (Q5) and shell-gated on POSIX (Q3).
+                        require_native_owner(&ctx)?;
+                        #[cfg(target_os = "windows")]
+                        let (shell_supported, shell) = (true, None::<String>);
+                        #[cfg(not(target_os = "windows"))]
+                        let shell = std::env::var("SHELL").unwrap_or_default();
+                        #[cfg(not(target_os = "windows"))]
+                        let shell_supported = pi_path::rc_filename_for_shell(&shell).is_some();
+                        let enabled = metadata
+                            .lock()
+                            .map_err(|_| "metadata store is not available".to_string())?
+                            .pref_get(pi_path::PREF_KEY)
+                            .unwrap_or(None)
+                            .and_then(|value| value.as_bool())
+                            .unwrap_or(false);
+                        Ok(json!({
+                            "dev": cfg!(debug_assertions),
+                            "shellSupported": shell_supported,
+                            "shell": shell,
+                            "enabled": enabled,
+                        }))
+                    }
+                    "pi_path_configure" => {
+                        require_native_owner(&ctx)?;
+                        if cfg!(debug_assertions) {
+                            return Err("the embedded-pi PATH toggle is release-only".to_string());
+                        }
+                        let enabled = arg_bool("enabled").ok_or("enabled is required")?;
+                        let pi_dir = pi_path::bundled_pi_dir(&static_dir)?;
+                        let message = if enabled {
+                            #[cfg(target_os = "windows")]
+                            let outcome = pi_path::apply_windows(&pi_dir.to_string_lossy());
+                            #[cfg(not(target_os = "windows"))]
+                            let outcome = {
+                                let shell = std::env::var("SHELL").unwrap_or_default();
+                                pi_path::apply_posix(
+                                    &dirs::home_dir().ok_or("cannot resolve the home directory")?,
+                                    &shell,
+                                    &pi_dir.to_string_lossy(),
+                                )
+                            };
+                            outcome?
+                        } else {
+                            #[cfg(target_os = "windows")]
+                            let outcome = pi_path::remove_windows(&pi_dir.to_string_lossy());
+                            #[cfg(not(target_os = "windows"))]
+                            let outcome = {
+                                let shell = std::env::var("SHELL").unwrap_or_default();
+                                pi_path::remove_posix(
+                                    &dirs::home_dir().ok_or("cannot resolve the home directory")?,
+                                    &shell,
+                                )
+                            };
+                            outcome?
+                        };
+                        metadata
+                            .lock()
+                            .map_err(|_| "metadata store is not available".to_string())?
+                            .pref_set(pi_path::PREF_KEY, &Value::Bool(enabled))
+                            .map_err(|error| error.to_string())?;
+                        Ok(json!({ "message": message }))
+                    }
                     "has_any_credentials" => {
                         // Landing zero-credential card: file + env truth only
                         // (landing-bridge-runtime spec v2); no Pi process.

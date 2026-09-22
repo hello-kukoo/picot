@@ -181,6 +181,7 @@ pi runtime 的存活不依赖 Picot 的 teardown：`pi` 在 stdin EOF 时退出�
 | `host_server.rs` | axum 服务器、路由、v2 WS 协议、兼容路由 |
 | `host_router.rs` | v2 hello 握手、客户端注册、帧路由 |
 | `host_data.rs` | 数据面（list/read/write/containment/cost/export 令牌） |
+| `pi_path.rs` | 内置 Pi 系统级 PATH 开关（`pi_path_status`/`pi_path_configure` 控制op）：POSIX marker 块管理 rc 文件、Windows HKCU 用户 Path + WM_SETTINGCHANGE；desktop-native owner、release-only、启动自愈，偏好键 `pi.pathEnabled` |
 | `host_files.rs` | 文件读写安全（symlink/TOCTOU/atomic/0600） |
 | `host_config.rs` | 设置/agent 文本文件（proper-lockfile） |
 | `host_capability.rs` | capability 存储（mint/validate/revoke） |

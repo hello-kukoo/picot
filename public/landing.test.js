@@ -198,6 +198,8 @@ function installDom() {
         <div class="session-list" id="session-list"></div>
         <button id="settings-btn"></button>
         <button id="toggle-mobile-access"></button>
+        <button id="toggle-pi-path"></button>
+        <span id="pi-path-note"></span>
         <div id="mobile-access-details"></div>
         <div id="mobile-access-pairing">
           <button id="mobile-pair-btn"></button>

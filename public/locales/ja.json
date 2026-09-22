@@ -671,6 +671,13 @@
   "settings": {
     "title": "設定",
     "general": "一般",
+    "piPath": {
+      "title": "内蔵 Pi",
+      "enable": "内蔵 Pi を PATH に追加",
+      "description": "新しく開いたターミナルで pi を直接実行できます。新しいターミナルのみ有効です。",
+      "devOnly": "開発ビルドでは利用できません。",
+      "unsupportedShell": "既定のシェル（{shell}）は未対応です。zsh と bash のみ対応しています。"
+    },
     "extensions": "拡張パッケージ",
     "extensionAdvisor": {
       "title": "Advisor",

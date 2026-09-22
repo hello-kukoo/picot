@@ -671,6 +671,13 @@
   "settings": {
     "title": "Settings",
     "general": "General",
+    "piPath": {
+      "title": "Embedded Pi",
+      "enable": "Add embedded Pi to PATH",
+      "description": "New terminals can run `pi` directly. Takes effect in newly opened terminals only.",
+      "devOnly": "Unavailable in development builds.",
+      "unsupportedShell": "The default shell ({shell}) is not supported; only zsh and bash are."
+    },
     "extensions": "Extension packages",
     "extensionAdvisor": {
       "title": "Advisor",

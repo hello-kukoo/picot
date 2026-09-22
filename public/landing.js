@@ -50,6 +50,7 @@ import { setupModelsPage } from "./settings/models-page.js";
 import { setupPackageBrowse } from "./settings/package-browse.js";
 import { setupPackageManager } from "./settings/package-manager.js";
 import { setupPackageSkillsTab } from "./settings/package-skills-tab.js";
+import { setupPiPathToggle } from "./settings/pi-path-toggle.js";
 import {
   clearSettingsSaveMessage,
   setSettingsSaveButtonSaving,
@@ -387,6 +388,7 @@ function openLandingSettings(tabKey = "general") {
   buildLandingAppearanceSelectors();
   void loadLandingPiVersion();
   void mobileAccessCard.refresh();
+  void piPathToggle.refresh();
 }
 
 // Pi version rides a host control op (no runtime needed); the value is the
@@ -405,6 +407,12 @@ async function loadLandingPiVersion() {
 
 // Mobile pairing is entirely host-side control ops (pairing tokens,
 // access info, the LAN-access preference).
+const piPathToggle = setupPiPathToggle({
+  transport,
+  toggle: document.getElementById("toggle-pi-path"),
+  note: document.getElementById("pi-path-note"),
+});
+
 const mobileAccessCard = setupMobileAccess({
   transport,
   toggle: document.getElementById("toggle-mobile-access"),

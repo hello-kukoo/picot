@@ -219,6 +219,14 @@ export class WsTransport {
     return this._control("preference.delete", { key });
   }
 
+  piPathStatus() {
+    return this._control("pi_path_status", {});
+  }
+
+  piPathConfigure(enabled) {
+    return this._control("pi_path_configure", { enabled });
+  }
+
   listPreferences(prefix = "") {
     return this._control("preference.list", { prefix });
   }

@@ -671,6 +671,13 @@
   "settings": {
     "title": "Ajustes",
     "general": "General",
+    "piPath": {
+      "title": "Pi integrado",
+      "enable": "Añadir Pi integrado al PATH",
+      "description": "Las terminales nuevas pueden ejecutar `pi` directamente. Solo surte efecto en terminales recién abiertas.",
+      "devOnly": "No disponible en compilaciones de desarrollo.",
+      "unsupportedShell": "El shell predeterminado ({shell}) no es compatible; solo zsh y bash."
+    },
     "extensions": "Paquetes de extensión",
     "extensionAdvisor": {
       "title": "Advisor",

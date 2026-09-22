@@ -671,6 +671,13 @@
   "settings": {
     "title": "设置",
     "general": "通用",
+    "piPath": {
+      "title": "内置 Pi",
+      "enable": "将内置 Pi 加入 PATH",
+      "description": "新开的终端可直接运行 pi。仅对新终端生效。",
+      "devOnly": "开发构建下不可用。",
+      "unsupportedShell": "默认 shell（{shell}）不受支持，仅支持 zsh 与 bash。"
+    },
     "extensions": "扩展包",
     "extensionAdvisor": {
       "title": "Advisor",

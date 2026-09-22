@@ -96,6 +96,7 @@ import { createOauthGateway } from "./settings/oauth-gateway.js";
 import { setupPackageBrowse } from "./settings/package-browse.js";
 import { setupPackageManager } from "./settings/package-manager.js";
 import { setupPackageSkillsTab } from "./settings/package-skills-tab.js";
+import { setupPiPathToggle } from "./settings/pi-path-toggle.js";
 import {
   clearSettingsSaveMessage,
   setSettingsSaveButtonSaving,
@@ -7198,6 +7199,7 @@ async function openSettings(tabKey = "general", options = {}) {
   }, 300);
   void refreshLanUrl();
   void mobileAccessCard.refresh();
+  void piPathToggle.refresh();
   // Fetch current state for toggles
   try {
     // The auto-compaction toggle owns Pi's global default (settings.json via
@@ -7296,6 +7298,12 @@ const settingsToggles = setupSettingsToggles({
   persistThinkingLevel: (level) =>
     void preferencesClient.set(PREFERENCE_KEYS.agentThinkingLevel, level),
   persistShowThinking: (show) => void preferencesClient.set(PREFERENCE_KEYS.showThinking, show),
+});
+
+const piPathToggle = setupPiPathToggle({
+  transport,
+  toggle: document.getElementById("toggle-pi-path"),
+  note: document.getElementById("pi-path-note"),
 });
 
 const mobileAccessCard = setupMobileAccess({
