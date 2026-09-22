@@ -3,6 +3,10 @@
 **Status:** Approved by Dr. Lin on 2026-09-13 (grilling session, Q1–Q3);
 revised same day after spec review (i18n namespace, cross-spec parity
 with the fff spec). Implemented 2026-09-15; spec tracks code.
+**Landing: available** since 2026-09-21 — landing.js passes the config-runtime
+gateway proxy into `setupPackageManager`, so the advisor section renders and
+saves at landing (global-only; rides
+`2026-09-18-landing-bridge-runtime-design.md`).
 **Date:** 2026-09-13
 
 ## Goal
@@ -49,7 +53,7 @@ effort).
 | --- | --- |
 | Abstraction | Per-package renderer map (`pkgName → renderer`), advisor is the first entry. No generic settings schema — pi extensions have no settings declaration mechanism, so schemas would be hand-written anyway; the map is the extension point. |
 | Effect timing | Fixed hint line in the section:「更改将在新会话生效」. The TUI's same-session effect is unattainable from the GUI (see Background); the hint keeps expectations honest. |
-| Model/effort coupling | Model dropdown (live modelRegistry, same channel as Models page) includes a「关闭 Advisor」row (`modelKey` absent). Effort dropdown = `getSupportedThinkingLevels(selectedModel)` + an「off（不发送 reasoning）」row. Switching to a model that does not support the stored effort **auto-resets effort to off** with a light notice — mirrors the TUI picker rebuilding its effort list per model, never leaves an illegal model+effort pair on disk. |
+| Model/effort coupling | Model dropdown = **composer parity**（Dr. Lin 2026-09-21 决议）：`list_model_catalog` ∩ `available ∩ visible` + `list_scoped_models`，与消息输入框同一个列表（scoped 分组在前、其余 enabled 在后，optgroup 呈现），含「关闭 Advisor」行 (`modelKey` absent)。 Effort dropdown = `getSupportedThinkingLevels(selectedModel)` + an「off（不发送 reasoning）」row. Switching to a model that does not support the stored effort **auto-resets effort to off** with a light notice — mirrors the TUI picker rebuilding its effort list per model, never leaves an illegal model+effort pair on disk. |
 
 ## Contract
 

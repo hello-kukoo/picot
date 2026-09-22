@@ -4,6 +4,29 @@
 
 v2，2026-09-20。v1 由 2026-09-18 grilling 会话（Dr. Lin）逐支拍板；v2 经 Dr. Lin
 指示将「高级配置」页签加入本期（废止 v1 决议 #7，依据见决议表与增补节）。
+**Implemented 2026-09-21；spec tracks code**（实现偏差记录：① 定址走
+`ephemeral_command` 通道而非 runtime_request 三元组——landing 帧无 workspaceId，
+`operation_scope` 永拒，Quick Chat 先例；② env 凭据检测为显式常量清单
+（upstream 无平面清单可复制），文件面检查覆盖 auth.json/models.json；
+③ MCP 页签揭示用已装包 host 数据，避免设置面板打开即派生 runtime；
+④ 实证根因（2026-09-21，真实 embedded Pi 复现）：`host_ephemeral::forward_command`
+转发命令时未传 idempotency key，而 `prompt` 属 mutation，`NativePiManager::request`
+一律拒绝（`Runtime mutation requires an idempotency key`）→ host 回
+`ephemeral_command_failed`，前端当时丢弃该帧 → landing 全族 ops（模型/MCP/包技能/高级配置）
+一起 30s 超时，且因 `config-gateway` 的就绪计时器先于 send 启动，报错被误标成
+「timed out waiting for runtime」。修法：`forward_command` 为每条命令生成幂等键；
+landing 侧把 `ephemeral_command_failed` 对应回原请求；就绪计时器在闸门打开时清除。
+附带修复：MCP 页签揭示此前只在模块加载时跑一次（那时 `hello_ack` 还没到，
+`capabilities.native` 为 false → 直接返回），现在随 `hostCapabilities` 重跑。
+⑤ 幂等键必须**按命令实例**唯一：coordinator 对重复键直接回缓存结果（命令不执行、
+无 notify），而客户端的 requestId 每次页面加载都从 `ep-1` 重数，复用即静默吞命令——
+改用 `requestId + uuid`；真实 Pi smoke
+`native_smoke_config_runtime_answers_every_landing_op` 断言「同一 requestId 连发两次
+必须各得一次应答」，并逐一断言 landing 六个 op 都有应答。
+⑥ 扩展详情页的 host op 渲染器此前把 host 控制面的「resolve 原始 payload」当成 bridge 的
+`{ok,data}`，`result.ok` 恒 undefined → 8 个 host 面页面全部显示 "load failed"；
+已在 `renderExtensionSettings` 边界统一补齐 `ok` 标志，渲染器测试同步改用生产契约
+（原始 payload / reject），去掉那层假契约后 20 个用例变红、加回边界即全绿。
 前置事实全部经代码核实，
 关键锚点：`landing.js:314`（隐藏名单）、`pi_launch.rs:263`（sessionless 契约）、
 `main.rs:3240` 一带（ephemeral 候选管线）、`config-gateway.js` 头注释（配置数据面）、

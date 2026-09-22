@@ -1,6 +1,12 @@
 # pi-extension-safety-guard Settings Design
 
-**Status:** Draft — awaiting Dr. Lin's grilling (open decisions below). Not implemented.
+**Uninstalled per Dr. Lin 2026-09-21** — replaced by the in-house fork
+(see `implemented/2026-09-21-datarx-safety-guard-pi-design.md`); the renderer gate
+was retargeted, the `safetyGuard.config.*` bridge ops remain as shared
+infrastructure for the fork.
+
+**Status:** Implemented 2026-09-21 per the recommendation column (Dr. Lin goal
+directive); spec tracks code. Implementation notes: ① auto-review 模型 = **composer parity 下拉**（Dr. Lin 2026-09-21 决议，取代早先的 provider/model-id 文本输入）：`list_model_catalog` ∩ `available ∩ visible` + `list_scoped_models`，与消息输入框同一个列表；provider+modelId 仍以 `entries` 一次成对写入（含清空）；② allow 计数仅全局（landing 无项目层）。
 **Date:** 2026-09-16
 **Provenance:** roll-out entry #8 of
 [`2026-09-16-extension-settings-rollout-inventory.md`](2026-09-16-extension-settings-rollout-inventory.md);
@@ -52,11 +58,17 @@ context lines, and the auto-review model.
 
 ### Bridge ops — added to `extensions/extension-settings.ts`
 
-- `safetyGuard.config.get` → `{ config, configPath, relocatedByEnv, allowCounts }`.
-- `safetyGuard.config.set` → `{ key, value }` single-key patch validated
-  against the package grammar (nested keys as dotted paths:
-  `categories.git`, `contextLines.before`, `autoReview.model.provider`, …);
-  merged through the package's merge semantics; atomic write, 0600.
+- `safetyGuard.config.get` → `{ config: Record | null, configPath,
+  relocatedByEnv, allowCounts, invalid? }`. 文件缺失 → 空配置；读不出来 →
+  `config: null` + `invalid.reason`（不给「空配置」，否则 set 会整份覆盖，
+  而且这是安全防护的配置）。
+- `safetyGuard.config.set` → `{ key, value }` 单键 patch，或
+  `{ entries: [{ key, value }, …] }` 批量，validated against the package
+  grammar (nested keys as dotted paths: `categories.git`,
+  `contextLines.before`, `autoReview.model.provider`, …); merged through the
+  package's merge semantics; invalid 文件拒绝写入；批量一次落盘，成对的
+  `autoReview.model.provider` + `.modelId` 因此不会半途留下不匹配的组合；
+  atomic write, 0600。
 
 ### Renderer
 
@@ -71,9 +83,10 @@ counts, hint, saved/saveFailed).
 
 ## Verification
 
-- Op tests: dotted-path patches; range validation 0–20; category enum;
-  relocated-env read-only; merge preserves unknown keys per package
-  semantics; 0600.
+- Op tests (`extensions/extension-settings.test.ts`): dotted-path patches;
+  range validation 0–20; category enum; relocated-env read-only; invalid
+  文件 → `config: null` + reason 且 set 拒绝；entries 成对写入一次落盘；
+  merge preserves unknown keys per package semantics; 0600.
 - Renderer tests: category toggles, stepper bounds, model picker payload,
   allow counts render.
 - Landing variant: section renders through the landing config gateway (the

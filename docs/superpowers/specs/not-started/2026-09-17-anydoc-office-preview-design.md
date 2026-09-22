@@ -351,7 +351,7 @@ historical design/plan documents are excluded from that mechanical check.
 | `extensions/markitdown-preview.ts` | Delete | Retire unused Python subprocess integration. |
 | `extensions/markitdown-preview.test.ts` | Delete | Retire MarkItDown-only tests. |
 | `extensions/markitdown-preview.e2e.test.ts` | Delete | Retire Python E2E harness. |
-| `docs/superpowers/specs/2026-07-26-markitdown-office-email-preview-design.md` | Modify | Mark superseded and link here; do not leave it as active guidance. |
+| `docs/superpowers/specs/superseded/2026-07-26-markitdown-office-email-preview-design.md` | Modify | Mark superseded and link here; do not leave it as active guidance. |
 | `docs/superpowers/plans/2026-07-26-markitdown-office-email-preview.md` | Modify | Mark superseded; do not execute it. |
 | `ARCHITECTURE.md` | Modify | Document host-side AnyDoc boundary, 8/32 MiB input split, 2 MiB output cap, two-permit limit, generation recheck, no-cancellation limitation, no-network/OCR rule, and raster image policy. |
 

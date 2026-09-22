@@ -3,7 +3,7 @@
 日期：2026-08-30  
 状态：**已批准（Dr. Lin 指令「做 D10 拍板」，2026-08-30）——框架性批准：stages/thresholds/telemetry 契约/stop-hold-rollback runbook 按本提案全案生效。** Stage 0 准入仍以三件人工件（browser/WebView E2E、同 fixture 性能样本、dogfood）为前置；fail-closed / default-off 约束不变；不授予 default-on；§1 的全部约束作为阶段门条件继续生效。
 
-依据：`docs/superpowers/specs/2026-08-27-ui-parity-and-rollout.md` §7，以及 P3 证据审计与 checkpoint：
+依据：`docs/superpowers/specs/process-evidence/2026-08-27-ui-parity-and-rollout.md` §7，以及 P3 证据审计与 checkpoint：
 
 - `2026-08-30-p3-evidence-audit.md`
 - `2026-08-30-p3-checkpoint.md`

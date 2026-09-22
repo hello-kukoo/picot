@@ -3,7 +3,7 @@
 - 日期：2026-07-25
 - 状态：已实现（含实现偏差，见 §11）
 - 作者：Dr. Lin + Mr. Spock
-- 相关：`ARCHITECTURE.md`（§前端、§跨端口状态持久化）、`docs/superpowers/specs/2026-07-11-recent-sessions-design.md`
+- 相关：`ARCHITECTURE.md`（§前端、§跨端口状态持久化）、`docs/superpowers/specs/superseded/2026-07-11-recent-sessions-design.md`
 
 ## 1. 背景与目标
 

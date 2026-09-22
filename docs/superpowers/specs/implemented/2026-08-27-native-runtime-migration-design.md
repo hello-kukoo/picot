@@ -21,7 +21,7 @@
 >
 > - `ARCHITECTURE.md`：现有三条通信路径、LAN/loopback 边界、窗口 owner、Pi launch 不变量；
 > - `docs/engineering-lessons.md`：adapter cancellation、workspace transition、真实路径验收；
-> - `docs/superpowers/specs/2026-08-26-workspace-registry-design.md`：workspace ID、注册表与 DB 迁移边界；
+> - `docs/superpowers/specs/implemented/2026-08-26-workspace-registry-design.md`：workspace ID、注册表与 DB 迁移边界；
 > - `src-tauri/src/{main.rs,window_owner.rs,broker_ws.rs,host_server.rs,host_router.rs,native_pi_manager.rs,runtime_coordinator.rs,pi_manager.rs,pi_rpc_bridge.rs}`；
 > - `extensions/{embedded-server.ts,request-access.ts,picot-bridge.ts,path-safety.ts}`。
 

@@ -3,7 +3,7 @@
 > 状态：evidence-based Gate B contract。本文只记录仓库已实现事实、已批准决策、迁移期约束与证据缺口；不把设计目标写成当前实现。
 > **Gate B-design：CLOSED at CP1（2026-08-29，Dr. Lin 签署；纪要 `2026-08-29-cp1-review.md`）。** 关闭仅固化设计为实现输入；B-GAP-01–14 全部保持 mandatory implementation acceptance，随归属 phase exit 关闭（§13/§14）。
 >
-> 证据快照：2026-08-28。主要来源：`docs/superpowers/specs/2026-08-27-native-runtime-migration-design.md`（Gate B、§4、§7–§10、D2/D4）、`2026-08-27-migration-inventory.md`、`2026-08-27-launch-contract.md`、`src-tauri/src/host_router.rs`、`host_server.rs`、`broker_ws.rs`、`native_pi_manager.rs`、`runtime_coordinator.rs`、`command_policy.rs`、`window_owner.rs`、`metadata_store.rs`、`remote_auth.rs`、`main.rs` 及其测试。
+> 证据快照：2026-08-28。主要来源：`docs/superpowers/specs/implemented/2026-08-27-native-runtime-migration-design.md`（Gate B、§4、§7–§10、D2/D4）、`2026-08-27-migration-inventory.md`、`2026-08-27-launch-contract.md`、`src-tauri/src/host_router.rs`、`host_server.rs`、`broker_ws.rs`、`native_pi_manager.rs`、`runtime_coordinator.rs`、`command_policy.rs`、`window_owner.rs`、`metadata_store.rs`、`remote_auth.rs`、`main.rs` 及其测试。
 
 ## 1. 结论与边界
 

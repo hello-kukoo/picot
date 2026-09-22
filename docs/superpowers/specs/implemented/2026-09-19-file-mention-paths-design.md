@@ -4,7 +4,7 @@
 ① Windows `..` 取 (a) 维持现状 + 文档说明；② UNC 不可达在菜单空态区渲染一行
 错误；③ `truncated` 仅保留数据字段不加 UI）。实施中（第一步：契约 A + 对齐清单）。
 **日期：** 2026-09-19
-**演化关系：** 扩展并部分取代 `docs/superpowers/specs/2026-07-25-at-file-mention-design.md`。
+**演化关系：** 扩展并部分取代 `docs/superpowers/specs/superseded/2026-07-25-at-file-mention-design.md`。
 07-25 的「路径语法与根」表格仍是本 spec 的目标语法；但其实现层描述属于
 embedded-server 时代（`/api/file-mentions`），且其中「插入绝对路径」的读法与
 native upstream 参考实现相反，以本 spec 为准。

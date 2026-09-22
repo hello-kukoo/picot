@@ -1,6 +1,9 @@
 # pi-web-access Settings Design
 
-**Status:** Draft — awaiting Dr. Lin's grilling (open decisions below). Not implemented.
+**Status:** Implemented 2026-09-21 per the recommendation column (Dr. Lin goal
+directive); spec tracks code. Implementation notes: ① 非 secret 文本键仅做类型校验（bool），URL 格式校验留待包级反馈；② 路由块（searchRouting/fetchRouting 有序列表）v1 未渲染为可编辑 UI，仅经高级途径读写；③ env 徽章按键名推导 env 变量名。
+**Date:** 2026-09-16
+**Corrections (2026-09-21 review):** ① 端点凭证键名原先写成 `searxng.password` / `crawl4ai.token` / `brightdata.key` 等嵌套名，包根本不读；已按包的扁平键名改正。SearxNG 头映射 `searxngHeaders` 是 `Record<string, string>`，没有单字符串行，v1 不渲染。② 配置目录解析漏了两条包级规则（legacy `~/.pi/web-search.json`、XDG 未设置时不看 `~/.config/pi`），会让 GUI 写到的文件与运行时读的不是同一个；已逐条对齐 `getWebSearchConfigDir`。③ `fetch.answerProvider` / `fetch.answerModel` 原先不在可写键列表里，行内保存必然报错；现已可写，并按包的「必须成对」规则校验。④ set 新增 `entries` 批量，成对字段一次写入。
 **Date:** 2026-09-16
 **Provenance:** roll-out entry #12 of
 [`2026-09-16-extension-settings-rollout-inventory.md`](2026-09-16-extension-settings-rollout-inventory.md);
@@ -25,9 +28,14 @@ than the package's own defaults.
 
 ## Research findings (source-verified, v0.29.0)
 
-- Config dir resolution (`utils.ts getWebSearchConfigDir`):
-  `PI_CODING_AGENT_DIR` > `$XDG_CONFIG_HOME/pi/web-search.json` (only if the
-  file exists there) > `~/.pi/agent`. File: `web-search.json`.
+- Config dir resolution (`utils.ts getWebSearchConfigDir`, re-read at
+  pi-web-access 0.30.0): `PI_CODING_AGENT_DIR` 优先；设置 `XDG_CONFIG_HOME`
+  时按 `$XDG_CONFIG_HOME/pi/web-search.json`（存在）→ legacy
+  `~/.pi/web-search.json`（存在）→ 以 XDG 目录作为新配置写入目标；未设置
+  `XDG_CONFIG_HOME` 时按 `~/.pi/agent/web-search.json`（存在）→ legacy
+  `~/.pi/web-search.json`（存在）→ 以 agent 目录作为新配置写入目标。文件名
+  一律 `web-search.json`。**GUI 必须走同一条链**：写到别的路径时保存会静默
+  不生效，并在 legacy 文件存在时把运行时仍在用的那份遮蔽掉。
 - **The file is a credential store** — the package's own comment: "its own
   text is the secret" (their JSON parse errors deliberately avoid quoting
   file text back). Consequence for Picot: the get op must never return full
@@ -39,9 +47,10 @@ than the package's own defaults.
     serpapiApiKey, xaiApiKey, valyuApiKey, anysearchApiKey, datalabApiKey,
     firecrawlApiKey` (+ per-provider baseUrls where present, e.g.
     `exaBaseUrl`).
-  - Endpoint credentials: `searxng` (endpoint + username + password),
-    `crawl4ai` (baseUrl + token), `brightdata` (key + serpZone +
-    unblocker zone).
+  - Endpoint credentials（扁平键名，与上面同层）: `searxngBaseUrl`、
+    `searxngHeaders`（`Record<string, string>`，v1 不渲染）、
+    `crawl4aiBaseUrl`、`crawl4aiApiToken`、`brightdataApiKey`、
+    `brightdataSerpZone`、`brightdataUnlockerZone`。
   - Non-secrets: `proxy` (URL), `openaiResponsesUrl`,
     `allowBrowserCookies` (bool; env `PI_ALLOW_BROWSER_COOKIES`),
     `image.enabled` (bool), `searchRouting` (`providers` ordered list,
@@ -50,7 +59,8 @@ than the package's own defaults.
     `fetch.answerModel`.
   - Advanced, NOT in v1: `authFetch` profiles, curator/local-curator
     network blocks.
-- Env parallels exist per provider (`SERPAPI_KEY`, `XAI_API_KEY`,
+- Env parallels exist per provider (`SERPAPI_KEY`, `SEARCH1API_KEY`,
+  `XAI_API_KEY`,
   `MISTRAL_API_KEY`, `VALYU_API_KEY`, `ANYSEARCH_API_KEY`,
   `DATALAB_API_KEY`, …) — `hasCredentialSource` checks config > env; an env
   key present shows a badge, does not disable the row (config is still
@@ -77,10 +87,13 @@ than the package's own defaults.
 
 - `webaccess.config.get` → `{ fields: Record<key, { configured, preview? }>,
   nonSecrets, routing, envKeyed: string[], invalid?: { reason } }`.
-- `webaccess.config.set` → `{ key, value | null }` single-key write-through
-  (null clears, gated by confirm semantics client-side); preserve-unknowns;
-  atomic write, 0600; non-secret keys validated by type (URL, bool, enum
-  lists).
+- `webaccess.config.set` → `{ key, value | null }` single-key write-through,
+  or `{ entries: [{ key, value }, …] }` for a batch (null clears, gated by
+  confirm semantics client-side); preserve-unknowns; atomic write, 0600;
+  non-secret keys validated by type (URL, bool, enum lists). `entries` exists
+  for paired fields: `fetch.answerProvider` + `fetch.answerModel` land in one
+  write, and a write that would leave only one half is rejected (the package
+  throws on such a file).
 
 ### Renderer
 
@@ -97,9 +110,11 @@ saved/saveFailed).
 
 ## Verification
 
-- Op tests: three-tier dir resolution; masked get (no full key in payload —
-  assert by property scan); single-key set; clear path; URL/enum rejects;
-  unknown preserved; 0600; invalid-file read-only error.
+- Op tests (`extensions/extension-settings.test.ts`): 目录解析四级
+  （explicit / XDG / legacy / agent）；masked get（payload 属性扫描里不出现
+  完整 key）；整体键名与包一致（`crawl4ai.token` 之类必须被拒）；单键 set；
+  clear；`entries` 成对写入与「只写一半」拒绝；URL/enum/bool 类型拒绝；
+  未知键保留；0600；invalid 文件只读报错；env 徽章走显式映射。
 - Renderer tests: masked rows render status not values; clear confirm flow;
   routing list edits produce ordered payloads; answer-model picker parity
   with advisor tests.

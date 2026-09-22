@@ -1,6 +1,11 @@
 # rpiv-todo Extension Settings Design
 
-**Status:** Draft — awaiting Dr. Lin's grilling (open decisions below). Not implemented.
+**Status:** Implemented 2026-09-21 per the recommendation column (Dr. Lin
+goal directive); spec tracks code. Implementation corrections: ① the
+installed `@juicesharp/rpiv-config` resolver is plain `HOME/.config/<pkg>`
+— **not** XDG-aware — so the shared host helper (`src-tauri/src/rpiv_config.rs`)
+matches the package exactly instead of the advisor XDG path; ② ops are
+`get_todo_config`/`set_todo_config` (host plane, landing owners included).
 **Date:** 2026-09-16
 **Provenance:** roll-out entry #1 of
 [`2026-09-16-extension-settings-rollout-inventory.md`](2026-09-16-extension-settings-rollout-inventory.md).
