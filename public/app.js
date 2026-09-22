@@ -31,6 +31,7 @@ import {
   TERMINAL_FONT_SIZE_PX,
   TERMINAL_THEME_MODES,
 } from "./appearance-preferences.js";
+import { createBackgroundSessionFiles } from "./background-session-files.js";
 import { setEditorHighlightTheme } from "./code-editor.js";
 import { createCompactCoordinator } from "./compact-coordinator.js";
 import { setupComposerCommandMenu } from "./composer-command-menu.js";
@@ -136,6 +137,7 @@ import {
 } from "./terminal-tab.js";
 import { applyTheme, getCurrentTheme, themes } from "./themes.js";
 import { createHostFileMentionSearch, setupAtFileMention } from "./ui/at-file-mention.js";
+import { BackgroundQuestionnaireStore } from "./ui/background-questionnaire-store.js";
 import { createTriggerRouter } from "./ui/composer-triggers.js";
 import { repaintContextViz, setupContextViz } from "./ui/context-viz.js";
 import { createConversationNav } from "./ui/conversation-nav.js";
@@ -683,6 +685,9 @@ const questionnaireCard = new QuestionnaireCard({
   wsClient,
   confirmAbandon: ({ title, message }) => dialogHandler.showLocalConfirm({ title, message }),
 });
+// Backgrounded runtimes wait forever on extension_ui_response; park their
+// questionnaire state here so the wait stays answerable after the user returns.
+const backgroundQuestionnaires = new BackgroundQuestionnaireStore();
 
 function clearConversationRenderers() {
   // P5.1: the registry is session-scoped state; a view reset drops it so the
@@ -887,6 +892,7 @@ setupMessagesInsets({
 
 // Ambient extension widgets are mirrored into panels owned by their Pi runtime.
 const widgetMirrorRegistry = createWidgetMirrorRegistry({ container: inputAreaEl });
+const backgroundSessionFiles = createBackgroundSessionFiles();
 widgetMirrorRegistry.registerRenderer({
   widgetKey: "rpiv-todos",
   toolNames: ["todo"],
@@ -2636,13 +2642,24 @@ function handleRPCEvent(event) {
       eventTarget.sessionId === currentTarget.sessionId &&
       (!eventTarget.instanceId || eventTarget.instanceId === currentTarget.instanceId));
   const eventSessionFile =
-    event?.sessionFile ||
-    (eventBelongsToCurrentRuntime ? mirrorActiveSessionFile : eventTarget?.sessionId) ||
-    null;
+    event?.sessionFile || (eventBelongsToCurrentRuntime ? mirrorActiveSessionFile : null) || null;
   const eventRuntimeId = runtimeIdForTarget(eventTarget || currentTarget);
   if (!eventBelongsToCurrentRuntime) {
-    handleBackgroundRPCEvent(eventSessionFile, event, eventRuntimeId);
+    // Sidebar rows are keyed by the jsonl sessionFile, which pi's native
+    // events never carry — resolve it from the remembered instance/mirror
+    // mapping or the green dot keyed in the foreground can never be cleared.
+    handleBackgroundRPCEvent(
+      event?.sessionFile || backgroundSessionFiles.resolve(eventTarget),
+      event,
+      eventRuntimeId,
+    );
     return;
+  }
+  if (eventTarget?.sessionId && mirrorActiveSessionFile) {
+    // Learn the mapping while this runtime is foreground so a later
+    // background agent_end can find the same row the foreground
+    // agent_start lit up.
+    backgroundSessionFiles.remember(eventTarget, mirrorActiveSessionFile);
   }
 
   // While user previews a different session, suppress live rendering so
@@ -2742,7 +2759,15 @@ function handleBackgroundRPCEvent(sessionFile, event, runtimeId) {
     case "message_end":
       sidebar.markUnread(sessionFile);
       break;
+    case "tool_execution_start":
+      // ask_user_question in a background session parks its card state; the
+      // walker's requests queue until the user returns to that session.
+      backgroundQuestionnaires.parkToolStart(sessionFile, runtimeId, event);
+      break;
     case "tool_execution_end":
+      // The parked questionnaire's tool finished elsewhere (answered, aborted,
+      // or errored): its parked entry must not replay against a dead call.
+      backgroundQuestionnaires.handleToolEnd(sessionFile, runtimeId, event.toolCallId);
       if (!event.isError) {
         widgetMirrorRegistry.handleToolResult(event.toolName, event.result, runtimeId);
       }
@@ -2752,6 +2777,10 @@ function handleBackgroundRPCEvent(sessionFile, event, runtimeId) {
         widgetMirrorRegistry.handleWidgetRequest(event, runtimeId);
       } else if (event.method === "notify") {
         widgetMirrorRegistry.handleCommandNotify(event.message, runtimeId);
+      } else if (backgroundQuestionnaires.queueRequest(sessionFile, runtimeId, event)) {
+        // Blocking walker request from a background runtime: queue it and
+        // badge the session instead of popping a modal for the wrong session.
+        if (sessionFile) sidebar.markUnread(sessionFile);
       }
       break;
   }
@@ -3696,6 +3725,7 @@ function subscribeToLiveRuntimeTargets() {
     .then((data) => {
       for (const instance of data?.instances || []) {
         if (!instance?.workspaceId || !instance?.sessionId || !instance?.instanceId) continue;
+        backgroundSessionFiles.rememberInstance(instance);
         wsClient.subscribeRuntimeTarget(instance);
         wsClient.requestRuntimeSnapshot(instance);
       }
@@ -5130,7 +5160,26 @@ function snapshotReportedProfile(reported) {
   });
 }
 
+/**
+ * Park the visible questionnaire before a session switch clears it. The
+ * previous runtime keeps waiting on extension_ui_response; parkActive hands
+ * its card state to the per-session store so restore can rebuild it when the
+ * user returns. Keyed by the leaving session's file, falling back to its
+ * runtime id when no mirror sync has landed yet.
+ */
+function parkActiveQuestionnaire() {
+  if (!questionnaireCard.isActive()) return;
+  const previousFile = mirrorActiveSessionFile || sidebar.activeSessionFile || null;
+  const previousRuntimeId = runtimeIdForTarget(wsClient.getRuntimeTarget());
+  backgroundQuestionnaires.parkActive(
+    previousFile,
+    previousRuntimeId,
+    questionnaireCard.captureAndClear(),
+  );
+}
+
 async function resetUiForNewSession() {
+  parkActiveQuestionnaire();
   questionnaireCard.handleSessionSwitch();
   pendingNewSessionPreviousFile = mirrorActiveSessionFile || sidebar.activeSessionFile || null;
   state.reset();
@@ -5282,6 +5331,7 @@ async function handleSessionSelectImpl(session, project) {
   // entries) we don't want the prior turn's list still pinned in the composer.
   // Clear the previous runtime's ambient panels before loading the new history.
   widgetMirrorRegistry.handleSessionSwitch([]);
+  parkActiveQuestionnaire();
   questionnaireCard.handleSessionSwitch();
   // Pending write-tool paths belong to the previous session's run; don't
   // let a stale toolCallId surface another session's file.
@@ -5414,6 +5464,29 @@ async function handleSessionSelectImpl(session, project) {
 // Mirror mode sync
 // ═══════════════════════════════════════
 
+/**
+ * Rebuild a parked background questionnaire now that its session is the
+ * foreground runtime. Card state (or the parked tool args) recreates the
+ * card, then queued walker requests replay in arrival order — an
+ * already-submitted card drains them immediately.
+ */
+function restoreParkedQuestionnaire(sessionFile, runtimeId) {
+  const entry = backgroundQuestionnaires.take(sessionFile, runtimeId);
+  if (!entry) return;
+  if (entry.cardState) {
+    questionnaireCard.restore(entry.cardState);
+  } else if (Array.isArray(entry.questions) && entry.questions.length > 0) {
+    questionnaireCard.start({
+      toolCallId: entry.toolCallId,
+      toolName: "ask_user_question",
+      args: { questions: entry.questions },
+    });
+  }
+  for (const request of entry.queuedRequests) {
+    handleExtensionUIRequest(request, runtimeId);
+  }
+}
+
 function handleMirrorSync(data) {
   logSessionRoute("mirrorSync:received", {
     sessionFile: data.sessionFile,
@@ -5464,6 +5537,8 @@ function handleMirrorSync(data) {
     sidebar.setActive(receivedSessionFile);
     restoreSessionUiState(receivedSessionFile);
     resolveAndApplyFocus();
+    // The parked questionnaire (if any) belongs to exactly this session/runtime.
+    restoreParkedQuestionnaire(receivedSessionFile, snapshotRuntimeId);
   }
   if (!appliedForegroundSession) {
     logSessionRoute("mirrorSync:ignored-background", {
