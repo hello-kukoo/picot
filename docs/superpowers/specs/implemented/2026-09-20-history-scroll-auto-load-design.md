@@ -1,6 +1,6 @@
 # History gate 滚动自动加载
 
-**状态：** Draft — 待 Dr. Lin 评审
+**状态：** Implemented — 2026-09-22（模块 `public/ui/history-gate-auto-reveal.js` + app.js 接线 + 回底按钮显隐；可选项〔按钮弱化样式、fade 过渡〕按 spec 默认未做；长 session 手测待 Dr. Lin 走查）
 **日期：** 2026-09-20
 **参照：** Paseo `packages/app/src/agent-stream/history-start-pagination.ts`（滚动触发状态机）、
 `use-stream-history-window.ts`（本地揭示/远端加载分层）、`view.tsx:1138-1155` +

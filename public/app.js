@@ -143,6 +143,7 @@ import { repaintContextViz, setupContextViz } from "./ui/context-viz.js";
 import { createConversationNav } from "./ui/conversation-nav.js";
 import { DialogHandler } from "./ui/dialogs.js";
 import { createHeaderStatusBar } from "./ui/header-status-bar.js";
+import { disconnectGateAutoReveal, observeGateAutoReveal } from "./ui/history-gate-auto-reveal.js";
 import { initImageLightbox } from "./ui/image-lightbox.js";
 import { setupMessagesInsets } from "./ui/layout-insets.js";
 import { MessageRenderer } from "./ui/message-renderer.js";
@@ -2412,6 +2413,9 @@ messagesContainer.addEventListener("scroll", () => {
     threshold;
   isScrolledUp = !atBottom;
   if (atBottom) scrollBottomBadge.classList.add("hidden");
+  // The jump-to-bottom button is position-driven only (Paseo semantics);
+  // new messages stay the badge's job.
+  scrollBottomBtn?.classList.toggle("hidden", atBottom);
 });
 window.addEventListener("resize", () => convNav.refresh());
 
@@ -5997,6 +6001,7 @@ function updateHistoryGateControl() {
   if (!gate?.control?.isConnected) return;
   const remaining = gate.turnCount - gate.revealedCount;
   if (remaining <= 0) {
+    disconnectGateAutoReveal();
     gate.control.remove();
     return;
   }
@@ -6331,9 +6336,14 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
       onAll: mountAll,
     });
     messagesElement.appendChild(historyGate.control);
+    observeGateAutoReveal(historyGate.control, messagesElement, () => {
+      mountOlder(HISTORY_REVEAL_BATCH_TURNS);
+      return historyGate.turnCount - historyGate.revealedCount;
+    });
   } else {
     historyGate.control = null;
     historyGate.loadToken += 1; // cancel any in-flight load-all batches
+    disconnectGateAutoReveal();
   }
   historyGate.revealedCount = searchRender
     ? historyGate.revealedCount // a search render never shrinks the reveal

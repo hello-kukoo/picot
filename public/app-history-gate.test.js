@@ -103,6 +103,30 @@ beforeEach(async () => {
 
     disconnect() {}
   };
+  globalThis.ResizeObserver = class {
+    observe() {}
+
+    disconnect() {}
+  };
+  // jsdom has no native IntersectionObserver; the auto-reveal gate uses it.
+  globalThis.IntersectionObserver = class {
+    static instances = [];
+    constructor(callback) {
+      this.callback = callback;
+      this.observed = [];
+      this.disconnected = false;
+      globalThis.IntersectionObserver.instances.push(this);
+    }
+    observe(target) {
+      this.observed.push(target);
+    }
+    disconnect() {
+      this.disconnected = true;
+    }
+    fire(isIntersecting, target = this.observed[0]) {
+      this.callback([{ isIntersecting, target }]);
+    }
+  };
   window.matchMedia = vi.fn(() => ({
     matches: false,
     addEventListener() {},
@@ -118,6 +142,7 @@ afterEach(() => {
   delete globalThis.fetch;
   delete globalThis.requestAnimationFrame;
   delete globalThis.ResizeObserver;
+  delete globalThis.IntersectionObserver;
 });
 
 const target = { workspaceId: "w1", sessionId: "s1", instanceId: "primary" };
@@ -399,4 +424,125 @@ test("turns revealed by the batch controls keep the user row above the answer", 
   messages.querySelector(".history-gate-all")?.click(); // Load all history
   await new Promise((resolve) => setTimeout(resolve, 120));
   assertTurnOrder();
+});
+
+test("auto-reveal mounts one batch per intersection and fills until the gate is exhausted", async () => {
+  const entries = makeTurnEntries(6);
+  let rafQueue = [];
+  globalThis.requestAnimationFrame = (callback) => {
+    rafQueue.push(callback);
+    return rafQueue.length;
+  };
+  await import("./app.js?history-gate-auto-reveal");
+  const ws = wsInstances.at(-1);
+  ws.onmessage({
+    data: JSON.stringify({
+      type: "runtime_snapshot",
+      protocolVersion: 2,
+      sequence: 1,
+      target,
+      state: {
+        pi: { sessionFile: "/pi/sessions/ar.jsonl", isStreaming: false },
+        messages: entries.map((entry) => entry.message),
+      },
+    }),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const messages = document.getElementById("messages");
+  const gate = messages.querySelector(".history-gate");
+  expect(gate).not.toBeNull();
+  expect([...messages.querySelectorAll(".message.user")]).toHaveLength(2);
+
+  const observer = globalThis.IntersectionObserver.instances.at(-1);
+  expect(observer.observed[0]).toBe(gate);
+
+  // One intersection reveals exactly one batch …
+  observer.fire(true);
+  expect([...messages.querySelectorAll(".message.user")]).toHaveLength(4);
+  expect(messages.querySelector(".history-gate").textContent).toContain("2");
+
+  // … and while the control still intersects, one rAF frame continues the
+  // chain until the gate is exhausted, removing the control.
+  const frame = rafQueue.splice(0);
+  rafQueue = [];
+  for (const callback of frame) callback();
+  expect([...messages.querySelectorAll(".message.user")]).toHaveLength(6);
+  expect(messages.querySelector(".history-gate")).toBeNull();
+  expect(observer.disconnected).toBe(true);
+});
+
+test("a search render disconnects the auto-reveal observer without re-observing", async () => {
+  const entries = makeTurnEntries(5);
+  await import("./app.js?history-gate-search-no-observe");
+  const ws = wsInstances.at(-1);
+  const snapshot = (messages, seq) =>
+    ws.onmessage({
+      data: JSON.stringify({
+        type: "runtime_snapshot",
+        protocolVersion: 2,
+        sequence: seq,
+        target,
+        state: {
+          pi: { sessionFile: "/pi/sessions/sn.jsonl", isStreaming: false },
+          messages,
+        },
+      }),
+    });
+  snapshot(
+    entries.map((e) => e.message),
+    1,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  const observer = globalThis.IntersectionObserver.instances.at(-1);
+  expect(observer).toBeDefined();
+  expect(observer.observed.length).toBe(1);
+  const instancesBefore = globalThis.IntersectionObserver.instances.length;
+
+  const searchInput = document.getElementById("session-search-input");
+  searchInput.value = "1";
+  searchInput.dispatchEvent(new Event("input", { bubbles: true }));
+  snapshot(
+    entries.map((e) => e.message),
+    2,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  // No new observer during the search render; the old one is cancelled.
+  expect(globalThis.IntersectionObserver.instances).toHaveLength(instancesBefore);
+  expect(observer.disconnected).toBe(true);
+});
+
+test("the jump-to-bottom button appears when scrolled up and hides at the bottom", async () => {
+  await import("./app.js?scroll-bottom-btn");
+  const ws = wsInstances.at(-1);
+  ws.onmessage({
+    data: JSON.stringify({
+      type: "runtime_snapshot",
+      protocolVersion: 2,
+      sequence: 1,
+      target,
+      state: {
+        pi: { sessionFile: "/pi/sessions/sb.jsonl", isStreaming: false },
+        messages: [{ role: "user", content: "hello" }],
+      },
+    }),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  const messages = document.getElementById("messages");
+  const button = document.getElementById("scroll-bottom-btn");
+  expect(button.classList.contains("hidden")).toBe(true);
+
+  // Fake scroll geometry: content far taller than the viewport, scrolled up.
+  Object.defineProperty(messages, "scrollHeight", { configurable: true, value: 3000 });
+  Object.defineProperty(messages, "clientHeight", { configurable: true, value: 800 });
+  messages.scrollTop = 0;
+  messages.dispatchEvent(new Event("scroll"));
+  expect(button.classList.contains("hidden")).toBe(false);
+
+  // Back at the bottom: the button hides again (badge logic untouched).
+  messages.scrollTop = 2200;
+  messages.dispatchEvent(new Event("scroll"));
+  expect(button.classList.contains("hidden")).toBe(true);
 });
