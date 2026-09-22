@@ -671,7 +671,7 @@
   "settings": {
     "title": "Ajustes",
     "general": "General",
-    "extensions": "Extensiones",
+    "extensions": "Paquetes de extensión",
     "extensionAdvisor": {
       "title": "Advisor",
       "modelLabel": "Modelo revisor",

@@ -671,7 +671,7 @@
   "settings": {
     "title": "Settings",
     "general": "General",
-    "extensions": "Extensions",
+    "extensions": "Extension packages",
     "extensionAdvisor": {
       "title": "Advisor",
       "modelLabel": "Reviewer model",

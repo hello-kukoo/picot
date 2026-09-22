@@ -671,7 +671,7 @@
   "settings": {
     "title": "设置",
     "general": "通用",
-    "extensions": "扩展",
+    "extensions": "扩展包",
     "extensionAdvisor": {
       "title": "Advisor",
       "modelLabel": "审阅模型",

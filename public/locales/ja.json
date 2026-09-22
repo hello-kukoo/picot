@@ -671,7 +671,7 @@
   "settings": {
     "title": "設定",
     "general": "一般",
-    "extensions": "拡張機能",
+    "extensions": "拡張パッケージ",
     "extensionAdvisor": {
       "title": "Advisor",
       "modelLabel": "レビューモデル",

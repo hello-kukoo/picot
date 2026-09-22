@@ -80,9 +80,9 @@ describe("settings page split", () => {
       "general",
       "appearance",
       "models",
+      "extensions",
       "skills",
       "mcp",
-      "extensions",
       "configuration",
       "usage",
     ]);
