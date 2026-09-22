@@ -1,9 +1,9 @@
 # 浏览器面板与元素标注：源码调试 + Office 办公双场景
 
-**状态：** Draft — 待 Dr. Lin 拍板（三个待定项见 §9）
+**状态：** Approved — 2026-09-22 Dr. Lin 拍板三项（§9），待实施
 **日期：** 2026-09-22
 **参照：** Paseo `packages/app/src/desktop/browser/pane/`（浏览器 pane 全套）、`element-selector.electron.ts`（492 行选择器）、`attachments/types.ts::BrowserElementAttachment`；officecli 1.0.149 本机实测；Picot 既有 file-preview 面板与子进程基建。
-**演化关系：** 独立于 daemon/relay spec，可并行。与 `2026-09-17-anydoc-office-preview-design.md`（not-started）互补：本 spec 落地后 office 深度查看/编辑走浏览器面板，file-preview 保留快速静览；anydoc spec 若实施应重新定位。
+**演化关系：** 独立于 daemon/relay spec，可并行。与 `2026-09-17-anydoc-office-preview-design.md`（Approved 未实施）构成**升级流水线**：点击 office 文件先走 anydoc markdown 只读预览，preview 面板提供「内置浏览器打开」入口升级到本 spec 的 browser tab（officecli watch 渲染 + 标注闭环）。两 spec 独立实施、互不阻塞。
 
 ## 1. 问题与产品定位
 
@@ -70,10 +70,9 @@ Picot 双用户群：
 
 ## 4. Phase 1：浏览器 tab 容器
 
-### 4.1 UI 载体（推荐 A，待拍板）
+### 4.1 UI 载体（已拍板：file preview 区域）
 
-- **A（推荐）**：file-preview 面板新增 `browser` tab 类型。复用现有 tab 状态管理（打开/关闭/持久化/拖宽），改动最小；office 文件双击默认路由到 browser tab（设置项可切回旧渲染器）。面板可拖宽，需要时全屏化（后续增量）。
-- **B（二期）**：主区分栏 pane（Paseo workspace-tab 形态）。UI 大改，等 A 验证后演进。
+file-preview 面板新增 `browser` tab 类型。复用现有 tab 状态管理（打开/关闭/持久化/拖宽），改动最小。主区分栏 pane（Paseo workspace-tab 形态）留待验证后作为二期演进。
 
 ### 4.2 webview 形态
 
@@ -86,9 +85,13 @@ Tauri 无 DOM 内嵌 webview；用 `tauri::webview::WebviewBuilder` 在主窗口
 - `on_new_window`：Deny（一期；target=_blank 显示提示）。
 - 一期 URL 白名单：officecli watch URL（host 分配的 loopback:port）+ 用户显式输入的 URL。无历史/书签。
 
-### 4.4 office 文件打开流
+### 4.4 office 文件打开流（已拍板：preview → 按钮升级）
 
-file-browser / 标注入口打开 office 文件 → host `officecli watch <file> --port <分配>`（child_supervision 注册）→ 解析 stdout `Watch: http://…` → browser tab 加载。文件关闭/tab 关闭 → `officecli unwatch`；崩溃 → 面板错误态 + 一键重启。多文件多 watch 实例（每文件独立端口，从空闲端口池分配）。
+1. 点击 office 文件 → **anydoc markdown 只读预览**（2026-09-17 spec 的路径，不依赖 officecli，快、零外部进程）。
+2. 预览面板工具条增加按钮/菜单项**「内置浏览器打开」**：host `officecli watch <file> --port <分配>`（child_supervision 注册）→ 解析 stdout `Watch: http://…` → browser tab 加载并切前台。无 officecli 时按钮置灰 + tooltip 提示安装。
+3. 文件关闭/tab 关闭 → `officecli unwatch`；崩溃 → 面板错误态 + 一键重启。多文件多 watch 实例（每文件独立端口，从空闲端口池分配）。
+
+入口分工：anydoc = 快速静览（零依赖、十格式）；browser tab = 深度场景（保真渲染 + 标注 + agent 闭环，需 officecli，格式以 officecli 支持面为准——实施前对 xlsx/pptx 各做一轮冒烟）。
 
 ## 5. Phase 2：元素选择与标注
 
@@ -156,15 +159,15 @@ officecli 渲染页必命中 `docPath`；普通网页为 null。React fiber 源�
 ## 8. 验收条件
 
 - 工程师：浏览器 tab 打开 localhost dev server，选中元素 + comment 发给 agent，附件含完整定位上下文（React 页含源码位置）。
-- 员工：双击 docx → browser tab 呈现；选中段落 + comment「字号改大」→ agent 执行 officecli set → 预览数秒内自动刷新呈现结果，徽标仍在。
+- 员工：点击 docx → markdown 预览即现；「内置浏览器打开」→ 保真渲染；选中段落 + comment「字号改大」→ agent 执行 officecli set → 预览数秒内自动刷新呈现结果，徽标仍在。
 - 外部页面无法以任何方式触达 host 能力（导航回跳被拒）。
 - 旧 file-preview 静览路径不受影响。
 
-## 9. 待拍板项
+## 9. 已拍板项（2026-09-22 Dr. Lin）
 
-1. **UI 载体**：A 右侧面板 browser tab（推荐，最小改动）vs B 主区分栏 pane。
-2. **office 文件默认路由**：双击 office 文件默认开 browser tab（推荐，需 officecli 存在；无 officecli 时回退旧渲染器 + 提示）？
-3. **一期范围**：普通网页标注是否随 office 场景同期交付（脚本同一套，仅 formatted 分支不同——推荐同期）。
+1. **UI 载体 = file preview 区域**：browser tab 先放右侧面板。
+2. **office 入口 = preview → 按钮升级**：点击先 anydoc preview，preview panel 加「内置浏览器打开」按钮/菜单项（§4.4）。
+3. **普通网页标注同期交付**：与 office 场景同一套脚本，仅 formatted 分支不同。
 
 ## 10. 风险
 
