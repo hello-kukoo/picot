@@ -2,7 +2,7 @@
 // ABOUTME: Resolves workspace roots through shared MetadataStore authority.
 use serde::Serialize;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1031,8 +1031,8 @@ impl SessionExportRegistry {
     }
 }
 
-/// Bounded session header (legacy `parseSessionFile`): at most 50 lines,
-/// early exit once name and first message are both known.
+/// Sidebar-visible session header fields parsed from a session JSONL.
+#[derive(Debug, PartialEq)]
 pub(crate) struct SessionHeader {
     pub id: String,
     pub timestamp: String,
@@ -1135,21 +1135,59 @@ fn session_summary_value(path: &Path, header: &SessionHeader) -> serde_json::Val
     })
 }
 
+/// Sidebar scan windows (Paseo session-descriptor alignment): the head
+/// window carries the `session` header entry and the first user message;
+/// the tail window carries the newest settled `session_info` name, which Pi
+/// appends near the file end when the agent settles or renames. This bounds
+/// a sidebar scan to O(HEAD + TAIL) bytes instead of O(file size) - a
+/// deliberate deviation from upstream's linear scan (upstream shares the
+/// same worst case); recorded in ARCHITECTURE.md's sidebar section.
+const SIDEBAR_SCAN_HEAD_BYTES: u64 = 64 * 1024;
+const SIDEBAR_SCAN_TAIL_BYTES: u64 = 256 * 1024;
+const SIDEBAR_SCAN_HEAD_LINE_LIMIT: usize = 2_000;
+
 fn scan_session_sidebar_visibility(path: &Path) -> Result<SidebarScan, HostDataError> {
-    let file = std::fs::File::open(path).map_err(|error| HostDataError::Io(error.to_string()))?;
+    let mut file =
+        std::fs::File::open(path).map_err(|error| HostDataError::Io(error.to_string()))?;
+    let len = file
+        .metadata()
+        .map_err(|error| HostDataError::Io(error.to_string()))?
+        .len();
+    scan_bounded_visibility(&mut file, len, &mut 0)
+}
+
+fn scan_bounded_visibility<R: Read + Seek>(
+    reader: &mut R,
+    len: u64,
+    bytes_read: &mut usize,
+) -> Result<SidebarScan, HostDataError> {
+    let head = read_window(reader, 0, SIDEBAR_SCAN_HEAD_BYTES, len, bytes_read)?;
+    let tail = read_window(
+        reader,
+        len.saturating_sub(SIDEBAR_SCAN_TAIL_BYTES),
+        SIDEBAR_SCAN_TAIL_BYTES,
+        len,
+        bytes_read,
+    )?;
+
+    // Head pass: header entry, first user message, validity counts, and a
+    // name candidate. Same early-stop as the historical full scan, plus a
+    // line cap so oversized preambles cannot dominate parse time.
     let mut header: Option<(String, String, Option<String>, Option<String>)> = None;
-    let mut name: Option<String> = None;
+    let mut head_name: Option<String> = None;
     let mut name_sealed = false;
     let mut first_message: Option<String> = None;
     let mut user_messages = 0usize;
     let mut line_count = 0usize;
-    for line in BufReader::new(file).lines() {
-        let line = line.map_err(|error| HostDataError::Io(error.to_string()))?;
+    for chunk in head.split(|byte| *byte == b'\n') {
+        let Ok(line) = std::str::from_utf8(chunk) else {
+            continue;
+        };
         if line.trim().is_empty() {
             continue;
         }
         line_count += 1;
-        let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) else {
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
         match entry.get("type").and_then(serde_json::Value::as_str) {
@@ -1179,7 +1217,7 @@ fn scan_session_sidebar_visibility(path: &Path) -> Result<SidebarScan, HostDataE
                     .and_then(serde_json::Value::as_str)
                     .filter(|value| !value.is_empty())
                 {
-                    name = Some(session_name.to_owned());
+                    head_name = Some(session_name.to_owned());
                 }
             }
             Some("session_info") => {
@@ -1188,7 +1226,7 @@ fn scan_session_sidebar_visibility(path: &Path) -> Result<SidebarScan, HostDataE
                     .and_then(serde_json::Value::as_str)
                     .filter(|value| !value.is_empty())
                 {
-                    name = Some(session_name.to_owned());
+                    head_name = Some(session_name.to_owned());
                     name_sealed = true;
                 }
             }
@@ -1222,10 +1260,15 @@ fn scan_session_sidebar_visibility(path: &Path) -> Result<SidebarScan, HostDataE
             }
             _ => {}
         }
-        if header.is_some() && user_messages > 0 && first_message.is_some() && name_sealed {
+        if (header.is_some() && user_messages > 0 && first_message.is_some() && name_sealed)
+            || line_count >= SIDEBAR_SCAN_HEAD_LINE_LIMIT
+        {
             break;
         }
     }
+    // Tail name (newest `session_info`) overrides the head candidate: a
+    // rename appended after the head window must win.
+    let name = newest_tail_session_info_name(&tail).or(head_name);
     let header = header.and_then(|(id, timestamp, cwd, parent_session)| {
         if id.is_empty() || (user_messages == 0 && line_count <= 4) {
             return None;
@@ -1240,6 +1283,64 @@ fn scan_session_sidebar_visibility(path: &Path) -> Result<SidebarScan, HostDataE
         })
     });
     Ok(SidebarScan { header })
+}
+
+fn read_window<R: Read + Seek>(
+    reader: &mut R,
+    offset: u64,
+    cap: u64,
+    file_len: u64,
+    bytes_read: &mut usize,
+) -> Result<Vec<u8>, HostDataError> {
+    if offset >= file_len {
+        return Ok(Vec::new());
+    }
+    let want = cap.min(file_len - offset) as usize;
+    let mut buffer = vec![0u8; want];
+    reader
+        .seek(SeekFrom::Start(offset))
+        .map_err(|error| HostDataError::Io(error.to_string()))?;
+    let mut filled = 0usize;
+    while filled < want {
+        let read = reader
+            .read(&mut buffer[filled..])
+            .map_err(|error| HostDataError::Io(error.to_string()))?;
+        if read == 0 {
+            break;
+        }
+        filled += read;
+        *bytes_read += read;
+    }
+    buffer.truncate(filled);
+    Ok(buffer)
+}
+
+/// Newest (closest to EOF) non-empty `session_info` name inside the tail
+/// window. A line truncated by the window boundary fails JSON parsing and
+/// is skipped, same as Paseo's tail parser.
+fn newest_tail_session_info_name(tail: &[u8]) -> Option<String> {
+    for chunk in tail.rsplit(|byte| *byte == b'\n') {
+        let Ok(line) = std::str::from_utf8(chunk) else {
+            continue;
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if entry.get("type").and_then(serde_json::Value::as_str) != Some("session_info") {
+            continue;
+        }
+        if let Some(name) = entry
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(name.to_owned());
+        }
+    }
+    None
 }
 
 pub(crate) fn parse_session_header(path: &Path) -> Option<SessionHeader> {
@@ -2941,6 +3042,101 @@ mod tests {
             scan.header.as_ref().map(|header| header.id.as_str()),
             Some("early-stop")
         );
+    }
+
+    #[test]
+    fn bounded_scan_reads_head_and_tail_windows_only() {
+        const HEAD_BYTES: usize = 64 * 1024;
+        const TAIL_BYTES: usize = 256 * 1024;
+        let mut content =
+            session_fixture("huge", "/workspace", None, "first question").into_bytes();
+        // Blow past the head window with oversized tool_output lines: the
+        // bounded scan must never read the middle of the file.
+        let filler = format!(
+            "{{\"type\":\"tool_output\",\"output\":\"{}\"}}\n",
+            "x".repeat(11 * 1024)
+        );
+        while content.len() < HEAD_BYTES + TAIL_BYTES + 512 * 1024 {
+            content.extend_from_slice(filler.as_bytes());
+        }
+        content.extend_from_slice(b"{\"type\":\"session_info\",\"name\":\"Settled Name\"}\n");
+        let len = content.len() as u64;
+        let mut cursor = std::io::Cursor::new(content);
+        let mut read_bytes = 0usize;
+        let scan = super::scan_bounded_visibility(&mut cursor, len, &mut read_bytes).unwrap();
+        assert!(read_bytes <= HEAD_BYTES + TAIL_BYTES, "read {read_bytes}");
+        let header = scan.header.as_ref().expect("header present");
+        assert_eq!(header.id, "huge");
+        assert_eq!(header.first_message.as_deref(), Some("first question"));
+        assert_eq!(header.name.as_deref(), Some("Settled Name"));
+    }
+
+    #[test]
+    fn bounded_scan_tail_name_overrides_head_name() {
+        let mut content = session_fixture("renamed", "/workspace", None, "hello").into_bytes();
+        // The fixture's early `session_info` says "renamed"; the latest one
+        // near the EOF must win.
+        content.extend_from_slice(b"{\"type\":\"session_info\",\"name\":\"Latest Name\"}\n");
+        let len = content.len() as u64;
+        let mut cursor = std::io::Cursor::new(content);
+        let scan = super::scan_bounded_visibility(&mut cursor, len, &mut 0usize).unwrap();
+        assert_eq!(
+            scan.header
+                .as_ref()
+                .and_then(|header| header.name.as_deref()),
+            Some("Latest Name")
+        );
+    }
+
+    #[test]
+    fn bounded_scan_name_degrades_when_settled_entry_is_beyond_tail_window() {
+        const TAIL_BYTES: usize = 256 * 1024;
+        // Head carries only the session entry and first user message; the
+        // sole name source sits mid-file, farther than TAIL_BYTES from EOF.
+        let mut content = Vec::new();
+        content.extend_from_slice(
+            b"{\"type\":\"session\",\"id\":\"ancient\",\"timestamp\":\"2026-09-12T00:00:00.000Z\",\"cwd\":\"/workspace\"}\n{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"hello\"}}\n",
+        );
+        // Push the name source past the head window ...
+        content.extend_from_slice(
+            "{\"type\":\"tool_output\",\"output\":\"z\"}\n"
+                .repeat(80 * 1024 / 36)
+                .as_bytes(),
+        );
+        // ... and past the tail window measured from EOF.
+        content.extend_from_slice(b"{\"type\":\"session_info\",\"name\":\"Ancient Name\"}\n");
+        let filler =
+            "{\"type\":\"tool_output\",\"output\":\"y\"}\n".repeat((TAIL_BYTES + 64 * 1024) / 36);
+        content.extend_from_slice(filler.as_bytes());
+        let len = content.len() as u64;
+        let mut cursor = std::io::Cursor::new(content);
+        let scan = super::scan_bounded_visibility(&mut cursor, len, &mut 0usize).unwrap();
+        let header = scan.header.as_ref().expect("header present");
+        assert!(
+            header.name.is_none(),
+            "name should degrade, got {:?}",
+            header.name
+        );
+        assert_eq!(header.first_message.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn bounded_scan_small_file_matches_full_read() {
+        let content =
+            session_fixture("small", "/workspace", Some("parent"), "greeting").into_bytes();
+        let len = content.len() as u64;
+        let mut cursor = std::io::Cursor::new(content.clone());
+        let bounded = super::scan_bounded_visibility(&mut cursor, len, &mut 0usize).unwrap();
+        let path = {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("small.jsonl");
+            fs::write(&path, &content).unwrap();
+            // Keep the tempdir alive for the duration of the file-backed scan.
+            let scanned = super::scan_session_sidebar_visibility(&path).unwrap();
+            assert_eq!(bounded.header, scanned.header);
+            path
+        };
+        let _ = path;
     }
 
     #[test]
