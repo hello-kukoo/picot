@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | [`implemented/`](implemented/) | 设计已批准 + 代码已落地 + 测试已通过 | 48 |
 | [`in-progress/`](in-progress/) | 设计已批准实施未完（部分代码已合入或 working tree 有进展） | 1 |
-| [`not-started/`](not-started/) | 设计草案或待评审，未实施 | 3 |
+| [`not-started/`](not-started/) | 设计草案或待评审，未实施 | 7 |
 | [`audits/`](../../audits/) | 审计记录（非设计 spec，不引入实现） | 1 |
 | [`superseded/`](superseded/) | 已被更新的 spec 取代，保留作历史参考 | 4 |
 | [`process-evidence/`](process-evidence/) | Native Runtime 迁移过程的证据 / CP 评审 / 闭环记录（不是设计规格） | 24 |
@@ -81,6 +81,10 @@
 | 📋 not-started | [2026-09-03-picot-external-terminal](not-started/2026-09-03-picot-external-terminal-design.md) | Path 2 拍板后暂停 |
 | 📋 not-started | [2026-09-17-anydoc-office-preview](not-started/2026-09-17-anydoc-office-preview-design.md) | 设计已批准，替换 MarkItDown；实施未启动 |
 | 📋 not-started | [2026-09-18-acp-external-agent-delegation](not-started/2026-09-18-acp-external-agent-delegation-design.md) | 设计草案，待 Dr. Lin 拍板 |
+| 📋 not-started | [2026-09-20-history-scroll-auto-load](not-started/2026-09-20-history-scroll-auto-load-design.md) | 参照 Paseo 滚动触发状态机 + gate；Draft 待 Dr. Lin 评审 |
+| 📋 not-started | [2026-09-20-persistent-daemon-relay](not-started/2026-09-20-persistent-daemon-relay-design.md) | 持久 daemon + relay 接入；Draft 待拍板（daemon 形态 + 公司服务器部署清单待定） |
+| 📋 not-started | [2026-09-20-session-resident-views](not-started/2026-09-20-session-resident-views-design.md) | 收窄为前端视图层（host 常驻已实现）；Draft 待 Dr. Lin 评审 |
+| 📋 not-started | [2026-09-20-session-scan-bounded-io](not-started/2026-09-20-session-scan-bounded-io-design.md) | head/tail 双窗口扫描；Draft 待 Dr. Lin 评审 |
 | ⛔ superseded | [2026-07-25-at-file-mention](superseded/2026-07-25-at-file-mention-design.md) | 由 [2026-09-19-file-mention-paths](implemented/2026-09-19-file-mention-paths-design.md) 扩展并部分取代 |
 | ⛔ superseded | [2026-07-26-markitdown-office-email-preview](superseded/2026-07-26-markitdown-office-email-preview-design.md) | 由 [2026-09-17-anydoc-office-preview](not-started/2026-09-17-anydoc-office-preview-design.md) 取代 |
 | ⛔ superseded | [2026-07-27-claude-skills-discovery](superseded/2026-07-27-claude-skills-discovery-design.md) | 由 [2026-08-07-composer-skill-discovery-and-execution-fixes](superseded/2026-08-07-composer-skill-discovery-and-execution-fixes.md) 取代 |
