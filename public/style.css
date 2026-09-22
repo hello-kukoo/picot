@@ -5770,6 +5770,15 @@ body.hide-thinking .thinking-block {
   box-shadow: var(--shadow-lg), var(--shadow-inset);
   animation: sheetIn 0.3s var(--ease);
 }
+/* Inline variant: the sheet's blur, width cap and centring belong to the modal
+   overlay, not to the transcript, so a card hosted by a turn drops them. */
+.turn-card-slot .sg-card {
+  width: 100%;
+  max-width: 100%;
+  padding: var(--space-4);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
 .sg-header {
   flex: 0 0 auto;
 }

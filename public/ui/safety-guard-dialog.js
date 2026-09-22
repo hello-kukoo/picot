@@ -2,6 +2,8 @@
 // ABOUTME: Intercepts the extension's marker-payload selects before the
 // ABOUTME: generic dialog (which long prompts stretch past the viewport) and
 // ABOUTME: answers on the same extension_ui_response channel as DialogHandler.
+// ABOUTME: Renders inline in the live turn that triggered it when the caller
+// ABOUTME: resolves a host, falling back to the modal container otherwise.
 
 import { t } from "../i18n.js";
 
@@ -25,15 +27,29 @@ function hintForChoice(choice) {
 }
 
 export class SafetyGuardDialog {
-  /** @param {{container?: HTMLElement|null, send?: ((message: object) => void)|null}} options */
-  constructor({ container = null, send = null } = {}) {
+  /**
+   * @param {{container?: HTMLElement|null, send?: ((message: object) => void)|null,
+   *   resolveHost?: ((request: object) => HTMLElement|null)|null}} options
+   *
+   * `resolveHost(request)` is consulted only for a request this dialog has
+   * already claimed, and returns the element to render the card into — the
+   * live turn's inline slot. Returning null (no live turn, replayed request,
+   * history) falls back to `container`, the modal.
+   */
+  constructor({ container = null, send = null, resolveHost = null } = {}) {
     this.container = container;
     this.send = send;
+    this.resolveHost = typeof resolveHost === "function" ? resolveHost : null;
     this.currentId = null;
     this.timeoutId = null;
+    this._card = null;
+    this._activeContainer = null;
     this._onKeyDown = (event) => {
       if (event.key === "Escape" && this.currentId !== null) {
         event.preventDefault();
+        // An inline card shares the page with the composer and the stop
+        // button; a bubbling Esc must not also fire their handlers.
+        event.stopPropagation();
         this.respond({ cancelled: true });
       }
     };
@@ -79,23 +95,47 @@ export class SafetyGuardDialog {
     }
   }
 
+  /**
+   * Re-home a still-pending card in the modal container. The caller invokes
+   * this when the turn that hosted the card is going away (session switch,
+   * transcript re-render, abort): the transcript clear would otherwise destroy
+   * the card while its runtime still waits on `extension_ui_response`. The
+   * card node moves, so its state and click handlers survive. Never answers.
+   */
+  rehost() {
+    if (!this._card || !this.container || this._activeContainer === this.container) return;
+    const previous = this._activeContainer;
+    this._activeContainer = this.container;
+    this._card.setAttribute("role", "dialog");
+    this.container.replaceChildren(this._card);
+    this.container.classList.remove("hidden");
+    previous?.replaceChildren();
+    previous?.classList.add("hidden");
+  }
+
   _teardown() {
     if (this.timeoutId) {
       clearTimeout(this.timeoutId);
       this.timeoutId = null;
     }
-    document.removeEventListener("keydown", this._onKeyDown);
-    this.container?.replaceChildren();
-    this.container?.classList.add("hidden");
+    this._activeContainer?.replaceChildren();
+    this._activeContainer?.classList.add("hidden");
+    this._activeContainer = null;
+    this._card = null;
     this.currentId = null;
   }
 
   _render(request, payload) {
     this._teardown();
     this.currentId = request.id ?? null;
+    // Inline when the caller resolves a host for this request (the live turn
+    // the approval belongs to); the modal container otherwise. An inline card
+    // is not modal, so it is a group, not a dialog.
+    const host = this.resolveHost?.(request) ?? null;
+    this._activeContainer = host ?? this.container;
     const card = document.createElement("div");
     card.className = "sg-card";
-    card.setAttribute("role", "dialog");
+    card.setAttribute("role", host ? "group" : "dialog");
     card.setAttribute("aria-label", t("settings.safetyGuardDialog.title"));
 
     const header = document.createElement("div");
@@ -133,9 +173,14 @@ export class SafetyGuardDialog {
     }
     card.append(actions);
 
-    this.container?.replaceChildren(card);
-    this.container?.classList.remove("hidden");
-    document.addEventListener("keydown", this._onKeyDown);
+    this._card = card;
+    this._activeContainer?.replaceChildren(card);
+    this._activeContainer?.classList.remove("hidden");
+    // Esc is scoped to the card, never to the document: an inline card must
+    // not hijack a page-level Esc (clearing the composer draft, stopping the
+    // run) into a silent Block. `first.focus()` below puts focus inside, so
+    // Esc works the moment the card appears.
+    card.addEventListener("keydown", this._onKeyDown);
     // Block stays the default focus exactly like the TUI (first option).
     const first = actions.querySelector(".sg-btn");
     first?.focus();

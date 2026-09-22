@@ -1,4 +1,4 @@
-// ABOUTME: Renders the complete ask-user-question form and preserves its local answers.
+// ABOUTME: Renders the ask-user-question form inline in the chat stream and preserves local answers.
 // ABOUTME: Drains the extension's sequential dialog requests after the user submits.
 
 import { onLocaleChange, t } from "../i18n.js";
@@ -90,15 +90,8 @@ export class QuestionnaireCard {
     this.confirming = false;
     this._destroyed = false;
 
-    this._onKeyDown = (event) => {
-      if (event.key === "Escape" && this.isActive() && !this.confirming) {
-        event.preventDefault();
-        void this.requestAbandon();
-      }
-    };
     this._onDisconnected = () => this.handleAbort();
     this._onAbortSignal = () => this.handleAbort();
-    document.addEventListener("keydown", this._onKeyDown);
     wsClient?.addEventListener?.("disconnected", this._onDisconnected);
     abortSignal?.addEventListener?.("abort", this._onAbortSignal, { once: true });
     this.unsubscribeLocaleChange = onLocaleChange(() => {
@@ -267,6 +260,8 @@ export class QuestionnaireCard {
     this.submitted = false;
     this.cancelRequested = false;
     this.confirming = false;
+    this._anchorObserver?.disconnect();
+    this._anchorObserver = null;
     this.overlay?.remove();
     this.overlay = null;
   }
@@ -281,7 +276,6 @@ export class QuestionnaireCard {
   destroy() {
     if (this._destroyed) return;
     this._destroyed = true;
-    document.removeEventListener("keydown", this._onKeyDown);
     this.wsClient?.removeEventListener?.("disconnected", this._onDisconnected);
     this.abortSignal?.removeEventListener?.("abort", this._onAbortSignal);
     this.unsubscribeLocaleChange?.();
@@ -365,10 +359,19 @@ export class QuestionnaireCard {
   render() {
     if (!this.container || !this.isActive()) return;
     this.overlay?.remove();
-    const overlay = createElement("div", "questionnaire-card-overlay");
-    overlay.setAttribute("role", "dialog");
-    overlay.setAttribute("aria-modal", "true");
+    const overlay = createElement("div", "questionnaire-inline");
+    overlay.setAttribute("role", "group");
     overlay.setAttribute("aria-label", t("questionnaire.title"));
+    // Inline cards sit in the stream flow: Esc abandons only when focus is
+    // inside the card, so page-level Esc (composer focus, stop button) is
+    // never hijacked by an open questionnaire.
+    overlay.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && this.isActive() && !this.confirming) {
+        event.preventDefault();
+        event.stopPropagation();
+        void this.requestAbandon();
+      }
+    });
     const card = createElement("div", "questionnaire-card");
     const heading = createElement("h2", "questionnaire-title", t("questionnaire.title"));
     card.appendChild(heading);
@@ -392,8 +395,26 @@ export class QuestionnaireCard {
     overlay.appendChild(card);
     this.container.appendChild(overlay);
     this.overlay = overlay;
+    this._watchStreamTail();
     const firstControl = overlay.querySelector("input, button");
     firstControl?.focus();
+  }
+
+  /**
+   * Keep the card anchored at the stream's tail: later appends (streaming
+   * messages, system rows) must never land below a pending questionnaire.
+   * One re-anchor per mutation batch; appendChild moves the node in place.
+   */
+  _watchStreamTail() {
+    this._anchorObserver?.disconnect();
+    if (typeof MutationObserver === "undefined") return;
+    this._anchorObserver = new MutationObserver(() => {
+      if (!this.overlay || !this.container) return;
+      if (this.container.lastElementChild !== this.overlay) {
+        this.container.appendChild(this.overlay);
+      }
+    });
+    this._anchorObserver.observe(this.container, { childList: true });
   }
 
   _renderQuestion(question, questionIndex) {
@@ -549,8 +570,4 @@ function appendSafeMarkdownNodes(target, source) {
     appendSafeMarkdownNodes(safe, node);
     target.appendChild(safe);
   }
-}
-
-export function isAskUserQuestionTool(event) {
-  return event?.toolName === TOOL_NAME && Array.isArray(parseArgs(event.args).questions);
 }

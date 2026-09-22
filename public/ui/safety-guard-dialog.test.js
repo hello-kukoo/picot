@@ -125,10 +125,16 @@ describe("interception", () => {
     expect(container.classList.contains("hidden")).toBe(true);
   });
 
-  it("Esc answers cancelled — the extension maps that to Block", () => {
+  it("Esc inside the card answers cancelled — the extension maps that to Block", () => {
     const { container, sent, dialog } = makeDialog();
     dialog.handleExtensionUIRequest({ method: "select", id: "req-2", message: markerMessage() });
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    // Esc is card-scoped: a page-level Esc (composer draft, stop button) must
+    // never be hijacked into a silent Block.
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(sent).toEqual([]);
+    container
+      .querySelector(".sg-card")
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(sent).toEqual([{ type: "extension_ui_response", id: "req-2", cancelled: true }]);
     expect(container.classList.contains("hidden")).toBe(true);
   });
@@ -181,5 +187,70 @@ describe("lifecycle", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("inline hosting", () => {
+  function makeInlineDialog() {
+    const built = makeDialog();
+    const host = document.createElement("div");
+    host.className = "turn-card-slot hidden";
+    document.body.append(host);
+    built.dialog.resolveHost = () => host;
+    return { ...built, host };
+  }
+
+  it("renders into the resolved host and leaves the modal container alone", () => {
+    const { container, host, sent, dialog } = makeInlineDialog();
+    const claimed = dialog.handleExtensionUIRequest({
+      method: "select",
+      id: "req-inline",
+      message: markerMessage(),
+    });
+    expect(claimed).toBe(true);
+    expect(host.querySelector(".sg-card")).not.toBeNull();
+    expect(host.classList.contains("hidden")).toBe(false);
+    // Inline is not modal: the card is a group, not a dialog.
+    expect(host.querySelector(".sg-card").getAttribute("role")).toBe("group");
+    expect(container.querySelector(".sg-card")).toBeNull();
+    expect(container.classList.contains("hidden")).toBe(true);
+
+    host.querySelector(".sg-btn").click();
+    expect(sent).toEqual([{ type: "extension_ui_response", id: "req-inline", value: "Block" }]);
+    expect(host.querySelector(".sg-card")).toBeNull();
+    expect(host.classList.contains("hidden")).toBe(true);
+  });
+
+  it("falls back to the modal container when no host is resolved", () => {
+    const { container, dialog } = makeDialog();
+    dialog.resolveHost = () => null;
+    dialog.handleExtensionUIRequest({ method: "select", id: "req-fb", message: markerMessage() });
+    expect(container.querySelector(".sg-card")).not.toBeNull();
+    expect(container.querySelector(".sg-card").getAttribute("role")).toBe("dialog");
+  });
+
+  it("rehost() moves a pending card to the modal container without answering", () => {
+    const { container, host, sent, dialog } = makeInlineDialog();
+    dialog.handleExtensionUIRequest({ method: "select", id: "req-move", message: markerMessage() });
+
+    dialog.rehost();
+
+    expect(host.querySelector(".sg-card")).toBeNull();
+    expect(host.classList.contains("hidden")).toBe(true);
+    expect(container.querySelector(".sg-card")).not.toBeNull();
+    expect(container.querySelector(".sg-card").getAttribute("role")).toBe("dialog");
+    // Re-homing is not an answer: the runtime keeps waiting.
+    expect(sent).toEqual([]);
+    expect(dialog.currentId).toBe("req-move");
+    // The moved card is still answerable.
+    container.querySelector(".sg-btn").click();
+    expect(sent).toEqual([{ type: "extension_ui_response", id: "req-move", value: "Block" }]);
+  });
+
+  it("rehost() is a no-op when nothing is pending", () => {
+    const { container, sent, dialog } = makeInlineDialog();
+    dialog.rehost();
+    expect(container.classList.contains("hidden")).toBe(true);
+    expect(sent).toEqual([]);
   });
 });

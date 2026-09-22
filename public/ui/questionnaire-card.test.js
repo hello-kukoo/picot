@@ -62,9 +62,7 @@ describe("QuestionnaireCard rendering", () => {
     expect(container.querySelector(".questionnaire-preview strong")?.textContent).toBe("Preview");
     expect(container.querySelectorAll("input[type='radio']")).toHaveLength(1);
     expect(container.querySelectorAll("input[type='checkbox']")).toHaveLength(2);
-    expect(container.querySelector(".questionnaire-card-overlay")?.getAttribute("role")).toBe(
-      "dialog",
-    );
+    expect(container.querySelector(".questionnaire-inline")?.getAttribute("role")).toBe("group");
     expect(document.activeElement).toBe(container.querySelector("input[type='radio']"));
   });
 });
@@ -217,7 +215,7 @@ describe("QuestionnaireCard abandon and teardown", () => {
     start(card, [{ prompt: "Pick one", options: [{ label: "One" }] }]);
     teardown(card);
     expect(card.isActive()).toBe(false);
-    expect(container.querySelector(".questionnaire-card-overlay")).toBeNull();
+    expect(container.querySelector(".questionnaire-inline")).toBeNull();
   });
 });
 
@@ -237,7 +235,7 @@ describe("QuestionnaireCard capture and restore across session switches", () => 
 
     const state = card.captureAndClear();
     expect(card.isActive()).toBe(false);
-    expect(container.querySelector(".questionnaire-card-overlay")).toBeNull();
+    expect(container.querySelector(".questionnaire-inline")).toBeNull();
     // Parking must not answer the walker: the runtime keeps waiting by design.
     expect(sent).toEqual([]);
     expect(state.pendingRequest?.id).toBe("q-park");
@@ -245,7 +243,7 @@ describe("QuestionnaireCard capture and restore across session switches", () => 
 
     expect(card.restore(state)).toBe(true);
     expect(card.isActive()).toBe(true);
-    expect(container.querySelector(".questionnaire-card-overlay")).not.toBeNull();
+    expect(container.querySelector(".questionnaire-inline")).not.toBeNull();
     expect(card.pendingRequest?.id).toBe("q-park");
     // Submitting after the round trip answers the parked request.
     card.submit();
@@ -293,5 +291,33 @@ describe("QuestionnaireCard capture and restore across session switches", () => 
     const { card } = makeCard();
     expect(card.restore(null)).toBe(false);
     expect(card.restore({ questions: [], answers: [], cursor: 0 })).toBe(false);
+  });
+});
+
+describe("QuestionnaireCard inline stream anchoring", () => {
+  it("stays the last child of the stream when later nodes are appended", async () => {
+    const { card, container } = makeCard();
+    start(card, [{ prompt: "Pick one", options: [{ label: "One" }] }]);
+
+    container.appendChild(document.createElement("div", { className: "later-message" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(container.lastElementChild?.classList.contains("questionnaire-inline")).toBe(true);
+  });
+
+  it("answers Escape only from inside the card, not from the page", async () => {
+    const confirmAbandon = vi.fn(async () => true);
+    const { card } = makeCard({ confirmAbandon });
+    start(card, [{ prompt: "Pick one", options: [{ label: "One" }] }]);
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(confirmAbandon).not.toHaveBeenCalled();
+
+    card.overlay
+      .querySelector("input")
+      ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(confirmAbandon).toHaveBeenCalled();
   });
 });

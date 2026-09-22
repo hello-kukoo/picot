@@ -6,7 +6,9 @@ payload echo, overlay layering, request matching, abort teardown, i18n
 namespace). Revised 2026-09-22: runtimes survive session switches, so
 session switch and background emission now park questionnaire state
 (`public/ui/background-questionnaire-store.js`) instead of destroying it —
-see "Background and session-switch semantics".
+see "Background and session-switch semantics". Revised again 2026-09-22:
+the card renders inline at the chat stream tail instead of a
+window-blocking modal overlay — see "Inline stream anchor".
 **Date:** 2026-09-13
 
 ## Goal
@@ -47,7 +49,7 @@ the returned option string with `parseIndex`).
 | Branch | Decision |
 | --- | --- |
 | Form | Same-screen questionnaire panel driven by tool `args`; walker dialog requests are answered programmatically in order (cursor tracks question index). Falls back to today's generic dialogs whenever no panel state exists — never worse than status quo. |
-| Container | Modal questionnaire card as a dedicated top-level overlay element **above** the `dialog-container` layer — never inside `DialogHandler`'s single slot (`clearCurrentDialog` + `replaceChildren` would evict it). Blocking semantics match dialogs; focus/Esc/respond plumbing reused. Layering matters twice: the abandon-confirm dialog and any fall-through generic dialog render into `dialog-container` underneath the card while the card stays mounted. Not a composer panel — todo-style panels are ambient state, wrong mental model for a blocking question. |
+| Container | Modal questionnaire card as a dedicated top-level overlay element **above** the `dialog-container` layer — never inside `DialogHandler`'s single slot (`clearCurrentDialog` + `replaceChildren` would evict it). Blocking semantics match dialogs; focus/Esc/respond plumbing reused. Layering matters twice: the abandon-confirm dialog and any fall-through generic dialog render into `dialog-container` underneath the card while the card stays mounted. Not a composer panel — todo-style panels are ambient state, wrong mental model for a blocking question. *Superseded 2026-09-22 (Dr. Lin): the card is now an inline stream element at the tail of `#messages` — see "Inline stream anchor"; the abandon-confirm dialog still renders into `dialog-container` above it.* |
 | Scope | Main window only (`app.js` `handleExtensionUIRequest`). Quick/Side Chat have their own DialogHandler + dispatch (`ephemeral-chat-view.js`) and keep current behavior; copy the integration there later if wanted. |
 | Abandon | Explicit abandon (button or Esc) asks for confirmation first (copy states "the agent will receive a decline"), then responds `cancelled: true` to the in-flight request — the walker's DECLINE envelope, same as TUI Esc. |
 
@@ -137,6 +139,26 @@ keyed by session file with runtime-id fallback:
   `cancelled` as before. Entries are in-memory only — a page reload drops
   them together with the runtime connection, which the abort path owns.
 
+## Inline stream anchor (2026-09-22 second revision)
+
+A window-blocking modal conflicts with Picot's multi-runtime model — the
+user reads the stream, scrolls history, or works in another session while
+a questionnaire waits. The card now renders as an in-flow element at the
+tail of `#messages` (Paseo's pending-permission pattern):
+
+- `.questionnaire-inline` is a plain stream child (role `group`, no
+  `aria-modal`, no backdrop); the card spans the 960px message column and
+  caps at `min(60vh, 720px)` with internal scroll.
+- A `MutationObserver` re-anchors the card to the stream tail whenever
+  later nodes (streaming messages, system rows) are appended, so the
+  pending question always reads as the newest stream item.
+- Esc abandons only when focus is inside the card; page-level Esc
+  (composer, stop button) is never hijacked. The abandon button remains.
+- Reveal paths (tool start, parked-restore) scroll the stream to the
+  card via the scroll owner; re-anchoring does not force scroll.
+- `#questionnaire-container` and its fixed-position CSS are gone; the
+  card's container is `#messages` itself.
+
 ## Hard constraints
 
 - A cancel path must always exist; the card must never strand a pending
@@ -176,4 +198,8 @@ copy.)
   `bun run dev`; trigger a questionnaire in session A, switch to session B
   (card parks, A badges unread), answer another prompt, return to A and
   finish the parked questionnaire.
+- Inline anchor: while a questionnaire is pending, stream more messages
+  and confirm the card stays pinned at the tail; press Esc outside the
+  card (nothing) and inside it (abandon confirm); resize to verify the
+  960px column alignment.
 - `bun run check`, focused vitest, then `bun run test`.

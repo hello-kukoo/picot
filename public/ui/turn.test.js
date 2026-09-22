@@ -30,7 +30,7 @@ describe("createTurnSection", () => {
     delete globalThis.fetch;
   });
 
-  test("section exposes rail / answer / status slots in order", () => {
+  test("section exposes rail / card / answer / status slots in order", () => {
     const turn = createTurnSection({ turnId: "t-42" });
     expect(turn.element.classList.contains("turn")).toBe(true);
     expect(turn.element.dataset.turnId).toBe("t-42");
@@ -38,8 +38,12 @@ describe("createTurnSection", () => {
     // The status row is last so the live model + elapsed readout stays at the
     // bottom edge, where auto-scroll keeps it visible while content streams in.
     expect(slots[0]).toContain("turn-rail");
-    expect(slots[1]).toContain("turn-answer");
-    expect(slots[2]).toContain("turn-status");
+    // The card slot sits between rail and answer: a required decision must not
+    // live inside the rail's collapsible disclosure.
+    expect(slots[1]).toContain("turn-card-slot");
+    expect(slots[2]).toContain("turn-answer");
+    expect(slots[3]).toContain("turn-status");
+    expect(turn.card.host.classList.contains("hidden")).toBe(true);
     expect(turn.rail.host.classList.contains("process-details-body")).toBe(true);
   });
 
@@ -135,6 +139,8 @@ describe("createTurnSection", () => {
     const slots = [...turn.element.children].map((el) => el.className);
     expect(slots[0]).toContain("turn-rail");
     expect(slots[1]).toContain("turn-answer");
+    // No inline-card slot on the history variant: nothing to rebuild it from.
+    expect(turn.card.host).toBeNull();
     // Status API degrades to no-ops (history never calls it defensively).
     turn.status.setLive();
     turn.status.setSettled(1000);

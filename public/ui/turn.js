@@ -1,5 +1,5 @@
 // ABOUTME: Turn section DOM — one <section class="turn"> per agent turn with
-// ABOUTME: user / rail / answer / status slots (spec P1.2). Pure DOM assembly.
+// ABOUTME: user / rail / card / answer / status slots (spec P1.2). Pure DOM assembly.
 import { t } from "../i18n.js";
 import { createProcessDetailsGroup } from "./process-group.js";
 import { formatTurnDuration } from "./turn-model.js";
@@ -19,7 +19,14 @@ let localTurnCounter = 0;
  * `modelLabel` is optional display text for the live status row.
  * `withStatus: false` builds the history variant — the same turn layout
  * minus the status row (logs carry no run duration; the live status is
- * not reconstructable), as the chat-window spec describes history rendering.
+ * not reconstructable) and minus the inline-card slot (history carries no
+ * blocker state to rebuild), as the chat-window spec describes history
+ * rendering.
+ *
+ * The `card` slot hosts blocking prompts that belong to this turn — today the
+ * datarx-safety-guard bash approval, which renders in the conversation instead
+ * of the full-screen dialog. It sits between the rail and the answer so a
+ * required decision is never hidden inside the rail's collapsible disclosure.
  */
 export function createTurnSection({
   turnId = null,
@@ -58,10 +65,15 @@ export function createTurnSection({
   const answer = document.createElement("div");
   answer.className = "turn-answer";
 
+  // Live turns carry the inline-card slot; history turns do not (nothing to
+  // rebuild it from). `hidden` keeps an empty slot out of the turn layout.
+  const card = withStatus ? document.createElement("div") : null;
+  if (card) card.className = "turn-card-slot hidden";
+
   // The user slot sits before everything else: the rail wrapper is always the
   // first element to insert the user bubble before.
   const userSlotRef = group.wrapper;
-  section.append(group.wrapper, answer, ...(status ? [status] : []));
+  section.append(group.wrapper, ...(card ? [card] : []), answer, ...(status ? [status] : []));
 
   let elapsedTimer = null;
   const liveParts = () => {
@@ -147,6 +159,10 @@ export function createTurnSection({
     },
     answer: {
       host: answer,
+    },
+    /** Inline blocking-prompt slot (null on the history variant). */
+    card: {
+      host: card,
     },
     /** Claim the optimistic user bubble by moving it into the user slot. */
     claimUserElement(userEl) {

@@ -677,10 +677,17 @@ const dialogHandler = new DialogHandler({
 // before the generic dialog — long approval prompts must scroll, not stretch.
 const safetyGuardDialog = new SafetyGuardDialog({
   container: document.getElementById("dialog-container"),
+  // The approval belongs to the turn whose bash call triggered it: render it in
+  // that turn's inline card slot so it scrolls with the conversation. With no
+  // live turn to host it (replayed background request, transcript re-render,
+  // abort) the card falls back to the modal container.
+  resolveHost: () => activeTurn?.card?.host ?? null,
   send: (message) => wsClient.send(message),
 });
 const questionnaireCard = new QuestionnaireCard({
-  container: document.getElementById("questionnaire-container"),
+  // Inline stream anchor: the card lives at the tail of the message flow so
+  // the pending question reads as part of the conversation, not a modal.
+  container: messagesElement,
   send: (message) => wsClient.send(message),
   wsClient,
   confirmAbandon: ({ title, message }) => dialogHandler.showLocalConfirm({ title, message }),
@@ -2915,6 +2922,10 @@ function runtimeKeyOf(target) {
 }
 
 function closeLiveTurn({ settled = false } = {}) {
+  // A card hosted by this turn cannot outlive it: re-home a still-pending
+  // approval in the modal container before the transcript drops the turn, or
+  // its runtime would wait on extension_ui_response forever.
+  safetyGuardDialog.rehost();
   if (!activeTurn) return;
   if (!settled) {
     // A turn that never saw agent_end (reconnect, session switch): settle it
@@ -3341,7 +3352,11 @@ function handleMessageEnd(message, eventSessionFile = null, entryId = null) {
 
 function handleToolExecutionStart(event) {
   const { toolCallId, toolName, args } = event;
-  questionnaireCard.handleToolExecutionStart(event);
+  if (questionnaireCard.handleToolExecutionStart(event)) {
+    // The inline card lands at the stream tail: bring it into view like any
+    // other new stream content.
+    messagesScrollOwner.scrollToBottom();
+  }
 
   state.addToolExecution(toolCallId, {
     toolName,
@@ -5473,15 +5488,17 @@ async function handleSessionSelectImpl(session, project) {
 function restoreParkedQuestionnaire(sessionFile, runtimeId) {
   const entry = backgroundQuestionnaires.take(sessionFile, runtimeId);
   if (!entry) return;
+  let revealed = false;
   if (entry.cardState) {
-    questionnaireCard.restore(entry.cardState);
+    revealed = questionnaireCard.restore(entry.cardState);
   } else if (Array.isArray(entry.questions) && entry.questions.length > 0) {
-    questionnaireCard.start({
+    revealed = questionnaireCard.start({
       toolCallId: entry.toolCallId,
       toolName: "ask_user_question",
       args: { questions: entry.questions },
     });
   }
+  if (revealed) messagesScrollOwner.scrollToBottom();
   for (const request of entry.queuedRequests) {
     handleExtensionUIRequest(request, runtimeId);
   }
