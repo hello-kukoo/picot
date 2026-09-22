@@ -3,6 +3,7 @@
 
 import { onLocaleChange, t } from "../i18n.js";
 import { createIcon } from "../icons.js";
+import { renderGroupStatusControl } from "./skills-group-status-control.js";
 
 /**
  * @typedef {Object} PackageSkillCandidate
@@ -267,34 +268,19 @@ export function setupPackageSkillsTab({ container, rpcCommand, showSuccess, show
     showSuccess?.(t("settings.skills.savedRestartRequired"));
   }
 
-  /** 全部启用 / 全部禁用 / {x}/{X} 已启用 — the Discovered tab's group status
-   * shape, as one tag-styled control instead of a label plus a switch. */
   function renderEnableAllAffordance(card) {
     const total = card.candidates.length;
     const enabled = card.candidates.filter((candidate) => candidate.enabled).length;
     const state = total > 0 && enabled === total ? "all-on" : enabled === 0 ? "all-off" : "mixed";
-    const label =
-      state === "all-on"
-        ? t("settings.skills.allEnabled")
-        : state === "all-off"
-          ? t("settings.skills.allDisabled")
-          : t("settings.skills.enabledCount", { enabled, total });
-    return el("div", { class: "skills-group-enable-all" }, [
-      el("button", {
-        type: "button",
-        class: `skills-group-status ${state}`,
-        text: label,
-        disabled: card.scope === "project" && !inventory?.trusted,
-        dataset: { packageEnableAll: card.id, groupState: state },
-        aria: {
-          label: `${t("settings.packageSkills.enableAll")}: ${card.source}`,
-          pressed: String(state === "all-on"),
-        },
-        // Anything not fully enabled turns everything on; only the all-on
-        // state turns everything off (the checkbox semantics it replaces).
-        onClick: () => void setAllEnabled(card, state !== "all-on"),
-      }),
-    ]);
+    return renderGroupStatusControl({
+      state,
+      enabled,
+      total,
+      disabled: card.scope === "project" && !inventory?.trusted,
+      dataset: { packageEnableAll: card.id, groupState: state },
+      ariaLabel: `${t("settings.packageSkills.enableAll")}: ${card.source}`,
+      onToggle: (next) => void setAllEnabled(card, next),
+    });
   }
 
   /**

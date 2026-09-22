@@ -3,6 +3,7 @@
 
 import { onLocaleChange, t } from "../i18n.js";
 import { createIcon } from "../icons.js";
+import { renderGroupStatusControl } from "./skills-group-status-control.js";
 import { manageModalDialog } from "./skills-modal.js";
 
 /**
@@ -266,20 +267,6 @@ export function setupDiscoveredSkillsTab({
     return input;
   }
 
-  function stateBadge(state, enabled, total) {
-    const label =
-      state === "all-on"
-        ? t("settings.skills.allEnabled")
-        : state === "all-off"
-          ? t("settings.skills.allDisabled")
-          : t("settings.skills.enabledCount", { enabled, total });
-    return el("span", {
-      class: `skills-group-status ${state}`,
-      text: label,
-      dataset: { skillGroupState: state },
-    });
-  }
-
   function renderRoot(root, rootDisabled) {
     const rootBasename = root.sourceRoot.split("/").pop() || root.sourceRoot;
     return el("section", { class: "skills-root", dataset: { skillRoot: root.sourceRoot } }, [
@@ -375,14 +362,15 @@ export function setupDiscoveredSkillsTab({
         el("div", { class: "skills-group-name", text: group.name }),
         el("div", { class: "skills-group-source", text: group.ruleBaseRelativePath }),
       ]),
-      stateBadge(group.state, enabled, leaves.length),
-      renderSwitch(
-        group.state === "all-on",
-        groupDisabled,
-        group.state === "mixed",
-        `${t("settings.skills.enableGroup")}: ${group.ruleBaseRelativePath}`,
-        (checked) => void setEnabled({ kind: "group", id: group.id }, checked),
-      ),
+      renderGroupStatusControl({
+        state: group.state,
+        enabled,
+        total: leaves.length,
+        disabled: groupDisabled,
+        dataset: { skillGroupState: group.state },
+        ariaLabel: `${t("settings.skills.enableGroup")}: ${group.ruleBaseRelativePath}`,
+        onToggle: (next) => void setEnabled({ kind: "group", id: group.id }, next),
+      }),
     ]);
 
     if (group.ambiguous) {
