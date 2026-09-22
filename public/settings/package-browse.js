@@ -381,7 +381,10 @@ export function setupPackageBrowse({
     actions.className = "settings-extension-actions";
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "settings-value-btn";
+    // Install is the affirmative action (solid accent); uninstall reuses the
+    // danger ghost the Installed tab's Remove button already uses, so the two
+    // states differ by fill weight as well as hue.
+    button.className = `settings-value-btn${installed ? " is-danger" : " is-primary"}`;
 
     const canManage = nativeAvailable();
     if (!canManage) {

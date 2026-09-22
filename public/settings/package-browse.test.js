@@ -85,6 +85,14 @@ describe("Community package browser", () => {
       "Uninstall",
     );
     expect(rows[1].querySelector(".settings-extension-actions button").textContent).toBe("Install");
+    // Install and uninstall must be visually distinguishable: solid accent for
+    // the affirmative action, danger ghost for the destructive one.
+    const installedBtn = rows[0].querySelector(".settings-extension-actions button");
+    const availableBtn = rows[1].querySelector(".settings-extension-actions button");
+    expect(installedBtn.classList.contains("is-danger")).toBe(true);
+    expect(installedBtn.classList.contains("is-primary")).toBe(false);
+    expect(availableBtn.classList.contains("is-primary")).toBe(true);
+    expect(availableBtn.classList.contains("is-danger")).toBe(false);
     expect(root.querySelector("#pkg-browse-installed-only")).toBeNull();
     expect(browser.getInstalledSources()).toEqual(new Set(["npm:installed"]));
   });

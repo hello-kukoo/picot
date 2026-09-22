@@ -9525,8 +9525,31 @@ body.file-preview-resizing {
 .pkg-manager-actions {
   margin-bottom: var(--space-3);
 }
-.pkg-manager-btn.is-danger {
+/* Community browse action buttons: install is the affirmative action (solid
+   accent), uninstall is the danger ghost — the same vocabulary the Installed
+   tab's Remove button uses. Fill weight and hue both carry the difference, so
+   the two states stay distinguishable without color. */
+.settings-value-btn.is-primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: white;
+}
+
+.settings-value-btn.is-primary:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.settings-value-btn.is-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.settings-value-btn.is-danger {
   color: #ef4444;
+}
+
+.settings-value-btn.is-danger:hover:not(:disabled) {
+  border-color: #ef4444;
 }
 
 /* Disabled manager buttons must look disabled: the shared settings-value-btn base
