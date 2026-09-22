@@ -26,7 +26,9 @@ export function createFileRenderer({
   rawUrl,
 } = {}) {
   const classification = classifyFilePath(filePath || "");
-  if (renderAs === "markdown" && classification.contentType === "convertible") {
+  // Priority 1: a trusted host directive wins over filename classification
+  // (converted Office documents render read-only regardless of suffix).
+  if (renderAs === "markdown") {
     return createMarkdownRenderer({
       filePath,
       content,
@@ -48,16 +50,6 @@ export function createFileRenderer({
         onChange,
         onModeChange,
         onError,
-      });
-
-    case "convertible":
-      return createMarkdownRenderer({
-        filePath,
-        content,
-        mode: "preview",
-        readOnly: true,
-        onError,
-        convertedDocument: true,
       });
 
     case "html":

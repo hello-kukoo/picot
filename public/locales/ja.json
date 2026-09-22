@@ -223,18 +223,12 @@
       "loadError": "ファイルの読み込みに失敗しました",
       "saveError": "ファイルの保存に失敗しました",
       "readOnly": "読み取り専用",
-      "markitdown": {
-        "pythonMissing": "このファイルをプレビューするにはPython 3.10以降をインストールしてください。",
-        "pythonTooOld": "Python {version}は古すぎます。Python 3.10以降をインストールしてください。",
-        "markitdownMissing": "このファイルをプレビューするにはMarkItDownをインストールしてください。",
-        "markitdownIncompatible": "標準入力変換をサポートするバージョンにMarkItDownを更新してください。",
-        "installPosix": "python3 -m pip install 'markitdown[docx,pptx,xlsx,xls,outlook]'",
-        "installWindows": "py -3 -m pip install \"markitdown[docx,pptx,xlsx,xls,outlook]\"",
-        "remoteImageHidden": "リモート画像は非表示です"
-      },
       "conflictMessage": "{name}がディスク上で変更されました。再読み込みしますか、それともディスクバージョンを上書きしますか？",
       "tabpanelLabel": "ファイルプレビュー",
-      "htmlLive": "HTML ライブプレビュー"
+      "htmlLive": "HTML ライブプレビュー",
+      "converted": {
+        "remoteImageHidden": "変換ドキュメント内の画像を非表示にしました：リモートまたは未対応の画像ソースです。"
+      }
     },
     "unsaved": {
       "title": "未保存の変更",

@@ -4,6 +4,8 @@
 
 // Host runtime modules are compiled into one native transport path.
 // Retired compatibility handlers remain explicit and fail closed where needed.
+#[allow(dead_code)]
+mod anydoc_preview;
 mod cache_optimizer_config;
 mod caveman_config;
 mod child_supervision;
@@ -15,7 +17,6 @@ mod host_config;
 #[allow(dead_code)]
 mod host_control;
 mod host_data;
-#[allow(dead_code)]
 mod host_files;
 mod host_router;
 mod host_server;

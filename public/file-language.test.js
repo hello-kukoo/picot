@@ -108,12 +108,11 @@ describe("classifyFilePath", () => {
     "ods",
     "eml",
     "msg",
-  ])("classifies .%s as non-editable convertible", (extension) => {
-    expect(classifyFilePath(`sample.${extension}`)).toEqual({
-      contentType: "convertible",
-      editable: false,
-      languageId: null,
-    });
+  ])("leaves .%s to the host: no browser office classification remains", (extension) => {
+    // The host owns the only candidate list now (anydoc preview, spec
+    // 2026-09-17); the browser classifies nothing about Office suffixes.
+    const result = classifyFilePath(`sample.${extension}`);
+    expect(result.contentType).not.toBe("convertible");
   });
 
   test("keeps CSV editable text and MBOX non-previewable", () => {

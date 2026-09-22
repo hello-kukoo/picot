@@ -61,12 +61,23 @@ pub fn resolve_existing(root: &Path, relative: &str) -> Result<PathBuf, FileErro
 }
 
 pub fn read(root: &Path, relative: &str) -> Result<FileContent, FileError> {
+    read_with_cap(root, relative, MAX_FILE_BYTES)
+}
+
+/// Same contract as [`read`] with a caller-selected byte cap. The generic
+/// path stays at MAX_FILE_BYTES; only candidate Office preview reads may
+/// raise it (spec 2026-09-17: 32 MiB through the preview branch).
+pub fn read_with_cap(
+    root: &Path,
+    relative: &str,
+    max_bytes: u64,
+) -> Result<FileContent, FileError> {
     let path = resolve_existing(root, relative)?;
     let metadata = fs::metadata(&path).map_err(io_error)?;
     if metadata.is_dir() {
         return Err(FileError::IsDirectory);
     }
-    if metadata.len() > MAX_FILE_BYTES {
+    if metadata.len() > max_bytes {
         return Err(FileError::TooLarge);
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
@@ -75,10 +86,10 @@ pub fn read(root: &Path, relative: &str) -> Result<FileContent, FileError> {
     // grows between the check and the read.
     fs::File::open(&path)
         .map_err(io_error)?
-        .take(MAX_FILE_BYTES + 1)
+        .take(max_bytes + 1)
         .read_to_end(&mut bytes)
         .map_err(io_error)?;
-    if bytes.len() as u64 > MAX_FILE_BYTES {
+    if bytes.len() as u64 > max_bytes {
         return Err(FileError::TooLarge);
     }
     Ok(FileContent {
@@ -271,11 +282,6 @@ fn io_error(error: std::io::Error) -> FileError {
     FileError::Io(error.to_string())
 }
 
-#[cfg(unix)]
-fn restrict_permissions(path: &Path) -> Result<(), FileError> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(io_error)
-}
 #[cfg(not(unix))]
 fn restrict_permissions(_path: &Path) -> Result<(), FileError> {
     Ok(())
@@ -285,6 +291,51 @@ fn restrict_permissions(_path: &Path) -> Result<(), FileError> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn read_with_cap_raises_the_limit_for_candidate_office_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        fs::create_dir(&root).unwrap();
+        // 9 MiB: above the generic 8 MiB cap, inside a 32 MiB candidate cap.
+        let payload = vec![0u8; 9 * 1024 * 1024];
+        fs::write(root.join("big.docx"), &payload).unwrap();
+        assert_eq!(
+            read(&root, "big.docx"),
+            Err(FileError::TooLarge),
+            "the generic 8 MiB read cap must stay untouched"
+        );
+        let content = read_with_cap(&root, "big.docx", 32 * 1024 * 1024).unwrap();
+        assert_eq!(content.bytes.len(), 9 * 1024 * 1024);
+        assert_eq!(content.relative_path, "big.docx");
+    }
+
+    #[test]
+    fn read_with_cap_preserves_validation_and_failure_modes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("small.docx"), b"hi").unwrap();
+        assert_eq!(
+            read_with_cap(&root, "../escape", 32 * 1024 * 1024),
+            Err(FileError::InvalidPath)
+        );
+        assert_eq!(
+            read_with_cap(&root, "missing.docx", 32 * 1024 * 1024),
+            Err(FileError::NotFound)
+        );
+        assert_eq!(
+            read_with_cap(&root, "small.docx", 1),
+            Err(FileError::TooLarge),
+            "the explicit cap is enforced, not the 8 MiB default"
+        );
+        assert_eq!(
+            read_with_cap(&root, "small.docx", MAX_FILE_BYTES)
+                .unwrap()
+                .bytes,
+            b"hi"
+        );
+    }
 
     #[test]
     fn rejects_traversal_and_symlink_escape() {

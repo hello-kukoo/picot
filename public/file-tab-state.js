@@ -93,7 +93,7 @@ export class FileTabState {
       content: null,
       originalContent: null,
       dirty: false,
-      loading: false,
+      loading: Boolean(metadata.loading),
       saving: false,
       conflict: false,
       error: null,

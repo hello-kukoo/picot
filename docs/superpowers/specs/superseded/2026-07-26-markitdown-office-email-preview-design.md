@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-26
 **Revised:** 2026-07-28 — extend dependency discovery to recognize a standalone `markitdown` CLI installed via `uv tool` / `pipx` / `pip --user` (the only viable path on PEP 668 externally-managed Python), and revise installation guidance to be PEP-668-safe.
-**Status:** Proposed — awaiting review
+**Status:** Superseded — 2026-09-22 by `2026-09-17-anydoc-office-preview-design.md (specs tree)` (native anydoc crate in the Tauri host replaces the Python MarkItDown runtime; EML/MSG support dropped with it). Do not execute; kept as historical record only.
 **Scope:** Convert selected workspace Office and email files to Markdown for read-only preview.
 
 ## 1. Goal

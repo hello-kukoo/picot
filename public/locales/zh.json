@@ -225,16 +225,10 @@
       "loadError": "文件加载失败",
       "saveError": "文件保存失败",
       "readOnly": "只读",
-      "markitdown": {
-        "pythonMissing": "请安装 Python 3.10 或更高版本以预览此文件。",
-        "pythonTooOld": "Python {version} 版本过低，请安装 Python 3.10 或更高版本。",
-        "markitdownMissing": "请安装 MarkItDown 以预览此文件。",
-        "markitdownIncompatible": "请升级 MarkItDown，使其支持通过标准输入转换。",
-        "installPosix": "python3 -m pip install 'markitdown[docx,pptx,xlsx,xls,outlook]'",
-        "installWindows": "py -3 -m pip install \"markitdown[docx,pptx,xlsx,xls,outlook]\"",
-        "remoteImageHidden": "远程图片已隐藏"
-      },
-      "conflictMessage": "{name} 的磁盘内容已更改。要重新加载还是覆盖磁盘版本？"
+      "conflictMessage": "{name} 的磁盘内容已更改。要重新加载还是覆盖磁盘版本？",
+      "converted": {
+        "remoteImageHidden": "已隐藏转换文档中的图片：远程或不支持的图片来源。"
+      }
     },
     "unsaved": {
       "title": "未保存的更改",

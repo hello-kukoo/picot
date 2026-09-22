@@ -223,18 +223,12 @@
       "loadError": "Error al cargar el archivo",
       "saveError": "Error al guardar el archivo",
       "readOnly": "Solo lectura",
-      "markitdown": {
-        "pythonMissing": "Instala Python 3.10 o superior para previsualizar este archivo.",
-        "pythonTooOld": "Python {version} es demasiado antiguo. Instala Python 3.10 o superior.",
-        "markitdownMissing": "Instala MarkItDown para previsualizar este archivo.",
-        "markitdownIncompatible": "Actualiza MarkItDown a una versión que soporte conversión por stdin.",
-        "installPosix": "python3 -m pip install 'markitdown[docx,pptx,xlsx,xls,outlook]'",
-        "installWindows": "py -3 -m pip install \"markitdown[docx,pptx,xlsx,xls,outlook]\"",
-        "remoteImageHidden": "Imagen remota oculta"
-      },
       "conflictMessage": "{name} fue modificado en disco. ¿Recargar o sobreescribir la versión del disco?",
       "tabpanelLabel": "Vista previa del archivo",
-      "htmlLive": "Vista previa de HTML"
+      "htmlLive": "Vista previa de HTML",
+      "converted": {
+        "remoteImageHidden": "Imagen eliminada del documento convertido: origen de imagen remoto o no compatible."
+      }
     },
     "unsaved": {
       "title": "Cambios sin guardar",

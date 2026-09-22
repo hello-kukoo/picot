@@ -1,7 +1,9 @@
 # AnyDoc Native Office Preview Design
 
 **Date:** 2026-09-17  
-**Status:** Approved design — implementation not started  
+**Status:** Implemented — 2026-09-22（macOS 侧完成；Windows release 体积差与双平台手动门禁待 Dr. Lin 在 Windows 机器补测）  
+
+实施记录：`anydoc = "=0.2.4"`（MIT）+ `anydoc_preview.rs`（封闭错误码/十后缀候选门/2MiB 输出上限）+ `host_files::read_with_cap`（普通 8MiB 不动，候选 32MiB）+ `host_server` 双 permit 信号量与 PreviewScope 三点重校验 + `file_read` 分支（ready 只读 Markdown / conversionFailed / fail-closed PDF）+ 前端 loading-neutral 打开、trusted `renderAs:"markdown"` 优先级、栅格 data-URI 图片策略（DOMParser 化解析管线）+ MarkItDown 运行时/测试/fixture/locale 全清（cleanup 测试守零）+ `extensions/fixtures/anydoc/` 十格式 fixture（全部取自 firecrawl/anydoc MIT 测试语料，checksum 见 README）。依赖树审计 `cargo tree -p anydoc -e all` 已记录。**macOS release 体积差：+5,655,232 bytes（+24.5%，23,091,536 → 28,746,768；LTO+strip 后）——anydoc 0.2.4 无 feature 分区，全部 14 格式解析器静态链入，属预期。** 偏差：permit 并发上界的确定性路由级测试改为「构造保证 + scope 失效中途测试」（真实 anydoc 转换毫秒级完成，无法确定性占满 permit；以 begin→prepare→commit 转场测试覆盖重校验窗口）。extensions/file-routes.ts 兼容 HTTP 分类器保留其独立 office 列表（不在 v2 预览面，spec 改动图未含）。  
 **Scope:** Restore native-runtime Office-file preview, replacing the abandoned MarkItDown integration with the embedded `anydoc` Rust crate.
 
 ## 1. Goal

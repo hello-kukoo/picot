@@ -166,7 +166,7 @@ export class FilePreviewPanel {
 
     if (existing) {
       if (currentTab?.id !== existing.id) {
-        if (this._isConversionTab(currentTab)) this._abortTabLoad(currentTab?.id);
+        if (currentTab?.loading) this._abortTabLoad(currentTab.id);
         this._captureActiveRenderer();
         this.state.selectTab(existing.id);
         if (existing.content === null && existing.loading) {
@@ -186,15 +186,20 @@ export class FilePreviewPanel {
       return existing;
     }
 
-    if (this._isConversionTab(currentTab)) this._abortTabLoad(currentTab?.id);
+    if (currentTab?.loading) this._abortTabLoad(currentTab.id);
     this._captureActiveRenderer();
-    const defaultMode =
-      metadata.mode ??
-      (classifyFilePath(normalizedPath).contentType === "text" ? "edit" : "preview");
-    const tab = this.state.openFile(normalizedPath, { ...metadata, mode: defaultMode });
-    this._openToolbarForEditorTab(tab);
+    // Loading-neutral open: no editor mode, toolbar, or edit affordance
+    // until the host response settles content and editability.
+    const tab = this.state.openFile(normalizedPath, {
+      ...metadata,
+      mode: "preview",
+      loading: true,
+    });
     this._openPanel();
     this._renderTabBar();
+    // Mount the loading presentation immediately; the settled response
+    // replaces it (loading-neutral open, spec 2026-09-17).
+    await this._mountRenderer(tab);
     await this._loadTabContent(tab);
     this.activeContent = { kind: "file", id: tab.id };
     this._renderTabBar();
@@ -803,7 +808,7 @@ export class FilePreviewPanel {
       return true;
     }
     if (this.activeContent?.kind === "transient") this._deactivateCurrent();
-    if (this._isConversionTab(currentTab)) this._abortTabLoad(currentTab?.id);
+    if (currentTab?.loading) this._abortTabLoad(currentTab.id);
     this._captureActiveRenderer();
     if (!this.state.selectTab(tabId)) return false;
 
@@ -897,37 +902,6 @@ export class FilePreviewPanel {
       const data = await this.transport.fileRead(relativePath, { signal: controller.signal });
       if (this.loadTokens.get(tab.id) !== token || !this.state.getTab(tab.id)) return false;
       const classification = classifyFilePath(tab.filePath);
-      if (data.previewStatus === "dependencyUnavailable") {
-        const reason = data.dependencyReason;
-        const version = typeof data.pythonVersion === "string" ? data.pythonVersion : "";
-        const messageKey = `files.preview.markitdown.${reason}`;
-        const message = t(messageKey, version ? { version } : undefined);
-        const needsInstallCommand =
-          reason === "markitdownMissing" || reason === "markitdownIncompatible";
-        const displayCommand =
-          typeof data.displayCommand === "string" && /^[a-z0-9 ._-]+$/i.test(data.displayCommand)
-            ? data.displayCommand
-            : /win/i.test(globalThis.navigator?.platform || "")
-              ? "py -3"
-              : "python3";
-        const installKey = /win/i.test(displayCommand)
-          ? "files.preview.markitdown.installWindows"
-          : "files.preview.markitdown.installPosix";
-        const installCommand = t(installKey).replace(/^(python3|py -3)/, displayCommand);
-        const guidance = needsInstallCommand ? `${message}\n${installCommand}` : message;
-        this.state.updateTab(tab.id, {
-          loading: false,
-          content: null,
-          originalContent: null,
-          editable: false,
-          mode: "preview",
-          error: guidance,
-          errorDetail: null,
-          isBinary: false,
-        });
-        await this._mountIfActive(tab.id);
-        return false;
-      }
       if (data.previewStatus === "conversionFailed") {
         this.state.updateTab(tab.id, {
           loading: false,
@@ -941,6 +915,26 @@ export class FilePreviewPanel {
         });
         await this._mountIfActive(tab.id);
         return false;
+      }
+      if (data.previewStatus === "ready") {
+        // Trusted host directive: read-only converted Markdown, explicit on
+        // every field so no editor affordance can flash first.
+        this.state.updateTab(tab.id, {
+          loading: false,
+          content: data.content ?? "",
+          originalContent: data.content ?? "",
+          renderAs: "markdown",
+          editable: false,
+          mode: "preview",
+          isBinary: false,
+          truncated: false,
+          dirty: false,
+          error: null,
+          errorDetail: null,
+        });
+        this.state.persist();
+        await this._mountIfActive(tab.id);
+        return true;
       }
       if (
         data.isBinary &&
@@ -975,9 +969,19 @@ export class FilePreviewPanel {
         saveError: null,
         error: null,
         errorDetail: null,
-        mode: editable ? tab.mode : "preview",
+        // Loading-neutral open defaults to preview; the settled response
+        // restores the classified edit default for editable text files.
+        mode: editable
+          ? tab.mode !== "preview"
+            ? tab.mode
+            : classification.contentType === "text"
+              ? "edit"
+              : "preview"
+          : "preview",
       });
       this.state.persist();
+      const settled = this.state.getTab(tab.id);
+      if (settled?.editable) this._openToolbarForEditorTab(settled);
       await this._mountIfActive(tab.id);
       return true;
     } catch (error) {
@@ -1000,10 +1004,6 @@ export class FilePreviewPanel {
         this.loadAbortControllers.delete(tab.id);
       }
     }
-  }
-
-  _isConversionTab(tab) {
-    return Boolean(tab && classifyFilePath(tab.filePath).contentType === "convertible");
   }
 
   _abortTabLoad(tabId) {
@@ -1096,7 +1096,7 @@ export class FilePreviewPanel {
       tab.editable === false ||
       tab.truncated ||
       tab.isBinary ||
-      (tab.renderAs === "markdown" && classifyFilePath(tab.filePath).contentType === "convertible")
+      tab.renderAs === "markdown"
     ) {
       return false;
     }
@@ -1441,9 +1441,9 @@ export class FilePreviewPanel {
     const contentType = tab ? classifyFilePath(tab.filePath).contentType : "";
     const hasEditor =
       hasText &&
+      tab.renderAs !== "markdown" &&
       contentType !== "image" &&
       contentType !== "pdf" &&
-      contentType !== "convertible" &&
       ((contentType !== "markdown" && contentType !== "html") || tab.mode === "edit");
     const editorToolbarVisible =
       isDiff || (editable && ["markdown", "text", "html"].includes(contentType));

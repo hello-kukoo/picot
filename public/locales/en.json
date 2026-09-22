@@ -225,16 +225,10 @@
       "loadError": "Failed to load file",
       "saveError": "Failed to save file",
       "readOnly": "Read-only",
-      "markitdown": {
-        "pythonMissing": "Install Python 3.10 or later to preview this file.",
-        "pythonTooOld": "Python {version} is too old. Install Python 3.10 or later.",
-        "markitdownMissing": "Install MarkItDown to preview this file.",
-        "markitdownIncompatible": "Update MarkItDown to a version that supports stdin conversion.",
-        "installPosix": "python3 -m pip install 'markitdown[docx,pptx,xlsx,xls,outlook]'",
-        "installWindows": "py -3 -m pip install \"markitdown[docx,pptx,xlsx,xls,outlook]\"",
-        "remoteImageHidden": "Remote image hidden"
-      },
-      "conflictMessage": "{name} changed on disk. Reload it or overwrite the disk version?"
+      "conflictMessage": "{name} changed on disk. Reload it or overwrite the disk version?",
+      "converted": {
+        "remoteImageHidden": "Converted image removed: remote or unsupported image source."
+      }
     },
     "unsaved": {
       "title": "Unsaved changes",

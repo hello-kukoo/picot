@@ -143,6 +143,9 @@ struct HostState {
     auth: Arc<Mutex<RemoteAuth>>,
     data: HostDataPlane,
     session_scan_permits: Arc<Semaphore>,
+    /// Native Office preview permits: at most two candidate conversions may
+    /// hold input bytes, read, detect, or parse at once (spec 2026-09-17).
+    preview_permits: Arc<Semaphore>,
     index_html: Mutex<String>,
     control_handler: Mutex<Option<ControlHandler>>,
     git_service: Mutex<Option<Arc<GitService>>>,
@@ -230,6 +233,7 @@ impl HostServer {
             auth,
             data,
             session_scan_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_SESSION_SCANS)),
+            preview_permits: Arc::new(Semaphore::new(2)),
             index_html: Mutex::new(String::new()),
             control_handler: Mutex::new(None),
             git_service: Mutex::new(None),
@@ -466,6 +470,16 @@ impl HostServer {
         if let Ok(mut slot) = self.state.owner_registry.lock() {
             *slot = Some(registry);
         }
+    }
+    /// Test-only read-back beside the setter; production code re-reads the
+    /// registry through HostState, never through the server handle.
+    #[cfg(test)]
+    pub fn owner_registry_for_tests(&self) -> Option<Arc<WindowOwnerRegistry>> {
+        self.state
+            .owner_registry
+            .lock()
+            .ok()
+            .and_then(|slot| slot.clone())
     }
 
     /// Install the native ephemeral hub so the WebSocket loop can route
@@ -2029,6 +2043,152 @@ fn current_registered_context(state: &HostState, context: &HostClientContext) ->
     )
 }
 
+/// Authority snapshot captured at admission for a long-running preview: the
+/// workspace binding may be revoked (transition committed) while the request
+/// waits for a permit or converts.
+#[derive(Clone)]
+struct PreviewScope {
+    owner: crate::window_owner::OwnerId,
+    workspace_id: String,
+    generation: u64,
+}
+
+fn preview_scope_from(context: &HostClientContext) -> Option<PreviewScope> {
+    Some(PreviewScope {
+        owner: context.owner_id.clone()?,
+        workspace_id: context.workspace_id.clone()?,
+        generation: context.workspace_generation?,
+    })
+}
+
+fn preview_scope_valid(state: &HostState, scope: &PreviewScope) -> bool {
+    state
+        .owner_registry
+        .lock()
+        .ok()
+        .and_then(|registry| registry.clone())
+        .map(|registry| registry.owner_current_workspace(&scope.owner))
+        .is_some_and(|snapshot| {
+            matches!(
+                snapshot,
+                crate::window_owner::OwnerWorkspaceSnapshot::Registered {
+                    wid,
+                    generation,
+                    ..
+                } if wid == scope.workspace_id && generation == scope.generation
+            )
+        })
+}
+
+/// Native Office preview: the candidate branch of `file_read` (spec
+/// 2026-09-17). Two permits cap concurrent in-memory parsing; the captured
+/// PreviewScope is revalidated before waiting, after the permit lands, and
+/// after conversion — a workspace transition mid-flight returns
+/// `unauthorized_target` and discards the result. In-process parsing has no
+/// hard cancellation: a browser abort only ignores the response; the permit
+/// leaves with the blocking closure.
+#[allow(clippy::too_many_arguments)]
+async fn convert_office_preview(
+    state: &HostState,
+    context: Option<&HostClientContext>,
+    request_id: &str,
+    root: &std::path::Path,
+    path: &str,
+) -> Result<Value, (&'static str, String)> {
+    let context = context.ok_or(("unauthenticated", "Authentication required".into()))?;
+    let scope = preview_scope_from(context)
+        .ok_or(("unauthorized_target", "Workspace is not authorized".into()))?;
+    if !preview_scope_valid(state, &scope) {
+        return Err(("unauthorized_target", "Workspace is not authorized".into()));
+    }
+    let permit = Arc::clone(&state.preview_permits)
+        .acquire_owned()
+        .await
+        .map_err(|_| ("host_operation_failed", "Preview permits closed".into()))?;
+    if !preview_scope_valid(state, &scope) {
+        return Err(("unauthorized_target", "Workspace is not authorized".into()));
+    }
+    let root = root.to_path_buf();
+    let relative = path.to_owned();
+    let relative_for_response = relative.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        // The permit moves into the closure: read, detect, and parse form
+        // one resource unit, released only when the buffers leave scope.
+        let _permit = permit;
+        match crate::host_files::read_with_cap(
+            &root,
+            &relative,
+            crate::anydoc_preview::PREVIEW_INPUT_CAP_BYTES,
+        ) {
+            Ok(content) => {
+                match crate::anydoc_preview::convert_candidate(&content.bytes, &relative) {
+                    crate::anydoc_preview::PreviewOutcome::Ready(markdown) => {
+                        PreviewTaskResult::Ready {
+                            markdown,
+                            modified_at_ms: content.modified_at_ms,
+                        }
+                    }
+                    crate::anydoc_preview::PreviewOutcome::Failed(code) => {
+                        PreviewTaskResult::Failed(code)
+                    }
+                }
+            }
+            // An input-cap overrun is a preview failure, not a generic
+            // file_too_large; every other file error keeps its code.
+            Err(crate::host_files::FileError::TooLarge) => {
+                PreviewTaskResult::Failed(crate::anydoc_preview::PreviewErrorCode::InputTooLarge)
+            }
+            Err(error) => PreviewTaskResult::FileError(error.code()),
+        }
+    })
+    .await
+    .map_err(|_| ("host_operation_failed", "Preview task failed".into()))?;
+    if !preview_scope_valid(state, &scope) {
+        // A transition landed mid-flight: discard the result unread.
+        return Err(("unauthorized_target", "Workspace is not authorized".into()));
+    }
+    match result {
+        PreviewTaskResult::Ready {
+            markdown,
+            modified_at_ms,
+        } => Ok(json!({
+            "type": "data_response",
+            "requestId": request_id,
+            "operation": "file_read",
+            "path": relative_for_response,
+            "content": markdown,
+            "mtimeMs": modified_at_ms,
+            "isBinary": false,
+            "truncated": false,
+            "editable": false,
+            "previewStatus": "ready",
+            "renderAs": "markdown",
+        })),
+        PreviewTaskResult::Failed(code) => {
+            // The fixed closed code is the only permitted log detail.
+            log::debug!("office preview failed: {code:?}");
+            Ok(json!({
+            "type": "data_response",
+            "requestId": request_id,
+            "operation": "file_read",
+            "path": relative_for_response,
+            "previewStatus": "conversionFailed",
+            "editable": false,
+            }))
+        }
+        PreviewTaskResult::FileError(code) => Err((code, "File read failed".to_owned())),
+    }
+}
+
+enum PreviewTaskResult {
+    Ready {
+        markdown: String,
+        modified_at_ms: u128,
+    },
+    Failed(crate::anydoc_preview::PreviewErrorCode),
+    FileError(&'static str),
+}
+
 fn dialog_response_allowed(context: Option<&HostClientContext>, live_owner: Option<&str>) -> bool {
     let Some(context) = context else { return false };
     let Some(owner) = context.owner_id.as_ref() else {
@@ -2941,6 +3101,16 @@ async fn dispatch(
                         .data
                         .workspace_root(workspace_id)
                         .map_err(host_data_error)?;
+                    if crate::anydoc_preview::is_candidate(path) {
+                        return convert_office_preview(
+                            state,
+                            context,
+                            request_id.as_str(),
+                            &root,
+                            path,
+                        )
+                        .await;
+                    }
                     let content = crate::host_files::read(&root, path)
                         .map_err(|error| (error.code(), "File read failed".to_owned()))?;
                     let text = String::from_utf8(content.bytes)
@@ -3959,6 +4129,168 @@ mod tests {
             .unwrap();
 
         // Deliberately no host.stop(): the socket closes with the test.
+    }
+
+    fn anydoc_fixture(name: &str) -> std::path::PathBuf {
+        [
+            env!("CARGO_MANIFEST_DIR"),
+            "..",
+            "extensions",
+            "fixtures",
+            "anydoc",
+            name,
+        ]
+        .iter()
+        .collect()
+    }
+
+    async fn send_data_request(
+        harness: &mut DesktopHarness,
+        request_id: &str,
+        operation: &str,
+        path: &str,
+    ) -> Value {
+        use tokio_tungstenite::tungstenite::Message;
+        harness
+            .socket
+            .send(Message::Text(
+                json!({
+                    "type": "data_request", "protocolVersion": 2,
+                    "requestId": request_id, "operation": operation,
+                    "workspaceId": harness.workspace_id, "path": path
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let message = harness.socket.next().await.unwrap().unwrap();
+                let frame: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+                if frame["requestId"] == request_id {
+                    return frame;
+                }
+            }
+        })
+        .await
+        .expect("file_read reply within 20s")
+    }
+
+    #[tokio::test]
+    async fn file_read_office_candidate_converts_to_read_only_markdown() {
+        let (_host, mut harness, temp) = desktop_harness("anydoc-ready", None).await;
+        fs::copy(
+            anydoc_fixture("text.docx"),
+            temp.join("workspace/report.docx"),
+        )
+        .unwrap();
+        let reply = send_data_request(&mut harness, "prev-1", "file_read", "report.docx").await;
+        assert_eq!(reply["type"], "data_response", "{reply:?}");
+        assert_eq!(reply["previewStatus"], "ready");
+        assert_eq!(reply["renderAs"], "markdown");
+        assert_eq!(reply["editable"], false);
+        assert_eq!(reply["isBinary"], false);
+        assert_eq!(reply["truncated"], false);
+        let content = reply["content"].as_str().unwrap();
+        assert!(!content.trim().is_empty());
+        assert!(reply["mtimeMs"].as_u64().unwrap_or(0) > 0);
+    }
+
+    #[tokio::test]
+    async fn file_read_candidate_pdf_bytes_fail_closed_without_reroute() {
+        let (_host, mut harness, temp) = desktop_harness("anydoc-pdf", None).await;
+        fs::copy(
+            anydoc_fixture("text.pdf"),
+            temp.join("workspace/mislabeled.docx"),
+        )
+        .unwrap();
+        let reply = send_data_request(&mut harness, "prev-2", "file_read", "mislabeled.docx").await;
+        assert_eq!(reply["previewStatus"], "conversionFailed", "{reply:?}");
+        assert!(reply.get("content").is_none());
+        assert_eq!(reply["editable"], false);
+    }
+
+    #[tokio::test]
+    async fn file_read_plain_text_stays_generic_and_editable() {
+        let (_host, mut harness, temp) = desktop_harness("anydoc-plain", None).await;
+        fs::write(temp.join("workspace/notes.txt"), "hello").unwrap();
+        let reply = send_data_request(&mut harness, "prev-3", "file_read", "notes.txt").await;
+        assert_eq!(reply["content"], "hello");
+        assert_eq!(reply["editable"], true);
+        assert!(reply.get("previewStatus").is_none());
+    }
+
+    #[tokio::test]
+    async fn file_read_missing_candidate_keeps_established_error_code() {
+        let (_host, mut harness, _temp) = desktop_harness("anydoc-missing", None).await;
+        let reply = send_data_request(&mut harness, "prev-4", "file_read", "ghost.docx").await;
+        assert_eq!(reply["type"], "error", "{reply:?}");
+        assert_eq!(reply["error"]["code"], "file_not_found");
+    }
+
+    #[tokio::test]
+    async fn file_read_candidate_over_input_cap_is_conversion_failed() {
+        let (_host, mut harness, temp) = desktop_harness("anydoc-cap", None).await;
+        let oversized = vec![0u8; 33 * 1024 * 1024];
+        fs::write(temp.join("workspace/huge.docx"), &oversized).unwrap();
+        let reply = send_data_request(&mut harness, "prev-5", "file_read", "huge.docx").await;
+        assert_eq!(reply["previewStatus"], "conversionFailed", "{reply:?}");
+    }
+
+    #[tokio::test]
+    async fn file_read_preview_rejects_after_workspace_transition() {
+        let (host, mut harness, temp) = desktop_harness("anydoc-scope", None).await;
+        fs::copy(
+            anydoc_fixture("text.docx"),
+            temp.join("workspace/report.docx"),
+        )
+        .unwrap();
+        // Hold both preview permits so the request passes admission, then
+        // parks on the permit wait — the window where a transition lands.
+        let permit_a = host
+            .state
+            .preview_permits
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+        let permit_b = host
+            .state
+            .preview_permits
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+        let harness_owner_id = harness.owner_id.clone();
+        let reply_task = tokio::spawn(async move {
+            send_data_request(&mut harness, "prev-6", "file_read", "report.docx").await
+        });
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        // A workspace transition commits while the request is parked on the
+        // permit wait: the captured scope's generation is now stale and must
+        // fail revalidation after the permit lands.
+        let registry = host.owner_registry_for_tests().expect("registry set");
+        let owner = crate::window_owner::OwnerId::from_string(harness_owner_id.clone());
+        let generation = registry
+            .begin_workspace_transition(&owner, temp.join("workspace-b"), 3011)
+            .expect("transition begins");
+        registry
+            .prepare_navigation(
+                &owner,
+                3011,
+                temp.join("workspace-b"),
+                "http://127.0.0.1:3011".to_string(),
+                Duration::from_secs(30),
+            )
+            .expect("navigation permit");
+        registry
+            .commit_workspace_transition(&owner, generation, "http://127.0.0.1:3011".to_string())
+            .expect("transition commits");
+        drop(permit_a);
+        drop(permit_b);
+        let reply = reply_task.await.unwrap();
+        assert_eq!(reply["type"], "error", "{reply:?}");
+        assert_eq!(reply["error"]["code"], "unauthorized_target");
     }
 
     #[tokio::test]

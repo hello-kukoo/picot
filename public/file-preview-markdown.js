@@ -84,6 +84,11 @@ function isSafeLink(href) {
   }
 }
 
+// Converted documents accept only base64 raster data URIs (png/jpeg/gif/
+// webp); every other source (SVG, remote, relative, unknown MIME) becomes
+// localized text (spec 2026-09-17).
+const RASTER_DATA_IMAGE = /^data:image\/(png|jpe?g|gif|webp);base64,/i;
+
 function isSafeImageSrc(src) {
   if (!src) return true;
   const trimmed = src.trim();
@@ -153,14 +158,14 @@ function sanitizeNode(node, { convertedDocument = false, remoteImageHiddenText }
       }
       if (tagName === "img" && attrName === "src") {
         const allowed = convertedDocument
-          ? attr.value.trim().toLowerCase().startsWith("data:image/")
+          ? RASTER_DATA_IMAGE.test(attr.value.trim())
           : isSafeImageSrc(attr.value);
         if (!allowed) {
           if (convertedDocument) {
             const replacement = document.createElement("span");
             replacement.className = "file-markdown-remote-image-hidden";
             replacement.textContent =
-              remoteImageHiddenText || t("files.preview.markitdown.remoteImageHidden");
+              remoteImageHiddenText || t("files.preview.converted.remoteImageHidden");
             child.replaceWith(replacement);
           } else {
             child.removeAttribute("src");
@@ -201,9 +206,13 @@ function sanitizeNode(node, { convertedDocument = false, remoteImageHiddenText }
  */
 export function renderFileMarkdown(markdownText, options = {}) {
   const rawHtml = renderMarkdown(markdownText || "");
-  const template = document.createElement("template");
-  template.innerHTML = rawHtml;
-  const fragment = template.content.cloneNode(true);
+  // Parse the rendered markdown into an inert document (scripts never
+  // execute), then sanitizeNode() — this module IS the sanitizer.
+  const parsed = new DOMParser().parseFromString(rawHtml, "text/html");
+  const fragment = document.createDocumentFragment();
+  while (parsed.body.firstChild) {
+    fragment.appendChild(parsed.body.firstChild);
+  }
   sanitizeNode(fragment, options);
   return fragment;
 }

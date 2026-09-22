@@ -3,7 +3,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
-  CONVERTIBLE_SUFFIXES,
   classifyFile,
   readTextFileForPreview,
   resolveScopedFilePath,
@@ -227,9 +226,12 @@ describe("classifyFile", () => {
 });
 
 describe("server/frontend suffix parity", () => {
-  test("keeps the frontend mirror aligned with the server allowlist", async () => {
-    const { CONVERTIBLE_SUFFIXES_MIRROR } = await import("../public/file-language.js");
-    expect([...CONVERTIBLE_SUFFIXES_MIRROR].sort()).toEqual([...CONVERTIBLE_SUFFIXES].sort());
+  test("the frontend office mirror is retired: the host owns the candidate list", async () => {
+    // The anydoc preview design (2026-09-17) removed the browser-side
+    // allowlist; the v2 host is the only candidate authority. The compat
+    // classifier here keeps its own independent list.
+    const exports = await import("../public/file-language.js");
+    expect(exports.CONVERTIBLE_SUFFIXES_MIRROR).toBeUndefined();
   });
 });
 

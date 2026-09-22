@@ -24,7 +24,7 @@ beforeEach(async () => {
             loading: isChinese ? "加载中..." : "Loading...",
             preview: {
               copyFailed: isChinese ? "复制失败" : "Copy failed",
-              markitdown: {
+              converted: {
                 remoteImageHidden: isChinese ? "已隐藏远程图片" : "Remote image hidden",
               },
             },

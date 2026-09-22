@@ -36,14 +36,8 @@ beforeEach(async () => {
               unsupportedBinary: "Unsupported binary",
               preview: "Preview",
               edit: "Edit",
-              markitdown: {
-                pythonMissing: "Install Python 3.10 or later to preview this file.",
-                pythonTooOld: "Python {version} is too old. Install Python 3.10 or later.",
-                markitdownMissing: "Install MarkItDown to preview this file.",
-                markitdownIncompatible:
-                  "Update MarkItDown to a version that supports stdin conversion.",
-                installPosix: "python3 -m pip install markitdown",
-                installWindows: "py -3 -m pip install markitdown",
+              converted: {
+                remoteImageHidden: "Remote image hidden",
               },
             },
             unsaved: { title: "Unsaved changes" },
@@ -236,24 +230,6 @@ describe("FilePreviewPanel", () => {
     p.destroy();
   });
 
-  test("maps an old Python dependency response to localized guidance", async () => {
-    global.fetch = vi.fn(() =>
-      Promise.resolve({
-        ok: true,
-        json: async () => ({
-          previewStatus: "dependencyUnavailable",
-          dependencyReason: "pythonTooOld",
-          pythonVersion: "3.9.7",
-          editable: false,
-        }),
-      }),
-    );
-    const p = createPanel();
-    await p.openFile("/test/workspace/report.docx");
-    expect(content.textContent).toContain("Python 3.9.7 is too old");
-    expect(content.textContent).not.toContain("stderr");
-    p.destroy();
-  });
   test("starts collapsed", () => {
     const p = createPanel();
     expect(panel.classList.contains("collapsed")).toBe(true);
@@ -386,13 +362,67 @@ describe("FilePreviewPanel", () => {
     p.destroy();
   });
 
-  test("uses the server-discovered Python command in dependency guidance", async () => {
+  test("renders a ready converted preview as read-only markdown with no edit affordance", async () => {
+    global.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: async () => ({
+          previewStatus: "ready",
+          renderAs: "markdown",
+          content: "# Converted report",
+          editable: false,
+          isBinary: false,
+          truncated: false,
+        }),
+      }),
+    );
+    const p = createPanel();
+    await p.openFile("/test/workspace/report.docx");
+    expect(content.querySelector(".file-markdown-preview")).not.toBeNull();
+    expect(content.querySelector(".file-markdown-preview").textContent).toContain(
+      "Converted report",
+    );
+    expect(p.state.getTab("file:/test/workspace/report.docx").editable).toBe(false);
+    p.destroy();
+  });
+
+  test("a candidate tab stays loading-neutral until the response settles", async () => {
+    let release = null;
+    global.fetch = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          release = () =>
+            resolve({
+              ok: true,
+              json: async () => ({
+                previewStatus: "ready",
+                renderAs: "markdown",
+                content: "# Late",
+                editable: false,
+              }),
+            });
+        }),
+    );
+    const p = createPanel();
+    const opened = p.openFile("/test/workspace/report.docx");
+    await Promise.resolve();
+    expect(content.querySelector(".file-preview-loading")).not.toBeNull();
+    expect(content.querySelector(".cm-editor")).toBeNull();
+    release();
+    await opened;
+    expect(content.querySelector(".file-markdown-preview")).not.toBeNull();
+    p.destroy();
+  });
+
+  test("a stale dependencyUnavailable response surfaces no install guidance", async () => {
+    // The Python dependency flow is retired; a stale host response must
+    // never surface install guidance again.
     global.fetch = vi.fn(() =>
       Promise.resolve({
         ok: true,
         json: async () => ({
           previewStatus: "dependencyUnavailable",
-          dependencyReason: "markitdownMissing",
+          dependencyReason: "retiredFlow",
           displayCommand: "python",
           editable: false,
         }),
@@ -400,11 +430,9 @@ describe("FilePreviewPanel", () => {
     );
     const p = createPanel();
     await p.openFile("/test/workspace/report.docx");
-    expect(content.textContent).toContain("python -m pip install");
-    expect(content.textContent).not.toContain("python3 -m pip install");
+    expect(content.textContent).not.toContain("pip install");
     p.destroy();
   });
-
   test("aborts the old load when switching tabs and reloads it when selected again", async () => {
     const pending = new Map();
     global.fetch = vi.fn((url, options) => {
@@ -417,9 +445,11 @@ describe("FilePreviewPanel", () => {
     });
     const p = createPanel();
     const first = p.openFile("/test/workspace/a.docx");
+    await Promise.resolve();
     const firstRequest = pending.get("/test/host-file-read?path=a.docx");
     const second = p.openFile("/test/workspace/b.docx");
     expect(firstRequest.options.signal.aborted).toBe(true);
+    await Promise.resolve();
     firstRequest.resolve({ ok: true, json: async () => ({ content: "stale" }) });
     pending.get("/test/host-file-read?path=b.docx").resolve({
       ok: true,
@@ -436,7 +466,9 @@ describe("FilePreviewPanel", () => {
     p.destroy();
   });
 
-  test("finishes independent loads when files resolve out of order", async () => {
+  test("switching tabs aborts the in-flight load; re-selecting reloads it", async () => {
+    // Spec 2026-09-17: switching away uses the generic loading predicate —
+    // ANY in-flight file request is aborted, not only a guessed Office one.
     const pending = new Map();
     global.fetch = vi.fn(
       (url) =>
@@ -447,12 +479,15 @@ describe("FilePreviewPanel", () => {
     const p = createPanel();
 
     const firstLoad = p.openFile("/test/workspace/a.js");
+    await Promise.resolve();
     const secondLoad = p.openFile("/test/workspace/b.js");
+    await Promise.resolve();
     pending.get("/test/host-file-read?path=b.js")({
       ok: true,
       json: async () => ({ content: "const b = 1;\n", mtimeMs: 2 }),
     });
     await secondLoad;
+    // The aborted a.js response arrives late and must be discarded.
     pending.get("/test/host-file-read?path=a.js")({
       ok: true,
       json: async () => ({ content: "const a = 1;\n", mtimeMs: 1 }),
@@ -460,9 +495,27 @@ describe("FilePreviewPanel", () => {
     await firstLoad;
 
     expect(p.state.getTab("file:/test/workspace/a.js")?.loading).toBe(false);
-    expect(p.state.getTab("file:/test/workspace/a.js")?.content).toBe("const a = 1;\n");
+    expect(p.state.getTab("file:/test/workspace/a.js")?.content).toBeNull();
     expect(p.state.getTab("file:/test/workspace/b.js")?.content).toBe("const b = 1;\n");
     expect(p.state.getActiveTab()?.filePath).toBe("/test/workspace/b.js");
+
+    // Re-selecting a reloads it through a fresh request.
+    const reloaded = new Map();
+    global.fetch = vi.fn(
+      (url) =>
+        new Promise((resolve) => {
+          reloaded.set(String(url), resolve);
+        }),
+    );
+    const select = tabBar.querySelector('[data-tab-id="file:/test/workspace/a.js"]');
+    select.click();
+    await Promise.resolve();
+    reloaded.get("/test/host-file-read?path=a.js")({
+      ok: true,
+      json: async () => ({ content: "const a = 1;\n", mtimeMs: 1 }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(p.state.getTab("file:/test/workspace/a.js")?.content).toBe("const a = 1;\n");
     p.destroy();
   });
 

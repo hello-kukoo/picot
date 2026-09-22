@@ -18,6 +18,9 @@ tauri-build = { version = "2", features = [] }
 p8-delete-legacy = []
 
 [dependencies]
+# Exact pin: reviewed release; any bump requires a dependency-tree audit and
+# a contract test of every PreviewErrorCode mapping (spec 2026-09-17).
+anydoc = "=0.2.4"
 tauri = { version = "2", features = ["image-png", "devtools", "macos-private-api"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"

@@ -249,6 +249,21 @@ Pi 以 `~/.pi/agent/trust.json`（键为 canonical 路径，值为 true/false/nu
 - **查询语义**：`skill_scope_context` 改用 `is_project_trusted`，对齐 Pi 的 `findNearestTrustEntry`——从项目根向上找最近的 true/false 条目（更近的显式 `false` 覆盖受信父目录），null/缺失继续上溯，无条目则不信任。
 
 ## 兼容路由（P8 删除候选）
+## Office 文件原生预览（anydoc）
+
+选中候选 Office 文件（后缀 `doc/docx/rtf/odt/ppt/pptx/odp/xls/xlsx/ods` 共十种）时，`file_read` 走内嵌 `anydoc` crate（精确 pin `=0.2.4`，MIT）的原生转换分支，产物为只读 Markdown（`previewStatus:"ready"` + `renderAs:"markdown"`）。安全与资源边界：
+
+- **输入上限分层**：普通读保持 8 MiB（`host_files::read`）；仅候选分支经 `read_with_cap` 用 32 MiB 专用上限。
+- **输出上限**：转换 Markdown 超 2 MiB UTF-8 即失败（远低于 WebSocket 响应上限的 JSON 转义最坏情形）。
+- **并发**：进程级两枚信号量 permit；请求先过 permit 才读盘/检测/解析，permit 随 blocking 闭包持有到缓冲区全部离开作用域。第三份并发请求只会等待，不占输入内存。提高上限需先做 macOS/Windows 双平台峰值 RSS 基准。
+- **授权跨长任务**：`PreviewScope`（owner/workspace/generation）在 permit 等待前、permit 到手后、解析完成后三点重校验；workspace 转场中途落地则丢弃结果返回 `unauthorized_target`，绝不返回旧内容。
+- **无硬取消**：进程内解析不可强停；浏览器 abort 只是忽略响应，不释放运行中转换的 permit。需要硬超时/硬取消时必须改为可杀死的隔离 worker 进程。
+- **错误去敏**：adapter（`anydoc_preview.rs`）持有封闭错误码枚举，AnyDoc 细节（part 名、限额、路径、字节、Display 文案）不出模块、不进日志（host 只可记录固定码）；浏览器只见通用 `conversionFailed`。`ConvertError` 为 `#[non_exhaustive]`，通配分支只映 `Internal`。升级 anydoc 版本须重审依赖树 + 全错误码契约测试。
+- **fail-closed**：候选后缀但内容检测为 PDF → `conversionFailed`，绝不改道 PDF 原始路由；检测出的非 Office 格式（EPUB/CSV 等）同样拒绝。
+- **图片策略**：转换文档的 Markdown 渲染只接受 base64 栅格 data URI（png/jpeg/gif/webp），其余来源（SVG/远程/相对/未知 MIME）替换为本地化文本 `files.preview.converted.remoteImageHidden`。
+- **无网络/无 OCR**：不调用 AnyDoc 托管 OCR/API key/任何网络路径；PDF 留在既有 PDF 预览路由。
+
+## 兼容路由（P8 删除候选）
 
 `/api/*` compatibility routes maintain existing shell behavior on host origin. Each route uses owner capability authorization. Runtime traffic must use `/v2/*` and `/v2/ws`; retained HTTP routes are explicit compatibility or retirement responses, never Pi-origin forwarding.
 
