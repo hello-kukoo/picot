@@ -220,3 +220,78 @@ describe("QuestionnaireCard abandon and teardown", () => {
     expect(container.querySelector(".questionnaire-card-overlay")).toBeNull();
   });
 });
+
+describe("QuestionnaireCard capture and restore across session switches", () => {
+  it("captures state without answering the pending request, then restores it", () => {
+    const { card, container, sent } = makeCard();
+    start(card, [{ prompt: "Pick one", options: [{ label: "One" }, { label: "Two" }] }]);
+    container.querySelectorAll("input[type='radio']")[1].click();
+    expect(
+      card.handleRequest({
+        id: "q-park",
+        method: "select",
+        title: "Pick one",
+        options: ["1. One", "2. Two"],
+      }),
+    ).toBe(true);
+
+    const state = card.captureAndClear();
+    expect(card.isActive()).toBe(false);
+    expect(container.querySelector(".questionnaire-card-overlay")).toBeNull();
+    // Parking must not answer the walker: the runtime keeps waiting by design.
+    expect(sent).toEqual([]);
+    expect(state.pendingRequest?.id).toBe("q-park");
+    expect(state.answers[0].selected).toBe(1);
+
+    expect(card.restore(state)).toBe(true);
+    expect(card.isActive()).toBe(true);
+    expect(container.querySelector(".questionnaire-card-overlay")).not.toBeNull();
+    expect(card.pendingRequest?.id).toBe("q-park");
+    // Submitting after the round trip answers the parked request.
+    card.submit();
+    expect(sent.at(-1)).toEqual({
+      type: "extension_ui_response",
+      id: "q-park",
+      value: "2. Two",
+    });
+  });
+
+  it("restores a multi-select card with its checkbox selections intact", () => {
+    const { card, container } = makeCard();
+    start(card, [
+      { prompt: "Pick any", multiSelect: true, options: [{ label: "A" }, { label: "B" }] },
+    ]);
+    container.querySelectorAll("input[type='checkbox']")[0].click();
+
+    const state = card.captureAndClear();
+    card.restore(state);
+    const boxes = container.querySelectorAll("input[type='checkbox']");
+    expect(boxes[0].checked).toBe(true);
+    expect(boxes[1].checked).toBe(false);
+  });
+
+  it("restores an already-submitted card and answers replayed requests instantly", () => {
+    const { card, sent } = makeCard();
+    start(card, [{ prompt: "Pick one", options: [{ label: "One" }] }]);
+    card.submit();
+
+    const state = card.captureAndClear();
+    expect(card.restore(state)).toBe(true);
+    expect(
+      card.handleRequest({
+        id: "q-drain",
+        method: "select",
+        title: "Pick one",
+        options: ["1. One", "2. Type something."],
+      }),
+    ).toBe(true);
+    expect(sent.at(-1)).toEqual({ type: "extension_ui_response", id: "q-drain", value: "1. One" });
+    expect(card.isActive()).toBe(false);
+  });
+
+  it("restore rejects empty or missing state", () => {
+    const { card } = makeCard();
+    expect(card.restore(null)).toBe(false);
+    expect(card.restore({ questions: [], answers: [], cursor: 0 })).toBe(false);
+  });
+});

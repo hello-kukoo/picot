@@ -6353,7 +6353,8 @@ details.sg-section > summary {
 /* Timestamp + cost share one styling: same font size, colour, tabular numerals. */
 .message-time,
 .message-usage,
-.message-duration {
+.message-duration,
+.turn-duration {
   font-size: var(--text-meta);
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;

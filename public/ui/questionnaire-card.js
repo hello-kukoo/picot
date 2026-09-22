@@ -209,6 +209,46 @@ export class QuestionnaireCard {
     if (!event?.toolCallId || event.toolCallId === this.toolCallId) this.teardown();
   }
 
+  /**
+   * Capture the live card state without answering the pending walker
+   * request, then clear it. Used when the user switches sessions: the
+   * runtime keeps waiting and `restore()` rebuilds the card when the
+   * session returns. Callers that want the old cancel-on-switch behavior
+   * must use `teardown()` instead.
+   */
+  captureAndClear() {
+    const state = {
+      questions: this.questions,
+      answers: this.answers,
+      toolCallId: this.toolCallId,
+      cursor: this.cursor,
+      submitted: this.submitted,
+      pendingRequest: this.pendingRequest,
+      pendingSentinel: this.pendingSentinel,
+      cancelRequested: this.cancelRequested,
+    };
+    this.clear();
+    return state;
+  }
+
+  /** Rebuild the card from a state captured by `captureAndClear`. */
+  restore(state) {
+    if (this._destroyed || !Array.isArray(state?.questions) || state.questions.length === 0) {
+      return false;
+    }
+    this.questions = state.questions;
+    this.answers = state.answers;
+    this.toolCallId = state.toolCallId ?? null;
+    this.cursor = state.cursor || 0;
+    this.submitted = state.submitted === true;
+    this.pendingRequest = state.pendingRequest ?? null;
+    this.pendingSentinel = state.pendingSentinel === true;
+    this.cancelRequested = state.cancelRequested === true;
+    this.confirming = false;
+    this.render();
+    return true;
+  }
+
   handleSessionSwitch() {
     this.teardown();
   }
@@ -226,6 +266,7 @@ export class QuestionnaireCard {
     this.cursor = 0;
     this.submitted = false;
     this.cancelRequested = false;
+    this.confirming = false;
     this.overlay?.remove();
     this.overlay = null;
   }

@@ -205,7 +205,7 @@ pi runtime 的存活不依赖 Picot 的 teardown：`pi` 在 stdin EOF 时退出�
 
 ## Widget mirror registry
 
-The main chat mirrors Pi `setWidget` payloads through `public/ui/widget-mirror-registry.js`. Ambient panels are keyed by the pushing runtime identity, so switching sessions hides inactive runtime panels and restores them when that runtime returns. Registered renderers such as rpiv-todo may consume tool results and history replay; unknown widget keys use a tolerant preformatted text panel. Blocking questionnaire UI is intentionally separate in `public/ui/questionnaire-card.js` because it has a one-shot lifecycle and must own cancellation and response draining.
+The main chat mirrors Pi `setWidget` payloads through `public/ui/widget-mirror-registry.js`. Ambient panels are keyed by the pushing runtime identity, so switching sessions hides inactive runtime panels and restores them when that runtime returns. Registered renderers such as rpiv-todo may consume tool results and history replay; unknown widget keys use a tolerant preformatted text panel. Blocking questionnaire UI is intentionally separate in `public/ui/questionnaire-card.js` because it has a one-shot lifecycle and must own cancellation and response draining. Because runtimes survive session switches, that card state (plus any walker requests already in flight) parks in `public/ui/background-questionnaire-store.js` keyed by session file / runtime id instead of being destroyed: a backgrounded runtime's `extension_ui_request` queues there with a sidebar unread badge, and the foreground mirror-sync path rebuilds the card and replays the queue when the user returns to that session.
 
 ## Settings 数据面（/picot-config 桥）
 

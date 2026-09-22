@@ -1,5 +1,5 @@
 // ABOUTME: Turn section DOM — one <section class="turn"> per agent turn with
-// ABOUTME: user / status / rail / answer slots (spec P1.2). Pure DOM assembly.
+// ABOUTME: user / rail / answer / status slots (spec P1.2). Pure DOM assembly.
 import { t } from "../i18n.js";
 import { createProcessDetailsGroup } from "./process-group.js";
 import { formatTurnDuration } from "./turn-model.js";
@@ -10,11 +10,15 @@ let localTurnCounter = 0;
  * Build one turn section. The rail is a process-details group that starts
  * EXPANDED while the turn is live (items stream into it) and collapses to the
  * summarized label when the turn settles. The status row has a fixed height
- * so phase text changes (working → worked-for) never reflow the transcript.
+ * so phase text changes (working → worked-for) never reflow the transcript,
+ * and renders LAST: auto-scroll keeps the bottom edge visible, so the live
+ * model + elapsed readout stays on screen while the rail and answer grow
+ * above it. On settle the row moves its duration into the answer's action
+ * toolbar and removes itself, so a finished turn reports one meta line.
  *
  * `modelLabel` is optional display text for the live status row.
  * `withStatus: false` builds the history variant — the same turn layout
- * minus the status header (logs carry no run duration; the live status is
+ * minus the status row (logs carry no run duration; the live status is
  * not reconstructable), as the chat-window spec describes history rendering.
  */
 export function createTurnSection({
@@ -54,10 +58,10 @@ export function createTurnSection({
   const answer = document.createElement("div");
   answer.className = "turn-answer";
 
-  // The user slot sits before everything else; with no status row the rail
-  // wrapper is the first element to insert the user bubble before.
-  const userSlotRef = status ?? group.wrapper;
-  section.append(...(status ? [status] : []), group.wrapper, answer);
+  // The user slot sits before everything else: the rail wrapper is always the
+  // first element to insert the user bubble before.
+  const userSlotRef = group.wrapper;
+  section.append(group.wrapper, answer, ...(status ? [status] : []));
 
   let elapsedTimer = null;
   const liveParts = () => {
@@ -99,9 +103,25 @@ export function createTurnSection({
           clearInterval(elapsedTimer);
           elapsedTimer = null;
         }
+        const label = formatTurnDuration(durationMs);
+        // A finished turn reports ONE line: the duration joins the answer's
+        // action toolbar (… · 用时 12s) instead of stacking a second meta row
+        // under it. The toolbar is the last .message-actions in the answer
+        // slot — the only assistant element the streaming path gives one.
+        const rows = label ? answer.querySelectorAll(".message-actions") : [];
+        const actions = rows.length ? rows[rows.length - 1] : null;
+        if (actions) {
+          const span = document.createElement("span");
+          span.className = "turn-duration";
+          span.textContent = t("messages.turnWorkedFor", { duration: label });
+          actions.appendChild(span);
+          status.remove();
+          return;
+        }
+        // No toolbar to merge into (aborted turn or a text-less run): keep the
+        // standalone row so the phase change still lands somewhere.
         status.classList.remove("live");
         status.classList.add("settled");
-        const label = formatTurnDuration(durationMs);
         statusText.textContent = label ? t("messages.turnWorkedFor", { duration: label }) : "";
         spinner.remove();
       },

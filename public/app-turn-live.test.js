@@ -179,10 +179,13 @@ test("a scripted live turn renders rail + answer + settled status in one section
   expect(answerMessages[0].dataset.entryId).toBe("e2");
   expect(answerMessages[0].querySelector(".message-actions")).not.toBeNull();
 
-  // Status settled, rail folded to its summary label.
-  const status = section.querySelector(".turn-status");
-  expect(status.classList.contains("settled")).toBe(true);
-  expect(status.textContent).toContain("Worked for");
+  // Settled: the readout merges into the answer's toolbar as its last item and
+  // the standalone status row is gone — a finished turn is one meta line.
+  expect(section.querySelector(".turn-status")).toBeNull();
+  const duration = section.querySelector(".turn-answer .message-actions .turn-duration");
+  expect(duration).not.toBeNull();
+  expect(duration.textContent).toContain("Worked for");
+  expect(duration.parentElement.lastElementChild).toBe(duration);
   expect(section.querySelector(".turn-rail").classList.contains("expanded")).toBe(false);
   expect(section.querySelector(".process-details-label").textContent).toContain("2");
   expect(section.querySelector(".process-details-label").textContent).toContain("1");

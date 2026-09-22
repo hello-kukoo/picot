@@ -3,7 +3,10 @@
 **Status:** Approved by Dr. Lin on 2026-09-13 (grilling session, Q1–Q4);
 revised same day after spec review (background correction, verbatim
 payload echo, overlay layering, request matching, abort teardown, i18n
-namespace).
+namespace). Revised 2026-09-22: runtimes survive session switches, so
+session switch and background emission now park questionnaire state
+(`public/ui/background-questionnaire-store.js`) instead of destroying it —
+see "Background and session-switch semantics".
 **Date:** 2026-09-13
 
 ## Goal
@@ -89,17 +92,50 @@ third case appears.
    submission enters answer-drain mode, consuming arriving requests in
    walker order.
 4. Teardown (card state destroyed; later requests fall through): on
-   `tool_execution_end` (any outcome), session switch, page reload,
-   confirmed abandon, or abort (`wsClient` abort + socket close) —
-   whether `tool_execution_end` fires reliably on a mid-tool abort is not
-   contractually established in pi, so the abort listener is the belt to
-   that suspender.
+   `tool_execution_end` (any outcome), page reload, confirmed abandon, or
+   abort (`wsClient` abort + socket close) — whether `tool_execution_end`
+   fires reliably on a mid-tool abort is not contractually established in
+   pi, so the abort listener is the belt to that suspender. Session switch
+   no longer destroys the card: it parks it (see below) because the
+   runtime survives the switch and keeps waiting on
+   `extension_ui_response`.
 
 ### Abandon path
 
 Abandon button / Esc → confirm dialog → `respond(id, { cancelled: true })`
 on the in-flight request → walker returns `cancelled` envelope → agent sees
 DECLINE (identical to TUI Esc).
+
+## Background and session-switch semantics (2026-09-22 revision)
+
+Pi runtimes are not killed when the user switches sessions or workspaces.
+Without parking, two flows strand a waiting runtime forever: a
+questionnaire emitted by a runtime that is already backgrounded (the
+background event path only handled `setWidget`/`notify`), and a visible
+card cleared by a session switch before the walker's request arrived.
+
+`public/ui/background-questionnaire-store.js` is a per-session parking lot
+keyed by session file with runtime-id fallback:
+
+- Background `tool_execution_start` (`ask_user_question`) parks the tool
+  `args.questions` and `toolCallId`.
+- Background blocking `extension_ui_request` (`select`/`input`/`confirm`/
+  `editor`) queues in arrival order and badges the session via the
+  existing sidebar unread dot; no modal ever pops for a non-foreground
+  session. Ambient methods (`notify`/`setWidget`/`setStatus`) are not
+  parked — they keep their existing background paths.
+- Session switch captures the live card via `captureAndClear()` — the
+  pending walker request is **not** answered (no `cancelled` on switch);
+  answers, cursor, and submit state travel with the captured state.
+- The foreground mirror-sync path takes the parked entry once, rebuilds
+  the card (`restore()` or `start()` from parked args), and replays the
+  queued requests in order; an already-submitted card drains them
+  immediately. Entries whose questions were never captured replay through
+  `dialogHandler` as generic dialogs — never worse than the status quo.
+- `tool_execution_end` arriving for the parked `toolCallId` drops the
+  entry (the tool finished elsewhere); abandoning a restored card answers
+  `cancelled` as before. Entries are in-memory only — a page reload drops
+  them together with the runtime connection, which the abort path owns.
 
 ## Hard constraints
 
@@ -128,7 +164,16 @@ copy.)
   responds `{ value: "" }` (not cancelled), sentinel input pairing,
   abandon-confirm → cancelled response, fall-through both when no card
   state exists and when a live request fits no cursor state, teardown on
-  tool end / session switch / abort.
+  tool end / session switch / abort, plus capture/restore round trips
+  (parking must not answer the pending request; restored cards keep
+  answers, cursor, and checkbox state; submitted cards drain replayed
+  requests instantly).
+- New `public/ui/background-questionnaire-store.test.js`: parking a
+  background tool start, queueing only blocking methods, merge with a
+  parked active card, drop on the parked tool's end, single-shot take by
+  session file or runtime id, and no cross-session handout.
 - Manual: run a 4-question questionnaire with previews and multiSelect in
-  `bun run dev`.
+  `bun run dev`; trigger a questionnaire in session A, switch to session B
+  (card parks, A badges unread), answer another prompt, return to A and
+  finish the parked questionnaire.
 - `bun run check`, focused vitest, then `bun run test`.

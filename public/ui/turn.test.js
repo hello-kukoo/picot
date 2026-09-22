@@ -30,14 +30,16 @@ describe("createTurnSection", () => {
     delete globalThis.fetch;
   });
 
-  test("section exposes status / rail / answer slots in order", () => {
+  test("section exposes rail / answer / status slots in order", () => {
     const turn = createTurnSection({ turnId: "t-42" });
     expect(turn.element.classList.contains("turn")).toBe(true);
     expect(turn.element.dataset.turnId).toBe("t-42");
     const slots = [...turn.element.children].map((el) => el.className);
-    expect(slots[0]).toContain("turn-status");
-    expect(slots[1]).toContain("turn-rail");
-    expect(slots[2]).toContain("turn-answer");
+    // The status row is last so the live model + elapsed readout stays at the
+    // bottom edge, where auto-scroll keeps it visible while content streams in.
+    expect(slots[0]).toContain("turn-rail");
+    expect(slots[1]).toContain("turn-answer");
+    expect(slots[2]).toContain("turn-status");
     expect(turn.rail.host.classList.contains("process-details-body")).toBe(true);
   });
 
@@ -104,6 +106,27 @@ describe("createTurnSection", () => {
     }
   });
 
+  test("settled duration merges into the answer toolbar and drops the status row", () => {
+    const turn = createTurnSection({ turnId: "t-merge", startedAt: Date.now() });
+    document.getElementById("m").appendChild(turn.element);
+    turn.status.setLive();
+    // Only the last assistant element carries a toolbar (demoted rail rows
+    // have theirs stripped), so the merge target is the answer slot's own.
+    const message = document.createElement("div");
+    message.className = "message assistant";
+    const actions = document.createElement("div");
+    actions.className = "message-actions";
+    message.appendChild(actions);
+    turn.answer.host.appendChild(message);
+
+    turn.status.setSettled(12000);
+
+    expect(actions.lastElementChild.classList.contains("turn-duration")).toBe(true);
+    expect(actions.lastElementChild.textContent).toBe("Worked for 12s");
+    // One meta line: the standalone status row is gone.
+    expect(turn.element.querySelector(".turn-status")).toBeNull();
+    expect(turn.element.lastElementChild.classList.contains("turn-answer")).toBe(true);
+  });
   test("withStatus:false builds the history variant — no status row", () => {
     const turn = createTurnSection({ turnId: "h-1", withStatus: false });
     expect(turn.element.querySelector(".turn-status")).toBeNull();
