@@ -481,7 +481,7 @@
   "terminal": {
     "toggle": "切换终端",
     "panelLabel": "终端",
-    "collapse": "折叠终端",
+    "collapse": "收起终端面板",
     "newTab": "新建终端",
     "profileDefault": "默认",
     "profileGitBash": "Git Bash",

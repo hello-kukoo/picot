@@ -481,7 +481,7 @@
   "terminal": {
     "toggle": "ターミナルを切り替え",
     "panelLabel": "ターミナル",
-    "collapse": "ターミナルを折りたたむ",
+    "collapse": "ターミナルパネルを折りたたむ",
     "newTab": "新しいターミナル",
     "profileDefault": "デフォルト",
     "profileGitBash": "Git Bash",

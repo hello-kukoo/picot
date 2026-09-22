@@ -481,7 +481,7 @@
   "terminal": {
     "toggle": "Alternar terminal",
     "panelLabel": "Terminal",
-    "collapse": "Colapsar terminal",
+    "collapse": "Contraer panel de terminal",
     "newTab": "Nueva terminal",
     "profileDefault": "Predeterminado",
     "profileGitBash": "Git Bash",

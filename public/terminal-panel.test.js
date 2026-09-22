@@ -220,6 +220,14 @@ test("enlarging keeps the terminal tab bar and panel controls mounted", async ()
   expect(panel.root.querySelector("[data-terminal-collapse]")).not.toBeNull();
   expect(panel.root.querySelector(".terminal-body")).not.toBeNull();
 
+  // The panel-level control only hides the panel, so it must not wear the X
+  // that closes a tab: it is the minus glyph, and it is labelled.
+  const collapse = panel.root.querySelector("[data-terminal-collapse]");
+  expect(collapse.querySelector("svg path").getAttribute("d")).toBe("M5 12h14");
+  // This suite mocks t() as key passthrough; the wording lives in the locales.
+  expect(collapse.getAttribute("aria-label")).toBe("terminal.collapse");
+  expect(collapse.title).toBe("terminal.collapse");
+
   panel.toggleEnlarge();
   expect(panel.root.classList.contains("enlarged")).toBe(false);
 });

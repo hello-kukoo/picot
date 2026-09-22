@@ -93,12 +93,17 @@ export class TerminalPanel {
       this.resizeObserver.observe(this.bodyEl);
     }
 
-    const closeButton = document.createElement("button");
-    closeButton.type = "button";
-    closeButton.className = "terminal-collapse";
-    closeButton.dataset.terminalCollapse = "";
-    setButtonIcon(closeButton, "x", { size: 16 });
-    closeButton.addEventListener("click", () => this.collapse());
+    // A horizontal bar, never an X: this only hides the panel — tabs and their
+    // PTYs survive. The tab-level X and the window-close dialog are the real
+    // closes, so the panel control must not look like one of them.
+    const collapseButton = document.createElement("button");
+    collapseButton.type = "button";
+    collapseButton.className = "terminal-collapse";
+    collapseButton.dataset.terminalCollapse = "";
+    collapseButton.title = t("terminal.collapse");
+    collapseButton.setAttribute("aria-label", t("terminal.collapse"));
+    setButtonIcon(collapseButton, "minus", { size: 16 });
+    collapseButton.addEventListener("click", () => this.collapse());
 
     this.enlargeButton = document.createElement("button");
     this.enlargeButton.type = "button";
@@ -118,7 +123,7 @@ export class TerminalPanel {
     newTabButton.addEventListener("click", () => {
       if (!this.locked) this.client?.create?.("default");
     });
-    this.tabBarEl.append(newTabButton, this.enlargeButton, closeButton);
+    this.tabBarEl.append(newTabButton, this.enlargeButton, collapseButton);
     this.root.append(resizer, this.tabBarEl, this.bodyEl);
     toggleContainer.appendChild(this.toggleEl);
     panelContainer.appendChild(this.root);
