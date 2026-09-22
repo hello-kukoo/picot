@@ -9,6 +9,7 @@ import { createComposerDraftStore } from "./app/composer-draft-store.js";
 import { resolveComposerSessionIdentity } from "./app/composer-session-identity.js";
 import { installHostOriginFetch } from "./app/host-origin.js";
 import { createPromptDelivery } from "./app/prompt-delivery.js";
+import { createSessionViewCache, viewMatchesStamp } from "./app/session-view-cache.js";
 import { StateManager } from "./app/state.js";
 import { initTransport } from "./app/transport.js";
 import { createAppUpdater } from "./app/updater.js";
@@ -780,6 +781,17 @@ const sessionUiState = new SessionUiStateStore({
   },
 });
 let activeUiSessionFile = null;
+// Session-resident views Phase A: per-session cached entries + view state,
+// enabling no-op switch-back without snapshot/disk reads.
+const sessionViewCache = createSessionViewCache();
+// File stamps from the sidebar row the user actually clicked (the row IS the
+// authoritative stamp source); fallback when the row walk finds no project.
+const selectStamps = new Map();
+// One-shot gate-reveal seed consumed by the next renderSessionHistory.
+let pendingRevealRestore = null;
+// True while a cached view is being re-rendered: the restored scroll target
+// must win over the post-render bottom anchor.
+let restoringCachedView = false;
 // Monotonic counter bumped whenever restoreSessionUiState binds a different
 // session. applySessionUiProfile captures it before each await and bails when
 // the token changes, so a profile restore that resumes after the user has
@@ -2769,6 +2781,21 @@ function handleBackgroundRPCEvent(sessionFile, event, runtimeId) {
     }
     case "message_end":
       sidebar.markUnread(sessionFile);
+      // Phase A: keep a cached (background) session's entries current so the
+      // switch-back no-op serves fresh content without re-reading the file.
+      if (sessionFile && sessionFile !== activeUiSessionFile) {
+        sessionViewCache.appendMessage(sessionFile, event.message, event.entryId);
+      }
+      break;
+    case "compaction_end":
+      // A background compaction rewrote the session file: cached entries are
+      // structurally stale (context replaced), drop them.
+      sessionViewCache.invalidate(sessionFile);
+      break;
+    case "session_tree":
+      // The background session's active leaf moved: the cached render path
+      // no longer matches; invalidate so the next visit re-syncs.
+      sessionViewCache.invalidate(sessionFile);
       break;
     case "tool_execution_start":
       // ask_user_question in a background session parks its card state; the
@@ -5339,6 +5366,22 @@ function handleSessionSelect(session, project) {
 }
 
 async function handleSessionSelectImpl(session, project) {
+  // Phase A: capture the outgoing session's live view state before any
+  // rebinding, so a later switch-back restores the exact reading position.
+  if (activeUiSessionFile) {
+    sessionViewCache.captureLeave(activeUiSessionFile, {
+      scrollTop: messagesContainer.scrollTop,
+      revealedCount: Number.isFinite(historyGate?.revealedCount) ? historyGate.revealedCount : null,
+      stamp: sidebarSessionStamp(activeUiSessionFile),
+    });
+  }
+  if (session?.filePath) {
+    selectStamps.set(session.filePath, {
+      mtimeMs: Number(session.mtime) || null,
+      sizeBytes: typeof session.sizeBytes === "number" ? session.sizeBytes : null,
+    });
+    while (selectStamps.size > 20) selectStamps.delete(selectStamps.keys().next().value);
+  }
   logSessionRoute("select:start", {
     selectedSession: session?.filePath,
     projectPath: project?.path,
@@ -5457,6 +5500,44 @@ async function handleSessionSelectImpl(session, project) {
       viewingActiveSession = true;
       updateMirrorInputState();
       wsClient.subscribeRuntimeTarget(target);
+      // Phase A no-op switch-back: the cached view is current (event-stream
+      // trusted, or the sidebar row's mtime/size stamp still matches), so
+      // skip both the snapshot request and the disk history fetch and
+      // re-render from cache with the stored gate/scroll state.
+      const cachedView = sessionViewCache.get(session.filePath);
+      const stamp = {
+        mtimeMs: Number(session.mtime) || null,
+        sizeBytes: typeof session.sizeBytes === "number" ? session.sizeBytes : null,
+      };
+      if (cachedView && !sidebar.searchQuery && viewMatchesStamp(cachedView, stamp)) {
+        logSessionRoute("select:cache-hit", { selectedSession: session.filePath });
+        pendingMirrorSessionFile = null; // no snapshot is coming to consume it
+        const streaming = sidebar.isStreaming(session.filePath);
+        state.setStreaming(streaming);
+        showTypingIndicator(streaming);
+        sidebar.setStreaming(session.filePath, streaming);
+        pendingRevealRestore = {
+          sessionKey: session.filePath,
+          count: cachedView.revealedCount,
+        };
+        restoringCachedView = true;
+        try {
+          renderTranscriptEntries(cachedView.entries, { leafId: cachedView.leafId });
+        } finally {
+          restoringCachedView = false;
+        }
+        pendingRevealRestore = null;
+        if (typeof cachedView.scrollTop === "number" && cachedView.scrollTop > 0) {
+          const restoreScroll = cachedView.scrollTop;
+          requestAnimationFrame(() => {
+            if (historyGateKey() === session.filePath) {
+              messagesContainer.scrollTop = restoreScroll;
+            }
+          });
+        }
+        void applySessionUiProfile(session.filePath);
+        return;
+      }
       wsClient.requestRuntimeSnapshot(target);
       // Upstream switch hydration: fetch the session file in parallel with
       // the snapshot; whichever lands first paints, and the snapshot render
@@ -5806,6 +5887,13 @@ const sessionDebug = {
 };
 globalThis.__picotSessionDebug = sessionDebug;
 
+// Test/inspection seam for the Phase A session view cache and the select
+// path that consumes it (same pattern as __picotSessionDebug).
+globalThis.__picotSessionView = {
+  select: handleSessionSelect,
+  cache: sessionViewCache,
+};
+
 // Upstream switch hydration state: the disk history captured once per
 // startup/switch. The snapshot render compares against it instead of
 // re-fetching (upstream's diskHistoryFallback).
@@ -5968,6 +6056,37 @@ let historyGate = null;
 
 function historyGateKey() {
   return activeUiSessionFile ?? mirrorActiveSessionFile ?? "transient";
+}
+
+/** Sidebar row stamp (mtime + size) for one session file, if a row exists. */
+function sidebarSessionStamp(sessionFile) {
+  for (const project of sidebar.projects || []) {
+    const row = (project.sessions || []).find((session) => session?.filePath === sessionFile);
+    if (row) {
+      return {
+        mtimeMs: Number(row.mtime) || null,
+        sizeBytes: typeof row.sizeBytes === "number" ? row.sizeBytes : null,
+      };
+    }
+  }
+  return null;
+}
+
+/** Cache the just-rendered canonical view of the active session (Phase A). */
+function captureSessionView(entries, leafId) {
+  const sessionFile = historyGateKey();
+  if (!sessionFile || sessionFile === "transient") return;
+  if (sidebar.searchQuery) return; // search renders are not canonical views
+  const previous = sessionViewCache.get(sessionFile);
+  sessionViewCache.put(sessionFile, {
+    entries,
+    leafId: leafId ?? null,
+    revealedCount: historyGate?.revealedCount ?? null,
+    scrollTop: previous?.scrollTop ?? null,
+    stamp:
+      sidebarSessionStamp(sessionFile) ?? selectStamps.get(sessionFile) ?? previous?.stamp ?? null,
+    trusted: previous?.trusted ?? false,
+  });
 }
 
 function buildHistoryGateControl({ remaining, onOlder, onAll }) {
@@ -6272,9 +6391,14 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
   const searchRender = Boolean(searchQuery);
   const gateSessionKey = historyGateKey();
   if (!historyGate || historyGate.sessionKey !== gateSessionKey || historyGate.forceReset) {
+    const restoredReveal =
+      pendingRevealRestore?.sessionKey === gateSessionKey &&
+      Number.isFinite(pendingRevealRestore.count)
+        ? Math.max(HISTORY_FULL_MOUNT_TURNS, pendingRevealRestore.count)
+        : HISTORY_FULL_MOUNT_TURNS;
     historyGate = {
       sessionKey: gateSessionKey,
-      revealedCount: HISTORY_FULL_MOUNT_TURNS,
+      revealedCount: restoredReveal,
       forceReset: false,
       turnCount: turns.length,
       control: null,
@@ -6356,6 +6480,9 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
     // The gate re-applies on the next plain render (spec P2).
     historyGate.forceReset = true;
   }
+  // Cache the canonical view after every plain (non-search) render so a
+  // switch-back can restore it without re-reading the session file.
+  if (!searchRender) captureSessionView(entries, leafId);
 
   toolCardCount = toolCardRenderer.toolCards.size;
   toolResultCount = toolResults.size;
@@ -6386,7 +6513,7 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
   fetchContextWindow();
 
   anchorHistoryToBottom(document.getElementById("messages"), {
-    preserveScrollTarget: Boolean(searchQuery),
+    preserveScrollTarget: Boolean(searchQuery) || restoringCachedView,
   });
 }
 

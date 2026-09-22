@@ -1107,6 +1107,7 @@ fn should_project_sidebar_file(classification: &SidebarFileClassification) -> bo
 
 fn session_summary_value(path: &Path, header: &SessionHeader) -> serde_json::Value {
     let metadata = std::fs::metadata(path).ok();
+    let size_bytes = metadata.as_ref().map(|value| value.len());
     let modified = metadata.as_ref().and_then(|value| {
         value
             .modified()
@@ -1132,6 +1133,7 @@ fn session_summary_value(path: &Path, header: &SessionHeader) -> serde_json::Val
         "filePath": path.to_string_lossy(),
         "mtime": modified,
         "ctime": created,
+        "sizeBytes": size_bytes,
     })
 }
 

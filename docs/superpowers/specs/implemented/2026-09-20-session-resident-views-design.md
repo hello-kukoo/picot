@@ -1,7 +1,9 @@
 # Session 常驻视图：并行会话的即时切换与完整视图
 
-**状态：** Draft — 待 Dr. Lin 评审（含一项对既有认知的重要修正：host 层
-session 常驻**已经实现**，本 spec 收窄为前端视图层）
+**状态：** Phase A Implemented — 2026-09-22；Phase B/C 不做（Dr. Lin 拍板：A 已交付核心价值「切回零请求、gate/滚动/内容恢复、后台增量」，B 的无闪烁升级边际价值小、动渲染核心风险高，永久缓后视体验再定；C 维持「另出 spec」不变）。
+
+实施记录：`public/app/session-view-cache.js`（LRU 5、appendMessage 按 entryId 增量、mtime+sizeBytes stamp 校验）+ app.js 接线（select no-op 短路 / 渲染落定 capture / leave 捕获 scrollTop+revealedCount / background `message_end` 增量、`compaction_end`/`session_tree` 失效）+ wire 新增 `sizeBytes` 字段（`session_summary_value`）+ `restoringCachedView` 抑制 bottom-anchor settle 清零恢复滚动。偏差：leafId 不作命中条件（后台无新 leafId 来源，作渲染参数用）；命中率判据 = trusted（事件流增量）或 stamp 匹配。
+**演化关系修正：** host 层 session 常驻**已经实现**，本 spec 收窄为前端视图层）
 **日期：** 2026-09-20
 **参照：** Paseo `docs/agent-lifecycle.md`（runtime residency）、`docs/timeline-sync.md`
 （no-op/增量/替换三路径）、`workspace-panel-host.tsx` + `retained-panel.tsx`
