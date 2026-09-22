@@ -511,7 +511,12 @@
     "searchClose": "検索バーを閉じる"
   },
   "landing": {
-    "hint": "サイドバーからセッションを選ぶか、ワークスペースの + をクリックして新しいセッションを開始してください。"
+    "hint": "サイドバーからセッションを選ぶか、ワークスペースの + をクリックして新しいセッションを開始してください。",
+    "credentials": {
+      "title": "まずモデルを設定",
+      "body": "APIキーまたはログインが見つかりません。追加すると会話を開始できます。",
+      "action": "モデル設定を開く"
+    }
   },
   "sidebar": {
     "loadingSessions": "セッションを読み込み中...",
@@ -869,7 +874,7 @@
       "scopeSummary": "{total}個のスキル · {groups}個のグループ",
       "discovered": "検出済み",
       "install": "インストール",
-      "packages": "パッケージ",
+      "packages": "拡張パッケージ",
       "sectionsAriaLabel": "スキルセクション"
     },
     "installSkills": {
@@ -885,7 +890,8 @@
       "installFailed": "選択したスキルのインストールに失敗しました。",
       "installing": "インストール中...",
       "project": "現在のプロジェクト",
-      "projectUntrusted": "このプロジェクトは信頼されていません。現在のプロジェクトへのインストールは利用できません。",
+      "projectUntrusted": "現在のプロジェクトへのインストールにはワークスペースを開く必要があります。今はグローバルにのみインストールできます。",
+      "projectNeedsWorkspace": "現在のプロジェクトへのインストールにはワークスペースを開く必要があります。今はグローバルにのみインストールできます。",
       "restartRequired": "保存しました。変更を反映するには新しいセッションを開始するかPiを再起動してください。",
       "review": "インストールを確認",
       "scanFailed": "選択したフォルダのスキャンに失敗しました。",
@@ -894,6 +900,7 @@
       "title": "スキルをインストール"
     },
     "packageSkills": {
+      "bulkFailure": "{total} 件中 {failed} 件のスキルを更新できませんでした。",
       "bundledCandidates": "バンドル候補",
       "candidateCount": "{count} 件の候補",
       "canonicalPath": "正規パス",
@@ -909,8 +916,8 @@
       "projectUntrusted": "このプロジェクトは信頼されていません。プロジェクトのパッケージパスは表示されません。",
       "refresh": "更新",
       "retry": "再試行",
-      "scopeSummary": "{count} パッケージ",
-      "title": "パッケージスキル"
+      "scopeSummary": "{skills}個のスキル · {packages}個の拡張パッケージ",
+      "title": "拡張パッケージのスキル"
     },
     "providers": {
       "addTitle": "プロバイダーを追加",
@@ -1001,6 +1008,159 @@
       "medium": "中",
       "large": "大",
       "xlarge": "特大"
+    },
+    "extensionTodo": {
+      "title": "Todo オーバーレイ",
+      "hint": "即時反映 — オーバーレイはレンダーごとに設定を再読み込みします。",
+      "maxLinesLabel": "ウィジェット最大行数",
+      "maxLinesError": "3 以上の整数にしてください",
+      "collapseKeyLabel": "折りたたみショートカット"
+    },
+    "extensionAskUser": {
+      "title": "ユーザー質問",
+      "hint": "即時反映 — 質問カードはレンダーごとに設定を再読み込みします。",
+      "collapseKeyLabel": "折りたたみショートカット"
+    },
+    "extensionPonytail": {
+      "title": "Ponytail",
+      "hint": "新規セッションのデフォルトモード。現在のセッションは維持されます。",
+      "modeLabel": "デフォルトモード",
+      "mode_lite": "ライト",
+      "mode_full": "フル",
+      "mode_ultra": "ウルトラ",
+      "useDefault": "デフォルトに戻す",
+      "quietStartupLabel": "静かな起動",
+      "hideStatusLabel": "ステータスを隠す"
+    },
+    "extensionVcc": {
+      "title": "pi-vcc 圧縮",
+      "hint": "次の圧縮から有効。実行中の圧縮は読み込み済みスナップショットを維持します。",
+      "relocatedBadge": "読み取り専用 — {name} で再配置",
+      "overrideDefaultCompactionLabel": "圧縮を管理",
+      "overrideDefaultCompactionDesc": "pi-vcc が /compact としきい値オーバーフローを管理。オフにすると pi コアに戻します。",
+      "smartKeepTailLabel": "スマート keep-tail",
+      "smartKeepTailDesc": "末尾が極端に短い場合、最大 25k まで keep-tail を引き上げます。",
+      "continueAfterThresholdCompactLabel": "自動圧縮後に続行",
+      "continueAfterThresholdCompactDesc": "自動圧縮後の継続を許可（保証ではない）。",
+      "debugLabel": "デバッグスナップショット",
+      "debugDesc": "圧縮スナップショットを /tmp/pi-vcc-debug.json に書き込みます。"
+    },
+    "extensionGoal": {
+      "title": "pi-goal",
+      "hint": "制限は次のゴール開始時に適用。RPC トグルには再起動が必要です。",
+      "rpcLabel": "RPC チャネル",
+      "rpcDesc": "ロード時にゴール RPC チャネルを登録（デフォルトはオフ）。",
+      "automaticTurnsLabel": "自動ターン数",
+      "noProgressTurnsLabel": "無進展ターン数",
+      "unlimited": "無制限",
+      "limitError": "1 以上の整数にしてください",
+      "reset": "デフォルトに戻す",
+      "resetConfirm": "もう一度クリックして確定",
+      "legacyWarning": "削除済みの旧設定 experimental.goals を検出しました — pi-goal は無視します（/goal edit で目標を変更、/goal <目標> で開始）。"
+    },
+    "extensionCaveman": {
+      "title": "pi-caveman",
+      "hint": "デフォルトレベルは新規セッションに適用されます。",
+      "levelLabel": "デフォルトレベル",
+      "statusLabel": "フッターステータスを表示"
+    },
+    "extensionCacheOptimizer": {
+      "title": "pi-cache-optimizer",
+      "hint": "Pi の再起動または /reload 後に有効になります。",
+      "footerModeLabel": "フッター統計モード",
+      "mode_total": "合計",
+      "mode_session": "セッション",
+      "mode_process": "プロセス",
+      "source_config": "設定",
+      "source_env": "環境変数",
+      "source_default": "デフォルト",
+      "omitTitle": "修復済みキャッシュキー（{count}、読み取り専用 — /cache-optimizer fix）",
+      "envTitle": "環境変数スイッチ（読み取り専用）",
+      "envOn": "オン",
+      "envOff": "オフ",
+      "invalidNote": "無効なファイル：手動で修正してください。修復はレシートと紐付くためリセットは提供されません。"
+    },
+    "extensionLens": {
+      "title": "pi-lens",
+      "hint": "トグルは新規セッションに適用（環境変数は再起動が必要）。",
+      "runtimeGroup": "ランタイム",
+      "feedbackGroup": "フィードバック",
+      "guardGroup": "ガード",
+      "reportGroup": "レポート",
+      "analyzerGroup": "アナライザー",
+      "advancedGroup": "詳細",
+      "maxProjectFilesLabel": "プロジェクトファイル上限",
+      "limitError": "1 以上の整数にしてください",
+      "shadowBadge": "{source} 上書き",
+      "relocatedBadge": "読み取り専用 — {name} で再配置",
+      "projectHint": "プロジェクト上書きはワークスペース进入後に表示。このページはグローバル層を編集します。"
+    },
+    "extensionPlanMode": {
+      "title": "pi-plan-mode",
+      "hint": "次回セッション開始時に適用されます。",
+      "thinkingLabel": "計画思考レベル",
+      "implModelLabel": "実装モデル",
+      "followPlanModel": "計画モデルに従う",
+      "implThinkingLabel": "実装思考レベル",
+      "retentionLabel": "計画保持",
+      "exportPathLabel": "エクスポートパス",
+      "shortcutLabel": "切替ショートカット",
+      "advancedGroup": "詳細",
+      "planToolsLabel": "デフォルト計画ツール（JSON 配列）",
+      "safeSubcommandsLabel": "安全サブコマンド（JSON オブジェクト）",
+      "invalidJson": "無効な JSON",
+      "invalidNote": "設定ファイルを読み取れません — 手動で修正してください。解析できるまで書き込みは拒否されます。"
+    },
+    "extensionSafetyGuard": {
+      "title": "datarx-safety-guard-pi",
+      "hint": "即時反映 — ガードはイベントごとに設定を再読み込みします。",
+      "masterLabel": "マスタースイッチ",
+      "categoriesGroup": "ルールカテゴリ",
+      "category_git": "Git 履歴",
+      "category_filesystem": "ファイルシステム削除",
+      "category_docker": "Docker",
+      "category_package": "パッケージマネージャー",
+      "category_system": "システムコマンド",
+      "category_database": "データベース",
+      "category_secrets": "シークレット",
+      "protectedPathsGroup": "保護パス",
+      "protectWrite": "書き込みガード",
+      "protectEdit": "編集ガード",
+      "contextBefore": "前コンテキスト行",
+      "contextAfter": "後コンテキスト行",
+      "rangeError": "0〜20 の整数にしてください",
+      "autoReviewGroup": "自動レビュー",
+      "autoReviewLabel": "自動レビューを有効化",
+      "modelLabel": "レビューモデル",
+      "modelUnset": "未設定",
+      "allowCounts": "許可エントリ（グローバル）: {count} — ガードダイアログでセッション内管理",
+      "relocatedBadge": "読み取り専用 — {name} で再配置",
+      "thinkingLevelLabel": "レビュー思考レベル",
+      "invalidNote": "設定ファイルを読み取れません — 手動で修正してください。解析できるまで書き込みは拒否されます。"
+    },
+    "extensionWebAccess": {
+      "title": "pi-web-access",
+      "hint": "Pi の再起動後に有効（モジュールごとの設定キャッシュ）。",
+      "searchKeysGroup": "検索プロバイダーキー",
+      "extractKeysGroup": "抽出プロバイダーとエンドポイント",
+      "endpointsGroup": "プロキシとエンドポイント",
+      "answerModelGroup": "回答モデル",
+      "answerModelLabel": "取得回答モデル",
+      "configuredPreview": "設定済み ····{preview}",
+      "envBadge": "環境変数",
+      "clear": "クリア",
+      "clearConfirm": "もう一度クリックして確定",
+      "modelUnset": "未設定",
+      "invalidNote": "無効なファイル — 手動で修正してください。リセットなし：ファイル自体がシークレットです。"
+    },
+    "safetyGuardDialog": {
+      "title": "セーフティガード: bash 承認",
+      "hintOnce": "承認は保存されません",
+      "hintSession": "現在のセッションで許可",
+      "hintPermanent": "このディレクトリに永久保存",
+      "hintEverywhere": "永続的にすべての場所で有効 — 今後のプロンプトをスキップ",
+      "hintRuleSession": "このセッションで操作タイプを許可",
+      "hintRulePermanent": "ここで操作タイプを常に許可"
     }
   },
   "cost": {

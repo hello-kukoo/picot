@@ -223,6 +223,45 @@ body.landing-mode #landing {
   max-width: 560px;
   text-align: center;
 }
+.landing-notice {
+  margin-top: var(--space-6);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  max-width: 560px;
+  text-align: center;
+}
+/* Zero-credential first-run card: shown only when no auth source exists. */
+.landing-credential-card {
+  margin-top: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 420px;
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  color: inherit;
+  cursor: pointer;
+  text-align: center;
+}
+.landing-credential-card:hover {
+  border-color: var(--border-strong);
+}
+.landing-credential-title {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+}
+.landing-credential-body {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+.landing-credential-action {
+  color: var(--accent);
+  font-size: var(--font-size-sm);
+  text-decoration: none;
+}
 /* Every settings surface visible at landing is functional; Pi-bound tabs are
    hidden entirely by landing.js. */
 
@@ -5707,8 +5746,120 @@ body.hide-thinking .thinking-block {
   padding: var(--space-8);
   max-width: 420px;
   width: 90%;
+  max-height: min(80vh, 720px);
+  overflow-y: auto;
   box-shadow: var(--shadow-lg), var(--shadow-inset);
   animation: sheetIn 0.3s var(--ease);
+}
+
+/* Rich bash-approval card (datarx-safety-guard-pi): the scrollable body and
+   pinned actions are the fix for long approval prompts blowing past the
+   viewport — the generic dialog above just gains bounded height. */
+.sg-card {
+  background: var(--bg-frosted);
+  backdrop-filter: blur(var(--blur-heavy)) saturate(1.5);
+  -webkit-backdrop-filter: blur(var(--blur-heavy)) saturate(1.5);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  max-width: 560px;
+  width: 92%;
+  max-height: min(80vh, 720px);
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-lg), var(--shadow-inset);
+  animation: sheetIn 0.3s var(--ease);
+}
+.sg-header {
+  flex: 0 0 auto;
+}
+.sg-header h3 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--font-size-lg);
+}
+.sg-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-right: var(--space-1);
+}
+.sg-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+}
+.sg-section-warning {
+  border-color: var(--warning, var(--border-hover));
+}
+.sg-section-label {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  margin-bottom: var(--space-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.sg-pre {
+  margin: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-size-sm);
+  white-space: pre;
+  overflow-x: auto;
+  max-height: 40vh;
+  overflow-y: auto;
+  color: var(--text-primary);
+}
+details.sg-section > .sg-pre {
+  margin-top: var(--space-2);
+}
+details.sg-section > summary {
+  cursor: pointer;
+  list-style: revert;
+}
+.sg-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+.sg-btn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-glass);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.sg-btn:hover {
+  border-color: var(--border-hover);
+}
+.sg-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.sg-btn-label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+.sg-btn-hint {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+.sg-btn-block .sg-btn-label {
+  color: var(--warning, var(--text-primary));
+}
+.sg-btn-warning {
+  border-color: var(--warning, var(--border-hover));
+}
+.sg-btn-warning .sg-btn-hint {
+  color: var(--warning, var(--text-secondary));
 }
 
 .dialog-title {
@@ -9649,8 +9800,22 @@ body.file-preview-resizing {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  /* Breathing room above/below the scope summary row; without it the line
+     sits flush against the scope tabs and the first card. */
+  margin-block: var(--space-2);
   color: var(--text-secondary);
   font-size: var(--font-size-sm);
+}
+/* The package card's tri-state control is a tag-shaped button: same pill as
+   the discovered tab's group status, no button chrome. */
+button.skills-group-status {
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+button.skills-group-status:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 .skills-scope-meta code,
 .skills-custom-rule {

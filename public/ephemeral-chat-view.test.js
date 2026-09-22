@@ -492,3 +492,29 @@ describe("EphemeralChatView", () => {
     });
   });
 });
+
+describe("EphemeralChatView safety-guard teardown", () => {
+  it("destroys the guard dialog with the view: no answer escapes afterwards", () => {
+    const runtime = makeRuntime();
+    const respond = vi.spyOn(runtime, "respondToExtensionUi");
+    const view = new EphemeralChatView({ runtime, kind: "side-chat", toolsEnabled: true });
+    const payload = {
+      __safetyGuardBash: 1,
+      version: 1,
+      sections: [{ label: "Command", body: "rm -rf ./dist" }],
+      choices: [{ label: "Block" }, { label: "Allow once" }],
+    };
+    runtime.dispatchEvent(
+      new CustomEvent("extensionuirequest", {
+        detail: { request: { id: "sg-1", method: "select", message: JSON.stringify(payload) } },
+      }),
+    );
+    expect(view._dialogContainer.classList.contains("hidden")).toBe(false);
+
+    view.destroy();
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(respond).not.toHaveBeenCalled();
+    expect(view._dialogContainer.classList.contains("hidden")).toBe(true);
+  });
+});

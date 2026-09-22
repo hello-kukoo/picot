@@ -2,6 +2,14 @@
 
 ## Status
 
+**Implemented 2026-09-22** on `private/features-v3`: `src-tauri/src/skill_install.rs`
+(Rust port of the feature-v3 TS scan/install, 6 ported unit tests) wired to the
+host control ops `skill_scan_install_source` / `skill_install_links`, with
+`pick_skill_source` open to Registered **and** landing owners; the candidate-id
+HMAC key is a per-process host secret (`HostInstallSecret`) and the source
+handle is consumed after a successful install. Previously these two ops were
+`(pending)` stubs, so the Install tab could not work anywhere.
+
 Approved design derived from discussion with Dr. Lin on 2026-07-27. The static
 visual reference is [`skill-install-prototype.html`](../../../skill-install-prototype.html).
 This document extends the existing Skills discovery/configuration design and
@@ -35,6 +43,12 @@ process restarts.
 - reloading skills in a running Pi process;
 - LAN, mobile, temporary-chat, or ephemeral-client access to local source paths
   or settings mutations.
+  **Amended 2026-09-22 (Dr. Lin):** the *landing* (Temporary/Landing) owner is
+  no longer excluded — skills must be installable before any project is open.
+  A workspaceless owner binds its placeholder root as the source scope and may
+  install into the **global** target only; the host refuses a `project` install
+  without a workspace and the Install tab disables that scope with a note.
+  LAN/mobile/temporary-chat clients remain excluded.
 
 Removing a linked root remains an advanced configuration operation. This first
 version does not add a dedicated removal affordance or project-settings editor.
@@ -49,7 +63,7 @@ version does not add a dedicated removal affordance or project-settings editor.
 | Selectable units | Both groups and individual skills are selectable. Selecting a group initially selects all descendant skills; the user may deselect individual descendants. |
 | Group path granularity | A completely selected group adds one source path for that group. A partially selected group adds one source path per selected skill, never the broader group path. |
 | Install mechanism | Link configuration only: append selected plain paths to the `skills` array in the selected Pi settings file. No copy mode exists. |
-| Scope | Global writes `~/.pi/agent/settings.json`. Current project writes `<cwd>/.pi/settings.json` and is disabled unless the retained Pi context reports the project trusted. |
+| Scope | Global writes `~/.pi/agent/settings.json` and works with or without a workspace. Current project writes `<cwd>/.pi/settings.json` and is disabled unless a workspace is open and the retained Pi context reports the project trusted. |
 | Path serialization | Generate a portable POSIX path relative to the target Pi resource base when that representation resolves reliably; otherwise serialize a POSIX absolute path. |
 | Deduplication | Resolve and canonicalize existing ordinary source paths against the target Pi resource base. If one already resolves to the same selected source directory, mark it configured and do not add a duplicate, even if stored text differs. |
 | Existing rules | Preserve all existing `!`, `+`, and `-` rules. Install never deletes, reorders, or rewrites them. Show their resolved effect when they leave a selected skill disabled. |

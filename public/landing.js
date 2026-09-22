@@ -35,6 +35,7 @@ import {
   t,
 } from "./i18n.js";
 import { createIcon, replaceButtonGlyph, setButtonIcon } from "./icons.js";
+import { setupLandingConfigRuntime } from "./landing/landing-config-runtime.js";
 import { renderPackageInstallFailure } from "./packages/install-status.js";
 import {
   createPreferencesClient,
@@ -43,10 +44,19 @@ import {
 } from "./preferences-client.js";
 import { QuickChatDialog } from "./quick-chat-dialog.js";
 import { setupExtensionsTabShell } from "./settings/extensions-tab-shell.js";
+import { setupMcpPage } from "./settings/mcp-page.js";
 import { setupMobileAccess } from "./settings/mobile-access.js";
+import { setupModelsPage } from "./settings/models-page.js";
 import { setupPackageBrowse } from "./settings/package-browse.js";
 import { setupPackageManager } from "./settings/package-manager.js";
-import { showSettingsSaveError, showSettingsSaveSuccess } from "./settings/save-status.js";
+import { setupPackageSkillsTab } from "./settings/package-skills-tab.js";
+import {
+  clearSettingsSaveMessage,
+  setSettingsSaveButtonSaving,
+  showSettingsSaveError,
+  showSettingsSaveSuccess,
+} from "./settings/save-status.js";
+import { setupSettingsConfig } from "./settings/settings-config.js";
 import { setupSkillsInstallTab } from "./settings/skills-install-tab.js";
 import { setupSkillsPage } from "./settings/skills-page.js";
 import { setupSkillsTabShell } from "./settings/skills-tab-shell.js";
@@ -70,6 +80,9 @@ installHostOriginFetch(window);
 const wsClient = new WebSocketClient(resolveWebSocketUrl(window));
 const transport = initTransport({ wsClient, env: window });
 const preferencesClient = createPreferencesClient({ transport });
+// Landing bridge-service config runtime (spec v2): lazy spawn on first
+// bridge-face use; the proxies below make it transparent to every page.
+const landingConfig = setupLandingConfigRuntime({ transport, wsClient });
 
 // Landing-local serializations: picking a folder and transitioning into the
 // selected workspace are separate async phases and must not share a lock.
@@ -285,6 +298,11 @@ wsClient.addEventListener("hostCapabilities", () => {
   // authenticated hello first.
   document.getElementById("quick-chat-btn")?.classList.remove("hidden");
   void sidebar.refresh();
+  // The MCP nav reveal needs the same authenticated hello: its capability
+  // check is false before `hello_ack`, so the module-load attempt alone
+  // leaves the tab hidden forever (found 2026-09-21 with the adapter
+  // installed).
+  void revealLandingMcpNav();
 });
 // App-global registry changed in another window — stay in sync. The
 // initiating window is already navigating when it launched the change.
@@ -298,20 +316,20 @@ wsClient.addEventListener("registryChanged", () => {
 // served by control ops. Runtime- and workspace-bound tabs stay hidden: there
 // is no live Pi and no workspace scope on this page.
 
-// Tabs that work without a workspace binding or a live Pi: General,
-// Appearance, and Usage (the cost dashboard scans the global session tree
-// over an owner-scoped data op). The remaining tabs (models, skills,
-// extensions, mcp, configuration) need a live Pi runtime or a workspace
-// scope: their nav entries are hidden entirely at landing — everything
-// visible here works.
+// Tabs at landing: General, Appearance, Usage, skills, and extensions run on
+// host ops; models, mcp, and configuration run on the lazily spawned
+// bridge-service config runtime above (spec v2) — global-only, exactly the
+// advisor/models machinery over an ephemeral sessionless Pi.
 const LANDING_FUNCTIONAL_SETTINGS_TABS = new Set([
   "general",
   "appearance",
   "usage",
   "skills",
   "extensions",
+  "models",
+  "mcp",
+  "configuration",
 ]);
-const LANDING_HIDDEN_SETTINGS_TABS = new Set(["models", "mcp", "configuration"]);
 
 function buildLandingThemeGrid() {
   const grid = document.getElementById("theme-grid");
@@ -402,7 +420,7 @@ function selectLandingSettingsTab(tabKey) {
   const target = LANDING_FUNCTIONAL_SETTINGS_TABS.has(tabKey) ? tabKey : "general";
   document.querySelectorAll(".settings-nav-item[data-settings-tab]").forEach((item) => {
     const tab = item.dataset.settingsTab;
-    item.classList.toggle("hidden", LANDING_HIDDEN_SETTINGS_TABS.has(tab));
+    // MCP stays hidden until the installed-package check reveals it.
     item.classList.toggle("active", tab === target);
   });
   document.querySelectorAll(".settings-tab[data-settings-panel]").forEach((tab) => {
@@ -419,10 +437,20 @@ function selectLandingSettingsTab(tabKey) {
   if (target === "extensions") {
     void packageManager.load();
   }
+  if (target === "models") {
+    void modelsPage.activate();
+  }
+  if (target === "mcp") {
+    void mcpPage.activate();
+  }
+  if (target === "configuration") {
+    void loadLandingConfigurationTab();
+  }
 }
 
 function closeLandingSettings() {
   document.getElementById("settings-panel")?.classList.add("hidden");
+  void refreshLandingCredentialCard();
 }
 
 document.querySelectorAll(".settings-nav-item[data-settings-tab]").forEach((item) => {
@@ -754,17 +782,22 @@ const skillsInstallPage = setupSkillsInstallTab({
   container: document.getElementById("settings-install-skills"),
   transport,
   isProjectTrusted: () => skillsPage.isProjectTrusted(),
+  // Landing has no workspace: global installs work, the project target is
+  // disabled with an explicit note (Dr. Lin 2026-09-22).
+  hasWorkspace: () => false,
   ...skillsSaveFeedback,
 });
 
-// The packages sub-tab needs a live Pi runtime (bridge-bound); at landing it
-// is hidden entirely — same contract as the Pi-bound settings tabs above.
-document.querySelector('[data-skills-page-tab="packages"]')?.classList.add("hidden");
+// The packages sub-tab rides the landing config runtime (bridge-bound,
+// global-only inventory — same op semantics as the workspace page).
+const packageSkillsPage = setupPackageSkillsTab({
+  container: document.getElementById("settings-package-skills"),
+  rpcCommand: landingBridgeRpcCommand,
+  ...skillsSaveFeedback,
+});
 
 setupSkillsTabShell({
-  // The same exclusion keeps keyboard navigation from selecting the hidden
-  // packages tab (arrow keys cycle the shell's own tab list).
-  tabs: document.querySelectorAll('[data-skills-page-tab]:not([data-skills-page-tab="packages"])'),
+  tabs: document.querySelectorAll("[data-skills-page-tab]"),
   panels: {
     discovered: document.getElementById("settings-skills"),
     install: document.getElementById("settings-install-skills"),
@@ -773,10 +806,206 @@ setupSkillsTabShell({
   activate: (name) => {
     if (name === "discovered") return skillsPage.activate();
     if (name === "install") return skillsInstallPage.activate();
-    // The packages sub-tab is hidden at landing; nothing to activate.
+    if (name === "packages") return packageSkillsPage.activate();
     return Promise.resolve();
   },
 });
+
+// ── Bridge-bound settings pages (config runtime; global-only) ────────────────
+// Models / MCP / Configuration ride the lazily spawned bridge service. The
+// gateway proxies ensure the runtime on first call, so activation order is
+// just "open the tab".
+
+/** Params for the package-skills bridge ops (the only bridge consumers here). */
+const LANDING_BRIDGE_OPS = {
+  list_package_skill_inventory: (cmd) => ({ scope: cmd?.scope }),
+  set_package_skill_enabled: (cmd) => ({
+    scope: cmd?.scope,
+    target: cmd?.target,
+    enabled: cmd?.enabled,
+  }),
+};
+
+/**
+ * Bridge op adapter for package-skills. The tab consumes the workspace
+ * `nativeRpcCommand` envelope (`{ success, data }` / `{ success: false,
+ * error }`), so this must translate the ConfigGateway's `{ ok, data }` rather
+ * than hand the tab a bare payload — that mismatch silently rendered "no
+ * extension skills" (2026-09-21).
+ */
+async function landingBridgeRpcCommand(cmd) {
+  const buildParams = LANDING_BRIDGE_OPS[cmd?.type];
+  if (!buildParams) {
+    return { success: false, error: `unsupported landing bridge op: ${cmd?.type}` };
+  }
+  try {
+    const result = await landingConfig.configGateway.call(cmd.type, buildParams(cmd));
+    if (!result?.ok) return { success: false, error: result?.error || `${cmd.type} failed` };
+    return { success: true, data: result.data ?? {} };
+  } catch (error) {
+    return { success: false, error: error?.message ?? String(error) };
+  }
+}
+
+const modelsPage = setupModelsPage({
+  configGateway: landingConfig.configGateway,
+  oauthGateway: landingConfig.oauthGateway,
+  onModelConfigurationChanged: () => {},
+});
+
+const mcpPage = setupMcpPage({
+  masterEl: document.getElementById("mcp-master"),
+  detailEl: document.getElementById("mcp-detail"),
+  tabs: document.querySelectorAll("[data-mcp-tab]"),
+  navItem: document.querySelector('[data-settings-tab="mcp"]'),
+  configGateway: landingConfig.configGateway,
+});
+
+// Configuration page: three global file editors + the agent controls. The
+// save-status helpers bind to one message element inside the panel.
+const configSaveMessageEl = document.createElement("div");
+document
+  .querySelector('[data-settings-panel="configuration"] .settings-body')
+  ?.prepend(configSaveMessageEl);
+const settingsConfigPage = setupSettingsConfig({
+  configGateway: landingConfig.configGateway,
+  clearSettingsSaveMessage: () => clearSettingsSaveMessage(configSaveMessageEl),
+  setSettingsSaveButtonSaving: setSettingsSaveButtonSaving,
+  showSettingsSaveError: (message) => showSettingsSaveError(configSaveMessageEl, message),
+  showSettingsSaveSuccess: (message) => showSettingsSaveSuccess(configSaveMessageEl, message),
+});
+
+async function loadLandingConfigurationTab() {
+  await Promise.all([
+    settingsConfigPage.loadInlineConfigEditor(),
+    settingsConfigPage.loadAgentsMdEditor(),
+    settingsConfigPage.loadAppendSystemMdEditor(),
+    loadLandingAgentDefaults(),
+  ]);
+}
+
+// ── Configuration agent controls (global defaults via the bridge) ───────────
+// Session-bound affordances ("apply to current session") have no object at
+// landing; only the global-default writes are wired.
+const landingAutoCompactToggle = document.getElementById("toggle-auto-compact");
+const landingThinkingSteps = document.getElementById("thinking-effort-steps");
+const landingThinkingMarker = document.getElementById("thinking-effort-marker");
+const landingThinkingName = document.getElementById("thinking-effort-name");
+const landingShowThinkingToggle = document.getElementById("toggle-show-thinking");
+const LANDING_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"];
+let landingThinkingLevel = "medium";
+
+function renderLandingThinkingControl() {
+  renderThinkingEffort(landingThinkingLevel, {
+    thinkingSteps: landingThinkingSteps,
+    thinkingMarker: landingThinkingMarker,
+    thinkingName: landingThinkingName,
+    levels: LANDING_THINKING_LEVELS,
+    nameFor: (level) => level,
+  });
+}
+
+async function loadLandingAgentDefaults() {
+  try {
+    const compaction = await landingConfig.configGateway.call("get_default_auto_compaction");
+    if (compaction?.ok && typeof compaction.data?.enabled === "boolean") {
+      landingAutoCompactToggle?.classList.toggle("on", compaction.data.enabled);
+    }
+  } catch {
+    // Leave the control untouched; a failed read must not fake a default.
+  }
+  try {
+    const thinking = await landingConfig.configGateway.call("get_default_thinking_level");
+    const level = thinking?.data?.level;
+    if (thinking?.ok && LANDING_THINKING_LEVELS.includes(level)) {
+      landingThinkingLevel = level;
+    }
+  } catch {
+    // Same contract: keep the neutral default.
+  }
+  renderLandingThinkingControl();
+}
+
+landingAutoCompactToggle?.addEventListener("click", () => {
+  const next = !landingAutoCompactToggle.classList.contains("on");
+  void landingConfig.configGateway
+    .call("set_default_auto_compaction", { enabled: next })
+    .then((result) => {
+      if (result?.ok) landingAutoCompactToggle.classList.toggle("on", next);
+      else showSettingsSaveError(configSaveMessageEl, result?.error || "save failed");
+    })
+    .catch((error) => showSettingsSaveError(configSaveMessageEl, String(error?.message || error)));
+});
+
+landingThinkingSteps?.querySelectorAll(".thinking-effort-dot").forEach((dot) => {
+  dot.addEventListener("click", () => {
+    const level = dot.dataset.level;
+    if (!LANDING_THINKING_LEVELS.includes(level)) return;
+    landingThinkingLevel = level;
+    renderLandingThinkingControl();
+    void landingConfig.configGateway
+      .call("set_default_thinking_level", { level })
+      .then((result) => {
+        if (!result?.ok) showSettingsSaveError(configSaveMessageEl, result?.error || "save failed");
+      })
+      .catch((error) =>
+        showSettingsSaveError(configSaveMessageEl, String(error?.message || error)),
+      );
+  });
+});
+
+landingShowThinkingToggle?.addEventListener("click", () => {
+  const next = !landingShowThinkingToggle.classList.contains("on");
+  landingShowThinkingToggle.classList.toggle("on", next);
+  void saveUserRenderPreference({
+    client: preferencesClient,
+    key: PREFERENCE_KEYS.showThinking,
+    value: next,
+    apply: () => {},
+  });
+});
+
+// MCP nav reveal from installed packages — host data only, so the check
+// never spawns the config runtime (mcpPage.refreshAvailability would).
+async function revealLandingMcpNav() {
+  const navItem = document.querySelector('[data-settings-tab="mcp"]');
+  if (!navItem || !transport.capabilities.native) return;
+  try {
+    const packages = await transport.listPiPackages();
+    const list = Array.isArray(packages) ? packages : (packages?.packages ?? []);
+    // `pi list` yields plain source strings or objects; match both shapes.
+    const installed = list.some((entry) =>
+      String(
+        typeof entry === "string"
+          ? entry
+          : (entry?.source ?? entry?.packageName ?? entry?.name ?? ""),
+      ).includes("pi-mcp-adapter"),
+    );
+    navItem.classList.toggle("hidden", !installed);
+  } catch {
+    navItem.classList.add("hidden");
+  }
+}
+
+// ── Zero-credential first-run card ───────────────────────────────────────────
+const landingCredentialCard = document.getElementById("landing-credential-card");
+
+async function refreshLandingCredentialCard() {
+  if (!landingCredentialCard || !transport.capabilities.native) return;
+  try {
+    const result = await transport.hasAnyCredentials();
+    landingCredentialCard.classList.toggle("hidden", Boolean(result));
+  } catch {
+    landingCredentialCard.classList.add("hidden");
+  }
+}
+
+landingCredentialCard?.addEventListener("click", () => {
+  openLandingSettings("models");
+});
+
+void revealLandingMcpNav();
+void refreshLandingCredentialCard();
 
 // ── Extensions page (host control ops; global-only at landing) ──
 // Package list/updates/installs run the bundled pi CLI from the host. At
@@ -806,6 +1035,9 @@ const packageManager = setupPackageManager({
   getSessionId: () => "",
   onRestarted: () => {},
   onUpdatesChecked: () => {},
+  // Advisor's section (and future bridge-family package settings) renders
+  // through the landing config runtime; the proxy spawns on demand.
+  configGateway: landingConfig.configGateway,
 });
 
 const packageBrowse = setupPackageBrowse({

@@ -19,8 +19,82 @@ const harness = vi.hoisted(() => ({
 
 vi.mock("./app/websocket-client.js", () => ({
   resolveWebSocketUrl: () => "ws://127.0.0.1:0/v2/ws",
+  /**
+   * Minimal stand-in for the host's landing config runtime: it answers
+   * `/picot-config` prompts over the ephemeral channel exactly like the real
+   * hub (`__picotConfig` notify), so the bridge-backed tabs are exercised
+   * end to end instead of dying on a missing transport method.
+   */
   WebSocketClient: class extends EventTarget {
+    constructor() {
+      super();
+      this.requests = 0;
+    }
     connect() {}
+    configAnswer(op) {
+      if (op === "list_package_skill_inventory") {
+        return {
+          ok: true,
+          data: {
+            scope: "global",
+            trusted: true,
+            packages: [
+              {
+                id: "npm:pi-fff",
+                source: "npm:pi-fff",
+                identity: "npm:pi-fff",
+                scope: "global",
+                effectivePackageRoot: "/pkg/pi-fff",
+                candidates: [
+                  {
+                    id: "npm:pi-fff::/pkg/pi-fff/skills/fff/SKILL.md",
+                    canonicalPath: "/pkg/pi-fff/skills/fff/SKILL.md",
+                    relativePath: "skills/fff",
+                    name: "fff-skill",
+                    enabled: true,
+                    description: "fixture skill",
+                    diagnostics: [],
+                  },
+                ],
+                diagnostics: [],
+              },
+            ],
+          },
+        };
+      }
+      if (op === "list_model_catalog") return { ok: true, data: { providers: [] } };
+      if (op === "list_scoped_models") return { ok: true, data: { modelIds: [] } };
+      return { ok: true, data: {} };
+    }
+    sendEphemeral(instanceId, generation, payload) {
+      const requestId = `ep-${++this.requests}`;
+      const message = String(payload?.message ?? "");
+      const configId = message.match(/"id":"([^"]+)"/)?.[1];
+      const op = message.match(/"op":"([^"]+)"/)?.[1];
+      if (configId && op) {
+        queueMicrotask(() =>
+          this.dispatchEvent(
+            new CustomEvent("ephemeralEvent", {
+              detail: {
+                type: "ephemeral_event",
+                instanceId,
+                generation,
+                requestId,
+                payload: {
+                  type: "extension_ui_request",
+                  id: `ui-${requestId}`,
+                  message: JSON.stringify({
+                    __picotConfig: configId,
+                    ...this.configAnswer(op),
+                  }),
+                },
+              },
+            }),
+          ),
+        );
+      }
+      return requestId;
+    }
   },
 }));
 
@@ -68,6 +142,9 @@ function makeTransportStub() {
     listSkillInventory: async () => ({ skills: [] }),
     setSkillEnabled: async () => ({}),
     getPreference: async () => ({ value: true }),
+    listPiPackages: async () => ({ packages: [] }),
+    hasAnyCredentials: async () => true,
+    spawnConfigRuntime: async () => ({ instanceId: "inst-1", generation: 1, kind: "config" }),
     runtimeInstances: async () => ({ instances: [] }),
     prepareWorkspaceTarget: async (targetCwd, options) => {
       harness.prepares.push({ targetCwd, options });
@@ -234,7 +311,7 @@ test("boot reveals the landing and hides the workspace chrome", async () => {
   expect(landing.getAttribute("aria-hidden")).toBe("false");
 });
 
-test("landing settings show only functional tabs; usage works, Pi-bound tabs hidden", async () => {
+test("landing settings: all tabs functional; MCP reveal follows installed packages", async () => {
   installDom();
   document.body.insertAdjacentHTML(
     "beforeend",
@@ -291,15 +368,16 @@ test("landing settings show only functional tabs; usage works, Pi-bound tabs hid
   const navItems = [...panel.querySelectorAll(".settings-nav-item[data-settings-tab]")];
   const hidden = (tab) =>
     navItems.find((item) => item.dataset.settingsTab === tab).classList.contains("hidden");
-  // Everything visible at landing works; Pi-bound tabs are hidden entirely.
+  // Everything visible at landing works; bridge tabs (models/configuration)
+  // run on the lazily spawned config runtime; MCP follows adapter presence.
   expect(hidden("general")).toBe(false);
   expect(hidden("appearance")).toBe(false);
   expect(hidden("usage")).toBe(false);
   expect(hidden("skills")).toBe(false);
   expect(hidden("extensions")).toBe(false);
-  expect(hidden("models")).toBe(true);
+  expect(hidden("models")).toBe(false);
   expect(hidden("mcp")).toBe(true);
-  expect(hidden("configuration")).toBe(true);
+  expect(hidden("configuration")).toBe(false);
   // Usage activates and lazy-loads the cost dashboard element.
   const ensureLoaded = vi.fn();
   document.getElementById("settings-cost-dashboard").ensureLoaded = ensureLoaded;
@@ -314,18 +392,22 @@ test("landing settings show only functional tabs; usage works, Pi-bound tabs hid
   // The back button returns to the landing view.
   document.getElementById("settings-close").click();
   expect(panel.classList.contains("hidden")).toBe(true);
-  // The bridge-bound packages sub-tab is hidden entirely at landing (no
-  // visible entry) and excluded from the shell (no keyboard selection).
+  // The bridge-bound packages sub-tab is present now: it rides the config
+  // runtime and activates on click (spawn happens lazily inside the page).
   const discoveredTab = document.querySelector('[data-skills-page-tab="discovered"]');
   const packagesTab = document.querySelector('[data-skills-page-tab="packages"]');
-  expect(packagesTab.classList.contains("hidden")).toBe(true);
+  expect(packagesTab.classList.contains("hidden")).toBe(false);
   discoveredTab.click();
   expect(discoveredTab.classList.contains("active")).toBe(true);
   packagesTab.click();
-  expect(packagesTab.classList.contains("active")).toBe(false);
-  expect(document.getElementById("settings-package-skills").classList.contains("hidden")).toBe(
-    true,
-  );
+  expect(packagesTab.classList.contains("active")).toBe(true);
+  // The inventory must actually render (the adapter used to hand the tab a
+  // bare payload, so it rendered its error state with nothing listed).
+  await vi.waitFor(() => {
+    if (!document.querySelector("#settings-package-skills").textContent.includes("npm:pi-fff")) {
+      throw new Error("package skills inventory not rendered");
+    }
+  });
   // Appearance stays fully functional.
   navItems.find((item) => item.dataset.settingsTab === "appearance").click();
   expect(
@@ -431,4 +513,71 @@ test("errors render into the landing notice, never a chat renderer", async () =>
   const notice = document.getElementById("landing-notice");
   expect(notice.classList.contains("hidden")).toBe(false);
   expect(notice.textContent).toContain("spawn failed");
+});
+test("MCP nav reveals on hello_ack even though the module-load attempt ran first", async () => {
+  installDom();
+  document.body.insertAdjacentHTML(
+    "beforeend",
+    `
+<div class="settings-nav">
+<button class="settings-nav-item hidden" data-settings-tab="mcp">MCP</button>
+</div>`,
+  );
+  harness.transport = makeTransportStub();
+  // Before `hello_ack` the transport reports no native capability — exactly
+  // the moment the module-load reveal runs, so its check bails and the entry
+  // keeps index.html's hidden default (2026-09-21: tab missing with the
+  // adapter installed).
+  harness.transport.capabilities.native = false;
+  harness.transport.listPiPackages = async () => [{ source: "npm:pi-mcp-adapter" }];
+  document.cookie = "picot-language=en; Max-Age=600; path=/";
+  const realFetch = globalThis.fetch.bind(globalThis);
+  vi.stubGlobal("fetch", async (input) => {
+    const match = String(input).match(/locales\/([a-z]{2})\.json/);
+    if (match) {
+      return {
+        ok: true,
+        json: async () => JSON.parse(readFileSync(`public/locales/${match[1]}.json`, "utf8")),
+      };
+    }
+    return realFetch(input);
+  });
+  await import("./landing.js");
+
+  const navItem = document.querySelector('[data-settings-tab="mcp"]');
+  expect(navItem.classList.contains("hidden")).toBe(true);
+  harness.transport.capabilities.native = true;
+  harness.wsClient.dispatchEvent(new Event("hostCapabilities"));
+  await vi.waitFor(() => expect(navItem.classList.contains("hidden")).toBe(false));
+});
+
+test("MCP nav stays hidden when the adapter is absent", async () => {
+  installDom();
+  document.body.insertAdjacentHTML(
+    "beforeend",
+    `
+<div class="settings-nav">
+<button class="settings-nav-item hidden" data-settings-tab="mcp">MCP</button>
+</div>`,
+  );
+  harness.transport = makeTransportStub();
+  harness.transport.listPiPackages = async () => [{ source: "npm:pi-fff" }];
+  document.cookie = "picot-language=en; Max-Age=600; path=/";
+  const realFetch = globalThis.fetch.bind(globalThis);
+  vi.stubGlobal("fetch", async (input) => {
+    const match = String(input).match(/locales\/([a-z]{2})\.json/);
+    if (match) {
+      return {
+        ok: true,
+        json: async () => JSON.parse(readFileSync(`public/locales/${match[1]}.json`, "utf8")),
+      };
+    }
+    return realFetch(input);
+  });
+  await import("./landing.js");
+  harness.wsClient.dispatchEvent(new Event("hostCapabilities"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(document.querySelector('[data-settings-tab="mcp"]').classList.contains("hidden")).toBe(
+    true,
+  );
 });

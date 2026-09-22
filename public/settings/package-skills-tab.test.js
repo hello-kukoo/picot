@@ -2,17 +2,18 @@
 // ABOUTME: Verifies loading, scope switching, trust gating, and package skill mutations.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { t } from "../i18n.js";
 import { setupPackageSkillsTab } from "./package-skills-tab.js";
 
 // Minimal i18n stub: returns the key plus interpolated values so tests can
 // assert on locale-key presence without pulling in the full i18n module.
 vi.mock("../i18n.js", () => ({
   onLocaleChange: () => () => {},
-  t: (key, params) => {
+  t: vi.fn((key, params) => {
     let s = key;
     if (params) for (const [k, v] of Object.entries(params)) s = s.replace(`{${k}}`, String(v));
     return s;
-  },
+  }),
 }));
 
 /** @returns {import("./package-skills-tab.js").PackageSkillInventory} */
@@ -313,9 +314,13 @@ describe("setupPackageSkillsTab — mutations", () => {
       showError,
     });
     await tab.activate();
-    const enableAll = container.querySelector(".skills-group-enable-all input");
-    enableAll.checked = false;
-    enableAll.dispatchEvent(new Event("change"));
+    // The affordance is now a tri-state tag button; clicking it enables all
+    // (the fixture starts mixed, so the click turns everything on).
+    const enableAll = container.querySelector(
+      ".skills-group-enable-all button.skills-group-status",
+    );
+    expect(enableAll.textContent).toBe("settings.skills.enabledCount");
+    enableAll.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(showError).toHaveBeenCalledWith("settings.packageSkills.bulkFailure");
     expect(container.querySelector(".skills-skill-description") || container).toBeTruthy();
@@ -352,5 +357,85 @@ describe("setupPackageSkillsTab — empty & error states", () => {
     await tab.activate();
     expect(container.querySelector(".skills-error")).toBeTruthy();
     expect(container.querySelector(".skills-rescan")).toBeTruthy();
+  });
+});
+
+describe("setupPackageSkillsTab — scope tabs, summary, tri-state tag", () => {
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="container"></div>';
+  });
+
+  async function renderInventory(inventory, { scope } = {}) {
+    const container = document.getElementById("container");
+    const tab = setupPackageSkillsTab({ container, rpcCommand: rpcReturning(inventory) });
+    await tab.activate();
+    if (scope) await tab.setScope(scope);
+    return container;
+  }
+
+  it("hides the project entry when the project contributes no packages", async () => {
+    const container = await renderInventory(
+      makeInventory({ packages: [makeCard({ candidates: [makeCandidate()] })] }),
+    );
+    const scopes = [...container.querySelectorAll("[data-scope]")].map((n) => n.dataset.scope);
+    expect(scopes).toEqual(["global"]);
+  });
+
+  it("shows the project entry when the project has packages", async () => {
+    const container = await renderInventory(
+      makeInventory({
+        packages: [
+          makeCard({ candidates: [makeCandidate()] }),
+          makeCard({ id: "proj:pkg", identity: "proj:pkg", scope: "project" }),
+        ],
+      }),
+    );
+    const scopes = [...container.querySelectorAll("[data-scope]")].map((n) => n.dataset.scope);
+    expect(scopes).toEqual(["global", "project"]);
+  });
+
+  it("summarizes skills and extension packages for the current scope", async () => {
+    vi.mocked(t).mockClear();
+    const container = await renderInventory(
+      makeInventory({
+        packages: [
+          makeCard({ candidates: [makeCandidate(), makeCandidate({ name: "beta" })] }),
+          makeCard({ id: "npm:other", identity: "npm:other", candidates: [makeCandidate()] }),
+        ],
+      }),
+    );
+    expect(container.querySelector(".skills-scope-meta")).toBeTruthy();
+    // 3 candidates across 2 packages, for the emphasized (global) scope.
+    expect(vi.mocked(t)).toHaveBeenCalledWith("settings.packageSkills.scopeSummary", {
+      skills: 3,
+      packages: 2,
+    });
+  });
+
+  it("renders the package toggle-all as a tri-state tag and flips it on click", async () => {
+    const allOn = makeCard({
+      candidates: [makeCandidate(), makeCandidate({ name: "beta" })],
+    });
+    const container = await renderInventory(makeInventory({ packages: [allOn] }));
+    const tag = container.querySelector(".skills-group-enable-all button.skills-group-status");
+    expect(tag.textContent).toBe("settings.skills.allEnabled");
+    expect(tag.dataset.groupState).toBe("all-on");
+    expect(tag.getAttribute("aria-pressed")).toBe("true");
+
+    const partial = makeCard({
+      candidates: [makeCandidate(), makeCandidate({ name: "beta", enabled: false })],
+    });
+    const container2 = await renderInventory(makeInventory({ packages: [partial] }));
+    const mixed = container2.querySelector(".skills-group-enable-all button.skills-group-status");
+    expect(mixed.textContent).toBe("settings.skills.enabledCount");
+    expect(mixed.dataset.groupState).toBe("mixed");
+
+    const none = makeCard({
+      candidates: [makeCandidate({ enabled: false })],
+    });
+    const container3 = await renderInventory(makeInventory({ packages: [none] }));
+    const off = container3.querySelector(".skills-group-enable-all button.skills-group-status");
+    expect(off.textContent).toBe("settings.skills.allDisabled");
+    expect(off.dataset.groupState).toBe("all-off");
   });
 });

@@ -38,17 +38,18 @@ pub struct DiscoveredRoot {
 /// Minimal frontmatter reader: `key: value` lines inside a `---` block,
 /// with YAML block-scalar support for `description` (`>`, `|`, and `-`/`+`
 /// chomping indicators) so multi-line skill descriptions unfold correctly.
-fn parse_frontmatter(content: &str) -> (Option<String>, Option<String>) {
+pub(crate) fn parse_frontmatter(content: &str) -> (Option<String>, Option<String>, bool) {
     let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
     if !normalized.starts_with("---") {
-        return (None, None);
+        return (None, None, false);
     }
     let Some(end) = normalized[3..].find("\n---") else {
-        return (None, None);
+        return (None, None, false);
     };
     let block = &normalized[4..3 + end];
     let mut name = None;
     let mut description = None;
+    let mut disable_model_invocation = false;
     let mut lines = block.lines().peekable();
     while let Some(line) = lines.next() {
         let Some((key, value)) = line.split_once(':') else {
@@ -119,10 +120,11 @@ fn parse_frontmatter(content: &str) -> (Option<String>, Option<String>) {
         match key {
             "name" => name = Some(value),
             "description" => description = Some(value),
+            "disable-model-invocation" if value == "true" => disable_model_invocation = true,
             _ => {}
         }
     }
-    (name, description)
+    (name, description, disable_model_invocation)
 }
 
 fn validate_skill_name(name: &str, errors: &mut Vec<String>) {
@@ -164,7 +166,9 @@ fn push_skill(
         }));
         return;
     };
-    let (name_from_fm, description_from_fm) = parse_frontmatter(&raw);
+    // The disable-model-invocation flag is consumed by the installer's scan
+    // (skill_install.rs); discovery here ignores it.
+    let (name_from_fm, description_from_fm, _disable_model_invocation) = parse_frontmatter(&raw);
     let skill_dir = file_path
         .parent()
         .map(|p| p.to_string_lossy().into_owned())

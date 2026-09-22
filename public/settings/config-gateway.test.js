@@ -211,3 +211,28 @@ describe("ConfigGateway", () => {
     await expect(gateway.call("list_model_catalog")).rejects.toThrow("No active session");
   });
 });
+
+describe("ConfigGateway timeout attribution", () => {
+  it("a gate that opens keeps the send's own timeout as the reported cause", async () => {
+    vi.useFakeTimers();
+    try {
+      // The gate opens immediately; the runtime never answers. The gate timer
+      // starts before the send, so without clearing it the caller is told the
+      // runtime was never ready — the wrong cause for a stalled response.
+      const gateway = new ConfigGateway({
+        runtime: { request: vi.fn(() => Promise.resolve({ acceptance: "accepted" })) },
+        getTarget: () => ({ workspaceId: "w", sessionId: "s", instanceId: "i" }),
+        waitUntilReady: () => Promise.resolve(),
+      });
+      const promise = gateway.call("list_model_catalog");
+      const assertion = expect(promise).rejects.toThrow(
+        'Configuration request "list_model_catalog" timed out',
+      );
+      await vi.advanceTimersByTimeAsync(30_100);
+      await assertion;
+      await expect(promise).rejects.not.toThrow("waiting for runtime");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

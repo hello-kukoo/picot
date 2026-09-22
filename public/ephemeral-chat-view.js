@@ -12,6 +12,7 @@ import { filterModelsByCatalogVisibility } from "./models/selection.js";
 import { createHostFileMentionSearch, setupAtFileMention } from "./ui/at-file-mention.js";
 import { DialogHandler } from "./ui/dialogs.js";
 import { MessageRenderer } from "./ui/message-renderer.js";
+import { SafetyGuardDialog } from "./ui/safety-guard-dialog.js";
 import { ToolCardRenderer } from "./ui/tool-card.js";
 
 // Monotonic counter guarantees unique mention-popup ids across ephemeral views.
@@ -173,6 +174,12 @@ export class EphemeralChatView {
         this.runtime.respondToExtensionUi(message.id, message);
       },
     });
+    this.safetyGuardDialog = new SafetyGuardDialog({
+      container: this._dialogContainer,
+      send: (message) => {
+        this.runtime.respondToExtensionUi(message.id, message);
+      },
+    });
 
     this._destroyVoice = setupVoiceInput({ micBtn: this._micBtn, messageInput: this._textarea });
 
@@ -311,6 +318,7 @@ export class EphemeralChatView {
     this.messageRenderer?.destroy();
     this.toolCardRenderer?.destroy();
     this.dialogHandler?.destroy();
+    this.safetyGuardDialog?.destroy();
     this._destroyVoice?.();
     this._pasteOffload?.destroy();
     this._imageAttachments?.destroy();
@@ -597,6 +605,7 @@ export class EphemeralChatView {
     if (this.destroyed || !request) return;
     switch (request.method) {
       case "select":
+        if (this.safetyGuardDialog.handleExtensionUIRequest(request)) break;
         this.dialogHandler.showSelect(request);
         break;
       case "confirm":

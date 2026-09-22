@@ -172,3 +172,34 @@ describe("skills install tab", () => {
     await vi.waitFor(() => expect(choose().disabled).toBe(false));
   });
 });
+
+describe("skills install tab — workspaceless (landing)", () => {
+  let container;
+  beforeEach(() => {
+    container = document.createElement("div");
+  });
+
+  it("keeps the global scope usable and disables the project scope", async () => {
+    const client = transport();
+    const tab = setupSkillsInstallTab({
+      container,
+      transport: client,
+      isProjectTrusted: () => true,
+      hasWorkspace: () => false,
+    });
+    await tab.activate();
+    container.querySelector(".skills-install-choose").click();
+    await vi.waitFor(() =>
+      expect(container.querySelector("[data-install-node='group-1']")).not.toBeNull(),
+    );
+    expect(container.querySelector("[data-scope='global']").disabled).not.toBe(true);
+    expect(container.querySelector("[data-scope='project']").disabled).toBe(true);
+    expect(container.querySelector(".skills-install-untrusted")).not.toBeNull();
+
+    // The global install still submits, and it never names a project scope.
+    container.querySelector(".skills-install-review").click();
+    container.querySelector(".skills-install-confirm").click();
+    await vi.waitFor(() => expect(client.installSkillLinks).toHaveBeenCalled());
+    expect(client.installSkillLinks.mock.calls[0][0].scope).toBe("global");
+  });
+});

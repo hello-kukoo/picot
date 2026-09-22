@@ -511,7 +511,12 @@
     "searchClose": "Cerrar barra de búsqueda"
   },
   "landing": {
-    "hint": "Selecciona una sesión en la barra lateral para empezar, o pulsa el + de un espacio de trabajo para iniciar una nueva."
+    "hint": "Selecciona una sesión en la barra lateral para empezar, o pulsa el + de un espacio de trabajo para iniciar una nueva.",
+    "credentials": {
+      "title": "Configura un modelo primero",
+      "body": "No se encontró ninguna clave API ni inicio de sesión. Añade una para empezar.",
+      "action": "Abrir ajustes de modelo"
+    }
   },
   "sidebar": {
     "loadingSessions": "Cargando sesiones...",
@@ -869,7 +874,7 @@
       "scopeSummary": "{total} habilidades · {groups} grupos",
       "discovered": "Descubiertas",
       "install": "Instalar",
-      "packages": "Paquetes",
+      "packages": "Paquetes de extensión",
       "sectionsAriaLabel": "Secciones de habilidades"
     },
     "installSkills": {
@@ -885,7 +890,8 @@
       "installFailed": "No se pudieron instalar las habilidades seleccionadas.",
       "installing": "Instalando...",
       "project": "Proyecto actual",
-      "projectUntrusted": "Este proyecto no es de confianza. No se puede instalar en el proyecto actual.",
+      "projectUntrusted": "Instalar en el proyecto actual requiere un espacio de trabajo abierto; ahora solo funciona el ámbito global.",
+      "projectNeedsWorkspace": "Instalar en el proyecto actual requiere un espacio de trabajo abierto; ahora solo funciona el ámbito global.",
       "restartRequired": "Guardado. Inicia una nueva sesión o reinicia Pi para que el cambio surta efecto.",
       "review": "Revisar instalación",
       "scanFailed": "No se pudo escanear la carpeta seleccionada.",
@@ -894,6 +900,7 @@
       "title": "Instalar habilidades"
     },
     "packageSkills": {
+      "bulkFailure": "No se pudieron actualizar {failed} de {total} skills.",
       "bundledCandidates": "Candidatos incluidos",
       "candidateCount": "{count} candidatos",
       "canonicalPath": "Ruta canónica",
@@ -909,8 +916,8 @@
       "projectUntrusted": "Este proyecto no es de confianza. No se muestran las rutas de paquetes del proyecto.",
       "refresh": "Actualizar",
       "retry": "Reintentar",
-      "scopeSummary": "{count} paquetes",
-      "title": "Habilidades de paquetes"
+      "scopeSummary": "{skills} habilidades · {packages} paquetes de extensión",
+      "title": "Habilidades de paquetes de extensión"
     },
     "providers": {
       "addTitle": "Añadir proveedor",
@@ -1001,6 +1008,159 @@
       "medium": "Mediano",
       "large": "Grande",
       "xlarge": "Muy grande"
+    },
+    "extensionTodo": {
+      "title": "Superposición de tareas",
+      "hint": "Se aplica de inmediato: la superposición relee su configuración en cada renderizado.",
+      "maxLinesLabel": "Líneas máximas del widget",
+      "maxLinesError": "Debe ser un entero ≥ 3",
+      "collapseKeyLabel": "Atajo de plegado"
+    },
+    "extensionAskUser": {
+      "title": "Preguntar al usuario",
+      "hint": "Se aplica de inmediato: el cuestionario relee su configuración en cada renderizado.",
+      "collapseKeyLabel": "Atajo de plegado"
+    },
+    "extensionPonytail": {
+      "title": "Ponytail",
+      "hint": "Modo por defecto para sesiones nuevas; la sesión activa mantiene el suyo.",
+      "modeLabel": "Modo por defecto",
+      "mode_lite": "Ligero",
+      "mode_full": "Completo",
+      "mode_ultra": "Ultra",
+      "useDefault": "Usar valor por defecto",
+      "quietStartupLabel": "Inicio silencioso",
+      "hideStatusLabel": "Ocultar estado"
+    },
+    "extensionVcc": {
+      "title": "Compresión pi-vcc",
+      "hint": "Surte efecto en la siguiente compactación; una compactación en curso conserva su instantánea.",
+      "relocatedBadge": "solo lectura — reubicado por {name}",
+      "overrideDefaultCompactionLabel": "Gestionar compactación",
+      "overrideDefaultCompactionDesc": "pi-vcc gestiona /compact y el desbordamiento del umbral; desactivado vuelve al núcleo de pi.",
+      "smartKeepTailLabel": "Keep-tail inteligente",
+      "smartKeepTailDesc": "Aumenta keep-tail cuando el final es minúsculo, hasta 25k.",
+      "continueAfterThresholdCompactLabel": "Continuar tras auto-compactar",
+      "continueAfterThresholdCompactDesc": "Permiso (no garantía) para continuar tras una compactación automática.",
+      "debugLabel": "Instantáneas de depuración",
+      "debugDesc": "Escribe instantáneas de compactación en /tmp/pi-vcc-debug.json."
+    },
+    "extensionGoal": {
+      "title": "pi-goal",
+      "hint": "Los límites se aplican al iniciar el próximo objetivo; el interruptor RPC requiere reinicio.",
+      "rpcLabel": "Canal RPC",
+      "rpcDesc": "Registra el canal RPC de objetivos al cargar (desactivado por defecto).",
+      "automaticTurnsLabel": "Turnos automáticos",
+      "noProgressTurnsLabel": "Turnos sin progreso",
+      "unlimited": "Ilimitado",
+      "limitError": "Debe ser un entero ≥ 1",
+      "reset": "Restablecer valores",
+      "resetConfirm": "Haz clic de nuevo para confirmar",
+      "legacyWarning": "Se detectó el ajuste heredado experimental.goals: pi-goal lo ignora (usa /goal edit para repriorizar, o /goal <objetivos> para iniciar uno)."
+    },
+    "extensionCaveman": {
+      "title": "pi-caveman",
+      "hint": "El nivel por defecto se aplica a las sesiones nuevas.",
+      "levelLabel": "Nivel por defecto",
+      "statusLabel": "Mostrar estado en pie"
+    },
+    "extensionCacheOptimizer": {
+      "title": "pi-cache-optimizer",
+      "hint": "Surte efecto tras reiniciar Pi o ejecutar /reload.",
+      "footerModeLabel": "Modo de estadísticas",
+      "mode_total": "Total",
+      "mode_session": "Sesión",
+      "mode_process": "Proceso",
+      "source_config": "config",
+      "source_env": "env",
+      "source_default": "por defecto",
+      "omitTitle": "Claves reparadas ({count}, solo lectura — /cache-optimizer fix)",
+      "envTitle": "Opciones de entorno (solo lectura)",
+      "envOn": "ACTIVO",
+      "envOff": "INACTIVO",
+      "invalidNote": "Archivo no válido: corrígelo a mano; las reparaciones están ligadas a recibos, no se ofrece restablecimiento."
+    },
+    "extensionLens": {
+      "title": "pi-lens",
+      "hint": "Los interruptores se aplican a sesiones nuevas (las variables de entorno requieren reinicio).",
+      "runtimeGroup": "Tiempo de ejecución",
+      "feedbackGroup": "Cadena de feedback",
+      "guardGroup": "Guardas",
+      "reportGroup": "Informes",
+      "analyzerGroup": "Analizadores",
+      "advancedGroup": "Avanzado",
+      "maxProjectFilesLabel": "Archivos máx. del proyecto",
+      "limitError": "Debe ser un entero ≥ 1",
+      "shadowBadge": "anulado por {source}",
+      "relocatedBadge": "solo lectura — reubicado por {name}",
+      "projectHint": "Las anulaciones de proyecto aparecen al entrar en un espacio de trabajo; esta página edita la capa global."
+    },
+    "extensionPlanMode": {
+      "title": "pi-plan-mode",
+      "hint": "Se aplica en el próximo inicio de sesión.",
+      "thinkingLabel": "Pensamiento del plan",
+      "implModelLabel": "Modelo de implementación",
+      "followPlanModel": "Seguir modelo del plan",
+      "implThinkingLabel": "Pensamiento de implementación",
+      "retentionLabel": "Retención del plan",
+      "exportPathLabel": "Ruta de exportación",
+      "shortcutLabel": "Atajo de alternancia",
+      "advancedGroup": "Avanzado",
+      "planToolsLabel": "Herramientas del plan (array JSON)",
+      "safeSubcommandsLabel": "Subcomandos seguros (objeto JSON)",
+      "invalidJson": "JSON no válido",
+      "invalidNote": "No se puede leer el archivo de configuración: corrígelo a mano. Las escrituras se rechazan hasta que se pueda analizar."
+    },
+    "extensionSafetyGuard": {
+      "title": "datarx-safety-guard-pi",
+      "hint": "Se aplica de inmediato: el guarda relee su configuración en cada evento.",
+      "masterLabel": "Interruptor maestro",
+      "categoriesGroup": "Categorías de reglas",
+      "category_git": "Historial Git",
+      "category_filesystem": "Borrado de archivos",
+      "category_docker": "Docker",
+      "category_package": "Gestores de paquetes",
+      "category_system": "Comandos del sistema",
+      "category_database": "Base de datos",
+      "category_secrets": "Secretos",
+      "protectedPathsGroup": "Rutas protegidas",
+      "protectWrite": "Proteger escrituras",
+      "protectEdit": "Proteger ediciones",
+      "contextBefore": "Líneas antes",
+      "contextAfter": "Líneas después",
+      "rangeError": "Debe ser un entero 0–20",
+      "autoReviewGroup": "Revisión automática",
+      "autoReviewLabel": "Activar revisión automática",
+      "modelLabel": "Modelo de revisión",
+      "modelUnset": "Sin configurar",
+      "allowCounts": "Entradas permitidas (globales): {count} — se gestionan en sesión",
+      "relocatedBadge": "solo lectura — reubicado por {name}",
+      "thinkingLevelLabel": "Nivel de pensamiento de revisión",
+      "invalidNote": "No se puede leer el archivo de configuración: corrígelo a mano. Las escrituras se rechazan hasta que se pueda analizar."
+    },
+    "extensionWebAccess": {
+      "title": "pi-web-access",
+      "hint": "Surte efecto tras reiniciar Pi (caché de configuración por módulo).",
+      "searchKeysGroup": "Claves de búsqueda",
+      "extractKeysGroup": "Proveedores de extracción",
+      "endpointsGroup": "Proxy y endpoints",
+      "answerModelGroup": "Modelo de respuesta",
+      "answerModelLabel": "Modelo de respuesta",
+      "configuredPreview": "configurada ····{preview}",
+      "envBadge": "env",
+      "clear": "Borrar",
+      "clearConfirm": "Haz clic de nuevo para confirmar",
+      "modelUnset": "Sin configurar",
+      "invalidNote": "Archivo no válido — corrígelo a mano. Sin restablecer: el propio texto del archivo es el secreto."
+    },
+    "safetyGuardDialog": {
+      "title": "Safety Guard: aprobación de bash",
+      "hintOnce": "No se guarda ninguna aprobación",
+      "hintSession": "Permitido en la sesión actual",
+      "hintPermanent": "Guardado permanentemente para este directorio",
+      "hintEverywhere": "Permanente, en TODAS PARTES — omite avisos futuros",
+      "hintRuleSession": "Tipos de operación permitidos en esta sesión",
+      "hintRulePermanent": "Tipos de operación siempre permitidos aquí"
     }
   },
   "cost": {

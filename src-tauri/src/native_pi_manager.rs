@@ -41,6 +41,11 @@ pub enum NativeRuntimeType {
     QuickChat,
     Standby,
     SuperAgent,
+    /// Landing-only bridge-service runtime: sessionless, toolless, cwd
+    /// `~/.pi/tmp`; hosts picot-bridge so ConfigGateway ops work with no
+    /// workspace open. Never rendered as a session (landing-bridge-runtime
+    /// spec v2).
+    Config,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,7 +108,10 @@ impl NativeLaunchSpec {
             args.push(session_path.to_string_lossy().into_owned());
         } else if matches!(
             self.runtime_type,
-            NativeRuntimeType::SideChat | NativeRuntimeType::QuickChat | NativeRuntimeType::Standby
+            NativeRuntimeType::SideChat
+                | NativeRuntimeType::QuickChat
+                | NativeRuntimeType::Standby
+                | NativeRuntimeType::Config
         ) {
             // Sessionless runtime types per the Gate C launch contract: the
             // host never resumes or persists a session for these runtimes.
@@ -1182,6 +1190,9 @@ impl NativePiManager {
             }
             crate::ephemeral_registry::EphemeralKind::QuickChat => {
                 spec.runtime_type == NativeRuntimeType::QuickChat
+            }
+            crate::ephemeral_registry::EphemeralKind::Config => {
+                spec.runtime_type == NativeRuntimeType::Config
             }
         };
         if !kind_matches {

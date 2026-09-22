@@ -35,6 +35,9 @@ export function setupSkillsInstallTab({
   container,
   transport,
   isProjectTrusted,
+  /** False on the landing page: no workspace means the global scope is the
+   * only installable target (the host refuses a project install there). */
+  hasWorkspace = () => true,
   showSuccess,
   showError,
 }) {
@@ -179,6 +182,7 @@ export function setupSkillsInstallTab({
 
   function renderScope() {
     const projectTrusted = isProjectTrusted();
+    const workspaceOpen = hasWorkspace();
     const locked = phase === "installing";
     const tabs = el("div", {
       class: "skills-scope-tabs",
@@ -187,7 +191,7 @@ export function setupSkillsInstallTab({
     });
     for (const value of ["global", "project"]) {
       const active = value === scope;
-      const disabled = locked || (value === "project" && !projectTrusted);
+      const disabled = locked || (value === "project" && (!projectTrusted || !workspaceOpen));
       tabs.appendChild(
         el(
           "button",
@@ -207,7 +211,16 @@ export function setupSkillsInstallTab({
         ),
       );
     }
-    if (!projectTrusted) {
+    // Workspace absence is the stronger reason: at landing there is no
+    // project to trust yet, so the trust note would mislead.
+    if (!workspaceOpen) {
+      tabs.appendChild(
+        el("span", {
+          class: "skills-install-untrusted",
+          text: t("settings.installSkills.projectNeedsWorkspace"),
+        }),
+      );
+    } else if (!projectTrusted) {
       tabs.appendChild(
         el("span", {
           class: "skills-install-untrusted",

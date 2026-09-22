@@ -61,7 +61,13 @@ export class ConfigGateway {
         );
       });
       return Promise.race([
-        this.#waitUntilReady().then(() => this.#send(op, params, options)),
+        this.#waitUntilReady().then(() => {
+          // Stop the gate timer the moment the gate opens: it starts before
+          // the send, so an un-cleared timer always wins the race and reports
+          // a slow response as "waiting for runtime" — the wrong cause.
+          clearTimeout(gateTimer);
+          return this.#send(op, params, options);
+        }),
         gateTimeout,
       ]).finally(() => clearTimeout(gateTimer));
     }

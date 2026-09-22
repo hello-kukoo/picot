@@ -28,7 +28,16 @@ import {
   resolveProviderId,
   testProviderConnectivity,
 } from "./custom-provider-probe";
-import { advisorConfigGet, advisorConfigSet } from "./extension-settings";
+import {
+  advisorConfigGet,
+  advisorConfigSet,
+  planModeConfigGet,
+  planModeConfigSet,
+  safetyGuardConfigGet,
+  safetyGuardConfigSet,
+  webAccessConfigGet,
+  webAccessConfigSet,
+} from "./extension-settings";
 import { deleteMcpServer, listMcpServers, saveMcpServer, toggleMcpServer } from "./mcp-settings";
 import {
   createOAuthLoginOperationManager,
@@ -1413,6 +1422,24 @@ export async function handlePicotConfig(
 
       case "advisor.config.set":
         return { ok: true, data: advisorConfigSet(params) };
+
+      case "planMode.config.get":
+        return { ok: true, data: await planModeConfigGet(requireRegistry()) };
+
+      case "planMode.config.set":
+        return { ok: true, data: planModeConfigSet(params) };
+
+      case "safetyGuard.config.get":
+        return { ok: true, data: safetyGuardConfigGet() };
+
+      case "safetyGuard.config.set":
+        return { ok: true, data: safetyGuardConfigSet(params) };
+
+      case "webaccess.config.get":
+        return { ok: true, data: webAccessConfigGet() };
+
+      case "webaccess.config.set":
+        return { ok: true, data: webAccessConfigSet(params) };
 
       case "set_default_auto_compaction":
         return {

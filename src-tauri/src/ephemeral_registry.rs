@@ -18,6 +18,10 @@ const INSTANCE_ID_BYTES: usize = 12;
 pub enum EphemeralKind {
     SideChat,
     QuickChat,
+    /// Landing bridge-service runtime. Not a chat: no bootstrap publication
+    /// contract beyond lifecycle tracking; dies at the next transition sweep
+    /// like every other ephemeral (landing-bridge-runtime spec v2).
+    Config,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -94,6 +98,7 @@ pub struct EphemeralRegistry {
 struct OwnerPartition {
     side: Vec<Record>,
     quick: Vec<Record>,
+    config: Vec<Record>,
     next_generation: u64,
     next_creation_order: u64,
 }
@@ -156,6 +161,7 @@ impl OwnerPartition {
         self.side
             .iter_mut()
             .chain(self.quick.iter_mut())
+            .chain(self.config.iter_mut())
             .find(|r| r.instance_id == id && r.generation == generation)
     }
 
@@ -163,11 +169,15 @@ impl OwnerPartition {
         self.side
             .iter()
             .chain(self.quick.iter())
+            .chain(self.config.iter())
             .find(|r| r.instance_id == id && r.generation == generation)
     }
 
     fn all_records_mut(&mut self) -> impl Iterator<Item = &mut Record> {
-        self.side.iter_mut().chain(self.quick.iter_mut())
+        self.side
+            .iter_mut()
+            .chain(self.quick.iter_mut())
+            .chain(self.config.iter_mut())
     }
 
     /// True when any quick record is mid-creation (an in-flight replacement candidate).
@@ -195,6 +205,13 @@ impl EphemeralRegistry {
             EphemeralKind::QuickChat => {
                 if !partition.quick.is_empty() {
                     return Err("quick chat already exists".to_string());
+                }
+            }
+            EphemeralKind::Config => {
+                if !partition.config.is_empty() {
+                    // Idempotent lazy spawn: the live config runtime is
+                    // reused, never duplicated.
+                    return Err("config runtime already exists".to_string());
                 }
             }
         }
@@ -371,6 +388,7 @@ impl EphemeralRegistry {
             .side
             .iter()
             .chain(partition.quick.iter())
+            .chain(partition.config.iter())
             .collect();
         records.sort_by_key(|r| r.creation_order);
         records.iter().map(|r| r.descriptor()).collect()
@@ -386,6 +404,7 @@ impl EphemeralRegistry {
             .side
             .iter()
             .chain(partition.quick.iter())
+            .chain(partition.config.iter())
             .find(|record| record.instance_id == instance_id)
             .map(|record| record.generation)
     }
@@ -452,7 +471,7 @@ impl EphemeralRegistry {
         leases
     }
 
-    pub fn side_chat_cleanup_for_transition(
+    pub fn chat_and_config_cleanup_for_transition(
         &self,
         owner: &OwnerId,
         transition_generation: u64,
@@ -462,7 +481,7 @@ impl EphemeralRegistry {
             return Vec::new();
         };
         let mut leases = Vec::new();
-        for record in partition.side.iter_mut() {
+        for record in partition.side.iter_mut().chain(partition.config.iter_mut()) {
             if record.transition_generation < transition_generation
                 && record.state != EphemeralState::Closing
             {
@@ -505,6 +524,7 @@ impl OwnerPartition {
         match kind {
             EphemeralKind::SideChat => &mut self.side,
             EphemeralKind::QuickChat => &mut self.quick,
+            EphemeralKind::Config => &mut self.config,
         }
     }
 
@@ -523,6 +543,14 @@ impl OwnerPartition {
             .position(|r| r.instance_id == id && r.generation == generation);
         if let Some(idx) = was_in_quick {
             self.quick.remove(idx);
+            return true;
+        }
+        let was_in_config = self
+            .config
+            .iter()
+            .position(|r| r.instance_id == id && r.generation == generation);
+        if let Some(idx) = was_in_config {
+            self.config.remove(idx);
             return true;
         }
         false
@@ -824,6 +852,26 @@ mod tests {
     }
 
     #[test]
+    fn config_records_are_visible_to_lookup_and_generation() {
+        // Regression: descriptors()/generation_of() once skipped the config
+        // slot — the idempotent landing spawn then errored with "config
+        // runtime already exists" and notify forwarding dropped the
+        // runtime's generation (config-gateway timeouts on the models page).
+        let reg = EphemeralRegistry::default();
+        let owner = owner("w1");
+        let reservation = reg.reserve_create(&owner, EphemeralKind::Config).unwrap();
+        let expected_generation = reservation.generation;
+        commit(&reg, &reservation, 5500);
+        let descriptors = reg.descriptors(&owner);
+        assert_eq!(descriptors.len(), 1);
+        assert_eq!(descriptors[0].kind, EphemeralKind::Config);
+        assert_eq!(
+            reg.generation_of(&owner, &descriptors[0].instance_id),
+            Some(expected_generation)
+        );
+    }
+
+    #[test]
     fn owner_cleanup_leases_every_record() {
         let reg = EphemeralRegistry::default();
         let owner = owner("w1");
@@ -842,7 +890,7 @@ mod tests {
     }
 
     #[test]
-    fn side_chat_cleanup_for_transition_targets_old_workspace_only() {
+    fn transition_cleanup_targets_old_chat_and_preserves_new_chat() {
         // The quota is one Side Chat per owner, but cleanup must filter by
         // transition_generation within a single partition — so this test
         // injects both the old and the new Side Chat records directly into the
@@ -898,7 +946,7 @@ mod tests {
             });
         }
 
-        let leases = reg.side_chat_cleanup_for_transition(&current_owner, 5);
+        let leases = reg.chat_and_config_cleanup_for_transition(&current_owner, 5);
         assert_eq!(leases.len(), 1);
         assert_eq!(leases[0].instance_id, old_instance_id);
         for lease in &leases {
@@ -907,6 +955,18 @@ mod tests {
         let remaining = reg.descriptors(&current_owner);
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].instance_id, new_instance_id);
+    }
+
+    #[test]
+    fn transition_cleanup_includes_old_config_runtime() {
+        let reg = EphemeralRegistry::default();
+        let owner = owner("w-config");
+        let reservation = reg.reserve_create(&owner, EphemeralKind::Config).unwrap();
+        commit(&reg, &reservation, 5500);
+
+        let leases = reg.chat_and_config_cleanup_for_transition(&owner, 2);
+        assert_eq!(leases.len(), 1);
+        assert_eq!(leases[0].instance_id, reservation.instance_id);
     }
 
     #[test]

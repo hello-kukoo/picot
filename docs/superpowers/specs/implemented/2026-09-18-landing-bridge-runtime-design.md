@@ -23,6 +23,10 @@ landing 侧把 `ephemeral_command_failed` 对应回原请求；就绪计时器�
 改用 `requestId + uuid`；真实 Pi smoke
 `native_smoke_config_runtime_answers_every_landing_op` 断言「同一 requestId 连发两次
 必须各得一次应答」，并逐一断言 landing 六个 op 都有应答。
+⑦ 软件包技能子页在 landing 空列表：该页消费的是 workspace `nativeRpcCommand` 的
+`{success, data}` 信封，而 landing 适配器当时返回 ConfigGateway 的裸 payload →
+`!response.success` 直接走错误态。适配器改为返回同一信封（`{success:false,error}` 亦然），
+并在 landing 集成测试里用「模拟 config runtime 应答 `__picotConfig`」的 wsClient 覆盖该路径。
 ⑥ 扩展详情页的 host op 渲染器此前把 host 控制面的「resolve 原始 payload」当成 bridge 的
 `{ok,data}`，`result.ok` 恒 undefined → 8 个 host 面页面全部显示 "load failed"；
 已在 `renderExtensionSettings` 边界统一补齐 `ok` 标志，渲染器测试同步改用生产契约

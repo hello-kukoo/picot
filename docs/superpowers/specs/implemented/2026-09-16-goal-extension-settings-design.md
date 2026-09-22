@@ -20,13 +20,14 @@ two continuation limits.
   - `continuationLimits.automaticTurns: number | null` (default `25`).
   - `continuationLimits.noProgressTurns: number | null` (default `3`).
     `null` = unlimited; values must be safe integers `> 0`.
-- **Strict whole-file normalization**: `normalizeGoalSettings` returns
-  `undefined` on ANY invalid key/type — one bad field makes the package fall
-  back to defaults wholesale. Consequence: the host op must validate every
-  write against the package grammar and refuse (not silently default) on
-  conflict, and single-key writes must re-validate the ENTIRE merged
-  document before saving (a pre-existing invalid file must surface as an
-  error state, never be "fixed" by partial writes).
+- **Known-subtree validation, unknown keys tolerated**（2026-09-21 复核 pi-goal
+  0.54.8 `src/settings.ts` + `docs/settings.md`，修正原先「全文档严格校验」的
+  错误结论）：`normalizeGoalSettings` 只校验 `rpc` / `continuationLimits`
+  两棵子树；**未知/已下线的键（`toolVisibility`、`experimental`…）一律忽略**，
+  且保存时 `{...raw, rpc, continuationLimits}` 原样保留。Consequence: 主机 op
+  只对这两棵子树做类型校验（类型错误 → 只读错误态），未知键必须容忍并在写入时
+  保留；`experimental.goals === true` 是**旧设置警告**（包会照常加载文件），
+  不是错误。
 - Writes: package does mkdir + writeFileSync + rename (its own atomic path).
 - Effect timing: limits are read when a goal run starts; rpc.enabled gates
   RPC registration at load — hint 「新目标生效；RPC 开关需重启」.

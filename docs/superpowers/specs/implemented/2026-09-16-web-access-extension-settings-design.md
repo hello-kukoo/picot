@@ -98,7 +98,9 @@ than the package's own defaults.
 ### Renderer
 
 - Groups: ① 搜索 providers keys ② 抽取 providers keys + endpoints ③ 代理与
-  端点 ④ 答复模型 (model picker, advisor machinery) ⑤ 路由 (ordered
+  端点 ④ 答复模型（**composer parity 下拉**，Dr. Lin 2026-09-21 决议：`list_model_catalog`
+  ∩ `available ∩ visible` + `list_scoped_models`，与 advisor / pi-plan-mode /
+  safety-guard 同一个列表；provider+modelId 以 `entries` 一次成对写入或清空）⑤ 路由 (ordered
   provider lists with up/down + fallbackOn checkboxes) ⑥ 开关
   (image/browser cookies). Hint 「重启 Picot 后生效」.
 

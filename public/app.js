@@ -147,6 +147,7 @@ import { summarizeProcessGroup } from "./ui/process-group.js";
 import { QuestionnaireCard } from "./ui/questionnaire-card.js";
 import { setupResizablePanel } from "./ui/resizable-panel.js";
 import { isRpivTodoCommandNotify, RpivTodoMirrorPanel } from "./ui/rpiv-todo-mirror.js";
+import { SafetyGuardDialog } from "./ui/safety-guard-dialog.js";
 import { setupSessionSearchDialog } from "./ui/session-search-dialog.js";
 import { setupSkillSlashCommand } from "./ui/skill-slash-command.js";
 import { ToolCardRenderer } from "./ui/tool-card.js";
@@ -667,6 +668,12 @@ initImageLightbox(messagesElement);
 const dialogHandler = new DialogHandler({
   container: document.getElementById("dialog-container"),
   notificationContainer: document.getElementById("messages"),
+  send: (message) => wsClient.send(message),
+});
+// Rich bash-approval card (datarx-safety-guard-pi): first-shot interception
+// before the generic dialog — long approval prompts must scroll, not stretch.
+const safetyGuardDialog = new SafetyGuardDialog({
+  container: document.getElementById("dialog-container"),
   send: (message) => wsClient.send(message),
 });
 const questionnaireCard = new QuestionnaireCard({
@@ -3366,6 +3373,7 @@ function handleExtensionUIRequest(
   runtimeId = runtimeIdForTarget(event?.__target || wsClient.getRuntimeTarget()),
 ) {
   if (questionnaireCard.handleExtensionUIRequest(event)) return;
+  if (safetyGuardDialog.handleExtensionUIRequest(event)) return;
   switch (event.method) {
     case "select":
       dialogHandler.showSelect(event);
@@ -7338,6 +7346,7 @@ const skillsInstallPage = setupSkillsInstallTab({
   container: document.getElementById("settings-install-skills"),
   transport,
   isProjectTrusted: () => skillsPage.isProjectTrusted(),
+  hasWorkspace: () => true,
   showSuccess: (msg) => showSettingsSaveSuccess(skillsSaveMessageEl, msg),
   showError: (msg) => showSettingsSaveError(skillsSaveMessageEl, msg),
 });

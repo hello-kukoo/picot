@@ -260,10 +260,12 @@ pub(crate) fn native_launch_spec(
 /// Build native launch inputs for a specific runtime type.
 ///
 /// Session and tool flags follow the Gate C launch contract per type:
-/// Dedicated requires an explicit session; SideChat, QuickChat, and Standby
-/// are sessionless (`command_description` emits `--no-session`); QuickChat
-/// is always toolless. Standby callers may still enable `no_tools` on the
-/// returned spec for the side-chat standby pool variant.
+/// Dedicated requires an explicit session; SideChat, QuickChat, Standby,
+/// and Config are sessionless (`command_description` emits `--no-session`);
+/// QuickChat and Config are always toolless (Config is the landing bridge
+/// service: configuration ops never call agent tools). Standby callers may
+/// still enable `no_tools` on the returned spec for the side-chat standby
+/// pool variant.
 pub(crate) fn native_launch_spec_for(
     static_dir: &Path,
     runtime_type: NativeRuntimeType,
@@ -275,7 +277,10 @@ pub(crate) fn native_launch_spec_for(
     }
     if matches!(
         runtime_type,
-        NativeRuntimeType::SideChat | NativeRuntimeType::QuickChat | NativeRuntimeType::Standby
+        NativeRuntimeType::SideChat
+            | NativeRuntimeType::QuickChat
+            | NativeRuntimeType::Standby
+            | NativeRuntimeType::Config
     ) && session_path.is_some()
     {
         return Err("Sessionless runtime types cannot carry a session path".into());
@@ -296,7 +301,10 @@ pub(crate) fn native_launch_spec_for(
         static_dir: Some(static_dir.to_path_buf()),
         install_secret: Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret_bytes)),
         runtime_type,
-        no_tools: runtime_type == NativeRuntimeType::QuickChat,
+        no_tools: matches!(
+            runtime_type,
+            NativeRuntimeType::QuickChat | NativeRuntimeType::Config
+        ),
         readiness: ReadinessPolicy::default(),
         cleanup: crate::native_pi_manager::NativeCleanupResources::default(),
     };

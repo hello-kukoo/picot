@@ -511,7 +511,12 @@
     "searchClose": "Close find bar"
   },
   "landing": {
-    "hint": "Select a session from the sidebar to begin, or click a workspace's + to start a new session."
+    "hint": "Select a session from the sidebar to begin, or click a workspace's + to start a new session.",
+    "credentials": {
+      "title": "Set up a model first",
+      "body": "No API key or login found. Add one to start chatting.",
+      "action": "Open model settings"
+    }
   },
   "sidebar": {
     "loadingSessions": "Loading sessions...",
@@ -849,7 +854,7 @@
       "sectionsAriaLabel": "Skills sections",
       "discovered": "Discovered",
       "install": "Install",
-      "packages": "Packages",
+      "packages": "Extension packages",
       "description": "Manage skills Pi discovers for this workspace. Changes are written to the matching settings.json and apply only after a new session or Pi-process restart.",
       "rescan": "Rescan",
       "global": "Global",
@@ -880,7 +885,8 @@
       "scanFailed": "Failed to scan the selected folder.",
       "global": "Global",
       "project": "Current project",
-      "projectUntrusted": "This project is not trusted. Install to the current project is unavailable.",
+      "projectUntrusted": "Installing into the current project needs an open workspace; the global scope works now.",
+      "projectNeedsWorkspace": "Installing into the current project needs an open workspace; the global scope works now.",
       "review": "Review installation",
       "confirmation": "Install {count} selected skills to {scope}?",
       "confirmationHeading": "Confirm skill installation",
@@ -894,7 +900,7 @@
       "group": "Group"
     },
     "packageSkills": {
-      "title": "Packages skills",
+      "title": "Extension packages",
       "description": "Manage skills from configured Pi packages. Changes are written to packages[].skills and take effect in a new session or after restarting Pi.",
       "bundledCandidates": "Package skills",
       "refresh": "Refresh",
@@ -909,7 +915,7 @@
       "package": "Package",
       "canonicalPath": "Canonical path",
       "candidateCount": "{count} candidates",
-      "scopeSummary": "{count} packages",
+      "scopeSummary": "{skills} skills · {packages} extension packages",
       "enableAll": "Enable all",
       "bulkFailure": "Failed to update {failed} of {total} skills."
     },
@@ -1002,6 +1008,159 @@
       "medium": "Medium",
       "large": "Large",
       "xlarge": "Extra large"
+    },
+    "extensionTodo": {
+      "title": "Todo Overlay",
+      "hint": "Applies immediately — the overlay re-reads its config on every render.",
+      "maxLinesLabel": "Max widget lines",
+      "maxLinesError": "Must be an integer ≥ 3",
+      "collapseKeyLabel": "Collapse shortcut"
+    },
+    "extensionAskUser": {
+      "title": "Ask User Question",
+      "hint": "Applies immediately — the questionnaire re-reads its config per render.",
+      "collapseKeyLabel": "Collapse shortcut"
+    },
+    "extensionPonytail": {
+      "title": "Ponytail",
+      "hint": "Default mode for new sessions; the active session keeps its current mode.",
+      "modeLabel": "Default mode",
+      "mode_lite": "Lite",
+      "mode_full": "Full",
+      "mode_ultra": "Ultra",
+      "useDefault": "Use default",
+      "quietStartupLabel": "Quiet startup",
+      "hideStatusLabel": "Hide status"
+    },
+    "extensionVcc": {
+      "title": "pi-vcc Compaction",
+      "hint": "Takes effect at the next compaction; an in-flight compaction keeps its loaded snapshot.",
+      "relocatedBadge": "read-only — relocated by {name}",
+      "overrideDefaultCompactionLabel": "Own compaction",
+      "overrideDefaultCompactionDesc": "pi-vcc owns /compact and threshold overflow; off leaves them to pi core.",
+      "smartKeepTailLabel": "Smart keep-tail",
+      "smartKeepTailDesc": "Boosts keep-tail when the last tail is tiny, up to 25k.",
+      "continueAfterThresholdCompactLabel": "Continue after auto-compact",
+      "continueAfterThresholdCompactDesc": "Permission (not guarantee) to continue after an automatic compaction.",
+      "debugLabel": "Debug snapshots",
+      "debugDesc": "Writes compaction snapshots to /tmp/pi-vcc-debug.json."
+    },
+    "extensionGoal": {
+      "title": "pi-goal",
+      "hint": "Limits apply when the next goal starts; the RPC toggle needs a restart.",
+      "rpcLabel": "RPC channel",
+      "rpcDesc": "Registers the goal RPC channel at load (default off).",
+      "automaticTurnsLabel": "Automatic turns",
+      "noProgressTurnsLabel": "No-progress turns",
+      "unlimited": "Unlimited",
+      "limitError": "Must be an integer ≥ 1",
+      "reset": "Reset to defaults",
+      "resetConfirm": "Click again to confirm",
+      "legacyWarning": "Removed legacy setting experimental.goals detected — pi-goal ignores it (use /goal edit to reprioritize, or /goal <objectives> to start one)."
+    },
+    "extensionCaveman": {
+      "title": "pi-caveman",
+      "hint": "The default level applies to new sessions.",
+      "levelLabel": "Default level",
+      "statusLabel": "Show footer status"
+    },
+    "extensionCacheOptimizer": {
+      "title": "pi-cache-optimizer",
+      "hint": "Takes effect after a Pi restart or /reload.",
+      "footerModeLabel": "Footer stats mode",
+      "mode_total": "Total",
+      "mode_session": "Session",
+      "mode_process": "Process",
+      "source_config": "config",
+      "source_env": "env",
+      "source_default": "default",
+      "omitTitle": "Repaired cache keys ({count}, read-only — /cache-optimizer fix)",
+      "envTitle": "Environment opt-outs (read-only)",
+      "envOn": "ON",
+      "envOff": "OFF",
+      "invalidNote": "Invalid file: fix it by hand — repairs are receipt-bound, so no reset is offered."
+    },
+    "extensionLens": {
+      "title": "pi-lens",
+      "hint": "Toggles apply to new sessions (env vars need a restart).",
+      "runtimeGroup": "Runtime",
+      "feedbackGroup": "Feedback chain",
+      "guardGroup": "Guards",
+      "reportGroup": "Reports",
+      "analyzerGroup": "Analyzers",
+      "advancedGroup": "Advanced",
+      "maxProjectFilesLabel": "Max project files",
+      "limitError": "Must be an integer ≥ 1",
+      "shadowBadge": "{source} override",
+      "relocatedBadge": "read-only — relocated by {name}",
+      "projectHint": "Project overrides appear after entering a workspace; this page edits the global layer."
+    },
+    "extensionPlanMode": {
+      "title": "pi-plan-mode",
+      "hint": "Applies to the next session start.",
+      "thinkingLabel": "Plan thinking",
+      "implModelLabel": "Implementation model",
+      "followPlanModel": "Follow plan model",
+      "implThinkingLabel": "Implementation thinking",
+      "retentionLabel": "Plan retention",
+      "exportPathLabel": "Export path",
+      "shortcutLabel": "Toggle shortcut",
+      "advancedGroup": "Advanced",
+      "planToolsLabel": "Default plan tools (JSON array)",
+      "safeSubcommandsLabel": "Safe subcommands (JSON object)",
+      "invalidJson": "Invalid JSON",
+      "invalidNote": "The config file cannot be read — fix it by hand. Writes stay refused until it parses."
+    },
+    "extensionSafetyGuard": {
+      "title": "datarx-safety-guard-pi",
+      "hint": "Applies immediately — the guard re-reads its config on every event.",
+      "masterLabel": "Master switch",
+      "categoriesGroup": "Rule categories",
+      "category_git": "Git history",
+      "category_filesystem": "Filesystem deletion",
+      "category_docker": "Docker",
+      "category_package": "Package managers",
+      "category_system": "System commands",
+      "category_database": "Database",
+      "category_secrets": "Secrets",
+      "protectedPathsGroup": "Protected paths",
+      "protectWrite": "Guard writes",
+      "protectEdit": "Guard edits",
+      "contextBefore": "Context lines before",
+      "contextAfter": "Context lines after",
+      "rangeError": "Must be an integer 0–20",
+      "autoReviewGroup": "Auto review",
+      "autoReviewLabel": "Enable auto review",
+      "modelLabel": "Review model",
+      "modelUnset": "Not set",
+      "allowCounts": "Allowed entries (global): {count} — managed in-session via guard dialogs",
+      "relocatedBadge": "read-only — relocated by {name}",
+      "thinkingLevelLabel": "Review thinking level",
+      "invalidNote": "The config file cannot be read — fix it by hand. Writes stay refused until it parses."
+    },
+    "extensionWebAccess": {
+      "title": "pi-web-access",
+      "hint": "Takes effect after a Pi restart (per-module config cache).",
+      "searchKeysGroup": "Search provider keys",
+      "extractKeysGroup": "Extraction providers + endpoints",
+      "endpointsGroup": "Proxy & endpoints",
+      "answerModelGroup": "Answer model",
+      "answerModelLabel": "Fetch answer model",
+      "configuredPreview": "configured ····{preview}",
+      "envBadge": "env",
+      "clear": "Clear",
+      "clearConfirm": "Click again to confirm",
+      "modelUnset": "Not set",
+      "invalidNote": "Invalid file — fix it by hand. No reset: the file's own text is the secret."
+    },
+    "safetyGuardDialog": {
+      "title": "Safety Guard: bash approval",
+      "hintOnce": "No approval is saved",
+      "hintSession": "Allowed for the current session",
+      "hintPermanent": "Saved permanently for this directory",
+      "hintEverywhere": "Permanent, EVERYWHERE — skips future prompts",
+      "hintRuleSession": "Operation types allowed this session",
+      "hintRulePermanent": "Operation types always allowed here"
     }
   },
   "cost": {

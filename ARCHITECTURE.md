@@ -43,7 +43,7 @@ fn native_runtime_enabled(app) -> bool {
 ```
 
 1. 检查 `PICOT_RUNTIME=native`（debug 构建限定）
-2. **冷启动进 landing**：不注册默认工作区、不预创建 session、不派生 Pi 进程，registry 在启动期零改动（2026-09-03「冷启动一律以 ~/.pi/tmp 为 workspace」决策已废弃）。owner 以 `TemporaryKind::Landing` 创建（label `native-landing`；canonical home 仅作 owner 记录占位，永不为 workspace 身份、scope 或授权输入）
+2. **冷启动进 landing**：不注册默认工作区、不预创建 session、不派生 Pi 进程，registry 在启动期零改动（2026-09-03「冷启动一律以 ~/.pi/tmp 为 workspace」决策已废弃）。冷启动仍零派生；landing 配置面（Models/MCP/高级配置/软件包技能/advisor）按需懒派生 bridge 服务 runtime（`NativeRuntimeType::Config`：sessionless+toolless，cwd `~/.pi/tmp`，不注册工作区，global-only，经 `ephemeral_command` 通道定址，transition commit sweep 一并回收——见 `2026-09-18-landing-bridge-runtime-design.md` v2）。owner 以 `TemporaryKind::Landing` 创建（label `native-landing`；canonical home 仅作 owner 记录占位，永不为 workspace 身份、scope 或授权输入）
 3. 创建 `NativePiManager` + `HostServer`（loopback:0 绑定）
 4. 打开 landing 窗口加载 `{origin}/`；WebView 在 bootstrap 期分叉加载 `landing.js`（仅构造 transport、sidebar 四 seam、transition controller、landing notice 与 landing 版 Quick Chat，不建任何 chat-lifecycle 对象）。首次进入工作区必为跨工作区原地切换（prepare → commit → navigate，overlay 换屏）；workspace 的 `same`/`cross` 分类按 owner 的 Registered 绑定派生，Landing owner 永不 same（即使占位 home 本身是已注册工作区）
 5. landing owner 首次 commit 后重绑为 Registered owner；窗口销毁清理、New Session 菜单状态与 Cmd+N 派发一律按 owner 注册表记录判定，不按 label 前缀（label 终身不变，非状态信号）

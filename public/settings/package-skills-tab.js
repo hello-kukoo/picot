@@ -145,13 +145,23 @@ export function setupPackageSkillsTab({ container, rpcCommand, showSuccess, show
     return load(scope);
   }
 
+  /** The project entry exists only when the project actually contributes
+   * packages (the Discovered tab's rule); landing has no project at all. The
+   * open untrusted project scope stays reachable so its notice is not a
+   * one-way door. */
+  function scopeTabsToRender() {
+    if (!inventory) return ["global"];
+    if (inventory.packages.some((card) => card.scope === "project")) return ["global", "project"];
+    return scope === "project" && !inventory.trusted ? ["global", "project"] : ["global"];
+  }
+
   function renderScopeTabs() {
     const tabs = el("div", {
       class: "skills-scope-tabs",
       role: "group",
       aria: { label: t("settings.packageSkills.title") },
     });
-    for (const s of ["global", "project"]) {
+    for (const s of scopeTabsToRender()) {
       const count = scopeCounts[s];
       const active = s === scope;
       tabs.appendChild(
@@ -257,20 +267,32 @@ export function setupPackageSkillsTab({ container, rpcCommand, showSuccess, show
     showSuccess?.(t("settings.skills.savedRestartRequired"));
   }
 
+  /** 全部启用 / 全部禁用 / {x}/{X} 已启用 — the Discovered tab's group status
+   * shape, as one tag-styled control instead of a label plus a switch. */
   function renderEnableAllAffordance(card) {
-    const enabled =
-      card.candidates.length > 0 && card.candidates.every((candidate) => candidate.enabled);
+    const total = card.candidates.length;
+    const enabled = card.candidates.filter((candidate) => candidate.enabled).length;
+    const state = total > 0 && enabled === total ? "all-on" : enabled === 0 ? "all-off" : "mixed";
+    const label =
+      state === "all-on"
+        ? t("settings.skills.allEnabled")
+        : state === "all-off"
+          ? t("settings.skills.allDisabled")
+          : t("settings.skills.enabledCount", { enabled, total });
     return el("div", { class: "skills-group-enable-all" }, [
-      el("span", { class: "skills-enable-all-label", text: t("settings.packageSkills.enableAll") }),
-      el("input", {
-        type: "checkbox",
-        class: "skills-switch",
-        checked: enabled,
+      el("button", {
+        type: "button",
+        class: `skills-group-status ${state}`,
+        text: label,
         disabled: card.scope === "project" && !inventory?.trusted,
-        aria: { label: `${t("settings.packageSkills.enableAll")}: ${card.source}` },
-        onChange: (event) => {
-          void setAllEnabled(card, event.currentTarget.checked);
+        dataset: { packageEnableAll: card.id, groupState: state },
+        aria: {
+          label: `${t("settings.packageSkills.enableAll")}: ${card.source}`,
+          pressed: String(state === "all-on"),
         },
+        // Anything not fully enabled turns everything on; only the all-on
+        // state turns everything off (the checkbox semantics it replaces).
+        onClick: () => void setAllEnabled(card, state !== "all-on"),
       }),
     ]);
   }
@@ -427,10 +449,17 @@ export function setupPackageSkillsTab({ container, rpcCommand, showSuccess, show
       );
     } else {
       const emphasized = inventory.packages.filter((p) => p.scope === scope);
+      const skillCount = emphasized.reduce(
+        (total, card) => total + (card.candidates?.length ?? 0),
+        0,
+      );
       fragment.appendChild(
         el("div", { class: "skills-scope-meta" }, [
           el("span", {
-            text: t("settings.packageSkills.scopeSummary", { count: emphasized.length }),
+            text: t("settings.packageSkills.scopeSummary", {
+              skills: skillCount,
+              packages: emphasized.length,
+            }),
           }),
         ]),
       );

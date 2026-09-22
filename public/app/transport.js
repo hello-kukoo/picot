@@ -118,9 +118,65 @@ export class WsTransport {
   getFffConfig() {
     return this._control("get_fff_config", {});
   }
+  // Landing bridge-service runtime (landing-bridge-runtime spec v2): lazy
+  // spawn, idempotent host-side; descriptor carries instanceId + generation.
+  spawnConfigRuntime() {
+    return this._control("spawn_config_runtime", {}, { timeoutMs: SPAWN_TIMEOUT_MS });
+  }
+  hasAnyCredentials() {
+    return this._control("has_any_credentials", {});
+  }
 
   setFffConfig(payload) {
     return this._control("set_fff_config", payload);
+  }
+  getTodoConfig() {
+    return this._control("get_todo_config", {});
+  }
+  setTodoConfig(payload) {
+    return this._control("set_todo_config", payload);
+  }
+  getAskUserConfig() {
+    return this._control("get_askuser_config", {});
+  }
+  setAskUserConfig(payload) {
+    return this._control("set_askuser_config", payload);
+  }
+  getPonytailConfig() {
+    return this._control("get_ponytail_config", {});
+  }
+  setPonytailConfig(payload) {
+    return this._control("set_ponytail_config", payload);
+  }
+  getVccConfig() {
+    return this._control("get_vcc_config", {});
+  }
+  setVccConfig(payload) {
+    return this._control("set_vcc_config", payload);
+  }
+  getGoalConfig() {
+    return this._control("get_goal_config", {});
+  }
+  setGoalConfig(payload) {
+    return this._control("set_goal_config", payload);
+  }
+  getCavemanConfig() {
+    return this._control("get_caveman_config", {});
+  }
+  setCavemanConfig(payload) {
+    return this._control("set_caveman_config", payload);
+  }
+  getCacheOptimizerConfig() {
+    return this._control("get_cache_optimizer_config", {});
+  }
+  setCacheOptimizerConfig(payload) {
+    return this._control("set_cache_optimizer_config", payload);
+  }
+  getLensConfig(cwd) {
+    return this._control("get_lens_config", { cwd: cwd ?? null });
+  }
+  setLensConfig(payload) {
+    return this._control("set_lens_config", payload);
   }
 
   restartRuntime(workspaceId, sessionId) {

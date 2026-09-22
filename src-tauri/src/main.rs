@@ -4,8 +4,11 @@
 
 // Host runtime modules are compiled into one native transport path.
 // Retired compatibility handlers remain explicit and fail closed where needed.
+mod cache_optimizer_config;
+mod caveman_config;
 mod child_supervision;
 mod fff_config;
+mod goal_config;
 mod host_capability;
 #[allow(dead_code)]
 mod host_config;
@@ -32,17 +35,22 @@ mod cost_compat;
 mod ephemeral_registry;
 mod git_pi_runner;
 mod git_service;
+mod host_credentials;
 mod host_ephemeral;
 mod host_models;
 mod host_skills;
+mod lens_config;
 mod pi_launch;
 mod pi_rpc_bridge;
+mod ponytail_config;
 #[allow(dead_code)]
 mod process_tree;
 mod project_trust;
 mod remote_auth;
+mod rpiv_config;
 mod runtime_coordinator;
 mod session_ui_profile_store;
+mod skill_install;
 mod skill_source_registry;
 mod telemetry;
 #[allow(dead_code)]
@@ -53,6 +61,7 @@ mod terminal_profiles;
 mod terminal_registry;
 mod terminal_state_store;
 mod transport_limits;
+mod vcc_config;
 mod window_owner;
 mod windows_child;
 mod workspace_controls;
@@ -1688,6 +1697,7 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
         TerminalStateStore::new(terminal_state_dir),
     ));
     app.manage(skill_source_registry.clone());
+    app.manage(HostInstallSecret::generate());
     app.manage(git_service.clone());
     app.manage(terminal_manager.clone());
     let session_ui_profiles = Arc::new(SessionUiProfileStore::open(
@@ -2244,6 +2254,47 @@ fn require_native_owner(ctx: &VerifiedClientContext) -> Result<(), String> {
     workspace_controls::require_native_owner(ctx).map(|_| ())
 }
 
+/// Per-process key behind the skill-install candidate ids. It never reaches
+/// the WebView, so a scan's opaque ids cannot be forged into an install.
+struct HostInstallSecret(String);
+
+impl HostInstallSecret {
+    fn generate() -> Self {
+        use base64::Engine;
+        let mut bytes = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut bytes);
+        Self(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+    }
+}
+
+/// Skill-source binding for one owner. A Registered owner binds its workspace;
+/// a Temporary (landing) owner binds its placeholder root and can only install
+/// into the global scope — the install op refuses `project` without a
+/// workspace (Dr. Lin 2026-09-22: skills must be installable before any
+/// project is open).
+fn skill_source_scope(
+    owner_registry: &WindowOwnerRegistry,
+    owner: &window_owner::OwnerId,
+) -> Result<(PathBuf, u64, u16, bool), String> {
+    match owner_registry.owner_current_workspace(owner) {
+        window_owner::OwnerWorkspaceSnapshot::Registered {
+            root, generation, ..
+        } => {
+            let port = owner_registry
+                .current_workspace(owner)
+                .map(|(_, port)| port)
+                .unwrap_or(0);
+            Ok((root, generation, port, true))
+        }
+        window_owner::OwnerWorkspaceSnapshot::Temporary {
+            root, generation, ..
+        } => Ok((root, generation, 0, false)),
+        window_owner::OwnerWorkspaceSnapshot::NoWorkspace => {
+            Err("skill sources require a window owner context".to_string())
+        }
+    }
+}
+
 /// The owner's registered workspace (id, canonical root, generation), or an
 /// error for landing/temporary owners. Workspace-scoped host operations are
 /// Registered-only; a placeholder root is never a scope.
@@ -2669,6 +2720,57 @@ fn install_control_handler(
                             .to_string(),
                     ),
                     "get_pi_version" => Ok(Value::from(locked_pi_version())),
+                    "has_any_credentials" => {
+                        // Landing zero-credential card: file + env truth only
+                        // (landing-bridge-runtime spec v2); no Pi process.
+                        require_native_owner(&ctx)?;
+                        let agent_root = pi_launch::resolve_pi_agent_root()?;
+                        Ok(Value::Bool(host_credentials::has_any_credentials(
+                            &agent_root,
+                        )))
+                    }
+                    "spawn_config_runtime" => {
+                        require_native_owner(&ctx)?;
+                        let owner = ctx
+                            .owner_id
+                            .as_ref()
+                            .ok_or("config runtime requires a native owner")?;
+                        // Idempotent lazy spawn: reuse the live instance.
+                        if let Some(descriptor) = ephemeral_hub.config_runtime_descriptor(owner) {
+                            return Ok(descriptor);
+                        }
+                        let generation = match owner_registry.owner_current_workspace(owner) {
+                            window_owner::OwnerWorkspaceSnapshot::Registered {
+                                generation, ..
+                            }
+                            | window_owner::OwnerWorkspaceSnapshot::Temporary {
+                                generation, ..
+                            } => generation,
+                            window_owner::OwnerWorkspaceSnapshot::NoWorkspace => {
+                                return Err("config runtime requires a native owner window context"
+                                    .to_string())
+                            }
+                        };
+                        let cwd = host_ephemeral::config_runtime_cwd()?;
+                        match ephemeral_hub.create(
+                            &runtimes,
+                            owner,
+                            "landing",
+                            &cwd,
+                            EphemeralKind::Config,
+                            generation,
+                        ) {
+                            Ok(descriptor) => Ok(descriptor),
+                            // Racing lazy spawn lost the reservation — the
+                            // winner's instance is the answer.
+                            Err(error) if error.contains("config runtime already exists") => {
+                                ephemeral_hub
+                                    .config_runtime_descriptor(owner)
+                                    .ok_or_else(|| error.clone())
+                            }
+                            Err(error) => Err(error),
+                        }
+                    }
                     "get_app_version" => Ok(Value::from(env!("CARGO_PKG_VERSION"))),
                     "is_dev" => Ok(Value::from(cfg!(debug_assertions))),
                     "pick_skill_source" => {
@@ -2679,13 +2781,11 @@ fn install_control_handler(
                         let window_label = owner_registry
                             .label_for_owner(&owner)
                             .ok_or("verified window owner required")?;
-                        // Skill sources are project-scoped config: Registered-only.
-                        let (_, workspace_root, generation) =
-                            registered_workspace(&owner_registry, &owner)?;
-                        let workspace_port = owner_registry
-                            .current_workspace(&owner)
-                            .map(|(_, port)| port)
-                            .unwrap_or(0);
+                        // Registered owners bind their workspace; a landing
+                        // (Temporary) owner binds its placeholder root and can
+                        // only install globally (enforced at install time).
+                        let (workspace_root, generation, workspace_port, _registered) =
+                            skill_source_scope(&owner_registry, &owner)?;
                         let selected = pick_folder_core(&app).await;
                         let Some(path) = selected else {
                             return Ok(Value::Null);
@@ -2743,14 +2843,127 @@ fn install_control_handler(
                         window.open_devtools();
                         Ok(Value::Null)
                     }
-                    "skill_scan_install_source" => Err(
-                        "skill source scan requires the native skill install surface (pending)"
-                            .to_string(),
-                    ),
-                    "skill_install_links" => Err(
-                        "skill install links require the native skill install surface (pending)"
-                            .to_string(),
-                    ),
+                    "skill_scan_install_source" => {
+                        // Scan the picked directory with the upstream Rust port
+                        // (skill_install.rs): no Pi runtime, no extension
+                        // channel — the host answers synchronously.
+                        if ctx.class != ClientClass::Native {
+                            return Err("native desktop owner required".to_string());
+                        }
+                        let owner = ctx.owner_id.ok_or("verified window owner required")?;
+                        let window_label = owner_registry
+                            .label_for_owner(&owner)
+                            .ok_or("verified window owner required")?;
+                        let source_id = arg_str("sourceId").ok_or("sourceId is required")?;
+                        let (workspace_root, generation, _, _registered) =
+                            skill_source_scope(&owner_registry, &owner)?;
+                        let binding = app
+                            .try_state::<SkillSourceRegistryState>()
+                            .ok_or("skill source registry is not available")?
+                            .resolve(
+                                &source_id,
+                                &owner,
+                                &window_label,
+                                &workspace_root,
+                                generation,
+                            )?;
+                        let context = skill_install::InstallContext {
+                            agent_dir: pi_launch::resolve_pi_agent_root()?,
+                            cwd: binding.workspace_root.clone(),
+                            install_secret: app
+                                .try_state::<HostInstallSecret>()
+                                .ok_or("install secret is not available")?
+                                .0
+                                .clone(),
+                        };
+                        let scan = tauri::async_runtime::spawn_blocking(move || {
+                            skill_install::scan_install_source(&binding, &context)
+                        })
+                        .await
+                        .map_err(|error| error.to_string())?;
+                        serde_json::to_value(&scan).map_err(|error| error.to_string())
+                    }
+                    "skill_install_links" => {
+                        if ctx.class != ClientClass::Native {
+                            return Err("native desktop owner required".to_string());
+                        }
+                        let owner = ctx.owner_id.ok_or("verified window owner required")?;
+                        let window_label = owner_registry
+                            .label_for_owner(&owner)
+                            .ok_or("verified window owner required")?;
+                        let source_id = arg_str("sourceId").ok_or("sourceId is required")?;
+                        let scope_name = arg_str("scope").unwrap_or_else(|| "global".into());
+                        let scan_revision =
+                            arg_str("scanRevision").ok_or("scanRevision is required")?;
+                        let (workspace_root, generation, _, registered) =
+                            skill_source_scope(&owner_registry, &owner)?;
+                        // Landing has no project scope: the global install is
+                        // the only writable target without a workspace.
+                        if scope_name == "project" && !registered {
+                            return Err(
+                                "Installing into a project requires an open workspace".to_string()
+                            );
+                        }
+                        let selection = args
+                            .get("selection")
+                            .and_then(Value::as_array)
+                            .filter(|items| !items.is_empty())
+                            .ok_or("selection is required")?;
+                        let parsed_selection: Vec<skill_install::InstallCandidateSelection> =
+                            selection
+                                .iter()
+                                .map(|item| {
+                                    let kind = item
+                                        .get("kind")
+                                        .and_then(Value::as_str)
+                                        .filter(|kind| *kind == "group" || *kind == "skill")
+                                        .ok_or("invalid selection entry: kind")?;
+                                    let id = item
+                                        .get("id")
+                                        .and_then(Value::as_str)
+                                        .filter(|id| !id.is_empty())
+                                        .ok_or("invalid selection entry: id")?;
+                                    Ok(skill_install::InstallCandidateSelection {
+                                        kind: kind.to_string(),
+                                        id: id.to_string(),
+                                    })
+                                })
+                                .collect::<Result<_, String>>()?;
+                        let registry_state = app
+                            .try_state::<SkillSourceRegistryState>()
+                            .ok_or("skill source registry is not available")?;
+                        let binding = registry_state.resolve(
+                            &source_id,
+                            &owner,
+                            &window_label,
+                            &workspace_root,
+                            generation,
+                        )?;
+                        let context = skill_install::InstallContext {
+                            agent_dir: pi_launch::resolve_pi_agent_root()?,
+                            cwd: binding.workspace_root.clone(),
+                            install_secret: app
+                                .try_state::<HostInstallSecret>()
+                                .ok_or("install secret is not available")?
+                                .0
+                                .clone(),
+                        };
+                        let result = tauri::async_runtime::spawn_blocking(move || {
+                            skill_install::install_links(
+                                &binding,
+                                &scope_name,
+                                &scan_revision,
+                                &parsed_selection,
+                                &context,
+                            )
+                        })
+                        .await
+                        .map_err(|error| error.to_string())??;
+                        // A successful install consumes the handle: the scan
+                        // revision guard makes a replay useless anyway.
+                        let _ = registry_state.consume(&source_id, &owner, generation);
+                        serde_json::to_value(&result).map_err(|error| error.to_string())
+                    }
                     "list_pi_packages" => {
                         require_native_owner(&ctx)?;
                         let owner = ctx
@@ -3104,6 +3317,87 @@ fn install_control_handler(
                         require_native_owner(&ctx)?;
                         fff_config::set_config(&args)
                     }
+                    "get_todo_config" => {
+                        // rpiv-todo overlay config: pure file state on the
+                        // host plane, landing owners included (fff precedent).
+                        require_native_owner(&ctx)?;
+                        rpiv_config::get_todo_config()
+                    }
+                    "set_todo_config" => {
+                        require_native_owner(&ctx)?;
+                        rpiv_config::set_todo_config(&args)
+                    }
+                    "get_askuser_config" => {
+                        // Questionnaire overlay collapse key: same rpiv
+                        // host plane, landing owners included.
+                        require_native_owner(&ctx)?;
+                        rpiv_config::get_askuser_config()
+                    }
+                    "set_askuser_config" => {
+                        require_native_owner(&ctx)?;
+                        rpiv_config::set_askuser_config(&args)
+                    }
+                    "get_ponytail_config" => {
+                        // Ponytail default mode + visibility switches: file
+                        // + env host plane, landing owners included.
+                        require_native_owner(&ctx)?;
+                        ponytail_config::get_config()
+                    }
+                    "set_ponytail_config" => {
+                        require_native_owner(&ctx)?;
+                        ponytail_config::set_config(&args)
+                    }
+                    "get_vcc_config" => {
+                        // pi-vcc compaction booleans: agent-root file state
+                        // on the host plane, landing owners included.
+                        require_native_owner(&ctx)?;
+                        vcc_config::get_config()
+                    }
+                    "get_goal_config" => {
+                        // pi-goal limits + rpc gate: agent-root file on the
+                        // host plane, landing owners included.
+                        require_native_owner(&ctx)?;
+                        goal_config::get_config()
+                    }
+                    "get_caveman_config" => {
+                        // pi-caveman default level + status toggle: host
+                        // plane, landing owners included.
+                        require_native_owner(&ctx)?;
+                        caveman_config::get_config()
+                    }
+                    "set_caveman_config" => {
+                        require_native_owner(&ctx)?;
+                        caveman_config::set_config(&args)
+                    }
+                    "get_cache_optimizer_config" => {
+                        // pi-cache-optimizer footer stats mode + read-only
+                        // env/omit display: host plane, landing included.
+                        require_native_owner(&ctx)?;
+                        cache_optimizer_config::get_config()
+                    }
+                    "set_cache_optimizer_config" => {
+                        require_native_owner(&ctx)?;
+                        cache_optimizer_config::set_config(&args)
+                    }
+                    "get_lens_config" => {
+                        // pi-lens curated toggles, global layer (optional
+                        // cwd consults the project tier read-only): host
+                        // plane, landing included.
+                        require_native_owner(&ctx)?;
+                        lens_config::get_config(&args)
+                    }
+                    "set_lens_config" => {
+                        require_native_owner(&ctx)?;
+                        lens_config::set_config(&args)
+                    }
+                    "set_goal_config" => {
+                        require_native_owner(&ctx)?;
+                        goal_config::set_config(&args)
+                    }
+                    "set_vcc_config" => {
+                        require_native_owner(&ctx)?;
+                        vcc_config::set_config(&args)
+                    }
                     "restart_runtime" => {
                         require_native_owner(&ctx)?;
                         let owner = ctx
@@ -3203,6 +3497,14 @@ fn install_control_handler(
                             }
                             EphemeralKind::QuickChat => {
                                 quick_chat_snapshot(&owner_registry, owner)?
+                            }
+                            // The config runtime is a dedicated lazy-spawn op
+                            // (idempotent, workspace-free) — never the generic
+                            // ephemeral_create entry point.
+                            EphemeralKind::Config => {
+                                return Err(
+                                    "config runtime spawns via spawn_config_runtime".to_string()
+                                );
                             }
                         };
                         let descriptor = ephemeral_hub.create(
@@ -3480,8 +3782,9 @@ fn install_control_handler(
                             if let Some(host) = app.try_state::<host_server::HostServer>() {
                                 host.revoke_session_exports(owner.as_str());
                             }
-                            ephemeral_hub
-                                .cleanup_side_chat_for_transition(&runtimes, &owner, gen, gen);
+                            ephemeral_hub.cleanup_chat_and_config_for_transition(
+                                &runtimes, &owner, gen, gen,
+                            );
                         }
                         let prior_generation = owner_registry
                             .current_workspace_generation(&owner)
@@ -4129,6 +4432,63 @@ fn install_termination_handlers(app_handle: tauri::AppHandle) {
 
 #[cfg(not(unix))]
 fn install_termination_handlers(_app_handle: tauri::AppHandle) {}
+
+#[cfg(test)]
+mod skill_source_scope_tests {
+    use super::*;
+
+    fn owner_registry() -> (WindowOwnerRegistry, PathBuf) {
+        let home = std::env::temp_dir().join(format!(
+            "picot-skill-scope-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&home).unwrap();
+        (WindowOwnerRegistry::default(), home)
+    }
+
+    #[test]
+    fn landing_owner_binds_its_root_without_project_authority() {
+        let (registry, home) = owner_registry();
+        let (owner, _) = registry
+            .create_owner_with_workspace(
+                "native-landing".to_string(),
+                home.clone(),
+                0,
+                "http://127.0.0.1:1".to_string(),
+                None,
+                window_owner::TemporaryKind::Landing,
+            )
+            .expect("landing owner");
+        let (root, generation, port, registered) =
+            skill_source_scope(&registry, &owner).expect("landing binds its placeholder root");
+        assert_eq!(root, home);
+        assert_eq!(generation, 0);
+        assert_eq!(port, 0);
+        // Only the global scope is installable for a workspaceless owner; the
+        // install op refuses `project` on this flag.
+        assert!(!registered);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn registered_owner_keeps_project_authority() {
+        let (registry, home) = owner_registry();
+        let (owner, _) = registry
+            .create_owner_with_workspace(
+                "native-workspace".to_string(),
+                home.clone(),
+                0,
+                "http://127.0.0.1:1".to_string(),
+                Some("wid-1".to_string()),
+                window_owner::TemporaryKind::DefaultStartup,
+            )
+            .expect("registered owner");
+        let (_, _, _, registered) =
+            skill_source_scope(&registry, &owner).expect("registered owner binds");
+        assert!(registered);
+        let _ = std::fs::remove_dir_all(home);
+    }
+}
 
 #[cfg(test)]
 mod startup_tests {

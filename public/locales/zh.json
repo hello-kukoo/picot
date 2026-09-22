@@ -511,7 +511,12 @@
     "searchClose": "关闭查找栏"
   },
   "landing": {
-    "hint": "从侧栏选择一个会话开始，或点击工作区的 + 开始新会话。"
+    "hint": "从侧栏选择一个会话开始，或点击工作区的 + 开始新会话。",
+    "credentials": {
+      "title": "先配置模型",
+      "body": "未检测到 API 密钥或登录凭据，添加后即可开始对话。",
+      "action": "打开模型设置"
+    }
   },
   "sidebar": {
     "loadingSessions": "正在加载会话...",
@@ -849,7 +854,7 @@
       "sectionsAriaLabel": "技能页面分区",
       "discovered": "已发现",
       "install": "安装",
-      "packages": "软件包",
+      "packages": "扩展包",
       "description": "管理 Pi 为当前工作区发现的技能。更改会写入对应的 settings.json，并且只有在新建会话或重启 Pi 后才会生效。",
       "rescan": "重新扫描",
       "global": "全局",
@@ -870,7 +875,7 @@
       "saveFailed": "保存技能设置失败。",
       "rescanFailed": "重新扫描技能失败。",
       "ambiguousRuleTarget": "该目标同时命中多个根；请手动编辑 settings.json 来修改。",
-      "scopeSummary": "{total} 个 skill · {groups} 个目录"
+      "scopeSummary": "{total}个技能 · {groups}个目录"
     },
     "installSkills": {
       "title": "安装技能",
@@ -880,7 +885,8 @@
       "scanFailed": "扫描所选目录失败。",
       "global": "全局",
       "project": "当前项目",
-      "projectUntrusted": "当前项目尚未受信任，不能安装到当前项目。",
+      "projectUntrusted": "安装到当前项目需要先打开工作区；现在可以安装到全局。",
+      "projectNeedsWorkspace": "安装到当前项目需要先打开工作区；现在可以安装到全局。",
       "review": "确认安装",
       "confirmation": "将 {count} 个已选技能安装到 {scope}？",
       "confirmationHeading": "确认安装技能",
@@ -894,7 +900,7 @@
       "group": "分组"
     },
     "packageSkills": {
-      "title": "包技能",
+      "title": "扩展包技能",
       "description": "管理已配置 Pi 包中的 skill。更改会写入 packages[].skills，并在新建会话或重启 Pi 后生效。",
       "bundledCandidates": "包内技能",
       "refresh": "刷新",
@@ -909,7 +915,7 @@
       "package": "包",
       "canonicalPath": "规范路径",
       "candidateCount": "{count} 个候选",
-      "scopeSummary": "{count} 个包",
+      "scopeSummary": "{skills}个技能 · {packages}个扩展包",
       "enableAll": "全部启用",
       "bulkFailure": "共 {total} 项技能中 {failed} 项更新失败。"
     },
@@ -1002,6 +1008,159 @@
       "medium": "中",
       "large": "大",
       "xlarge": "特大"
+    },
+    "extensionTodo": {
+      "title": "待办浮层",
+      "hint": "立即生效——浮层每次渲染都会重新读取配置。",
+      "maxLinesLabel": "浮层最大行数",
+      "maxLinesError": "必须是 ≥ 3 的整数",
+      "collapseKeyLabel": "收起快捷键"
+    },
+    "extensionAskUser": {
+      "title": "用户提问",
+      "hint": "立即生效——问卷每次渲染都会重新读取配置。",
+      "collapseKeyLabel": "收起快捷键"
+    },
+    "extensionPonytail": {
+      "title": "Ponytail",
+      "hint": "新会话的默认模式；当前会话保持不变。",
+      "modeLabel": "默认模式",
+      "mode_lite": "轻量",
+      "mode_full": "标准",
+      "mode_ultra": "极致",
+      "useDefault": "使用默认",
+      "quietStartupLabel": "静默启动",
+      "hideStatusLabel": "隐藏状态"
+    },
+    "extensionVcc": {
+      "title": "pi-vcc 压缩",
+      "hint": "下次压缩生效；进行中的压缩保持其已加载的快照。",
+      "relocatedBadge": "只读——由 {name} 重定位",
+      "overrideDefaultCompactionLabel": "接管压缩",
+      "overrideDefaultCompactionDesc": "由 pi-vcc 接管 /compact 与阈值溢出；关闭则交还 pi 核心。",
+      "smartKeepTailLabel": "智能保留尾部",
+      "smartKeepTailDesc": "尾部过短时自动提升保留量，上限 25k。",
+      "continueAfterThresholdCompactLabel": "自动压缩后继续",
+      "continueAfterThresholdCompactDesc": "允许（而非保证）在自动压缩后继续。",
+      "debugLabel": "调试快照",
+      "debugDesc": "将压缩快照写入 /tmp/pi-vcc-debug.json。"
+    },
+    "extensionGoal": {
+      "title": "pi-goal",
+      "hint": "限制在新目标开始时生效；RPC 开关需重启。",
+      "rpcLabel": "RPC 通道",
+      "rpcDesc": "加载时注册 goal RPC 通道（默认关闭）。",
+      "automaticTurnsLabel": "自动续跑轮数",
+      "noProgressTurnsLabel": "无进展轮数",
+      "unlimited": "无限制",
+      "limitError": "必须是 ≥ 1 的整数",
+      "reset": "重置为默认",
+      "resetConfirm": "再点一次确认",
+      "legacyWarning": "检测到已移除的旧设置 experimental.goals——pi-goal 会忽略它（用 /goal edit 调整当前目标，或 /goal <目标> 新建）。"
+    },
+    "extensionCaveman": {
+      "title": "pi-caveman",
+      "hint": "默认级别对新会话生效。",
+      "levelLabel": "默认级别",
+      "statusLabel": "显示底部状态"
+    },
+    "extensionCacheOptimizer": {
+      "title": "pi-cache-optimizer",
+      "hint": "重启 Picot 或执行 /reload 后生效。",
+      "footerModeLabel": "底部统计模式",
+      "mode_total": "累计",
+      "mode_session": "会话",
+      "mode_process": "进程",
+      "source_config": "配置",
+      "source_env": "环境变量",
+      "source_default": "默认",
+      "omitTitle": "已修复的缓存键（{count}，只读——经 /cache-optimizer fix）",
+      "envTitle": "环境变量开关（只读）",
+      "envOn": "开",
+      "envOff": "关",
+      "invalidNote": "文件无效：请手动修复——修复与回执绑定，不提供重置。"
+    },
+    "extensionLens": {
+      "title": "pi-lens",
+      "hint": "开关对新会话生效（环境变量需重启）。",
+      "runtimeGroup": "运行时",
+      "feedbackGroup": "反馈链",
+      "guardGroup": "防护",
+      "reportGroup": "报告",
+      "analyzerGroup": "分析器",
+      "advancedGroup": "高级",
+      "maxProjectFilesLabel": "项目文件上限",
+      "limitError": "必须是 ≥ 1 的整数",
+      "shadowBadge": "{source} 覆盖",
+      "relocatedBadge": "只读——由 {name} 重定位",
+      "projectHint": "进入工作区后可见项目覆盖；本页编辑全局层。"
+    },
+    "extensionPlanMode": {
+      "title": "pi-plan-mode",
+      "hint": "下次会话启动时生效。",
+      "thinkingLabel": "计划思考深度",
+      "implModelLabel": "实现模型",
+      "followPlanModel": "跟随计划模型",
+      "implThinkingLabel": "实现思考深度",
+      "retentionLabel": "计划保留策略",
+      "exportPathLabel": "导出路径",
+      "shortcutLabel": "切换快捷键",
+      "advancedGroup": "高级",
+      "planToolsLabel": "默认计划工具（JSON 数组）",
+      "safeSubcommandsLabel": "安全子命令（JSON 对象）",
+      "invalidJson": "无效 JSON",
+      "invalidNote": "配置文件无法读取——请手动修复；在能解析之前拒绝写入。"
+    },
+    "extensionSafetyGuard": {
+      "title": "datarx-safety-guard-pi",
+      "hint": "立即生效——防护在每次事件时重新读取配置。",
+      "masterLabel": "总开关",
+      "categoriesGroup": "规则分类",
+      "category_git": "Git 历史",
+      "category_filesystem": "文件系统删除",
+      "category_docker": "Docker",
+      "category_package": "包管理器",
+      "category_system": "系统命令",
+      "category_database": "数据库",
+      "category_secrets": "密钥",
+      "protectedPathsGroup": "受保护路径",
+      "protectWrite": "写入防护",
+      "protectEdit": "编辑防护",
+      "contextBefore": "前文行数",
+      "contextAfter": "后文行数",
+      "rangeError": "必须是 0–20 的整数",
+      "autoReviewGroup": "自动审查",
+      "autoReviewLabel": "启用自动审查",
+      "modelLabel": "审查模型",
+      "modelUnset": "未设置",
+      "allowCounts": "已放行条目（全局）：{count}——通过防护对话框在会话内管理",
+      "relocatedBadge": "只读——由 {name} 重定位",
+      "thinkingLevelLabel": "审查思考深度",
+      "invalidNote": "配置文件无法读取——请手动修复；在能解析之前拒绝写入。"
+    },
+    "extensionWebAccess": {
+      "title": "pi-web-access",
+      "hint": "重启 Pi 后生效（各模块缓存配置）。",
+      "searchKeysGroup": "搜索服务密钥",
+      "extractKeysGroup": "抓取服务与端点凭据",
+      "endpointsGroup": "代理与端点",
+      "answerModelGroup": "答复模型",
+      "answerModelLabel": "抓取答复模型",
+      "configuredPreview": "已配置 ····{preview}",
+      "envBadge": "环境变量",
+      "clear": "清除",
+      "clearConfirm": "再点一次确认",
+      "modelUnset": "未设置",
+      "invalidNote": "文件无效——请手动修复。不提供重置：文件内容本身即密钥。"
+    },
+    "safetyGuardDialog": {
+      "title": "安全防护：bash 审批",
+      "hintOnce": "不保存任何放行",
+      "hintSession": "当前会话内允许",
+      "hintPermanent": "在此目录永久保存",
+      "hintEverywhere": "永久、全局生效——跳过后续提示",
+      "hintRuleSession": "本会话允许这些操作类型",
+      "hintRulePermanent": "此处始终允许这些操作类型"
     }
   },
   "cost": {

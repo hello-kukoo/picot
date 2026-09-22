@@ -16,6 +16,20 @@ use tokio::sync::broadcast;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const EPHEMERAL_SESSION_PREFIX: &str = "ephemeral-";
+
+/// Landing bridge-service cwd: the scratch root `~/.pi/tmp` (sibling of the
+/// agent root, never a registered workspace). Created on demand so the spawn
+/// never races a fresh machine's first landing.
+pub(crate) fn config_runtime_cwd() -> Result<PathBuf, String> {
+    let agent_root = crate::pi_launch::resolve_pi_agent_root()?;
+    let scratch = agent_root
+        .parent()
+        .ok_or_else(|| "agent root has no parent directory".to_string())?
+        .join("tmp");
+    std::fs::create_dir_all(&scratch)
+        .map_err(|error| format!("cannot create config runtime scratch dir: {error}"))?;
+    Ok(scratch)
+}
 /// Keep the reducer journal bounded: only recent events are replayed and the
 /// snapshot watermark is the authoritative dedupe signal on the client.
 const MAX_MESSAGES: usize = 512;
@@ -377,6 +391,7 @@ impl EphemeralHub {
         let runtime_type = match kind {
             EphemeralKind::SideChat => crate::native_pi_manager::NativeRuntimeType::SideChat,
             EphemeralKind::QuickChat => crate::native_pi_manager::NativeRuntimeType::QuickChat,
+            EphemeralKind::Config => crate::native_pi_manager::NativeRuntimeType::Config,
         };
         // Quick Chat is a throwaway scratch space; Side Chat shares the
         // workspace cwd so file tools still resolve relative paths. The temp
@@ -385,6 +400,12 @@ impl EphemeralHub {
         let (cwd, cleanup_dir) = if kind == EphemeralKind::QuickChat {
             let (dir, token) = crate::temp_resources::create_quick_chat_temp_dir()?;
             (dir.clone(), Some((dir, token)))
+        } else if kind == EphemeralKind::Config {
+            // Landing bridge service: cwd is the designated scratch root
+            // `~/.pi/tmp` (2026-09-03 decision — no workspace identity, but
+            // still a usable directory). Ensured to exist before spawn; the
+            // runtime is never given a workspace cwd and never trusted there.
+            (config_runtime_cwd()?, None)
         } else {
             (workspace_cwd.to_path_buf(), None)
         };
@@ -653,8 +674,20 @@ impl EphemeralHub {
         if let Some(object) = command.as_object_mut() {
             object.insert("id".into(), Value::String(request_id.to_string()));
         }
+        // Every mutation needs an idempotency key, and the key must be unique
+        // per command *instance*: the coordinator answers a duplicate key from
+        // its cache instead of running the command, and the client's requestId
+        // restarts at `ep-1` on every page load — a reused key would silently
+        // swallow the command (no reply frame, caller times out) exactly like
+        // the missing key did.
+        let mutation_key = format!("{request_id}-{}", uuid::Uuid::new_v4().simple());
         let response = runtimes
-            .request(&target.target, command, None, COMMAND_TIMEOUT)
+            .request(
+                &target.target,
+                command,
+                Some(&mutation_key),
+                COMMAND_TIMEOUT,
+            )
             .await;
         let mut state_guard = self
             .states
@@ -785,7 +818,7 @@ impl EphemeralHub {
         });
     }
 
-    pub fn cleanup_side_chat_for_transition(
+    pub fn cleanup_chat_and_config_for_transition(
         &self,
         runtimes: &NativePiManager,
         owner: &OwnerId,
@@ -794,7 +827,7 @@ impl EphemeralHub {
     ) {
         for lease in self
             .registry
-            .side_chat_cleanup_for_transition(owner, transition_generation)
+            .chat_and_config_cleanup_for_transition(owner, transition_generation)
         {
             if let Ok(target) = self.take_target(&lease.instance_id) {
                 let _ = runtimes.stop(&target.target);
@@ -893,6 +926,20 @@ impl EphemeralHub {
     fn publish_bootstrap(&self, owner: &OwnerId, workspace_generation: u64) {
         let frame = self.bootstrap_value(owner, workspace_generation);
         self.host_events.send_owner_event(owner, frame);
+    }
+
+    /// Descriptor of the owner's live config runtime, if any — the reuse leg
+    /// of the idempotent lazy spawn.
+    pub fn config_runtime_descriptor(&self, owner: &OwnerId) -> Option<Value> {
+        let descriptor = self
+            .registry
+            .descriptors(owner)
+            .into_iter()
+            .find(|descriptor| descriptor.kind == EphemeralKind::Config)?;
+        // An undeserializable descriptor is not a usable target: report "no
+        // live runtime" so the caller spawns instead of handing the WebView a
+        // null descriptor every later request would address.
+        serde_json::to_value(descriptor).ok()
     }
 }
 
@@ -1014,6 +1061,147 @@ mod admission_tests {
     use super::*;
     use crate::host_control::HostEventSink;
     use crate::runtime_coordinator::RuntimeTarget;
+
+    /// Real-Pi smoke for the landing settings plane: every op the landing
+    /// pages issue must answer through the hub, and a *reused* request id
+    /// (the client counter restarts on every page load) must not be swallowed
+    /// by the coordinator's mutation cache.
+    #[tokio::test]
+    #[ignore = "real embedded-Pi smoke; run with --ignored --nocapture"]
+    async fn native_smoke_config_runtime_answers_every_landing_op() {
+        let static_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
+        let (sender, mut receiver) = tokio::sync::broadcast::channel(256);
+        let registry = Arc::new(EphemeralRegistry::default());
+        let hub = Arc::new(EphemeralHub::new(
+            registry.clone(),
+            HostEventSink::new(sender),
+            static_dir,
+        ));
+        let runtimes = NativePiManager::new(32);
+        runtimes.set_ephemeral_registry(registry);
+        hub.spawn_pump(&runtimes);
+        let owner = OwnerId::from_string("ops-smoke-owner".into());
+        let cwd = std::env::temp_dir().join(format!("picot-ops-smoke-{}", std::process::id()));
+        std::fs::create_dir_all(&cwd).unwrap();
+        let descriptor = hub
+            .create(&runtimes, &owner, "landing", &cwd, EphemeralKind::Config, 2)
+            .expect("config runtime spawns");
+        let instance_id = descriptor["instanceId"].as_str().unwrap().to_string();
+        let generation = descriptor["generation"].as_u64().unwrap();
+
+        // The exact ops the landing pages issue (Advanced tab, skills tab,
+        // Models, MCP) — every one must produce a `__picotConfig` notify.
+        let ops: [(&str, Value); 6] = [
+            ("get_default_auto_compaction", json!({})),
+            ("read_agent_config", json!({})),
+            ("read_agents_md", json!({})),
+            ("read_append_system_md", json!({})),
+            ("list_package_skill_inventory", json!({ "scope": "global" })),
+            ("list_model_catalog", json!({})),
+        ];
+        for (index, (op, params)) in ops.iter().enumerate() {
+            let request_id = format!("ep-{index}");
+            let answered = run_config_op(
+                &hub,
+                &runtimes,
+                &owner,
+                &instance_id,
+                generation,
+                op,
+                params,
+                &request_id,
+                &mut receiver,
+            )
+            .await;
+            assert!(answered, "{op} never answered through the hub");
+        }
+
+        // Page reload: the client counter restarts, so the same ids arrive
+        // again. Each must run (two distinct config ids answered).
+        let mut answered_ids = Vec::new();
+        for attempt in 0..2 {
+            let request_id = "ep-0";
+            let message = format!(
+                "/picot-config {{\"id\":\"reload-{attempt}\",\"op\":\"read_agents_md\",\"params\":{{}}}}"
+            );
+            let outcome = hub
+                .forward_command(
+                    &runtimes,
+                    &owner,
+                    &instance_id,
+                    generation,
+                    json!({ "type": "prompt", "message": message }),
+                    request_id,
+                )
+                .await;
+            assert!(outcome.is_ok(), "reused-key command rejected: {outcome:?}");
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+            while tokio::time::Instant::now() < deadline {
+                let Ok(Ok(event)) =
+                    tokio::time::timeout(Duration::from_secs(2), receiver.recv()).await
+                else {
+                    continue;
+                };
+                let raw = event.value.to_string();
+                if raw.contains(&format!("reload-{attempt}")) {
+                    answered_ids.push(attempt);
+                    break;
+                }
+            }
+        }
+        assert_eq!(
+            answered_ids,
+            vec![0, 1],
+            "a reused request id was swallowed by the mutation cache"
+        );
+
+        let _ = hub.close(&runtimes, &owner, &instance_id, generation, 2);
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    /// Forward one `/picot-config` op and wait for its notify.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_config_op(
+        hub: &Arc<EphemeralHub>,
+        runtimes: &NativePiManager,
+        owner: &OwnerId,
+        instance_id: &str,
+        generation: u64,
+        op: &str,
+        params: &Value,
+        request_id: &str,
+        receiver: &mut tokio::sync::broadcast::Receiver<crate::host_control::OwnerEvent>,
+    ) -> bool {
+        let message = format!(
+            "/picot-config {{\"id\":\"{request_id}\",\"op\":\"{op}\",\"params\":{params}}}"
+        );
+        let outcome = hub
+            .forward_command(
+                runtimes,
+                owner,
+                instance_id,
+                generation,
+                json!({ "type": "prompt", "message": message }),
+                request_id,
+            )
+            .await;
+        eprintln!("[ops-smoke] {op}: forward={outcome:?}");
+        if outcome.is_err() {
+            return false;
+        }
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        while tokio::time::Instant::now() < deadline {
+            let Ok(Ok(event)) = tokio::time::timeout(Duration::from_secs(2), receiver.recv()).await
+            else {
+                continue;
+            };
+            let raw = event.value.to_string();
+            if raw.contains(request_id) && raw.contains("__picotConfig") {
+                return true;
+            }
+        }
+        false
+    }
 
     fn hub_with_target(owner: &str, instance_id: &str, generation: u64) -> EphemeralHub {
         let (sender, _receiver) = tokio::sync::broadcast::channel(8);
@@ -1183,7 +1371,7 @@ mod generation_token_tests {
         let runtimes = NativePiManager::new(8);
         runtimes.register_in_memory(target).unwrap();
 
-        hub.cleanup_side_chat_for_transition(&runtimes, &owner, 5, 5);
+        hub.cleanup_chat_and_config_for_transition(&runtimes, &owner, 5, 5);
 
         assert!(runtimes.target_for_session_id(&instance_id).is_none());
         assert!(hub.target_of(&instance_id).is_none());
