@@ -54,6 +54,15 @@ fn is_local_alias(host: &str) -> bool {
 /// Tauri-managed state so exit/window-destroy hooks can reach the runtime.
 pub struct BrowserPaneState(pub std::sync::Arc<BrowserPaneRuntime>);
 
+fn webview_label(pane_id: &str) -> String {
+    let encoded: String = pane_id
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("browser-pane-{encoded}")
+}
+
 pub struct BrowserPaneRuntime {
     app: AppHandle,
     host_origin: String,
@@ -110,12 +119,9 @@ impl BrowserPaneRuntime {
         }
         let host_origin = self.host_origin.clone();
         let host_port = self.host_port;
-        let builder = WebviewBuilder::new(
-            format!("browser-pane-{pane_id}"),
-            WebviewUrl::External(parsed),
-        )
-        .on_navigation(move |url| pane_url_allowed(url, &host_origin, host_port))
-        .on_new_window(|_url, _features| NewWindowResponse::Deny);
+        let builder = WebviewBuilder::new(webview_label(pane_id), WebviewUrl::External(parsed))
+            .on_navigation(move |url| pane_url_allowed(url, &host_origin, host_port))
+            .on_new_window(|_url, _features| NewWindowResponse::Deny);
         let webview = window
             .add_child(
                 builder,
@@ -272,6 +278,18 @@ mod tests {
         assert!(!allowed("file:///etc/passwd"));
         assert!(!allowed("tauri://localhost/x"));
         assert!(!allowed("about:blank"));
+    }
+
+    #[test]
+    fn webview_label_encodes_pane_keys_without_invalid_characters() {
+        let label = webview_label("native-workspace-w1:p1");
+        assert_eq!(
+            label,
+            "browser-pane-6e61746976652d776f726b73706163652d77313a7031"
+        );
+        assert!(label
+            .bytes()
+            .all(|byte| { byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_' }));
     }
 
     #[test]
