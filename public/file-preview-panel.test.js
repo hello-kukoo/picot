@@ -269,6 +269,30 @@ describe("FilePreviewPanel", () => {
     p.destroy();
   });
 
+  test("collapse syncs an active browser pane after its width transition", async () => {
+    global.ResizeObserver = class {
+      observe() {}
+      disconnect() {}
+    };
+    window.__TAURI__ = { window: { getCurrentWindow: () => ({ label: "panel-test" }) } };
+    const p = createPanel();
+    await p.openBrowserTab("http://127.0.0.1:41001/", {
+      file: "/test/workspace/a.docx",
+      fileName: "a.docx",
+    });
+    await Promise.resolve();
+    p.collapse();
+    const event = new Event("transitionend");
+    Object.defineProperty(event, "propertyName", { value: "width" });
+    panel.dispatchEvent(event);
+    await Promise.resolve();
+    expect(p.transport.browserPaneSetRect).toHaveBeenCalledWith(
+      expect.objectContaining({ paneId: "panel-test:browser:/test/workspace/a.docx" }),
+    );
+    p.destroy();
+    delete window.__TAURI__;
+  });
+
   test("switching back to a browser tab does not stick on loading", async () => {
     const p = createPanel();
     await p.openBrowserTab("http://127.0.0.1:41001/", {

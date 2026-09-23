@@ -166,6 +166,10 @@ export async function evalPane(paneId, expression, transport) {
   let envelope = null;
   try {
     envelope = JSON.parse(response.result ?? "null");
+    // Tauri eval_with_callback JSON-serializes the JavaScript return value.
+    // eval_json already returns a JSON envelope, so native callbacks arrive
+    // as a JSON string containing that JSON envelope.
+    if (typeof envelope === "string") envelope = JSON.parse(envelope);
   } catch {
     throw new Error("eval_failed");
   }

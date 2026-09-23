@@ -96,6 +96,21 @@ test("navigatePane updates the tracked url; evalPane round-trips values", async 
   expect(value).toEqual({ docPath: "/body/p[1]" });
 });
 
+test("evalPane decodes Tauri's JSON-serialized string result", async () => {
+  const transport = makeTransport();
+  transport.browserPaneEval = vi.fn(async () => ({
+    result: JSON.stringify(JSON.stringify({ ok: true, value: { docPath: "/body/p[4]" } })),
+  }));
+  const container = document.createElement("div");
+  await openPane({ paneId: "p-native-eval", url: "http://x/", container, transport });
+  await expect(
+    evalPane("p-native-eval", "window.__picotSelectorResult", transport),
+  ).resolves.toEqual({
+    docPath: "/body/p[4]",
+  });
+  closePane("p-native-eval");
+});
+
 test("evalPane surfaces runtime errors from the wrapper envelope", async () => {
   const transport = makeTransport();
   transport.browserPaneEval = vi.fn(async () => ({

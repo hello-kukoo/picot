@@ -282,22 +282,24 @@ export class FilePreviewPanel {
     this.panel.classList.add("enlarged");
     this.panel.classList.remove("collapsed");
     if (this.mainContainer) this.mainContainer.classList.add("preview-enlarged");
-    this._syncActiveBrowserPaneAfterLayout();
     this._savePreferences();
     this._updateControlButtons();
+    this._syncActiveBrowserPaneAfterLayout();
   }
 
   collapse() {
     this.enlarged = false;
     this.panel.classList.remove("enlarged");
     if (this.mainContainer) this.mainContainer.classList.remove("preview-enlarged");
-    this._syncActiveBrowserPaneAfterLayout();
     this._savePreferences();
     this._updateControlButtons();
     this._updatePanelWidth();
+    this._syncActiveBrowserPaneAfterLayout();
   }
 
   destroy() {
+    this._cancelPaneLayoutSync?.();
+    this._cancelPaneLayoutSync = null;
     for (const timer of this.autoSaveTimers.values()) clearTimeout(timer);
     this.autoSaveTimers.clear();
     this._abortAllTabLoads();
@@ -601,7 +603,31 @@ export class FilePreviewPanel {
   _syncActiveBrowserPaneAfterLayout() {
     const tab = this.state.getActiveTab();
     if (tab?.kind !== "browser") return;
-    requestAnimationFrame(() => void syncPane(tab.id).catch(() => {}));
+    this._cancelPaneLayoutSync?.();
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      this.panel?.removeEventListener("transitionend", onTransitionEnd);
+      this._cancelPaneLayoutSync = null;
+      void syncPane(tab.id).catch(() => {});
+    };
+    const onTransitionEnd = (event) => {
+      if (
+        event.target === this.panel &&
+        (event.propertyName === "width" || event.propertyName === "flex-basis")
+      ) {
+        finish();
+      }
+    };
+    const timeoutId = setTimeout(finish, 200);
+    this.panel?.addEventListener("transitionend", onTransitionEnd);
+    this._cancelPaneLayoutSync = () => {
+      settled = true;
+      clearTimeout(timeoutId);
+      this.panel?.removeEventListener("transitionend", onTransitionEnd);
+    };
   }
 
   _availableWidth() {
