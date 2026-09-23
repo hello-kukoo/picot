@@ -2408,7 +2408,10 @@ async fn dispatch(
                         &target,
                         json!({ "type": "get_state" }),
                         None,
-                        Duration::from_secs(10),
+                        // A newly started Pi runtime may need longer than the
+                        // ordinary command timeout before its first get_state.
+                        // Align with the 30s runtime readiness policy.
+                        Duration::from_secs(30),
                     )
                     .await
                     .map_err(|message| ("snapshot_failed", message))?;
