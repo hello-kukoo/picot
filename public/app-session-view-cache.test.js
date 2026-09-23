@@ -94,6 +94,17 @@ class FakeWebSocket extends EventTarget {
       this.reply({ requestId: frame.requestId, ...snapshotFor(file) });
       return;
     }
+    if (frame.type === "runtime_request") {
+      if (frame.command?.type === "get_state") {
+        this.reply({
+          type: "runtime_response",
+          requestId: frame.requestId,
+          ok: true,
+          response: { success: true, data: { sessionFile: frame.target?.sessionId } },
+        });
+      }
+      return;
+    }
     if (frame.type === "data_request") {
       if (frame.operation === "read_session_messages") {
         FakeWebSocket.diskReadLog.push(frame.sessionId);
@@ -329,4 +340,48 @@ test("background message_end increments the cached view and stays no-op on switc
   expect(FakeWebSocket.diskReadLog).toHaveLength(0);
   // … and the incremented content renders.
   expect(messages.textContent).toContain("background follow-up");
+});
+
+test("cache-hit switch-back re-arms the config readiness gate via a get_state probe", async () => {
+  await import("./app.js?svc-readiness");
+
+  await selectSession("/pi/sessions/a.jsonl");
+  await settle();
+  await selectSession("/pi/sessions/b.jsonl");
+  await settle();
+
+  FakeWebSocket.snapshotLog.length = 0;
+  FakeWebSocket.diskReadLog.length = 0;
+  await selectSession("/pi/sessions/a.jsonl");
+  await settle();
+
+  // No-op switch-back contract still holds …
+  expect(FakeWebSocket.snapshotLog).toHaveLength(0);
+  expect(FakeWebSocket.diskReadLog).toHaveLength(0);
+  // … and the adopted target proved itself live through the get_state
+  // probe, so ConfigGateway calls no longer gate until their 30s timeout
+  // ("timed out waiting for runtime").
+  expect(globalThis.__picotSessionView.configReady()).toBe(true);
+});
+
+test("cache-hit switch-back leaves the gate closed without a live probe reply", async () => {
+  await import("./app.js?svc-readiness-neg");
+  await selectSession("/pi/sessions/a.jsonl");
+  await settle();
+  await selectSession("/pi/sessions/b.jsonl");
+  await settle();
+
+  // The runtime never answers get_state: the gate must stay closed so
+  // config calls surface the readiness timeout instead of firing blind.
+  const ws = FakeWebSocket.instances.at(-1);
+  const original = ws.send.bind(ws);
+  ws.send = (raw) => {
+    const frame = JSON.parse(raw);
+    if (frame.type === "runtime_request" && frame.command?.type === "get_state") return;
+    return original(raw);
+  };
+
+  await selectSession("/pi/sessions/a.jsonl");
+  await settle();
+  expect(globalThis.__picotSessionView.configReady()).toBe(false);
 });

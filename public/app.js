@@ -5561,6 +5561,29 @@ async function handleSessionSelectImpl(session, project) {
           });
         }
         void applySessionUiProfile(session.filePath);
+        // The cached render skipped the snapshot, so no foreground snapshot
+        // frame will ever arrive for this target — and that frame is the
+        // config readiness gate's only opener. After this switch every
+        // ConfigGateway call (settings Models page, model visibility filter)
+        // would gate 30s and die as "timed out waiting for runtime". Probe
+        // get_state instead: its reply is a control response, never a
+        // snapshot frame, so the cached render/scroll/gate state stay
+        // untouched, and a runtime that is still booting answers once its
+        // extension host is up. The routing re-check guards a reply landing
+        // after yet another switch moved the target on (same rule as the
+        // background-snapshot check in the runtimeSnapshot handler).
+        wsClient
+          .sendRuntime({ type: "get_state" }, target)
+          .then(() => {
+            const current = wsClient.getRuntimeTarget();
+            if (
+              current?.workspaceId === target.workspaceId &&
+              current?.sessionId === target.sessionId
+            ) {
+              configReadiness.noteForegroundSnapshot();
+            }
+          })
+          .catch(() => {});
         return;
       }
       wsClient.requestRuntimeSnapshot(target);
@@ -5917,6 +5940,7 @@ globalThis.__picotSessionDebug = sessionDebug;
 globalThis.__picotSessionView = {
   select: handleSessionSelect,
   cache: sessionViewCache,
+  configReady: () => configReadiness.isReady(),
 };
 
 // Upstream switch hydration state: the disk history captured once per

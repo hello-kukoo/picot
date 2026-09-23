@@ -36,5 +36,9 @@ export function createConfigReadiness({ targetKeyOf }) {
     }
   }
 
-  return { waitUntilReady, noteForegroundSnapshot };
+  function isReady() {
+    return readyKey !== null && readyKey === targetKeyOf();
+  }
+
+  return { waitUntilReady, noteForegroundSnapshot, isReady };
 }
