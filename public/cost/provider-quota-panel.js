@@ -1,6 +1,9 @@
 // ABOUTME: Settings → Usage "Provider Quota" section (spec 2026-09-22).
 // ABOUTME: Renders normalized quota reports; owns the codex reset-credit flow.
 
+/** A credit expiring within this many days is flagged in the list. */
+const URGENT_CREDIT_DAYS = 7;
+
 const DISPLAY_NAMES = {
   "openai-codex": "OpenAI Codex",
   zai: "Z.ai",
@@ -58,6 +61,45 @@ function toEpochMs(value) {
 function formatAbsoluteTime(value) {
   const ms = toEpochMs(value);
   return ms === null ? "" : new Date(ms).toLocaleString();
+}
+
+/** Upstream spends the earliest-granted credit first (FIFO), so list them in
+ * that order and mark the first as the one this reset will consume. */
+function sortCreditsFifo(credits) {
+  return [...credits].sort(
+    (left, right) => (toEpochMs(left?.granted_at) ?? 0) - (toEpochMs(right?.granted_at) ?? 0),
+  );
+}
+
+function daysUntil(value) {
+  const ms = toEpochMs(value);
+  if (ms === null) return null;
+  return Math.ceil((ms - Date.now()) / 86_400_000);
+}
+
+/** One credit row: when it was granted, and when it expires (absolute time
+ * plus the days left, which is what makes an imminent expiry visible). */
+function creditRow(credit, isNext, locale) {
+  const row = document.createElement("div");
+  row.className = "quota-credit-row";
+  if (isNext) row.classList.add("is-next");
+  const head = document.createElement("div");
+  head.className = "quota-credit-head";
+  const granted = locale.creditGranted.replace("{time}", formatAbsoluteTime(credit?.granted_at));
+  head.textContent = isNext ? `${locale.creditNext} · ${granted}` : granted;
+  const expiry = document.createElement("div");
+  expiry.className = "quota-credit-expiry";
+  const days = daysUntil(credit?.expires_at);
+  if (days === null) {
+    expiry.textContent = locale.creditUnknown;
+  } else if (days <= 0) {
+    expiry.textContent = locale.creditExpired;
+  } else {
+    if (days <= URGENT_CREDIT_DAYS) row.classList.add("is-urgent");
+    expiry.textContent = `${locale.creditExpires.replace("{time}", formatAbsoluteTime(credit?.expires_at))} · ${locale.creditDaysLeft.replace("{days}", String(days))}`;
+  }
+  row.append(head, expiry);
+  return row;
 }
 
 function windowBar({ label, percent, resetAt }, locale) {
@@ -164,49 +206,23 @@ export function createProviderQuotaPanel(seams, { locale }) {
     return { confirmed: await confirmReset(credits) };
   }
 
-  /** Modal confirm listing each credit with its absolute granted/expires time. */
+  /** Reset dialog, ported from opencodex's codex account reset modal: step one
+   * lists the credits (FIFO, the next one marked), step two confirms the spend
+   * with the credit that will actually be consumed. Resolves true on confirm. */
   function confirmReset(credits) {
     return new Promise((resolve) => {
       const overlay = document.createElement("div");
       overlay.className = "file-preview-dialog-overlay";
       const dialog = document.createElement("div");
-      dialog.className = "file-preview-dialog";
+      dialog.className = "file-preview-dialog quota-reset-dialog";
       dialog.setAttribute("role", "dialog");
       dialog.setAttribute("aria-modal", "true");
-      const heading = document.createElement("h3");
-      heading.textContent = locale.resetDialogTitle;
-      const body = document.createElement("p");
-      body.textContent = locale.resetDialogBody;
-      const list = document.createElement("div");
-      list.className = "quota-credits";
-      if (credits.length > 0) {
-        for (const credit of credits) {
-          const row = document.createElement("div");
-          row.className = "quota-credit-row";
-          row.textContent = `${locale.creditGranted.replace("{time}", formatAbsoluteTime(credit?.granted_at))} · ${locale.creditExpires.replace("{time}", formatAbsoluteTime(credit?.expires_at))}`;
-          list.append(row);
-        }
-      } else {
-        const row = document.createElement("div");
-        row.className = "quota-credit-row";
-        row.textContent = locale.creditUnknown;
-        list.append(row);
-      }
-      const actions = document.createElement("div");
-      actions.className = "file-preview-dialog-actions";
-      const cancel = document.createElement("button");
-      cancel.type = "button";
-      cancel.className = "file-preview-dialog-button";
-      cancel.textContent = locale.dialogCancel;
-      const confirm = document.createElement("button");
-      confirm.type = "button";
-      confirm.className = "file-preview-dialog-button primary";
-      confirm.textContent = locale.dialogConfirm;
-      actions.append(cancel, confirm);
-      dialog.append(heading, body, list, actions);
+      dialog.setAttribute("aria-label", locale.resetDialogTitle);
       overlay.append(dialog);
       document.body.append(overlay);
 
+      const ordered = sortCreditsFifo(credits);
+      let step = "list";
       let settled = false;
       const finish = (value) => {
         if (settled) return;
@@ -219,9 +235,84 @@ export function createProviderQuotaPanel(seams, { locale }) {
         if (event.key === "Escape") finish(false);
       };
       document.addEventListener("keydown", onKeyDown);
-      cancel.addEventListener("click", () => finish(false));
-      confirm.addEventListener("click", () => finish(true));
-      confirm.focus();
+
+      const paint = () => {
+        dialog.replaceChildren();
+        const heading = document.createElement("h3");
+        heading.textContent = locale.resetDialogTitle;
+        const count = document.createElement("p");
+        count.className = "quota-reset-count";
+        count.textContent = locale.resetCreditsAvailable.replace("{count}", String(ordered.length));
+        const list = document.createElement("div");
+        list.className = "quota-credits";
+        if (ordered.length > 0) {
+          ordered.forEach((credit, index) => {
+            list.append(creditRow(credit, index === 0, locale));
+          });
+        } else {
+          const row = document.createElement("div");
+          row.className = "quota-credit-row";
+          row.textContent = locale.creditNone;
+          list.append(row);
+        }
+        const actions = document.createElement("div");
+        actions.className = "file-preview-dialog-actions";
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "file-preview-dialog-button";
+        cancel.textContent = locale.dialogCancel;
+        cancel.addEventListener("click", () => finish(false));
+
+        if (step === "list") {
+          if (ordered.length > 0) {
+            const note = document.createElement("p");
+            note.className = "quota-reset-note";
+            note.textContent = locale.fifoNote;
+            const proceed = document.createElement("button");
+            proceed.type = "button";
+            proceed.className = "file-preview-dialog-button primary";
+            proceed.textContent = locale.dialogProceed;
+            proceed.addEventListener("click", () => {
+              step = "confirm";
+              paint();
+            });
+            actions.append(cancel, proceed);
+            dialog.append(heading, count, list, note, actions);
+          } else {
+            const hint = document.createElement("p");
+            hint.className = "quota-reset-note";
+            hint.textContent = locale.creditEarnHint;
+            actions.append(cancel);
+            dialog.append(heading, count, list, hint, actions);
+          }
+          (dialog.querySelector(".file-preview-dialog-button.primary") ?? cancel).focus();
+          return;
+        }
+
+        const desc = document.createElement("p");
+        desc.textContent = locale.confirmResetDesc.replace("{count}", String(ordered.length));
+        const which = document.createElement("p");
+        which.className = "quota-reset-note";
+        if (ordered[0]) {
+          which.textContent = locale.confirmWhichCredit.replace(
+            "{date}",
+            formatAbsoluteTime(ordered[0]?.granted_at),
+          );
+        }
+        const irreversible = document.createElement("p");
+        irreversible.className = "quota-reset-irreversible";
+        irreversible.textContent = locale.irreversible;
+        const confirm = document.createElement("button");
+        confirm.type = "button";
+        confirm.className = "file-preview-dialog-button primary";
+        confirm.textContent = locale.dialogConfirm;
+        confirm.addEventListener("click", () => finish(true));
+        actions.append(cancel, confirm);
+        dialog.append(heading, desc, which, irreversible, actions);
+        confirm.focus();
+      };
+
+      paint();
     });
   }
 

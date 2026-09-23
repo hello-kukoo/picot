@@ -2502,6 +2502,44 @@ body.landing-mode #landing {
   background: var(--error);
 }
 
+.quota-reset-count {
+  margin: var(--space-2) 0 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.quota-reset-dialog .quota-credits {
+  margin-top: var(--space-2);
+}
+
+.quota-credit-row.is-next {
+  border-left: 2px solid var(--accent);
+  padding-left: var(--space-2);
+}
+
+.quota-credit-row.is-urgent .quota-credit-expiry {
+  color: var(--warning);
+}
+
+.quota-credit-head {
+  color: var(--text-primary);
+}
+
+.quota-credit-expiry {
+  color: var(--text-dim);
+}
+
+.quota-reset-note,
+.quota-reset-irreversible {
+  margin: var(--space-2) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.quota-reset-irreversible {
+  color: var(--warning);
+}
+
 .quota-credits {
   display: flex;
   flex-direction: column;

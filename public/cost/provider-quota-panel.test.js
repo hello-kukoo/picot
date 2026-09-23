@@ -24,6 +24,17 @@ const locale = {
   creditGranted: "Granted {time}",
   creditExpires: "Expires {time}",
   creditUnknown: "Expiry unknown",
+  resetCreditsAvailable: "Reset credits available: {count}",
+  creditNext: "Next to use",
+  creditDaysLeft: "{days} days left",
+  creditExpired: "Expired",
+  creditNone: "No reset credits available",
+  creditEarnHint: "Reset credits are granted by the plan.",
+  fifoNote: "Credits are spent oldest first.",
+  confirmResetDesc: "This spends one of your {count} reset credits and cannot be undone.",
+  confirmWhichCredit: "Will spend the credit granted {date}.",
+  irreversible: "This cannot be undone.",
+  dialogProceed: "Continue",
   dialogConfirm: "Reset now",
   dialogCancel: "Cancel",
   toastUnavailable: "Cannot open the reset operation right now",
@@ -36,7 +47,25 @@ const locale = {
   toastNoCredit: "No reset credits left",
 };
 
+const DAY = 86_400;
+const NOW_SEC = Math.floor(Date.now() / 1000);
+
 let container;
+
+/** Drives the two-step reset dialog to its confirm button. Every ledger op is a
+ * stub in this suite, so no real reset credit can be spent. */
+async function confirmResetDialog() {
+  container.querySelector(".quota-reset-btn").click();
+  await advance();
+  document.querySelector(".file-preview-dialog-button.primary").click(); // continue
+  await advance();
+  document.querySelector(".file-preview-dialog-button.primary").click(); // confirm
+  await advance();
+}
+
+function advance() {
+  return new Promise((resolve) => setTimeout(resolve, 20));
+}
 
 beforeEach(() => {
   container = document.createElement("div");
@@ -146,11 +175,7 @@ test("reset click runs the open→consume→settle ledger flow", async () => {
   await panel.loadReports();
   const toasts = [];
   window.addEventListener("picot-toast", (event) => toasts.push(event.detail.message));
-  container.querySelector(".quota-reset-btn").click();
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  // Spending a credit is irreversible, so the ledger flow waits for the dialog.
-  document.querySelector(".file-preview-dialog-button.primary").click();
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await confirmResetDialog();
   expect(seams.dataTransport.resetCreditOpen).toHaveBeenCalledTimes(1);
   expect(seams.gateway.call).toHaveBeenCalledWith("codex_reset_credits_consume", {
     operationId: "op-uuid-1",
@@ -177,11 +202,7 @@ test("an ambiguous consume settles ambiguous and toasts the unknown result", asy
   await panel.loadReports();
   const toasts = [];
   window.addEventListener("picot-toast", (event) => toasts.push(event.detail.message));
-  container.querySelector(".quota-reset-btn").click();
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  // Spending a credit is irreversible, so the ledger flow waits for the dialog.
-  document.querySelector(".file-preview-dialog-button.primary").click();
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await confirmResetDialog();
   expect(seams.dataTransport.resetCreditSettle).toHaveBeenCalledWith({
     operationId: "op-uuid-1",
     ambiguous: true,
@@ -206,11 +227,7 @@ test("a failed ledger open never reaches consume", async () => {
   await panel.loadReports();
   const toasts = [];
   window.addEventListener("picot-toast", (event) => toasts.push(event.detail.message));
-  container.querySelector(".quota-reset-btn").click();
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  // Spending a credit is irreversible, so the ledger flow waits for the dialog.
-  document.querySelector(".file-preview-dialog-button.primary").click();
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await confirmResetDialog();
   // The consume op never ran; the refresh-after-attempt report call is fine.
   const consumeCalls = seams.gateway.call.mock.calls.filter(
     (args) => args[0] === "codex_reset_credits_consume",
@@ -219,7 +236,7 @@ test("a failed ledger open never reaches consume", async () => {
   expect(toasts).toContain("Cannot open the reset operation right now");
 });
 
-test("reset opens a confirm dialog that lists credits with absolute times", async () => {
+test("reset lists credits oldest-first with absolute times, then confirms", async () => {
   const seams = makeSeams({
     reports: [
       {
@@ -228,27 +245,53 @@ test("reset opens a confirm dialog that lists credits with absolute times", asyn
         quota: { fiveHourPercent: 90, resetCredits: 2, updatedAt: Date.now() },
       },
     ],
+    inspectData: {
+      credits: [
+        // Deliberately out of order: the list must come back oldest-first.
+        // The older credit also expires within the urgency window.
+        { granted_at: NOW_SEC - 3 * DAY, expires_at: NOW_SEC + 40 * DAY },
+        { granted_at: NOW_SEC - 30 * DAY, expires_at: NOW_SEC + 5 * DAY },
+      ],
+    },
   });
   const panel = createProviderQuotaPanel(seams, { locale });
   await panel.loadReports();
   container.querySelector(".quota-reset-btn").click();
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await advance();
 
+  // Step 1: inventory only — nothing spent.
   expect(seams.gateway.call).toHaveBeenCalledWith("codex_reset_credits_inspect", {});
-  const rows = [...document.querySelectorAll(".quota-credit-row")].map((row) => row.textContent);
-  const granted = new Date(1_760_000_000 * 1000).toLocaleString();
-  const expires = new Date(1_790_000_000 * 1000).toLocaleString();
-  expect(rows).toHaveLength(1);
-  expect(rows[0]).toContain(granted);
-  expect(rows[0]).toContain(expires);
-  // Nothing irreversible has happened yet.
+  expect(document.querySelector(".quota-reset-count")?.textContent).toContain("2");
+  const rows = [...document.querySelectorAll(".quota-credit-row")];
+  expect(rows).toHaveLength(2);
+  const oldestGranted = new Date((NOW_SEC - 30 * DAY) * 1000).toLocaleString();
+  expect(rows[0].classList.contains("is-next")).toBe(true);
+  expect(rows[0].textContent).toContain("Next to use");
+  expect(rows[0].textContent).toContain(oldestGranted);
+  expect(rows[0].textContent).toContain(new Date((NOW_SEC + 5 * DAY) * 1000).toLocaleString());
+  expect(rows[0].textContent).toContain("days left");
+  expect(rows[0].classList.contains("is-urgent")).toBe(true);
+  expect(rows[1].classList.contains("is-next")).toBe(false);
+  expect(document.querySelector(".quota-reset-note")?.textContent).toContain("oldest first");
   expect(seams.dataTransport.resetCreditOpen).not.toHaveBeenCalled();
-  expect(
-    seams.gateway.call.mock.calls.filter((args) => args[0] === "codex_reset_credits_consume"),
-  ).toHaveLength(0);
+
+  // Step 2: which credit this spends, and that it cannot be undone.
+  document.querySelector(".file-preview-dialog-button.primary").click();
+  await advance();
+  const text = document.querySelector(".quota-reset-dialog")?.textContent ?? "";
+  expect(text).toContain("Will spend the credit granted");
+  expect(text).toContain(oldestGranted);
+  expect(text).toContain("This cannot be undone.");
+  expect(seams.dataTransport.resetCreditOpen).not.toHaveBeenCalled();
+
+  // Escape abandons it; the ledger stays untouched.
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await advance();
+  expect(document.querySelector(".file-preview-dialog-overlay")).toBeNull();
+  expect(seams.dataTransport.resetCreditOpen).not.toHaveBeenCalled();
 });
 
-test("cancelling the confirm dialog never touches the ledger", async () => {
+test("cancelling the reset dialog never touches the ledger", async () => {
   const seams = makeSeams({
     reports: [
       {
@@ -261,9 +304,10 @@ test("cancelling the confirm dialog never touches the ledger", async () => {
   const panel = createProviderQuotaPanel(seams, { locale });
   await panel.loadReports();
   container.querySelector(".quota-reset-btn").click();
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await advance();
+  // Step 1's ghost button is cancel; step 2 has its own cancel as well.
   document.querySelectorAll(".file-preview-dialog-button")[0].click();
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await advance();
   expect(document.querySelector(".file-preview-dialog-overlay")).toBeNull();
   expect(seams.dataTransport.resetCreditOpen).not.toHaveBeenCalled();
   expect(seams.dataTransport.resetCreditSettle).not.toHaveBeenCalled();
