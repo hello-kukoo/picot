@@ -5390,6 +5390,32 @@ function handleSessionSelect(session, project) {
   return run;
 }
 
+function renderCachedSessionView(session, cachedView) {
+  const streaming = sidebar.isStreaming(session.filePath);
+  state.setStreaming(streaming);
+  showTypingIndicator(streaming);
+  sidebar.setStreaming(session.filePath, streaming);
+  pendingRevealRestore = {
+    sessionKey: session.filePath,
+    count: cachedView.revealedCount,
+  };
+  restoringCachedView = true;
+  try {
+    renderTranscriptEntries(cachedView.entries, { leafId: cachedView.leafId });
+  } finally {
+    restoringCachedView = false;
+  }
+  pendingRevealRestore = null;
+  if (typeof cachedView.scrollTop === "number" && cachedView.scrollTop > 0) {
+    const restoreScroll = cachedView.scrollTop;
+    requestAnimationFrame(() => {
+      if (historyGateKey() === session.filePath) {
+        messagesContainer.scrollTop = restoreScroll;
+      }
+    });
+  }
+}
+
 async function handleSessionSelectImpl(session, project) {
   // Phase A: capture the outgoing session's live view state before any
   // rebinding, so a later switch-back restores the exact reading position.
@@ -5476,6 +5502,21 @@ async function handleSessionSelectImpl(session, project) {
   } else {
     updateWorkspaceIndicator(foregroundWorkspacePath);
   }
+
+  const cachedView = sessionViewCache.get(session.filePath);
+  const stamp = {
+    mtimeMs: Number(session.mtime) || null,
+    sizeBytes: typeof session.sizeBytes === "number" ? session.sizeBytes : null,
+  };
+  const cachedViewValid = cachedView && !sidebar.searchQuery && viewMatchesStamp(cachedView, stamp);
+  const cachedViewRenderedEarly =
+    nativeAvailable() &&
+    Boolean(cachedViewValid) &&
+    selectedWorkspacePath === fileBrowserWorkspacePath;
+  if (cachedViewRenderedEarly) {
+    logSessionRoute("select:cache-render-early", { selectedSession: session.filePath });
+    renderCachedSessionView(session, cachedView);
+  }
   // Native transitions above navigate to a host-origin workspace route. The
   // remaining path is browser/dev compatibility only.
   if (session.filePath) {
@@ -5529,37 +5570,10 @@ async function handleSessionSelectImpl(session, project) {
       // trusted, or the sidebar row's mtime/size stamp still matches), so
       // skip both the snapshot request and the disk history fetch and
       // re-render from cache with the stored gate/scroll state.
-      const cachedView = sessionViewCache.get(session.filePath);
-      const stamp = {
-        mtimeMs: Number(session.mtime) || null,
-        sizeBytes: typeof session.sizeBytes === "number" ? session.sizeBytes : null,
-      };
-      if (cachedView && !sidebar.searchQuery && viewMatchesStamp(cachedView, stamp)) {
+      if (cachedViewValid) {
         logSessionRoute("select:cache-hit", { selectedSession: session.filePath });
         pendingMirrorSessionFile = null; // no snapshot is coming to consume it
-        const streaming = sidebar.isStreaming(session.filePath);
-        state.setStreaming(streaming);
-        showTypingIndicator(streaming);
-        sidebar.setStreaming(session.filePath, streaming);
-        pendingRevealRestore = {
-          sessionKey: session.filePath,
-          count: cachedView.revealedCount,
-        };
-        restoringCachedView = true;
-        try {
-          renderTranscriptEntries(cachedView.entries, { leafId: cachedView.leafId });
-        } finally {
-          restoringCachedView = false;
-        }
-        pendingRevealRestore = null;
-        if (typeof cachedView.scrollTop === "number" && cachedView.scrollTop > 0) {
-          const restoreScroll = cachedView.scrollTop;
-          requestAnimationFrame(() => {
-            if (historyGateKey() === session.filePath) {
-              messagesContainer.scrollTop = restoreScroll;
-            }
-          });
-        }
+        if (!cachedViewRenderedEarly) renderCachedSessionView(session, cachedView);
         void applySessionUiProfile(session.filePath);
         // The cached render skipped the snapshot, so no foreground snapshot
         // frame will ever arrive for this target — and that frame is the
