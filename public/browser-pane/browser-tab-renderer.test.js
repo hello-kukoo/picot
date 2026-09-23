@@ -38,7 +38,7 @@ function makeEvalTransport() {
       value = null;
     }
     const envelope = JSON.stringify({ ok: true, value: value ?? null });
-    return { result: JSON.stringify(envelope) };
+    return JSON.stringify(envelope);
   });
 }
 

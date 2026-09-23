@@ -21,9 +21,11 @@ function makeTransport() {
     browserPaneSetVisible: vi.fn(async () => ({})),
     // new Function instead of eval: same expression semantics without the
     // lint block; the parens keep ASI from swallowing the return.
-    browserPaneEval: vi.fn(async ({ js }) => ({
-      result: JSON.stringify({ ok: true, value: new Function(`return (${js})`)() }),
-    })),
+    // data_response resolution hands back the frame's `result` value, so the
+    // bridge resolves with the envelope itself — not a `{ result }` wrapper.
+    browserPaneEval: vi.fn(async ({ js }) =>
+      JSON.stringify({ ok: true, value: new Function(`return (${js})`)() }),
+    ),
     browserPaneNavigate: vi.fn(async () => ({})),
     browserPaneDestroy: vi.fn(async () => ({})),
   };
@@ -98,24 +100,20 @@ test("navigatePane updates the tracked url; evalPane round-trips values", async 
 
 test("evalPane decodes Tauri's JSON-serialized string result", async () => {
   const transport = makeTransport();
-  transport.browserPaneEval = vi.fn(async () => ({
-    result: JSON.stringify(JSON.stringify({ ok: true, value: { docPath: "/body/p[4]" } })),
-  }));
+  transport.browserPaneEval = vi.fn(async () =>
+    JSON.stringify(JSON.stringify({ ok: true, value: { docPath: "/body/p[4]" } })),
+  );
   const container = document.createElement("div");
   await openPane({ paneId: "p-native-eval", url: "http://x/", container, transport });
   await expect(
     evalPane("p-native-eval", "window.__picotSelectorResult", transport),
-  ).resolves.toEqual({
-    docPath: "/body/p[4]",
-  });
+  ).resolves.toEqual({ docPath: "/body/p[4]" });
   closePane("p-native-eval");
 });
 
 test("evalPane accepts an envelope the bridge already decoded", async () => {
   const transport = makeTransport();
-  transport.browserPaneEval = vi.fn(async () => ({
-    result: { ok: true, value: { docPath: "/body/p[4]" } },
-  }));
+  transport.browserPaneEval = vi.fn(async () => ({ ok: true, value: { docPath: "/body/p[4]" } }));
   const container = document.createElement("div");
   await openPane({ paneId: "p-decoded", url: "http://x/", container, transport });
   await expect(evalPane("p-decoded", "x", transport)).resolves.toEqual({ docPath: "/body/p[4]" });
@@ -124,7 +122,7 @@ test("evalPane accepts an envelope the bridge already decoded", async () => {
 
 test("evalPane names an envelope it cannot read instead of failing blind", async () => {
   const transport = makeTransport();
-  transport.browserPaneEval = vi.fn(async () => ({ result: { type: "data_response" } }));
+  transport.browserPaneEval = vi.fn(async () => ({ type: "data_response" }));
   const container = document.createElement("div");
   await openPane({ paneId: "p-opaque", url: "http://x/", container, transport });
   await expect(evalPane("p-opaque", "x", transport)).rejects.toThrow("eval_failed:keys:type");
@@ -133,9 +131,9 @@ test("evalPane names an envelope it cannot read instead of failing blind", async
 
 test("evalPane surfaces runtime errors from the wrapper envelope", async () => {
   const transport = makeTransport();
-  transport.browserPaneEval = vi.fn(async () => ({
-    result: JSON.stringify({ ok: false, error: "ReferenceError: x is not defined" }),
-  }));
+  transport.browserPaneEval = vi.fn(async () =>
+    JSON.stringify({ ok: false, error: "ReferenceError: x is not defined" }),
+  );
   const container = document.createElement("div");
   await openPane({ paneId: "p5", url: "http://x/", container, transport });
   await expect(evalPane("p5", "x", transport)).rejects.toThrow("ReferenceError");

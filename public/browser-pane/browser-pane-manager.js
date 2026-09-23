@@ -173,6 +173,16 @@ function unwrapEnvelope(raw) {
   return value;
 }
 
+/** `data_response` resolution returns the frame's own `result` value, so what
+ * arrives here is the envelope itself. A wrapped `{ result }` shape also occurs
+ * when the frame carries other payload fields; accept both. */
+function evalEnvelope(response) {
+  if (response && typeof response === "object" && !("ok" in response) && "result" in response) {
+    return response.result;
+  }
+  return response;
+}
+
 function describeEnvelope(value) {
   if (value === null) return "null";
   if (value === undefined) return "undefined";
@@ -187,7 +197,7 @@ export async function evalPane(paneId, expression, transport) {
   const entry = PANES.get(paneId);
   if (!entry || entry.dead) throw new Error("pane_not_found");
   const response = await transport.browserPaneEval({ paneId: entry.paneKey, js: expression });
-  const envelope = unwrapEnvelope(response?.result);
+  const envelope = unwrapEnvelope(evalEnvelope(response));
   if (envelope?.ok !== true) {
     // The shape is the diagnosis; never collapse it to a bare "eval_failed".
     throw new Error(envelope?.error ?? `eval_failed:${describeEnvelope(envelope)}`);
