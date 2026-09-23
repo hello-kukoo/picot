@@ -1110,18 +1110,40 @@ function readModelsJsonProviders(): Record<string, { baseUrl?: string; apiKey?: 
   }
 }
 
-/** Catalog (providerId, baseUrl) pairs — deduped, first sighting wins. */
-function catalogProviderPairs(
-  registry: CatalogRegistry,
-): Array<{ providerId: string; baseUrl?: string }> {
-  const seen = new Map<string, { providerId: string; baseUrl?: string }>();
-  for (const model of registry.getAll() as Array<Record<string, unknown>>) {
-    const providerId = typeof model?.provider === "string" ? model.provider : "";
-    if (!providerId || seen.has(providerId)) continue;
-    const baseUrl = typeof model?.baseUrl === "string" ? model.baseUrl : undefined;
-    seen.set(providerId, { providerId, baseUrl });
+/** Provider candidates for quota probes, taken from pi's own provider list.
+ * The model catalog is deliberately NOT the source: it only knows providers
+ * that expose models with a baseUrl, so providers whose models are described
+ * elsewhere (codex / opencode-go / zai-coding-cn) were missing from the probe
+ * set while an unconfigured provider that did carry a baseUrl was probed. */
+type QuotaProviderRuntime = {
+  getProviders?: () => readonly { id?: string; baseUrl?: string }[];
+  getRegisteredProviderIds?: () => readonly string[];
+  getProvider?: (providerId: string) => { baseUrl?: string } | undefined;
+  getModels?: (providerId?: string) => readonly { baseUrl?: string }[];
+  hasConfiguredAuth?: (providerId: string) => boolean;
+};
+
+function quotaProviderCandidates(runtime: QuotaProviderRuntime): {
+  providers: Array<{ providerId: string; baseUrl?: string }>;
+  configuredProviderIds: string[];
+} {
+  const providerIds = new Set<string>(runtime.getRegisteredProviderIds?.() ?? []);
+  for (const provider of runtime.getProviders?.() ?? []) {
+    if (provider?.id) providerIds.add(provider.id);
   }
-  return [...seen.values()];
+  const providers: Array<{ providerId: string; baseUrl?: string }> = [];
+  const configuredProviderIds: string[] = [];
+  for (const providerId of providerIds) {
+    // Unconfigured providers produce no probe — no card, no failed request.
+    if (runtime.hasConfiguredAuth?.(providerId) !== true) continue;
+    configuredProviderIds.push(providerId);
+    providers.push({
+      providerId,
+      baseUrl:
+        runtime.getProvider?.(providerId)?.baseUrl ?? runtime.getModels?.(providerId)?.[0]?.baseUrl,
+    });
+  }
+  return { providers, configuredProviderIds };
 }
 
 async function resolveQuotaInstance(
@@ -1351,17 +1373,16 @@ export async function handlePicotConfig(
 
       case "provider_quota_report": {
         const force = params.force === true;
-        const registryReady = requireRegistry();
         const modelsJsonProviders = readModelsJsonProviders();
-        const picked = providersOfInterest({
-          catalogProviders: catalogProviderPairs(registryReady),
-          modelsJsonProviders,
-        });
+        const runtime = await ModelRuntime.create();
+        const candidates = quotaProviderCandidates(runtime);
+        const picked = providersOfInterest({ ...candidates, modelsJsonProviders });
+        const baseUrlById = new Map(
+          candidates.providers.map((entry) => [entry.providerId, entry.baseUrl]),
+        );
         const reports = [];
         for (const { providerId, spec } of picked) {
-          const baseUrl =
-            catalogProviderPairs(registryReady).find((pair) => pair.providerId === providerId)
-              ?.baseUrl ?? modelsJsonProviders[providerId]?.baseUrl;
+          const baseUrl = baseUrlById.get(providerId) ?? modelsJsonProviders[providerId]?.baseUrl;
           const instance = await resolveQuotaInstance(providerId, baseUrl, modelsJsonProviders);
           reports.push(await quotaProbeCache.report(providerId, spec, instance, force));
         }

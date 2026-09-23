@@ -354,15 +354,27 @@ const SPECS: ProviderSpec[] = [
   },
 ];
 
-/** Pure selector: which configured providers produce probes this run. */
+/** Pure selector: which configured providers produce probes this run.
+ *
+ * The candidate list comes from pi's own provider list (`ModelRuntime`), not
+ * from the model catalog: a provider exists whether or not one of its models
+ * happens to carry a baseUrl, and `codex`/`opencode-go`/`zai-coding-cn` only
+ * ever appear as providers. The canonical-baseUrl match is unchanged — it is
+ * the anti-spoof guard, not the id→endpoint mapping — and a provider that pi
+ * reports as unconfigured is not probed at all (spec: 未配置的 provider 配额区
+ * 不显示). */
 export function providersOfInterest(input: {
-  /** (providerId, baseUrl) pairs from the model catalog. */
-  catalogProviders: Array<{ providerId: string; baseUrl?: string }>;
-  /** Custom provider entries from models.json (id → {baseUrl, apiKey?}). */
+  /** Providers from pi's provider list: id + canonical baseUrl. */
+  providers?: Array<{ providerId: string; baseUrl?: string }>;
+  /** Provider ids pi reports as having configured credentials. */
+  configuredProviderIds?: readonly string[];
+  /** Custom provider entries from models.json (id → {baseUrl, apiKey?}); their
+   * credential is the entry's own apiKey, not an auth.json provider entry. */
   modelsJsonProviders?: Record<string, { baseUrl?: string; apiKey?: string }>;
 }): Array<{ providerId: string; spec: ProviderSpec }> {
   const out: Array<{ providerId: string; spec: ProviderSpec }> = [];
   const seen = new Set<string>();
+  const configured = new Set(input.configuredProviderIds ?? []);
   const consider = (providerId: string, baseUrl: string | undefined) => {
     if (!baseUrl) return;
     const spec = SPECS.find((candidate) =>
@@ -374,10 +386,12 @@ export function providersOfInterest(input: {
     seen.add(key);
     out.push({ providerId, spec });
   };
-  for (const { providerId, baseUrl } of input.catalogProviders) {
+  for (const { providerId, baseUrl } of input.providers ?? []) {
+    if (!configured.has(providerId)) continue;
     consider(providerId, baseUrl);
   }
   for (const [providerId, entry] of Object.entries(input.modelsJsonProviders ?? {})) {
+    if (!entry?.apiKey) continue;
     consider(providerId, entry?.baseUrl);
   }
   return out;

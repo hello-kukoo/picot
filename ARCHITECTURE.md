@@ -264,6 +264,7 @@ Pi 以 `~/.pi/agent/trust.json`（键为 canonical 路径，值为 true/false/nu
 
 `extensions/provider-quota.ts` 在 pi 进程内对已配置 provider 的用量端点做只读探针（spec 2026-09-22，端点语义照抄 opencodex 生产实现）。边界：
 
+- **候选 provider 来自 pi 自己的 provider 列表**（`ModelRuntime.getProviders()` + `getRegisteredProviderIds()`），且**只有 pi 报告已配置凭据（`hasConfiguredAuth`）的才探测**；models.json 自定义 provider 的凭据是条目自带的 `apiKey`。模型 catalog 不能当枚举源：它只知道「带 baseUrl 的模型」，会漏掉只有 provider 身份、没有对应模型的 codex/opencode-go/zai-coding-cn，却把无凭据的 provider 放进名单（实测：只有 deepseek 一张卡且是失败态）。
 - **按 canonical baseUrl 选择，不按 provider id**：探针注册表只认固定 host 集合（chatgpt.com / api.z.ai / open.bigmodel.cn / opencode.ai / api.deepseek.com / minimax.io / minimaxi.com / moonshot.ai / moonshot.cn / ollama.com）；baseUrl 不匹配不发包（防把 key 发到仿冒 host）。
 - **凭据不出 pi 进程**：api-key 走 `readStoredCredential`；models.json 自定义 provider 读条目 `apiKey`；openai-codex 走 `ModelRuntime.getAuth`（OAuth 刷新归 pi，失败报 `needs_login`）+ `readStoredCredential` 补 accountId。返回 WebView 的只有归一化配额数字与封闭错误码。
 - **探针纪律**：`redirect:"manual"`（3xx 显式记为 `destination_blocked` 而非误报 timeout）、8s 超时、256KB 响应体上限（**流式**断读：`fetch` 的 `text()/json()` 会先缓冲全文，故按 reader 分块计字节，超限即 cancel）；瞬时失败（429/5xx/超时）保留 last-good 行 30 分钟，`response_unusable` 丢弃旧行；进程内缓存 TTL 5 分钟 + in-flight 去重，`force` 跳过。

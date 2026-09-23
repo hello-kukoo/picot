@@ -142,17 +142,21 @@ test("parseOllamaUsage maps weekly/monthly/session usage", () => {
 });
 
 describe("providersOfInterest", () => {
-  test("matches canonical baseUrls only — never provider ids", () => {
+  test("probes configured providers whose canonical baseUrl matches", () => {
     const picked = providersOfInterest({
-      catalogProviders: [
+      providers: [
         { providerId: "zai-coding-cn", baseUrl: "https://open.bigmodel.cn" },
         { providerId: "my-relay", baseUrl: "https://open.bigmodel.cn.evil.example" },
         { providerId: "zai", baseUrl: "https://api.z.ai/" },
-        { providerId: "deepseek" },
+        // Canonical endpoint, but pi reports no credential for it → no card.
+        { providerId: "deepseek", baseUrl: "https://api.deepseek.com" },
       ],
+      configuredProviderIds: ["zai", "zai-coding-cn", "my-relay", "openai-codex"],
       modelsJsonProviders: {
         "my-ollama": { baseUrl: "https://ollama.com", apiKey: "k" },
         "other-relay": { baseUrl: "https://example.com" },
+        // Canonical endpoint without a stored key → not probed.
+        "keyless-ollama": { baseUrl: "https://ollama.com" },
       },
     });
     expect(picked.map((entry) => entry.providerId).sort()).toEqual([
@@ -160,6 +164,15 @@ describe("providersOfInterest", () => {
       "zai",
       "zai-coding-cn",
     ]);
+  });
+
+  test("probes a configured provider that the model catalog never listed", () => {
+    const picked = providersOfInterest({
+      providers: [{ providerId: "openai-codex", baseUrl: "https://chatgpt.com" }],
+      configuredProviderIds: ["openai-codex"],
+    });
+    expect(picked.map((entry) => entry.providerId)).toEqual(["openai-codex"]);
+    expect(picked[0].spec.source).toBe("openai-codex:wham");
   });
 });
 
