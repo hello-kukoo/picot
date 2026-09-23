@@ -157,24 +157,40 @@ export async function navigatePane(paneId, url, transport) {
   if (entry) entry.url = url;
 }
 
+/** The envelope's encoding depth is not fixed: `eval_with_callback`
+ * re-serializes the JavaScript return value, so the bridge can hand back the
+ * envelope as an object or as one-or-more nested JSON strings. Unwrap until it
+ * stops being a string instead of assuming a depth. */
+function unwrapEnvelope(raw) {
+  let value = raw;
+  for (let depth = 0; depth < 3 && typeof value === "string"; depth += 1) {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      break;
+    }
+  }
+  return value;
+}
+
+function describeEnvelope(value) {
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  if (typeof value !== "object") return typeof value;
+  const keys = Object.keys(value);
+  return keys.length > 0 ? `keys:${keys.slice(0, 5).join("|")}` : "empty-object";
+}
+
 /** Promise-style executeJavaScript: resolves with the deserialized JSON
  * value of `expression`. Rejects on timeout or when the pane is gone. */
 export async function evalPane(paneId, expression, transport) {
   const entry = PANES.get(paneId);
   if (!entry || entry.dead) throw new Error("pane_not_found");
   const response = await transport.browserPaneEval({ paneId: entry.paneKey, js: expression });
-  let envelope = null;
-  try {
-    envelope = JSON.parse(response.result ?? "null");
-    // Tauri eval_with_callback JSON-serializes the JavaScript return value.
-    // eval_json already returns a JSON envelope, so native callbacks arrive
-    // as a JSON string containing that JSON envelope.
-    if (typeof envelope === "string") envelope = JSON.parse(envelope);
-  } catch {
-    throw new Error("eval_failed");
-  }
+  const envelope = unwrapEnvelope(response?.result);
   if (envelope?.ok !== true) {
-    throw new Error(envelope?.error ?? "eval_failed");
+    // The shape is the diagnosis; never collapse it to a bare "eval_failed".
+    throw new Error(envelope?.error ?? `eval_failed:${describeEnvelope(envelope)}`);
   }
   return envelope.value ?? null;
 }

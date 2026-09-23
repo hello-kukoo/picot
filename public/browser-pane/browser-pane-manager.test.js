@@ -111,6 +111,26 @@ test("evalPane decodes Tauri's JSON-serialized string result", async () => {
   closePane("p-native-eval");
 });
 
+test("evalPane accepts an envelope the bridge already decoded", async () => {
+  const transport = makeTransport();
+  transport.browserPaneEval = vi.fn(async () => ({
+    result: { ok: true, value: { docPath: "/body/p[4]" } },
+  }));
+  const container = document.createElement("div");
+  await openPane({ paneId: "p-decoded", url: "http://x/", container, transport });
+  await expect(evalPane("p-decoded", "x", transport)).resolves.toEqual({ docPath: "/body/p[4]" });
+  closePane("p-decoded");
+});
+
+test("evalPane names an envelope it cannot read instead of failing blind", async () => {
+  const transport = makeTransport();
+  transport.browserPaneEval = vi.fn(async () => ({ result: { type: "data_response" } }));
+  const container = document.createElement("div");
+  await openPane({ paneId: "p-opaque", url: "http://x/", container, transport });
+  await expect(evalPane("p-opaque", "x", transport)).rejects.toThrow("eval_failed:keys:type");
+  closePane("p-opaque");
+});
+
 test("evalPane surfaces runtime errors from the wrapper envelope", async () => {
   const transport = makeTransport();
   transport.browserPaneEval = vi.fn(async () => ({
