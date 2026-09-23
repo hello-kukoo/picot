@@ -2396,6 +2396,124 @@ body.landing-mode #landing {
   border-bottom-color: var(--accent);
 }
 
+/* Provider quota cards (Settings → 使用量 → 配额). The section renders in the
+   Settings DOM, not inside the cost dashboard's shadow root, so these styles
+   must live here — the panel's classes had no definitions at all while the
+   section was silently hidden. */
+#settings-provider-quota {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.quota-section-head {
+  display: flex;
+  flex: 1 0 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.quota-section-head h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+}
+
+.quota-refresh-btn,
+.quota-reset-btn {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-glass);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--duration) var(--ease);
+}
+
+.quota-refresh-btn:hover,
+.quota-reset-btn:hover {
+  background: var(--bg-glass-hover);
+}
+
+.quota-card {
+  flex: 1 1 240px;
+  max-width: 340px;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-glass);
+}
+
+.quota-card-name {
+  margin-bottom: var(--space-2);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.quota-windows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.quota-window-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+  font-size: var(--font-size-sm);
+}
+
+.quota-window-label {
+  color: var(--text-secondary);
+}
+
+.quota-window-value {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.quota-bar {
+  /* design-token-ignore: bar thickness is a visual constant, not spacing */
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--bg-glass-strong);
+}
+
+.quota-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--duration) var(--ease);
+}
+
+.quota-bar-fill.is-warning {
+  background: var(--warning);
+}
+
+.quota-bar-fill.is-critical {
+  background: var(--error);
+}
+
+.quota-updated,
+.quota-failure {
+  margin-top: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.quota-reset-btn {
+  width: 100%;
+  margin-top: var(--space-3);
+}
+
 .settings-usage-embed {
   height: calc(100dvh - 140px);
   min-height: 460px;
