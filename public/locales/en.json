@@ -1223,6 +1223,30 @@
       "friday": "Fri",
       "less": "Less",
       "more": "More"
+    },
+    "quota": {
+      "sectionTitle": "Provider Quota",
+      "refresh": "Refresh",
+      "refreshing": "Refreshing…",
+      "fiveHour": "5h window",
+      "weekly": "Weekly",
+      "monthly": "Monthly",
+      "needsLogin": "Re-login required",
+      "unavailable": "Temporarily unavailable",
+      "justNow": "just now",
+      "minutesAgo": "{n}m ago",
+      "hoursAgo": "{n}h ago",
+      "resetsInMinutes": "resets in {n}m",
+      "resetsInHours": "resets in {n}h",
+      "resetsInDays": "resets in {n}d",
+      "resetCredits": "Reset quota ({n} left)",
+      "toastUnavailable": "Cannot open the reset operation right now",
+      "toastUnknown": "Result unknown — reopen the dialog to verify",
+      "toastInFlight": "An operation is already in progress",
+      "toastNeedsLogin": "Re-login required before resetting",
+      "toastResetDone": "Quota reset",
+      "toastNothingToReset": "Nothing to reset",
+      "toastNoCredit": "No reset credits left"
     }
   },
   "misc": {

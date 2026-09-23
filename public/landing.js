@@ -747,6 +747,23 @@ void updater.initUpdaterUI();
 {
   const { setCostDashboardTransport } = await import("./cost/dashboard.js");
   setCostDashboardTransport(transport);
+  // Provider quota section rides the landing ConfigGateway (same temporary
+  // pi instance the model/MCP pages use).
+  const { createProviderQuotaPanel } = await import("./cost/provider-quota-panel.js");
+  const { quotaLocaleBundle } = await import("./cost/quota-locale.js");
+  const quotaPanel = createProviderQuotaPanel(
+    {
+      container: () =>
+        document
+          .querySelector("cost-dashboard")
+          ?.shadowRoot?.querySelector("#usage-provider-quota") ?? null,
+      gateway: landingConfig.configGateway,
+      dataTransport: transport,
+    },
+    { locale: quotaLocaleBundle() },
+  );
+  document.addEventListener("cost-dashboard-rendered", () => quotaPanel.render());
+  void quotaPanel.loadReports();
 }
 
 // ── Skills page (discovered + install; packages sub-tab is bridge-bound) ──

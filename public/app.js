@@ -619,6 +619,24 @@ const oauthGateway = createOauthGateway({
 {
   const { setCostDashboardTransport } = await import("./cost/dashboard.js");
   setCostDashboardTransport(transport);
+  // Provider quota section (spec 2026-09-22): the gateway lives in this
+  // document; the section itself renders inside the dashboard shadow root.
+  const { createProviderQuotaPanel } = await import("./cost/provider-quota-panel.js");
+  const { quotaLocaleBundle } = await import("./cost/quota-locale.js");
+  const quotaPanel = createProviderQuotaPanel(
+    {
+      container: () =>
+        document
+          .querySelector("cost-dashboard")
+          ?.shadowRoot?.querySelector("#usage-provider-quota") ?? null,
+      gateway: configGateway,
+      dataTransport: transport,
+    },
+    { locale: quotaLocaleBundle() },
+  );
+  document.addEventListener("cost-dashboard-rendered", () => quotaPanel.render());
+  window.addEventListener("localechange", () => quotaPanel.render());
+  void quotaPanel.loadReports();
 }
 // Mobile LAN QR: header button + modal over the native pairing controls
 // (token minted on open; visibility follows the running host's LAN bind).

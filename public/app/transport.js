@@ -354,6 +354,16 @@ export class WsTransport {
     });
   }
 
+  /** Codex reset-credit ledger (spec 2026-09-22): open returns the
+   * idempotency-keyed operationId; settle records the outcome. */
+  resetCreditOpen() {
+    return this.wsClient.sendData("reset_credit_open", {});
+  }
+
+  resetCreditSettle({ operationId, ambiguous }) {
+    return this.wsClient.sendData("reset_credit_settle", { operationId, ambiguous });
+  }
+
   hostHealth() {
     return this._control("host_health", {});
   }

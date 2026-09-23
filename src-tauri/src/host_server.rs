@@ -2855,7 +2855,13 @@ async fn dispatch(
                 // target at all. Data reads still resolve roots through
                 // MetadataStore; only the current desktop owner may request
                 // these operations.
-                if operation == "workspace_sessions" || operation == "cost_dashboard" {
+                if matches!(
+                    operation,
+                    "workspace_sessions"
+                        | "cost_dashboard"
+                        | "reset_credit_open"
+                        | "reset_credit_settle"
+                ) {
                     return true;
                 }
                 current_registered_context(state, ctx)
@@ -3091,6 +3097,41 @@ async fn dispatch(
                         }
                     }
                     Ok(response)
+                }
+                Some("reset_credit_open") => {
+                    // Codex reset-credit ledger open (spec 2026-09-22):
+                    // same owner-scoped, landing-visible surface as the cost
+                    // dashboard; the operation id doubles as the upstream
+                    // redeem_request_id idempotency key.
+                    let operation_id = state
+                        .data
+                        .reset_credit_open()
+                        .map_err(|error| ("host_operation_failed", error))?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "reset_credit_open",
+                        "operationId": operation_id,
+                    }))
+                }
+                Some("reset_credit_settle") => {
+                    let operation_id = frame
+                        .get("operationId")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_operation", "operationId is required".into()))?;
+                    let ambiguous = frame.get("ambiguous") == Some(&Value::Bool(true));
+                    state
+                        .data
+                        .reset_credit_settle(
+                            operation_id,
+                            if ambiguous { "ambiguous" } else { "settled" },
+                        )
+                        .map_err(|error| ("host_operation_failed", error))?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "reset_credit_settle",
+                    }))
                 }
                 Some("file_read") => {
                     let path = frame

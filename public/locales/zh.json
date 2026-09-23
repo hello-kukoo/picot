@@ -1223,6 +1223,30 @@
       "friday": "周五",
       "less": "较少",
       "more": "较多"
+    },
+    "quota": {
+      "sectionTitle": "提供方配额",
+      "refresh": "刷新",
+      "refreshing": "刷新中…",
+      "fiveHour": "5 小时窗口",
+      "weekly": "周",
+      "monthly": "月",
+      "needsLogin": "需要重新登录",
+      "unavailable": "暂不可用",
+      "justNow": "刚刚",
+      "minutesAgo": "{n} 分钟前",
+      "hoursAgo": "{n} 小时前",
+      "resetsInMinutes": "{n} 分钟后重置",
+      "resetsInHours": "{n} 小时后重置",
+      "resetsInDays": "{n} 天后重置",
+      "resetCredits": "重置额度（剩 {n} 个）",
+      "toastUnavailable": "暂时无法开启重置操作",
+      "toastUnknown": "结果未知，请重新打开对话框核对",
+      "toastInFlight": "已有操作进行中",
+      "toastNeedsLogin": "需先重新登录再重置",
+      "toastResetDone": "额度已重置",
+      "toastNothingToReset": "没有可重置的内容",
+      "toastNoCredit": "重置额度已用完"
     }
   },
   "misc": {

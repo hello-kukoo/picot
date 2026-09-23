@@ -227,6 +227,8 @@ impl MetadataStore {
         // exist at every accepted schema level.
         if current >= WRITTEN_SCHEMA_VERSION {
             self.ensure_workspace_session_bucket_column()?;
+            self.ensure_reset_credit_operations_table()?;
+            self.sweep_abandoned_reset_credits()?;
             self.drop_session_sidebar_visibility_table()?;
             return Ok(());
         }
@@ -309,6 +311,12 @@ impl MetadataStore {
         transaction
             .commit()
             .map_err(|error| format!("Cannot commit Picot metadata migration: {error}"))?;
+
+        // Public-owned additions apply to every accepted schema level, so a
+        // freshly migrated database needs the same existence-based pass.
+        self.ensure_workspace_session_bucket_column()?;
+        self.ensure_reset_credit_operations_table()?;
+        self.sweep_abandoned_reset_credits()?;
         self.drop_session_sidebar_visibility_table()
     }
 
@@ -334,6 +342,103 @@ impl MetadataStore {
                 format!("Cannot extend Picot workspaces schema (session_bucket): {error}")
             })?;
         Ok(())
+    }
+
+    /// Codex reset-credit ledger (spec 2026-09-22): public-owned table
+    /// created existence-based, never via the version staircase — Corp
+    /// builds own schema v4–v6, public stamps v3 (session_bucket precedent).
+    /// Rows carry only id/timestamps/status; no credentials, no upstream
+    /// payloads. The id doubles as the upstream redeem_request_id idempotency
+    /// key, so an unresolved (pending|ambiguous) row must be REUSED, not
+    /// replaced — a fresh uuid would double-spend the credit.
+    fn ensure_reset_credit_operations_table(&self) -> Result<(), String> {
+        self.connection
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS reset_credit_operations (
+                    id TEXT PRIMARY KEY,
+                    opened_at INTEGER NOT NULL,
+                    settled_at INTEGER,
+                    status TEXT NOT NULL
+                );",
+            )
+            .map_err(|error| format!("Cannot create Picot reset-credit ledger: {error}"))?;
+        Ok(())
+    }
+
+    fn now_secs() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs() as i64)
+            .unwrap_or(0)
+    }
+
+    /// Open (or reuse) the one unresolved reset-credit operation.
+    pub fn reset_credit_open(&self) -> Result<String, String> {
+        let existing: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT id FROM reset_credit_operations
+                 WHERE status IN ('pending', 'ambiguous')
+                 ORDER BY opened_at DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .map(Some)
+            .or_else(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })
+            .map_err(|error| format!("Cannot read Picot reset-credit ledger: {error}"))?;
+        if let Some(id) = existing {
+            return Ok(id);
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        self.connection
+            .execute(
+                "INSERT INTO reset_credit_operations (id, opened_at, settled_at, status)
+                 VALUES (?1, ?2, NULL, 'pending')",
+                rusqlite::params![id, Self::now_secs()],
+            )
+            .map_err(|error| format!("Cannot write Picot reset-credit ledger: {error}"))?;
+        Ok(id)
+    }
+
+    /// Settle an operation as `settled` or mark it `ambiguous` (response
+    /// lost mid-flight; recovery re-checks before replaying the same id).
+    pub fn reset_credit_settle(&self, operation_id: &str, status: &str) -> Result<(), String> {
+        if !matches!(status, "settled" | "ambiguous") {
+            return Err(format!("Invalid reset-credit settle status: {status}"));
+        }
+        let settled_at = if status == "settled" {
+            Self::now_secs()
+        } else {
+            0
+        };
+        let changed = self
+            .connection
+            .execute(
+                "UPDATE reset_credit_operations SET status = ?2, settled_at = ?3 WHERE id = ?1",
+                rusqlite::params![operation_id, status, settled_at],
+            )
+            .map_err(|error| format!("Cannot update Picot reset-credit ledger: {error}"))?;
+        if changed == 0 {
+            return Err("Unknown reset-credit operation".to_owned());
+        }
+        Ok(())
+    }
+
+    /// Startup sweep: a pending row whose opener process is long gone can
+    /// never be settled — mark it abandoned so the next open proceeds.
+    pub fn sweep_abandoned_reset_credits(&self) -> Result<u64, String> {
+        let swept = self
+            .connection
+            .execute(
+                "UPDATE reset_credit_operations SET status = 'abandoned'
+                 WHERE status = 'pending' AND opened_at < ?1",
+                rusqlite::params![Self::now_secs() - 60],
+            )
+            .map_err(|error| format!("Cannot sweep Picot reset-credit ledger: {error}"))?;
+        Ok(swept as u64)
     }
 
     /// The session sidebar visibility cache table is deprecated (Dr. Lin,
@@ -874,6 +979,77 @@ mod tests {
         let temp = temp_dir();
         let store = MetadataStore::open(&temp.join(name)).unwrap();
         (tempdir_guard::TempDirGuard(temp), store)
+    }
+
+    #[test]
+    fn reset_credit_ledger_opens_reuses_and_settles() {
+        let (_guard, store) = fresh_store("rc-ledger.sqlite3");
+        let first = store.reset_credit_open().expect("first open");
+        assert!(!first.is_empty());
+        // A pending row blocks new operations: the same id comes back.
+        assert_eq!(store.reset_credit_open().unwrap(), first);
+        store
+            .reset_credit_settle(&first, "settled")
+            .expect("settle");
+        // Settled: the next open creates a fresh operation.
+        let second = store.reset_credit_open().unwrap();
+        assert_ne!(second, first);
+    }
+
+    #[test]
+    fn reset_credit_ledger_reuses_ambiguous_rows_for_recovery() {
+        let (_guard, store) = fresh_store("rc-ambiguous.sqlite3");
+        let id = store.reset_credit_open().unwrap();
+        store.reset_credit_settle(&id, "ambiguous").unwrap();
+        // Recovery reuses the SAME operationId so the upstream idempotency
+        // key answers already_redeemed instead of double-spending.
+        assert_eq!(store.reset_credit_open().unwrap(), id);
+        store.reset_credit_settle(&id, "settled").unwrap();
+        assert_ne!(store.reset_credit_open().unwrap(), id);
+    }
+
+    #[test]
+    fn reset_credit_sweep_abandons_only_stale_pending_rows() {
+        let (_guard, store) = fresh_store("rc-sweep.sqlite3");
+        let stale = store.reset_credit_open().unwrap();
+        store.reset_credit_settle(&stale, "settled").unwrap();
+        // Re-open as pending, then backdate it past the sweep horizon.
+        let backdated = store.reset_credit_open().unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE reset_credit_operations SET opened_at = ? WHERE id = ?",
+                rusqlite::params![
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs() as i64
+                        - 120,
+                    backdated
+                ],
+            )
+            .unwrap();
+        let recent = store.reset_credit_open().unwrap();
+        assert_eq!(
+            recent, backdated,
+            "the backdated pending row is reused, not swept"
+        );
+
+        let swept = store.sweep_abandoned_reset_credits().unwrap();
+        assert_eq!(swept, 1);
+        // After the sweep the stale row is abandoned: a new open proceeds.
+        let fresh = store.reset_credit_open().unwrap();
+        assert_ne!(fresh, backdated);
+        // The settled row was never touched.
+        let status = store
+            .connection
+            .query_row(
+                "SELECT status FROM reset_credit_operations WHERE id = ?",
+                rusqlite::params![stale],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        assert_eq!(status, "settled");
     }
 
     mod tempdir_guard {

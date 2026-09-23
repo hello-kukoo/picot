@@ -15,7 +15,12 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createAgentSession, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+  createAgentSession,
+  ModelRuntime,
+  readStoredCredential,
+  SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import {
   buildModelsJsonProviderEntry,
   detectProviderProtocol,
@@ -46,6 +51,13 @@ import {
 import { buildPackageSkillInventory, mutatePackageSkillEnabled } from "./package-skill-inventory";
 import { writePasteOffloadFile } from "./paste-offload";
 import { createPiOAuthLoginAdapter } from "./pi-oauth-login-adapter";
+import {
+  consumeCodexResetCredit,
+  createQuotaProbeCache,
+  inspectCodexResetCredits,
+  type ProviderInstance,
+  providersOfInterest,
+} from "./provider-quota.ts";
 import { generateTitleForSession } from "./session-title";
 import {
   buildSkillInventory,
@@ -1076,6 +1088,82 @@ async function removeStoredApiKey(
 
 // Dispatch a single Configuration operation. `ctx` is the extension command
 // context; `ctx.modelRegistry` provides live provider/model/auth access.
+// ─── Provider quota surface (spec 2026-09-22) ──────────────────────────────
+
+const quotaProbeCache = createQuotaProbeCache();
+
+function readModelsJsonProviders(): Record<string, { baseUrl?: string; apiKey?: string }> {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(MODELS_CONFIG_PATH, "utf8")) as {
+      providers?: Record<string, Record<string, unknown>>;
+    };
+    const out: Record<string, { baseUrl?: string; apiKey?: string }> = {};
+    for (const [id, entry] of Object.entries(parsed?.providers ?? {})) {
+      out[id] = {
+        baseUrl: typeof entry?.baseUrl === "string" ? entry.baseUrl : undefined,
+        apiKey: typeof entry?.apiKey === "string" ? entry.apiKey : undefined,
+      };
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** Catalog (providerId, baseUrl) pairs — deduped, first sighting wins. */
+function catalogProviderPairs(
+  registry: CatalogRegistry,
+): Array<{ providerId: string; baseUrl?: string }> {
+  const seen = new Map<string, { providerId: string; baseUrl?: string }>();
+  for (const model of registry.getAll() as Array<Record<string, unknown>>) {
+    const providerId = typeof model?.provider === "string" ? model.provider : "";
+    if (!providerId || seen.has(providerId)) continue;
+    const baseUrl = typeof model?.baseUrl === "string" ? model.baseUrl : undefined;
+    seen.set(providerId, { providerId, baseUrl });
+  }
+  return [...seen.values()];
+}
+
+async function resolveQuotaInstance(
+  providerId: string,
+  baseUrl: string | undefined,
+  modelsJsonProviders: Record<string, { apiKey?: string }>,
+): Promise<ProviderInstance | null> {
+  if (providerId === "openai-codex") {
+    // OAuth: pi owns refresh; a failing refresh reports needs_login.
+    const runtime = await ModelRuntime.create();
+    try {
+      const auth = await runtime.getAuth(providerId);
+      const header =
+        (auth?.auth?.headers as Record<string, string> | undefined)?.Authorization ??
+        (auth?.auth?.headers as Record<string, string> | undefined)?.authorization;
+      const accessToken =
+        (typeof auth?.auth?.apiKey === "string" && auth.auth.apiKey) ||
+        (header?.startsWith("Bearer ") ? header.slice(7) : undefined) ||
+        undefined;
+      if (!accessToken) return null;
+      const stored = readStoredCredential(providerId) as
+        | { access?: string; accountId?: unknown }
+        | undefined;
+      const accountId = typeof stored?.accountId === "string" ? stored.accountId : undefined;
+      return {
+        providerId,
+        baseUrl: baseUrl ?? "https://chatgpt.com",
+        accessToken,
+        accountId,
+      };
+    } catch {
+      return null;
+    }
+  }
+  // api-key providers: auth.json key, else a models.json custom entry.
+  const stored = readStoredCredential(providerId) as { key?: string } | undefined;
+  const apiKey =
+    (typeof stored?.key === "string" && stored.key) || modelsJsonProviders[providerId]?.apiKey;
+  if (!apiKey) return null;
+  return { providerId, baseUrl: baseUrl ?? "", apiKey };
+}
+
 export async function handlePicotConfig(
   op: string,
   params: Record<string, unknown>,
@@ -1259,6 +1347,61 @@ export async function handlePicotConfig(
       case "list_model_catalog": {
         const catalog = await loadModelCatalog(requireRegistry(), preferences);
         return { ok: true, data: catalog };
+      }
+
+      case "provider_quota_report": {
+        const force = params.force === true;
+        const registryReady = requireRegistry();
+        const modelsJsonProviders = readModelsJsonProviders();
+        const picked = providersOfInterest({
+          catalogProviders: catalogProviderPairs(registryReady),
+          modelsJsonProviders,
+        });
+        const reports = [];
+        for (const { providerId, spec } of picked) {
+          const baseUrl =
+            catalogProviderPairs(registryReady).find((pair) => pair.providerId === providerId)
+              ?.baseUrl ?? modelsJsonProviders[providerId]?.baseUrl;
+          const instance = await resolveQuotaInstance(providerId, baseUrl, modelsJsonProviders);
+          reports.push(await quotaProbeCache.report(providerId, spec, instance, force));
+        }
+        return { ok: true, data: { reports } };
+      }
+
+      case "codex_reset_credits_inspect": {
+        const instance = await resolveQuotaInstance("openai-codex", "https://chatgpt.com", {});
+        if (!instance?.accessToken) {
+          return { ok: true, data: { failure: "needs_login", credits: [] } };
+        }
+        const result = await inspectCodexResetCredits({
+          accessToken: instance.accessToken,
+          accountId: instance.accountId,
+        });
+        return { ok: true, data: { credits: result?.credits ?? [] } };
+      }
+
+      case "codex_reset_credits_consume": {
+        const operationId = asString(params.operationId);
+        if (!operationId) throw new Error("operationId is required");
+        const instance = await resolveQuotaInstance("openai-codex", "https://chatgpt.com", {});
+        if (!instance?.accessToken) {
+          return { ok: true, data: { failure: "needs_login" } };
+        }
+        const result = await consumeCodexResetCredit({
+          operationId,
+          accessToken: instance.accessToken,
+          accountId: instance.accountId,
+        });
+        if (!result.ok) {
+          const failure = (result as { ok: false; error: string }).error;
+          return { ok: true, data: { failure } };
+        }
+        // The consume changed the upstream quota; force a fresh probe.
+        quotaProbeCache.invalidate("openai-codex");
+        return {
+          ok: true,
+          data: { code: result.code, availableCount: result.availableCount ?? null },
+        };
       }
 
       case "set_model_visibility": {

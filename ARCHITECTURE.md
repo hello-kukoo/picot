@@ -248,7 +248,6 @@ Pi 以 `~/.pi/agent/trust.json`（键为 canonical 路径，值为 true/false/nu
 - **写入协议**：复刻 Pi 的 proper-lockfile 语义——`create_dir`（原子 EEXIST，绝不可用 `create_dir_all`）在 `trust.json.lock` 目录上获取锁，10s mtime 过期阈值，20ms 重试、上限 750 次，`remove_dir` 释放；read-modify-write 保留其他条目，键排序 + 2 空格 JSON + 尾随换行与 Pi 的 `writeTrustFile` 逐字节一致，tmp+rename 原子落盘。
 - **查询语义**：`skill_scope_context` 改用 `is_project_trusted`，对齐 Pi 的 `findNearestTrustEntry`——从项目根向上找最近的 true/false 条目（更近的显式 `false` 覆盖受信父目录），null/缺失继续上溯，无条目则不信任。
 
-## 兼容路由（P8 删除候选）
 ## Office 文件原生预览（anydoc）
 
 选中候选 Office 文件（后缀 `doc/docx/rtf/odt/ppt/pptx/odp/xls/xlsx/ods` 共十种）时，`file_read` 走内嵌 `anydoc` crate（精确 pin `=0.2.4`，MIT）的原生转换分支，产物为只读 Markdown（`previewStatus:"ready"` + `renderAs:"markdown"`）。安全与资源边界：
@@ -262,6 +261,16 @@ Pi 以 `~/.pi/agent/trust.json`（键为 canonical 路径，值为 true/false/nu
 - **fail-closed**：候选后缀但内容检测为 PDF → `conversionFailed`，绝不改道 PDF 原始路由；检测出的非 Office 格式（EPUB/CSV 等）同样拒绝。
 - **图片策略**：转换文档的 Markdown 渲染只接受 base64 栅格 data URI（png/jpeg/gif/webp），其余来源（SVG/远程/相对/未知 MIME）替换为本地化文本 `files.preview.converted.remoteImageHidden`。
 - **无网络/无 OCR**：不调用 AnyDoc 托管 OCR/API key/任何网络路径；PDF 留在既有 PDF 预览路由。
+
+## Provider 配额探针（Usage → 提供方配额）
+
+`extensions/provider-quota.ts` 在 pi 进程内对已配置 provider 的用量端点做只读探针（spec 2026-09-22，端点语义照抄 opencodex 生产实现）。边界：
+
+- **按 canonical baseUrl 选择，不按 provider id**：探针注册表只认固定 host 集合（chatgpt.com / api.z.ai / open.bigmodel.cn / opencode.ai / api.deepseek.com / minimax.io / minimaxi.com / moonshot.ai / moonshot.cn / ollama.com）；baseUrl 不匹配不发包（防把 key 发到仿冒 host）。
+- **凭据不出 pi 进程**：api-key 走 `readStoredCredential`；models.json 自定义 provider 读条目 `apiKey`；openai-codex 走 `ModelRuntime.getAuth`（OAuth 刷新归 pi，失败报 `needs_login`）+ `readStoredCredential` 补 accountId。返回 WebView 的只有归一化配额数字与封闭错误码。
+- **探针纪律**：`redirect:"error"`、8s 超时、256KB 响应体上限；瞬时失败（429/5xx/超时）保留 last-good 行 30 分钟，`response_unusable` 丢弃旧行；进程内缓存 TTL 5 分钟 + in-flight 去重，`force` 跳过。
+- **Codex 重置额度双通道（不可逆操作）**：WebView → Rust 账本 `reset_credit_open`（sqlite 记 pending，operationId 即上游幂等键 `redeem_request_id`，未决行复用不开新单）→ pi 内 `consume` POST → Rust `reset_credit_settle`（settled/ambiguous）。启动清扫 60s 前的 pending 行为 abandoned；ambiguous 行下次重开对话框时先 `inspect` 对比 `available_count` 再决定重放同 id。账本表 `reset_credit_operations` 为 public-owned、existence-based 建表（session_bucket 先例，不动 Corp 拥有的版本戳）。
+- **owner 门禁**：`reset_credit_open/settle` 与 `cost_dashboard` 同款——已认证 desktop owner、landing 可见。
 
 ## 兼容路由（P8 删除候选）
 

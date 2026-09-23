@@ -118,6 +118,22 @@ pub struct HostDataPlane {
 }
 
 impl HostDataPlane {
+    /// Codex reset-credit ledger passthrough (spec 2026-09-22): the ledger
+    /// lives in the shared metadata store; callers get the raw String error.
+    pub fn reset_credit_open(&self) -> Result<String, String> {
+        self.metadata
+            .lock()
+            .map_err(|_| "Picot metadata lock poisoned".to_owned())?
+            .reset_credit_open()
+    }
+
+    pub fn reset_credit_settle(&self, operation_id: &str, status: &str) -> Result<(), String> {
+        self.metadata
+            .lock()
+            .map_err(|_| "Picot metadata lock poisoned".to_owned())?
+            .reset_credit_settle(operation_id, status)
+    }
+
     pub fn new(metadata: crate::metadata_store::SharedMetadataStore) -> Self {
         Self {
             metadata,

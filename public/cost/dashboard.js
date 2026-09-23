@@ -69,6 +69,8 @@ function renderShell(target) {
               </div>
             </div>
 
+            <div class="infobar-panel is-active" id="usage-provider-quota"></div>
+
             <div class="infobar-right-col">
               <div class="infobar-panel is-active" id="usage-tool-cost">
                 <div class="infobar-cost-block">
@@ -172,6 +174,11 @@ class CostDashboard extends HTMLElement {
     this._rangeChips = Array.from(this._root.querySelectorAll("[data-range-chip]"));
     this._bindEvents();
     this._syncRangeChips();
+    // The provider-quota section inside this shadow root re-renders itself
+    // on this event (composed: crosses the shadow boundary).
+    this.dispatchEvent(
+      new CustomEvent("cost-dashboard-rendered", { bubbles: true, composed: true }),
+    );
   }
 
   _renderForLocale() {

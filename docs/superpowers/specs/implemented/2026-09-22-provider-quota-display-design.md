@@ -1,6 +1,8 @@
 # Picot 提供方配额展示设计（Settings → 用量）
 
-**状态：** 提案（待评审）
+**状态：** Implemented — 2026-09-22（7 provider 探针 + Codex 重置额度双通道 + 用量页区块 + i18n 四语言；端到端真实凭据手测清单留待 Dr. Lin 走查）
+
+实施记录：`extensions/provider-quota.ts`（解析器纯函数 + baseUrl 守卫注册表 + TTL 缓存/去重 + consume 幂等；WHAM 窗口按 primary/secondary/tertiary 角色映射，兼容 `primary`/`primary_window` 两种线格式）+ `picot-config.ts` 三 op（provider_quota_report / codex_reset_credits_inspect / codex_reset_credits_consume；codex 凭据经 getAuth + readStoredCredential 补 accountId）+ Rust 账本（`reset_credit_operations` existence-based 建表、open 复用未决行、settle settled/ambiguous、启动 60s 清扫 abandoned；数据面 op 与 cost_dashboard 同款 owner 门禁）+ `public/cost/provider-quota-panel.js`（纯 DOM 构造渲染，shadow root 内区块，dashboard rendered 事件驱动）+ transport 双 op + i18n `cost.quota.*` ×4。偏差：spec 的 metadata v7 迁移改为 existence-based 建表（public 只盖 v3 戳、Corp 拥有 v4–v6，session_bucket 先例）；`reset_credit_settle` 的 wire 参数为 `{operationId, ambiguous}`（code 不落库，表结构与 spec 逐列一致）。
 **日期：** 2026-09-22
 **参考实现：** opencodex `src/providers/quota*`（借用其 vendor 探针端点与数据模型，不引入代码依赖）
 

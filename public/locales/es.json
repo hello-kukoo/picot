@@ -1223,6 +1223,30 @@
       "friday": "Vie",
       "less": "Menos",
       "more": "Más"
+    },
+    "quota": {
+      "sectionTitle": "Cuota del proveedor",
+      "refresh": "Actualizar",
+      "refreshing": "Actualizando…",
+      "fiveHour": "Ventana de 5h",
+      "weekly": "Semanal",
+      "monthly": "Mensual",
+      "needsLogin": "Requiere volver a iniciar sesión",
+      "unavailable": "No disponible temporalmente",
+      "justNow": "ahora mismo",
+      "minutesAgo": "hace {n}m",
+      "hoursAgo": "hace {n}h",
+      "resetsInMinutes": "se restablece en {n}m",
+      "resetsInHours": "se restablece en {n}h",
+      "resetsInDays": "se restablece en {n}d",
+      "resetCredits": "Restablecer cuota (quedan {n})",
+      "toastUnavailable": "No se puede abrir la operación de restablecimiento ahora",
+      "toastUnknown": "Resultado desconocido — reabre el diálogo para verificar",
+      "toastInFlight": "Ya hay una operación en curso",
+      "toastNeedsLogin": "Inicia sesión de nuevo antes de restablecer",
+      "toastResetDone": "Cuota restablecida",
+      "toastNothingToReset": "Nada que restablecer",
+      "toastNoCredit": "No quedan créditos de restablecimiento"
     }
   },
   "misc": {

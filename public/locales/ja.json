@@ -1223,6 +1223,30 @@
       "friday": "金",
       "less": "少ない",
       "more": "多い"
+    },
+    "quota": {
+      "sectionTitle": "プロバイダー使用量",
+      "refresh": "更新",
+      "refreshing": "更新中…",
+      "fiveHour": "5時間ウィンドウ",
+      "weekly": "週次",
+      "monthly": "月次",
+      "needsLogin": "再ログインが必要です",
+      "unavailable": "一時的に利用できません",
+      "justNow": "たった今",
+      "minutesAgo": "{n}分前",
+      "hoursAgo": "{n}時間前",
+      "resetsInMinutes": "{n}分後にリセット",
+      "resetsInHours": "{n}時間後にリセット",
+      "resetsInDays": "{n}日後にリセット",
+      "resetCredits": "リセット（残り {n} 回）",
+      "toastUnavailable": "現在リセット操作を開けません",
+      "toastUnknown": "結果不明 — ダイアログを開き直して確認してください",
+      "toastInFlight": "操作が既に進行中です",
+      "toastNeedsLogin": "リセット前に再ログインしてください",
+      "toastResetDone": "クォータをリセットしました",
+      "toastNothingToReset": "リセット対象がありません",
+      "toastNoCredit": "リセット回数が残っていません"
     }
   },
   "misc": {
