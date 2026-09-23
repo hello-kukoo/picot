@@ -111,8 +111,25 @@ test("a picked element opens a dialog that names its docPath", async () => {
   renderer.destroy();
 });
 
-test("the native pane hides while the dialog is open and returns after", async () => {
+test("the composer shortens the pane instead of hiding the page", async () => {
   vi.useFakeTimers();
+  const box = (width, height) => ({
+    x: 0,
+    y: 100,
+    width,
+    height,
+    top: 100,
+    bottom: 100 + height,
+    left: 0,
+    right: width,
+  });
+  // jsdom has no layout: give the pane target and the composer real boxes.
+  const originalRect = Element.prototype.getBoundingClientRect;
+  Element.prototype.getBoundingClientRect = function () {
+    if (this.classList?.contains("browser-pane-content")) return box(400, 600);
+    if (this.classList?.contains("browser-annotation-card")) return box(360, 180);
+    return originalRect.call(this);
+  };
   const transport = makeTransport();
   const container = document.createElement("div");
   document.body.append(container);
@@ -120,31 +137,37 @@ test("the native pane hides while the dialog is open and returns after", async (
   renderer.mount(container);
   await vi.advanceTimersByTimeAsync(1);
   const paneKey = "w:browser:/w/a.docx";
-  expect(transport.browserPaneSetVisible).toHaveBeenLastCalledWith({
-    paneId: paneKey,
-    visible: true,
-  });
 
   container.querySelector(".browser-pane-action").click();
   await vi.advanceTimersByTimeAsync(1);
   const anchor = document.createElement("div");
-  anchor.setAttribute("data-path", "/slide[1]/shape[@id=6]");
+  anchor.setAttribute("data-path", "/slide[2]/shape[@id=7]");
   document.body.append(anchor);
   anchor.dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true }));
   await vi.advanceTimersByTimeAsync(300);
 
-  // A host-DOM modal cannot paint over the OS-level child webview, so the
-  // pane must be hidden for as long as the dialog is up.
-  expect(transport.browserPaneSetVisible).toHaveBeenLastCalledWith({
+  // The page stays visible — the pane only gives up the composer's height.
+  expect(transport.browserPaneSetVisible).not.toHaveBeenCalledWith({
     paneId: paneKey,
     visible: false,
+  });
+  expect(transport.browserPaneSetRect).toHaveBeenLastCalledWith({
+    paneId: paneKey,
+    x: 0,
+    y: 100,
+    width: 400,
+    height: 420,
   });
 
   document.querySelector(".file-preview-dialog-button.primary").click();
   await vi.advanceTimersByTimeAsync(1);
-  expect(transport.browserPaneSetVisible).toHaveBeenLastCalledWith({
+  expect(transport.browserPaneSetRect).toHaveBeenLastCalledWith({
     paneId: paneKey,
-    visible: true,
+    x: 0,
+    y: 100,
+    width: 400,
+    height: 600,
   });
   renderer.destroy();
+  Element.prototype.getBoundingClientRect = originalRect;
 });

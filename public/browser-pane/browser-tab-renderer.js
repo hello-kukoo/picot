@@ -14,6 +14,7 @@ import {
   navigatePane,
   openPane,
   paneVisible,
+  setPaneBottomInset,
   showPane,
 } from "./browser-pane-manager.js";
 import { createElementSelectorController, createPaneWebviewAdapter } from "./element-selector.js";
@@ -95,21 +96,34 @@ export function createBrowserTabRenderer({ tab, transport }) {
           return;
         }
         const selection = outcome.selection;
-        // The dialog is host DOM, while the pane is an OS-level child webview
-        // that always paints above it — without hiding the pane the dialog is
-        // created but invisible behind the page.
-        showPane(tab.id, false);
+        // The pane is an OS-level child webview that always paints above host
+        // DOM, so the composer takes space by shortening the pane rather than
+        // covering it — the annotated page stays visible while typing.
+        let cardObserver = null;
+        const releaseComposerSpace = () => {
+          cardObserver?.disconnect();
+          cardObserver = null;
+          void setPaneBottomInset(tab.id, 0).catch(() => {});
+        };
         let comment = null;
         try {
           comment = await openAnnotationDialog({
             docPath: selection.docPath,
             url: selection.url,
             container: contentEl,
+            onMount: (card) => {
+              const apply = () =>
+                void setPaneBottomInset(tab.id, card.getBoundingClientRect().height).catch(
+                  () => {},
+                );
+              apply();
+              // The textarea is user-resizable; keep the pane in step.
+              cardObserver = new ResizeObserver(apply);
+              cardObserver.observe(card);
+            },
           });
         } finally {
-          // Restore only while this renderer still owns the pane: re-showing
-          // after a detach would float the webview over another tab.
-          if (attached) showPane(tab.id, true);
+          releaseComposerSpace();
         }
         if (comment === null) return;
         const block =
@@ -205,6 +219,7 @@ export function createBrowserTabRenderer({ tab, transport }) {
     detach() {
       // Tab switch: keep the native webview alive, just hide it.
       attached = false;
+      void setPaneBottomInset(tab.id, 0).catch(() => {});
       showPane(tab.id, false);
       selector.cancel();
       root?.remove();
@@ -214,6 +229,7 @@ export function createBrowserTabRenderer({ tab, transport }) {
       if (destroyed) return;
       destroyed = true;
       attached = false;
+      void setPaneBottomInset(tab.id, 0).catch(() => {});
       selector.cancel();
       closePane(tab.id);
       root?.remove();

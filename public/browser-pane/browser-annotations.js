@@ -72,7 +72,7 @@ export function formatOfficeElementAttachment(selection, comment, file) {
  * It mounts inline in `container` (the pane's content area) rather than as a
  * window-wide modal: the page is hidden while the box is up, so the comment
  * takes the page's place instead of dimming everything else. */
-export function openAnnotationDialog({ docPath, url, container } = {}) {
+export function openAnnotationDialog({ docPath, url, container, onMount } = {}) {
   return new Promise((resolve) => {
     const dialog = document.createElement("div");
     dialog.className = "file-preview-dialog browser-annotation-card";
@@ -101,6 +101,9 @@ export function openAnnotationDialog({ docPath, url, container } = {}) {
     actions.append(cancel, confirm);
     dialog.append(heading, meta, textarea, actions);
     (container ?? document.body).appendChild(dialog);
+    // Hand the mounted card to the caller: the pane reserves space from the
+    // card's measured height, so it must exist in the DOM first.
+    onMount?.(dialog);
 
     let settled = false;
     const finish = (value) => {

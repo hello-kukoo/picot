@@ -10526,6 +10526,8 @@ button.skills-group-status:disabled {
 /* The native child webview floats above this rect; keep it clear of any
  * in-DOM chrome so the two stay visually aligned. */
 .browser-pane-content {
+  display: flex;
+  flex-direction: column;
   position: relative;
   flex: 1;
   min-height: 0;
@@ -10556,7 +10558,8 @@ button.skills-group-status:disabled {
 .browser-annotation-card {
   width: auto;
   max-width: min(560px, 100%);
-  margin: var(--space-3);
+  /* Pushed to the bottom: the native pane keeps the space above it. */
+  margin: var(--space-3) auto auto;
 }
 
 .browser-annotation-meta {
