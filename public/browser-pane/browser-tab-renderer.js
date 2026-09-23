@@ -95,10 +95,21 @@ export function createBrowserTabRenderer({ tab, transport }) {
           return;
         }
         const selection = outcome.selection;
-        const comment = await openAnnotationDialog({
-          docPath: selection.docPath,
-          url: selection.url,
-        });
+        // The dialog is host DOM, while the pane is an OS-level child webview
+        // that always paints above it — without hiding the pane the dialog is
+        // created but invisible behind the page.
+        showPane(tab.id, false);
+        let comment = null;
+        try {
+          comment = await openAnnotationDialog({
+            docPath: selection.docPath,
+            url: selection.url,
+          });
+        } finally {
+          // Restore only while this renderer still owns the pane: re-showing
+          // after a detach would float the webview over another tab.
+          if (attached) showPane(tab.id, true);
+        }
         if (comment === null) return;
         const block =
           selection.docPath && isOfficeTab(tab)
