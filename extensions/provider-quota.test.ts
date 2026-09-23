@@ -19,6 +19,23 @@ import {
   QUOTA_CACHE_TTL_MS,
 } from "./provider-quota.ts";
 
+/** A response stand-in carrying a real byte stream, so the probe's
+ * streaming body cap is exercised instead of bypassed by the mock. */
+function streamResponse(text: string, ok = true, status = 200) {
+  const bytes = new TextEncoder().encode(text);
+  return {
+    ok,
+    status,
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    }),
+    text: async () => text,
+  } as unknown as Response;
+}
+
 describe("parseWhamUsage", () => {
   test("maps weekly/5h/monthly windows and reset credits", () => {
     const json = {
@@ -161,12 +178,20 @@ describe("createQuotaProbeCache", () => {
   };
 
   function jsonResponse(body: unknown, ok = true, status = 200) {
-    return {
-      ok,
-      status,
-      text: async () => JSON.stringify(body),
-    } as unknown as Response;
+    return streamResponse(JSON.stringify(body), ok, status);
   }
+
+  test("a body past the cap fails closed while streaming", async () => {
+    // 300 KiB: past the 256 KiB cap. The cap must trip during the read, not
+    // after the whole body has already been buffered in memory.
+    const oversized = `{"pad":"${"x".repeat(300 * 1024)}"}`;
+    const fetchImpl = vi.fn(async () => streamResponse(oversized));
+    const cache = createQuotaProbeCache({ fetchImpl, now: () => 1_000_000 });
+    const instance = { providerId: "p", baseUrl: "https://example.test", apiKey: "k" };
+    const report = await cache.report("p", spec, instance);
+    expect(report.failure).toBe("response_unusable");
+    expect(report.provider).toBe("p");
+  });
 
   test("serves from cache within TTL and refetches after it", async () => {
     let clock = 1_000_000;
@@ -250,10 +275,6 @@ describe("consumeCodexResetCredit", () => {
   });
 
   function jsonResponse200(body: unknown): Response {
-    return {
-      ok: true,
-      status: 200,
-      json: async () => body,
-    } as unknown as Response;
+    return streamResponse(JSON.stringify(body));
   }
 });

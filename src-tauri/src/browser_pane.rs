@@ -11,13 +11,44 @@ use tauri::{
 };
 
 /// Whether a URL may load inside a browser pane. Only http(s) is allowed and
-/// the origin must never be the Picot host origin — an external page jumping
-/// back to host origin must not reach the owner WebView's context.
-pub fn pane_url_allowed(url: &Url, host_origin: &str) -> bool {
+/// an external page must never reach the Picot host under ANY of its local
+/// aliases — jumping back to host origin must not reach the owner WebView's
+/// context.
+pub fn pane_url_allowed(url: &Url, host_origin: &str, host_port: u16) -> bool {
     if url.scheme() != "http" && url.scheme() != "https" {
         return false;
     }
-    url.origin().ascii_serialization() != host_origin
+    if url.origin().ascii_serialization() == host_origin {
+        return false;
+    }
+    !resolves_to_host(url, host_port)
+}
+
+/// The host answers on several names: the serialized-origin comparison alone
+/// misses `http://localhost:<port>/`, `http://0.0.0.0:<port>/`, and the LAN
+/// address when LAN access binds a route — all reach the same server. Deny by
+/// (local alias, port) instead. A different machine's private address sharing
+/// the host's ephemeral port is indistinguishable from the host's own LAN
+/// alias, so it is denied too: a trust boundary errs closed.
+fn resolves_to_host(url: &Url, host_port: u16) -> bool {
+    if host_port == 0 || url.port_or_known_default() != Some(host_port) {
+        return false;
+    }
+    url.host_str().is_some_and(is_local_alias)
+}
+
+fn is_local_alias(host: &str) -> bool {
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    if bare.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    match bare.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => {
+            v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+        }
+        Ok(std::net::IpAddr::V6(v6)) => v6.is_loopback() || v6.is_unspecified(),
+        Err(_) => false,
+    }
 }
 
 /// Tauri-managed state so exit/window-destroy hooks can reach the runtime.
@@ -26,6 +57,10 @@ pub struct BrowserPaneState(pub std::sync::Arc<BrowserPaneRuntime>);
 pub struct BrowserPaneRuntime {
     app: AppHandle,
     host_origin: String,
+    host_port: u16,
+    /// Keyed by (window label, pane id): the same file opened from two
+    /// workspace windows is two panes, and webview labels must stay unique
+    /// app-wide.
     panes: Mutex<HashMap<String, Webview>>,
 }
 
@@ -39,9 +74,15 @@ pub struct PaneRect {
 
 impl BrowserPaneRuntime {
     pub fn new(app: AppHandle, host_origin: &str) -> Self {
+        let host_port = host_origin
+            .parse::<Url>()
+            .ok()
+            .and_then(|url| url.port_or_known_default())
+            .unwrap_or(0);
         Self {
             app,
             host_origin: host_origin.to_string(),
+            host_port,
             panes: Mutex::new(HashMap::new()),
         }
     }
@@ -57,7 +98,7 @@ impl BrowserPaneRuntime {
         rect: PaneRect,
     ) -> Result<(), String> {
         let parsed: Url = url.parse().map_err(|e| format!("invalid URL: {e}"))?;
-        if !pane_url_allowed(&parsed, &self.host_origin) {
+        if !pane_url_allowed(&parsed, &self.host_origin, self.host_port) {
             return Err("url_not_allowed".to_string());
         }
         let window = self
@@ -68,11 +109,12 @@ impl BrowserPaneRuntime {
             return Err("pane_already_exists".to_string());
         }
         let host_origin = self.host_origin.clone();
+        let host_port = self.host_port;
         let builder = WebviewBuilder::new(
             format!("browser-pane-{pane_id}"),
             WebviewUrl::External(parsed),
         )
-        .on_navigation(move |url| pane_url_allowed(url, &host_origin))
+        .on_navigation(move |url| pane_url_allowed(url, &host_origin, host_port))
         .on_new_window(|_url, _features| NewWindowResponse::Deny);
         let webview = window
             .add_child(
@@ -120,7 +162,7 @@ impl BrowserPaneRuntime {
 
     pub fn navigate(&self, pane_id: &str, url: &str) -> Result<(), String> {
         let parsed: Url = url.parse().map_err(|e| format!("invalid URL: {e}"))?;
-        if !pane_url_allowed(&parsed, &self.host_origin) {
+        if !pane_url_allowed(&parsed, &self.host_origin, self.host_port) {
             return Err("url_not_allowed".to_string());
         }
         let panes = self.panes.lock().unwrap();
@@ -208,32 +250,77 @@ mod tests {
         s.parse().unwrap()
     }
 
+    const HOST_ORIGIN: &str = "http://127.0.0.1:41000";
+    const HOST_PORT: u16 = 41000;
+
+    fn allowed(target: &str) -> bool {
+        pane_url_allowed(&url(target), HOST_ORIGIN, HOST_PORT)
+    }
+
     #[test]
     fn allows_http_https_except_host_origin() {
-        let host = "http://127.0.0.1:41000";
-        assert!(pane_url_allowed(&url("http://localhost:5173/"), host));
-        assert!(pane_url_allowed(&url("https://example.com/page"), host));
-        assert!(!pane_url_allowed(&url("http://127.0.0.1:41000/app"), host));
+        assert!(allowed("http://localhost:5173/"));
+        assert!(allowed("https://example.com/page"));
+        assert!(!allowed("http://127.0.0.1:41000/app"));
         // userinfo is not a host: this URL actually loads evil.com, which is
         // an ordinary external page, not a jump back to the host origin.
-        assert!(pane_url_allowed(
-            &url("http://127.0.0.1:41000@evil.com/"),
-            host
-        ));
+        assert!(allowed("http://127.0.0.1:41000@evil.com/"));
     }
 
     #[test]
     fn denies_non_http_schemes() {
-        let host = "http://127.0.0.1:41000";
-        assert!(!pane_url_allowed(&url("file:///etc/passwd"), host));
-        assert!(!pane_url_allowed(&url("tauri://localhost/x"), host));
-        assert!(!pane_url_allowed(&url("about:blank"), host));
+        assert!(!allowed("file:///etc/passwd"));
+        assert!(!allowed("tauri://localhost/x"));
+        assert!(!allowed("about:blank"));
     }
 
     #[test]
     fn different_port_on_same_host_is_allowed() {
-        let host = "http://127.0.0.1:41000";
         // officecli watch servers bind their own loopback ports
-        assert!(pane_url_allowed(&url("http://127.0.0.1:41001/"), host));
+        assert!(allowed("http://127.0.0.1:41001/"));
+        assert!(allowed("http://localhost:41001/"));
+    }
+
+    #[test]
+    fn denies_every_local_alias_of_the_host_port() {
+        // The serialized-origin comparison alone misses every one of these,
+        // yet each reaches the host server.
+        for alias in [
+            "http://localhost:41000/",
+            "http://127.0.0.1:41000/",
+            "http://127.0.0.2:41000/x",
+            "http://0.0.0.0:41000/",
+            "http://[::1]:41000/",
+            "http://192.168.1.10:41000/",
+            "http://10.0.0.5:41000/",
+            "http://172.16.3.4:41000/",
+            "http://169.254.1.1:41000/",
+        ] {
+            assert!(!allowed(alias), "{alias} must not reach the host");
+        }
+    }
+
+    #[test]
+    fn private_addresses_on_other_ports_stay_allowed() {
+        // A LAN dev server stays a legitimate target; only the host's own
+        // port is denied on local aliases.
+        assert!(allowed("http://192.168.1.50:5173/"));
+        assert!(allowed("http://10.0.0.9:8080/"));
+    }
+
+    #[test]
+    fn unknown_host_port_leaves_origin_comparison_only() {
+        // port 0 means the origin did not parse; the exact-origin deny still
+        // holds and unrelated hosts stay reachable.
+        assert!(!pane_url_allowed(
+            &url("http://127.0.0.1:41000/x"),
+            HOST_ORIGIN,
+            0
+        ));
+        assert!(pane_url_allowed(
+            &url("http://127.0.0.1:41001/"),
+            HOST_ORIGIN,
+            0
+        ));
     }
 }

@@ -21,6 +21,16 @@ struct WatchEntry {
     port: u16,
 }
 
+impl Drop for WatchEntry {
+    /// Every path that drops an entry — an overwritten insert, `status`
+    /// reaping a dead server, `stop`, `stop_all`, or the runtime itself —
+    /// must terminate and reap the child; otherwise an orphaned officecli
+    /// keeps its port for the life of the app.
+    fn drop(&mut self) {
+        terminate_child(&mut self.child);
+    }
+}
+
 /// Parse the `Watch: http://localhost:PORT` line from `officecli watch` stdout.
 pub fn parse_watch_url(line: &str) -> Option<u16> {
     let rest = line.split("Watch:").nth(1)?;
@@ -97,12 +107,19 @@ impl OfficecliWatchRuntime {
             let _ = child.wait();
             return Err("watch_startup_timeout".to_string());
         }
-        let url = format!("http://127.0.0.1:{port}");
-        self.watches
-            .lock()
-            .unwrap()
-            .insert(canonical, WatchEntry { child, port });
-        Ok(url)
+        let mut watches = self.watches.lock().unwrap();
+        // Re-check under the lock: a concurrent start may have established the
+        // watch while this one was spawning (up to the startup timeout).
+        // Overwriting would silently orphan the earlier process.
+        let established = watches
+            .get_mut(&canonical)
+            .and_then(|entry| try_wait_alive(&mut entry.child).then_some(entry.port));
+        if let Some(existing_port) = established {
+            drop(child);
+            return Ok(format!("http://127.0.0.1:{existing_port}"));
+        }
+        watches.insert(canonical, WatchEntry { child, port });
+        Ok(format!("http://127.0.0.1:{port}"))
     }
 
     /// Current watch URL for `file`, or None when no live watch exists.
@@ -121,8 +138,9 @@ impl OfficecliWatchRuntime {
         let canonical = std::fs::canonicalize(file).map_err(|e| format!("file not found: {e}"))?;
         let mut watches = self.watches.lock().unwrap();
         match watches.remove(&canonical) {
-            Some(mut entry) => {
-                terminate_child(&mut entry.child);
+            // Dropping the entry terminates and reaps the child.
+            Some(entry) => {
+                drop(entry);
                 Ok(())
             }
             None => Err("watch_not_found".to_string()),
@@ -153,8 +171,8 @@ impl OfficecliWatchRuntime {
     /// Kill every watch (app exit): SIGTERM first, wait briefly, then kill.
     pub fn stop_all(&self) {
         let mut watches = self.watches.lock().unwrap();
-        for (_, mut entry) in watches.drain() {
-            terminate_child(&mut entry.child);
+        for (_, entry) in watches.drain() {
+            drop(entry);
         }
     }
 }

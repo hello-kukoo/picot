@@ -402,17 +402,19 @@ export function createQuotaProbeCache(deps: QuotaProbeDeps = {}) {
   async function fetchJson(url: string, init: RequestInit): Promise<unknown> {
     const response = await fetchImpl(url, {
       ...init,
-      redirect: "error",
+      // `manual` rather than `error`: a redirect is a blocked destination we
+      // can name, not an opaque transport failure miscoded as a timeout.
+      redirect: "manual",
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
+    if (response.status >= 300 && response.status < 400) {
+      throw Object.assign(new Error("redirect_blocked"), { code: "destination_blocked" });
+    }
     if (response.status === 429)
       throw Object.assign(new Error("rate_limited"), { code: "rate_limited" });
     if (!response.ok)
       throw Object.assign(new Error(`upstream_${response.status}`), { code: "upstream_error" });
-    const text = await response.text();
-    if (text.length > RESPONSE_BODY_CAP_BYTES) {
-      throw Object.assign(new Error("response_too_large"), { code: "response_unusable" });
-    }
+    const text = await readCappedText(response, RESPONSE_BODY_CAP_BYTES);
     try {
       return JSON.parse(text);
     } catch {
@@ -498,6 +500,42 @@ export function createQuotaProbeCache(deps: QuotaProbeDeps = {}) {
 
 // ─── Codex reset-credit consume (idempotency-keyed POST) ───────────────────
 
+/** Read a response body with a hard byte cap. `fetch` buffers the whole body
+ * for `text()`/`json()`, so the cap has to be enforced while streaming —
+ * otherwise a hostile or runaway endpoint exhausts memory before any length
+ * check can run. */
+async function readCappedText(response: Response, cap: number): Promise<string> {
+  const body = response.body;
+  if (!body) return "";
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value?.byteLength ?? 0;
+    if (total > cap) {
+      await reader.cancel().catch(() => {});
+      throw Object.assign(new Error("response_too_large"), { code: "response_unusable" });
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
+/** Capped JSON body: same discipline as the probe path, shared by the Codex
+ * reset-credit endpoints (whose responses are also upstream-controlled). */
+async function readCappedJson(response: Response, cap: number): Promise<unknown> {
+  const text = await readCappedText(response, cap);
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Malformed JSON keeps the closed failure code callers already handle.
+    throw Object.assign(new Error("bad_json"), { code: "response_unusable" });
+  }
+}
+
 const consumeInFlight = new Set<string>();
 
 export async function consumeCodexResetCredit(input: {
@@ -529,7 +567,9 @@ export async function consumeCodexResetCredit(input: {
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       },
     );
-    const json = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    const json = (await readCappedJson(response, RESPONSE_BODY_CAP_BYTES).catch(
+      () => null,
+    )) as Record<string, unknown> | null;
     if (!response.ok || !json || typeof json.code !== "string") {
       return { ok: false, error: "ambiguous" };
     }
@@ -563,7 +603,9 @@ export async function inspectCodexResetCredits(input: {
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       },
     );
-    const json = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    const json = (await readCappedJson(response, RESPONSE_BODY_CAP_BYTES).catch(
+      () => null,
+    )) as Record<string, unknown> | null;
     const credits = Array.isArray(json?.credits) ? json.credits : null;
     if (!credits) return null;
     return {

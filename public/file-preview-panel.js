@@ -292,8 +292,17 @@ export class FilePreviewPanel {
     this.autoSaveTimers.clear();
     this._abortAllTabLoads();
     this.loadTokens.clear();
+    // Panes die with the panel; the office watch servers must die too, or
+    // closing a workspace window leaves officecli processes (and their
+    // ports) alive for the rest of the app's life.
+    const stoppedWatches = new Set();
     for (const tab of this.state.getTabs()) {
-      if (tab.kind === "browser") closePane(tab.id);
+      if (tab.kind !== "browser") continue;
+      closePane(tab.id);
+      if (tab.filePath && tab.filePath !== tab.url && !stoppedWatches.has(tab.filePath)) {
+        stoppedWatches.add(tab.filePath);
+        this.transport?.officecliWatchStop?.({ file: tab.filePath }).catch(() => {});
+      }
     }
     this._destroyRenderer();
     this.activeDialogCancel?.();

@@ -13,9 +13,17 @@ const PANES = new Map();
  */
 export async function openPane({ paneId, url, container, transport }) {
   if (PANES.has(paneId)) return PANES.get(paneId);
-  const windowLabel = window.__TAURI__?.window?.getCurrentWindow?.()?.label ?? "";
+  const windowLabel = currentWindowLabel();
+  if (!windowLabel) {
+    // A missing label cannot address the native webview; failing loudly beats
+    // silently colliding with another window's pane key.
+    throw new Error("window_label_unavailable");
+  }
+  // Panes are keyed window-qualified host-side: two workspace windows may
+  // hold the same file path (and therefore the same tab id) at once.
   const entry = {
     paneId,
+    paneKey: `${windowLabel}:${paneId}`,
     container,
     transport,
     url,
@@ -27,21 +35,32 @@ export async function openPane({ paneId, url, container, transport }) {
   };
   PANES.set(paneId, entry);
   const rect = container.getBoundingClientRect();
-  await transport.browserPaneCreate({
-    paneId,
-    windowLabel,
-    url,
-    x: rect.x,
-    y: rect.y,
-    width: Math.max(1, rect.width),
-    height: Math.max(1, rect.height),
-  });
+  try {
+    await transport.browserPaneCreate({
+      paneId: entry.paneKey,
+      windowLabel,
+      url,
+      x: rect.x,
+      y: rect.y,
+      width: Math.max(1, rect.width),
+      height: Math.max(1, rect.height),
+    });
+  } catch (error) {
+    // A failed create must not leave a usable-looking entry behind: later
+    // opens would short-circuit on it and every eval would miss the pane.
+    PANES.delete(paneId);
+    throw error;
+  }
   entry.observer = new ResizeObserver(() => {
     entry.dirty = container.getBoundingClientRect();
     scheduleSync(entry);
   });
   entry.observer.observe(container);
   return entry;
+}
+
+function currentWindowLabel() {
+  return window.__TAURI__?.window?.getCurrentWindow?.()?.label ?? "";
 }
 
 /** Coalesce resize bursts to one native rect update per animation frame. */
@@ -54,7 +73,7 @@ function scheduleSync(entry) {
     if (!rect || entry.dead) return;
     void entry.transport
       .browserPaneSetRect({
-        paneId: entry.paneId,
+        paneId: entry.paneKey,
         x: rect.x,
         y: rect.y,
         width: Math.max(1, rect.width),
@@ -72,7 +91,7 @@ function scheduleSync(entry) {
 function setVisible(entry, visible) {
   if (entry.dead || entry.visible === visible) return;
   entry.visible = visible;
-  void entry.transport.browserPaneSetVisible({ paneId: entry.paneId, visible }).catch(() => {});
+  void entry.transport.browserPaneSetVisible({ paneId: entry.paneKey, visible }).catch(() => {});
 }
 
 /** Show/hide without destroying (tab switching keeps the page alive). */
@@ -89,13 +108,13 @@ export function closePane(paneId) {
   if (entry.rafId) cancelAnimationFrame(entry.rafId);
   entry.observer?.disconnect();
   PANES.delete(paneId);
-  void entry.transport.browserPaneDestroy({ paneId }).catch(() => {});
+  void entry.transport.browserPaneDestroy({ paneId: entry.paneKey }).catch(() => {});
 }
 
 /** Navigate an existing pane; also refreshes the tracked URL. */
 export async function navigatePane(paneId, url, transport) {
-  await transport.browserPaneNavigate({ paneId, url });
   const entry = PANES.get(paneId);
+  await transport.browserPaneNavigate({ paneId: entry?.paneKey ?? paneId, url });
   if (entry) entry.url = url;
 }
 
@@ -104,7 +123,7 @@ export async function navigatePane(paneId, url, transport) {
 export async function evalPane(paneId, expression, transport) {
   const entry = PANES.get(paneId);
   if (!entry || entry.dead) throw new Error("pane_not_found");
-  const response = await transport.browserPaneEval({ paneId, js: expression });
+  const response = await transport.browserPaneEval({ paneId: entry.paneKey, js: expression });
   let envelope = null;
   try {
     envelope = JSON.parse(response.result ?? "null");

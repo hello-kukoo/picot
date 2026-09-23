@@ -374,8 +374,30 @@ impl MetadataStore {
 
     /// Open (or reuse) the one unresolved reset-credit operation.
     pub fn reset_credit_open(&self) -> Result<String, String> {
-        let existing: Option<String> = self
+        // One conditional INSERT instead of read-then-insert: two concurrent
+        // opens must never leave two unresolved rows behind (an orphan row
+        // would let a later session replay a credit this one already used).
+        // SQLite serializes writers, so the second statement observes the
+        // first row and inserts nothing.
+        let candidate = uuid::Uuid::new_v4().to_string();
+        let inserted = self
             .connection
+            .execute(
+                "INSERT INTO reset_credit_operations (id, opened_at, settled_at, status)
+                 SELECT ?1, ?2, NULL, 'pending'
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM reset_credit_operations
+                     WHERE status IN ('pending', 'ambiguous')
+                 )",
+                rusqlite::params![candidate, Self::now_secs()],
+            )
+            .map_err(|error| format!("Cannot write Picot reset-credit ledger: {error}"))?;
+        if inserted == 1 {
+            return Ok(candidate);
+        }
+        // An unresolved row already exists: reuse it (the id doubles as the
+        // upstream idempotency key, so a fresh uuid would double-spend).
+        self.connection
             .query_row(
                 "SELECT id FROM reset_credit_operations
                  WHERE status IN ('pending', 'ambiguous')
@@ -383,24 +405,7 @@ impl MetadataStore {
                 [],
                 |row| row.get(0),
             )
-            .map(Some)
-            .or_else(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                other => Err(other),
-            })
-            .map_err(|error| format!("Cannot read Picot reset-credit ledger: {error}"))?;
-        if let Some(id) = existing {
-            return Ok(id);
-        }
-        let id = uuid::Uuid::new_v4().to_string();
-        self.connection
-            .execute(
-                "INSERT INTO reset_credit_operations (id, opened_at, settled_at, status)
-                 VALUES (?1, ?2, NULL, 'pending')",
-                rusqlite::params![id, Self::now_secs()],
-            )
-            .map_err(|error| format!("Cannot write Picot reset-credit ledger: {error}"))?;
-        Ok(id)
+            .map_err(|error| format!("Cannot read Picot reset-credit ledger: {error}"))
     }
 
     /// Settle an operation as `settled` or mark it `ambiguous` (response

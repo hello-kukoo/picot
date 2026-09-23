@@ -48,7 +48,7 @@ test("openPane creates the child webview at the container rect", async () => {
   });
   await openPane({ paneId: "p1", url: "http://127.0.0.1:41001/", container, transport });
   expect(transport.browserPaneCreate).toHaveBeenCalledWith({
-    paneId: "p1",
+    paneId: "native-workspace-w1:p1",
     windowLabel: "native-workspace-w1",
     url: "http://127.0.0.1:41001/",
     x: 300,
@@ -66,7 +66,10 @@ test("show/hide toggles transport visibility only on change", async () => {
   showPane("p2", true);
   expect(transport.browserPaneSetVisible).toHaveBeenCalledTimes(1);
   showPane("p2", false);
-  expect(transport.browserPaneSetVisible).toHaveBeenCalledWith({ paneId: "p2", visible: false });
+  expect(transport.browserPaneSetVisible).toHaveBeenCalledWith({
+    paneId: "native-workspace-w1:p2",
+    visible: false,
+  });
   expect(paneVisible("p2")).toBe(false);
 });
 
@@ -99,4 +102,29 @@ test("evalPane surfaces runtime errors from the wrapper envelope", async () => {
   const container = document.createElement("div");
   await openPane({ paneId: "p5", url: "http://x/", container, transport });
   await expect(evalPane("p5", "x", transport)).rejects.toThrow("ReferenceError");
+});
+
+test("a failed create leaves no entry behind (later opens retry)", async () => {
+  const transport = makeTransport();
+  transport.browserPaneCreate = vi.fn(async () => {
+    throw new Error("url_not_allowed");
+  });
+  const container = document.createElement("div");
+  await expect(
+    openPane({ paneId: "p6", url: "http://127.0.0.1:41000/", container, transport }),
+  ).rejects.toThrow("url_not_allowed");
+  // The pane must be retryable: a second attempt reaches the transport again.
+  transport.browserPaneCreate = vi.fn(async () => ({}));
+  await openPane({ paneId: "p6", url: "http://ok/", container, transport });
+  expect(transport.browserPaneCreate).toHaveBeenCalledTimes(1);
+});
+
+test("an unknown window label fails loudly instead of colliding", async () => {
+  delete window.__TAURI__;
+  const transport = makeTransport();
+  const container = document.createElement("div");
+  await expect(openPane({ paneId: "p7", url: "http://x/", container, transport })).rejects.toThrow(
+    "window_label_unavailable",
+  );
+  expect(transport.browserPaneCreate).not.toHaveBeenCalled();
 });
