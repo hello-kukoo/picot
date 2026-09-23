@@ -3464,6 +3464,34 @@ async fn dispatch(
                     }
                     let content = crate::host_files::read(&root, path)
                         .map_err(|error| (error.code(), "File read failed".to_owned()))?;
+                    let content_type = Path::new(path)
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .map(|ext| ext.to_ascii_lowercase());
+                    let mime_type = match content_type.as_deref() {
+                        Some("png") => Some("image/png"),
+                        Some("jpg") | Some("jpeg") => Some("image/jpeg"),
+                        Some("gif") => Some("image/gif"),
+                        Some("webp") => Some("image/webp"),
+                        Some("svg") => Some("image/svg+xml"),
+                        Some("ico") => Some("image/x-icon"),
+                        Some("bmp") => Some("image/bmp"),
+                        Some("pdf") => Some("application/pdf"),
+                        _ => None,
+                    };
+                    if let Some(mime_type) = mime_type {
+                        return Ok(json!({
+                            "type": "data_response",
+                            "requestId": request_id,
+                            "operation": "file_read",
+                            "path": content.relative_path,
+                            "mtimeMs": content.modified_at_ms,
+                            "mimeType": mime_type,
+                            "isBinary": true,
+                            "truncated": false,
+                            "editable": false,
+                        }));
+                    }
                     let text = String::from_utf8(content.bytes)
                         .map_err(|_| ("binary_file", "Binary file requires raw download".into()))?;
                     Ok(json!({

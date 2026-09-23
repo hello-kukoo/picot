@@ -185,6 +185,7 @@ export class FilePreviewPanel {
         await this._mountRenderer(freshExisting);
       }
       this.activeContent = { kind: "file", id: existing.id };
+      this._renderTabBar();
       return existing;
     }
 
@@ -701,7 +702,14 @@ export class FilePreviewPanel {
     // transient chat tabs (Side Chat) live inside this panel but follow the
     // app theme, so the palette swap is gated on a class toggled here from
     // the same state machine that owns content activation.
-    this.panel?.classList.toggle("preview-themed", this.activeContent?.kind !== "transient");
+    const activeTab = this.state.getActiveTab();
+    const activeType = activeTab ? classifyFilePath(activeTab.filePath).contentType : "";
+    const sourcePreview =
+      this.activeContent?.kind === "file" &&
+      activeTab &&
+      activeTab.renderAs !== "markdown" &&
+      ["text", "html"].includes(activeType);
+    this.panel?.classList.toggle("preview-themed", Boolean(sourcePreview));
     if (!this.tabBar) return;
     this.tabBar.replaceChildren();
     this.tabBar.setAttribute("role", "tablist");
@@ -1178,7 +1186,7 @@ export class FilePreviewPanel {
         this.state.persist();
       },
       rawUrl: this.transport?.fileRawUrl?.(relativeLocalPath(tab.filePath, this.workspaceRoot)),
-      onOpenInBrowser: tab.renderAs === "markdown" ? () => this._openOfficeInBrowserTab(tab) : null,
+      onOpenInBrowser: null,
       onError: (error) => {
         this.state.updateTab(tab.id, {
           error: t("files.preview.loadError"),
@@ -1391,6 +1399,7 @@ export class FilePreviewPanel {
       goToLineInput: document.getElementById("file-preview-go-to-line-input"),
       copy: document.getElementById("file-preview-copy"),
       openDesktop: document.getElementById("file-preview-open"),
+      openBrowser: document.getElementById("file-preview-open-browser"),
       wrap: document.getElementById("file-preview-wrap"),
       autoSave: document.getElementById("file-preview-autosave"),
       status: document.getElementById("file-preview-status"),
@@ -1404,6 +1413,7 @@ export class FilePreviewPanel {
       [this.controls.goToLine, "list"],
       [this.controls.copy, "copy"],
       [this.controls.openDesktop, "external-link"],
+      [this.controls.openBrowser, "globe"],
       [this.controls.toolbarToggle, "sliders"],
       [this.controls.enlarge, "maximize"],
       [this.controls.collapse, "minimize"],
@@ -1454,6 +1464,10 @@ export class FilePreviewPanel {
     this._listen(this.controls.openDesktop, "click", () => {
       const tab = this.state.getActiveTab();
       if (tab) this.onOpenDesktop(tab.filePath);
+    });
+    this._listen(this.controls.openBrowser, "click", () => {
+      const tab = this.state.getActiveTab();
+      if (tab) void this._openOfficeInBrowserTab(tab);
     });
     this._listen(this.controls.wrap, "change", (event) => {
       this.wrapLines = Boolean(event.target.checked);
@@ -1525,11 +1539,17 @@ export class FilePreviewPanel {
     const controls = this.controls;
     if (!controls) return;
     const isDiff = this.activeContent?.kind === "diff";
-    controls.toolbarToggle?.classList.toggle("hidden", isDiff);
-    controls.toolbarToggle?.setAttribute("aria-expanded", String(!isDiff && this.toolbarOpen));
-    if (isDiff) this.currentRenderer?.update?.({ wrapLines: this.wrapLines });
-
     const tab = this.state.getActiveTab();
+    const contentType = tab ? classifyFilePath(tab.filePath).contentType : "";
+    const isOfficePreview = tab?.renderAs === "markdown" && contentType !== "markdown";
+    const settingsVisible =
+      !isDiff && ["markdown", "text", "html"].includes(contentType) && !isOfficePreview;
+    controls.toolbarToggle?.classList.toggle("hidden", !settingsVisible);
+    controls.toolbarToggle?.setAttribute(
+      "aria-expanded",
+      String(settingsVisible && this.toolbarOpen),
+    );
+    if (isDiff) this.currentRenderer?.update?.({ wrapLines: this.wrapLines });
     const editable = this._isEditable(tab);
     const relativePath = tab ? relativeLocalPath(tab.filePath, this.workspaceRoot) : null;
     if (controls.path) {
@@ -1539,7 +1559,6 @@ export class FilePreviewPanel {
       controls.path.classList.toggle("hidden", isDiff || !tab || !displayPath);
     }
     const hasText = typeof tab?.content === "string" && !tab?.isBinary;
-    const contentType = tab ? classifyFilePath(tab.filePath).contentType : "";
     const hasEditor =
       hasText &&
       tab.renderAs !== "markdown" &&
@@ -1548,6 +1567,8 @@ export class FilePreviewPanel {
       ((contentType !== "markdown" && contentType !== "html") || tab.mode === "edit");
     const editorToolbarVisible =
       isDiff || (editable && ["markdown", "text", "html"].includes(contentType));
+    controls.openBrowser?.classList.toggle("hidden", !isOfficePreview || isDiff);
+    controls.openBrowser?.toggleAttribute("disabled", !isOfficePreview || isDiff);
     controls.toolbar?.classList.toggle(
       "hidden",
       !editorToolbarVisible || (!isDiff && !this.toolbarOpen),
@@ -1591,7 +1612,7 @@ export class FilePreviewPanel {
     if (controls.copy) controls.copy.disabled = !hasText;
     if (controls.openDesktop) {
       controls.openDesktop.disabled = isDiff || !tab;
-      controls.openDesktop.classList.toggle("hidden", isDiff);
+      controls.openDesktop.classList.toggle("hidden", isDiff || !tab);
     }
     if (controls.wrap) controls.wrap.checked = this.wrapLines;
     if (controls.autoSave) controls.autoSave.checked = this.autoSaveEnabled;
