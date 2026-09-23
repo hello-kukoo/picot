@@ -10,7 +10,7 @@
  * Markdown parsing, or CodeMirror configuration.
  */
 
-import { closePane, hideAllPanes } from "./browser-pane/browser-pane-manager.js";
+import { closePane, hideAllPanes, syncPane } from "./browser-pane/browser-pane-manager.js";
 import { createBrowserTabRenderer } from "./browser-pane/browser-tab-renderer.js";
 import { classifyFilePath } from "./file-language.js";
 import { createFileRenderer } from "./file-preview-renderers.js";
@@ -282,6 +282,7 @@ export class FilePreviewPanel {
     this.panel.classList.add("enlarged");
     this.panel.classList.remove("collapsed");
     if (this.mainContainer) this.mainContainer.classList.add("preview-enlarged");
+    this._syncActiveBrowserPaneAfterLayout();
     this._savePreferences();
     this._updateControlButtons();
   }
@@ -290,6 +291,7 @@ export class FilePreviewPanel {
     this.enlarged = false;
     this.panel.classList.remove("enlarged");
     if (this.mainContainer) this.mainContainer.classList.remove("preview-enlarged");
+    this._syncActiveBrowserPaneAfterLayout();
     this._savePreferences();
     this._updateControlButtons();
     this._updatePanelWidth();
@@ -594,6 +596,12 @@ export class FilePreviewPanel {
     const collapseBtn = document.getElementById("file-preview-collapse");
     enlargeBtn?.classList.toggle("hidden", this.enlarged);
     collapseBtn?.classList.toggle("hidden", !this.enlarged);
+  }
+
+  _syncActiveBrowserPaneAfterLayout() {
+    const tab = this.state.getActiveTab();
+    if (tab?.kind !== "browser") return;
+    requestAnimationFrame(() => void syncPane(tab.id).catch(() => {}));
   }
 
   _availableWidth() {

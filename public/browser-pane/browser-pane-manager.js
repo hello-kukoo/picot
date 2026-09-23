@@ -114,6 +114,20 @@ function setVisible(entry, visible) {
   void entry.transport.browserPaneSetVisible({ paneId: entry.paneKey, visible }).catch(() => {});
 }
 
+/** Push the container's current geometry after an explicit layout transition. */
+export async function syncPane(paneId) {
+  const entry = PANES.get(paneId);
+  if (!entry || entry.dead) return;
+  const rect = entry.container.getBoundingClientRect();
+  await entry.transport.browserPaneSetRect({
+    paneId: entry.paneKey,
+    x: rect.x,
+    y: rect.y,
+    width: Math.max(1, rect.width),
+    height: Math.max(1, rect.height),
+  });
+}
+
 /** Show/hide without destroying (tab switching keeps the page alive). */
 export function showPane(paneId, visible) {
   const entry = PANES.get(paneId);

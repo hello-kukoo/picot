@@ -59,6 +59,19 @@ test("installs select mode and reports the session token", () => {
   expect(document.documentElement.classList.contains("__picot-select-mode")).toBe(true);
 });
 
+test("does not cancel pointer events before the browser dispatches click", () => {
+  installScript("tok-pointer");
+  const el = document.createElement("p");
+  document.body.append(el);
+  const down = new Event("pointerdown", { bubbles: true, cancelable: true });
+  const up = new Event("pointerup", { bubbles: true, cancelable: true });
+  el.dispatchEvent(down);
+  el.dispatchEvent(up);
+  expect(down.defaultPrevented).toBe(false);
+  expect(up.defaultPrevented).toBe(false);
+  el.remove();
+});
+
 test("captures clicked element fields including docPath from data-path anchor", () => {
   installScript("tok-2");
   const anchor = document.createElement("div");

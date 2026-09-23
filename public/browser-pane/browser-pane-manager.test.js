@@ -11,6 +11,7 @@ import {
   paneUrl,
   paneVisible,
   showPane,
+  syncPane,
 } from "./browser-pane-manager.js";
 
 function makeTransport() {
@@ -180,4 +181,22 @@ test("hideAllPanes hides every visible native webview", async () => {
   });
   closePane("p-hide-1");
   closePane("p-hide-2");
+});
+
+test("syncPane pushes the current container rect after a layout transition", async () => {
+  const transport = makeTransport();
+  let rect = { x: 300, y: 40, width: 480, height: 620 };
+  const container = document.createElement("div");
+  Object.defineProperty(container, "getBoundingClientRect", { value: () => rect });
+  await openPane({ paneId: "p-sync", url: "http://x/", container, transport });
+  rect = { x: 900, y: 80, width: 980, height: 900 };
+  await syncPane("p-sync");
+  expect(transport.browserPaneSetRect).toHaveBeenLastCalledWith({
+    paneId: "native-workspace-w1:p-sync",
+    x: 900,
+    y: 80,
+    width: 980,
+    height: 900,
+  });
+  closePane("p-sync");
 });

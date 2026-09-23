@@ -205,23 +205,10 @@ export function buildElementSelectorScript(sessionToken) {
           window.__picotSelectorResult = { __cancelled: true, __picotSessionToken: sessionToken };
         }
       }
-      function blockEvent(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-      }
       function destroy() {
         document.removeEventListener('mousemove', onMove, true);
         document.removeEventListener('click', onClick, true);
         document.removeEventListener('keydown', onKey, true);
-        document.removeEventListener('mousedown', blockEvent, true);
-        document.removeEventListener('mouseup', blockEvent, true);
-        document.removeEventListener('pointerdown', blockEvent, true);
-        document.removeEventListener('pointerup', blockEvent, true);
-        document.removeEventListener('touchstart', blockEvent, true);
-        document.removeEventListener('touchend', blockEvent, true);
-        document.removeEventListener('focus', blockEvent, true);
-        document.removeEventListener('submit', blockEvent, true);
         document.documentElement.classList.remove('__picot-select-mode');
         if (last) last.classList.remove('__picot-hover');
         if (hoverLabel.parentNode) hoverLabel.parentNode.removeChild(hoverLabel);
@@ -231,14 +218,6 @@ export function buildElementSelectorScript(sessionToken) {
       document.addEventListener('mousemove', onMove, true);
       document.addEventListener('click', onClick, true);
       document.addEventListener('keydown', onKey, true);
-      document.addEventListener('mousedown', blockEvent, true);
-      document.addEventListener('mouseup', blockEvent, true);
-      document.addEventListener('pointerdown', blockEvent, true);
-      document.addEventListener('pointerup', blockEvent, true);
-      document.addEventListener('touchstart', blockEvent, true);
-      document.addEventListener('touchend', blockEvent, true);
-      document.addEventListener('focus', blockEvent, true);
-      document.addEventListener('submit', blockEvent, true);
       window.__picotSelector = { destroy: destroy, sessionToken: sessionToken };
       return { installed: true, sessionToken: sessionToken };
     })()
