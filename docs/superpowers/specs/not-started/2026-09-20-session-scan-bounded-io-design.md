@@ -1,6 +1,6 @@
 # Session 扫描有界 IO（head/tail 双窗口）
 
-**状态：** Implemented — 2026-09-22（`host_data.rs` 双窗口扫描，偏差已记入 ARCHITECTURE.md 侧栏章节）
+**状态：** Draft — 待 Dr. Lin 评审
 **日期：** 2026-09-20
 **参照：** Paseo `packages/server/src/server/agent/providers/pi/session-descriptor.ts`（bucket 列表性能）；upstream `~/tmp/PI/picot/src-tauri/src/host_data.rs::parse_session_summary_with_metadata`
 
