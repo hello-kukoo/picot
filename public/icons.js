@@ -214,6 +214,11 @@ const ICONS = {
   ],
   "chevron-down": [["path", { d: "m6 9 6 6 6-6" }]],
   "chevron-up": [["path", { d: "m18 15-6-6-6 6" }]],
+  globe: [
+    ["circle", { cx: 12, cy: 12, r: 10 }],
+    ["path", { d: "M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" }],
+    ["path", { d: "M2 12h20" }],
+  ],
   "panel-right": [
     ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }],
     ["path", { d: "M15 3v18" }],

@@ -331,6 +331,13 @@ export class WsTransport {
     return `/v2/files/raw?${query}`;
   }
 
+  /** Raw bytes over the authenticated data plane. Subresource loads
+   * (<img>/pdf.js) cannot carry the desktop-capability header the
+   * /v2/files/raw HTTP route requires, so previews fetch base64 here. */
+  fileRaw(path) {
+    return this.wsClient.sendData("file_raw", { path });
+  }
+
   sessionHistory(sessionId, sessionFile) {
     return this.wsClient.sendData("session_history", { sessionId, sessionFile });
   }

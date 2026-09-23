@@ -144,9 +144,18 @@ export function createBrowserTabRenderer({ tab, transport }) {
     refreshBtn.textContent = t("files.browser.refresh");
     refreshBtn.addEventListener("click", () => void navigate(tab.url));
 
+    const externalBtn = document.createElement("button");
+    externalBtn.type = "button";
+    externalBtn.className = "browser-pane-action";
+    externalBtn.title = t("files.browser.openExternalTooltip");
+    externalBtn.textContent = t("files.browser.openExternal");
+    externalBtn.addEventListener("click", () => {
+      void transport.openExternal?.(tab.url);
+    });
+
     const actions = document.createElement("div");
     actions.className = "browser-pane-actions";
-    actions.append(annotateBtn, refreshBtn);
+    actions.append(annotateBtn, refreshBtn, externalBtn);
     if (isOfficeTab(tab)) {
       const restartBtn = document.createElement("button");
       restartBtn.type = "button";

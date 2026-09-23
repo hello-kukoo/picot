@@ -162,6 +162,14 @@ function createPanel(options = {}) {
       return response.json();
     }),
     fileRawUrl: vi.fn((path) => `/v2/files/raw?path=${encodeURIComponent(path)}`),
+    fileRaw: vi.fn(async () => ({ contentBase64: "aGk=", modifiedAtMs: 1 })),
+    browserPaneCreate: vi.fn(async () => ({})),
+    browserPaneSetVisible: vi.fn(async () => ({})),
+    browserPaneSetRect: vi.fn(async () => ({})),
+    browserPaneDestroy: vi.fn(async () => ({})),
+    browserPaneNavigate: vi.fn(async () => ({})),
+    browserPaneEval: vi.fn(async () => ({})),
+    browserPaneUrl: vi.fn(async () => ({})),
   };
   return new FilePreviewPanel({
     panel,
@@ -227,6 +235,37 @@ describe("FilePreviewPanel", () => {
     });
     expect(content.querySelector(".file-markdown-preview")).not.toBeNull();
     expect(document.getElementById("file-preview-mode-preview").disabled).toBe(true);
+    p.destroy();
+  });
+
+  test("image previews render from authenticated data URLs", async () => {
+    global.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: async () => ({
+          mimeType: "image/png",
+          isBinary: true,
+          editable: false,
+          mtimeMs: 1700000000000,
+        }),
+      }),
+    );
+    const p = createPanel();
+    await p.openFile("/test/workspace/photo.png");
+    const img = content.querySelector(".file-image-img");
+    expect(img?.getAttribute("src")).toBe("data:image/png;base64,aGk=");
+    p.destroy();
+  });
+
+  test("switching back to a browser tab does not stick on loading", async () => {
+    const p = createPanel();
+    await p.openBrowserTab("http://127.0.0.1:41001/", {
+      file: "/test/workspace/a.docx",
+      fileName: "a.docx",
+    });
+    const tab = p.state.getActiveTab();
+    await p._loadTabContent(tab);
+    expect(p.state.getTab(tab.id).loading).toBe(false);
     p.destroy();
   });
 

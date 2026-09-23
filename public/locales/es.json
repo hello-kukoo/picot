@@ -256,6 +256,8 @@
       "cancel": "Cancelar",
       "addToComposer": "Añadir al compositor",
       "openInBrowser": "Abrir en navegador integrado",
+      "openExternal": "Abrir en el navegador del sistema",
+      "openExternalTooltip": "Abre la URL actual en tu navegador predeterminado",
       "openInBrowserTooltip": "Render fiel con anotación de elementos (requiere officecli)",
       "officecliMissing": "Instala officecli para usar la vista integrada",
       "watchStartFailed": "No se pudo iniciar el servicio de render"

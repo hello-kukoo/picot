@@ -82,6 +82,8 @@ export class FilePreviewPanel {
     this.currentRenderer = null;
     this.workspaceRoot = normalizeLocalPath(workspaceRoot) || "";
     this.loadTokens = new Map();
+    // Authenticated raw bytes cached per tab (data URLs for img/pdf.js).
+    this.rawDataUrls = new Map();
     this.loadAbortControllers = new Map();
     this.savePromises = new Map();
     this.autoSaveTimers = new Map();
@@ -293,6 +295,7 @@ export class FilePreviewPanel {
     this.autoSaveTimers.clear();
     this._abortAllTabLoads();
     this.loadTokens.clear();
+    this.rawDataUrls.clear();
     // Panes die with the panel; the office watch servers must die too, or
     // closing a workspace window leaves officecli processes (and their
     // ports) alive for the rest of the app's life.
@@ -708,6 +711,7 @@ export class FilePreviewPanel {
       this.activeContent?.kind === "file" &&
       activeTab &&
       activeTab.renderAs !== "markdown" &&
+      activeTab.kind !== "browser" &&
       ["text", "html"].includes(activeType);
     this.panel?.classList.toggle("preview-themed", Boolean(sourcePreview));
     if (!this.tabBar) return;
@@ -982,10 +986,15 @@ export class FilePreviewPanel {
     const token = (this.loadTokens.get(tab.id) || 0) + 1;
     this.loadTokens.set(tab.id, token);
     this.state.updateTab(tab.id, { loading: true, error: null, errorDetail: null });
+    // A reload must drop cached raw bytes; the file may have changed.
+    this.rawDataUrls.delete(tab.id);
 
     if (tab.kind === "browser") {
       // Browser tabs point at an external URL rendered by a native child
-      // webview; there is no file content to load.
+      // webview; there is no file content to load. Clear the loading flag:
+      // a stuck flag makes the next mount short-circuit to "Loading…" and
+      // never re-show the hidden native webview (annotation then no-ops).
+      this.state.updateTab(tab.id, { loading: false });
       await this._mountIfActive(tab.id);
       return true;
     }
@@ -1185,7 +1194,11 @@ export class FilePreviewPanel {
         this.state.updateTab(tab.id, { mode });
         this.state.persist();
       },
-      rawUrl: this.transport?.fileRawUrl?.(relativeLocalPath(tab.filePath, this.workspaceRoot)),
+      rawUrl:
+        classifyFilePath(tab.filePath).contentType === "image" ||
+        classifyFilePath(tab.filePath).contentType === "pdf"
+          ? await this._ensureRawDataUrl(tab)
+          : this.transport?.fileRawUrl?.(relativeLocalPath(tab.filePath, this.workspaceRoot)),
       onOpenInBrowser: null,
       onError: (error) => {
         this.state.updateTab(tab.id, {
@@ -1196,6 +1209,24 @@ export class FilePreviewPanel {
     });
     this.currentRenderer.mount(this.content);
     this._renderToolbar();
+  }
+
+  /** Image/PDF previews render from data URLs fetched over the
+   * authenticated data plane; only those paths pay the extra await so text
+   * mounts keep their original synchronous ordering. */
+  async _ensureRawDataUrl(tab) {
+    const cached = this.rawDataUrls.get(tab.id);
+    if (cached) return cached;
+    const relativePath = relativeLocalPath(tab.filePath, this.workspaceRoot);
+    if (relativePath === null) throw new Error("File is outside workspace");
+    if (!this.transport?.fileRaw) throw new Error("Raw file preview unavailable");
+    const data = await this.transport.fileRaw(relativePath);
+    if (typeof data?.contentBase64 !== "string" || !data.contentBase64) {
+      throw new Error("Raw file preview returned no bytes");
+    }
+    const url = `data:${tab.mimeType || "application/octet-stream"};base64,${data.contentBase64}`;
+    this.rawDataUrls.set(tab.id, url);
+    return url;
   }
 
   _isEditable(tab) {
