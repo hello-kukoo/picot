@@ -21,6 +21,31 @@ describe("settings page split", () => {
     expect(document.querySelector('[data-settings-panel="models"]')).not.toBeNull();
   });
 
+  test("keeps Usage cost and provider quota as two tabs of one page", () => {
+    const dom = new JSDOM(html, { url: "http://localhost" });
+    const { document } = dom.window;
+
+    // One Settings entry, two views inside it.
+    expect(document.querySelector('[data-settings-tab="quota"]')).toBeNull();
+
+    const page = document.querySelector('[data-settings-panel="usage"]');
+    expect(page).not.toBeNull();
+    const tabs = [...page.querySelectorAll("[data-usage-tab]")].map((tab) => tab.dataset.usageTab);
+    expect(tabs).toEqual(["cost", "quota"]);
+    const panels = [...page.querySelectorAll("[data-usage-panel]")].map(
+      (panel) => panel.dataset.usagePanel,
+    );
+    expect(panels).toEqual(["cost", "quota"]);
+    expect(page.querySelector('[data-usage-panel="cost"] #settings-cost-dashboard')).not.toBeNull();
+    expect(
+      page.querySelector('[data-usage-panel="quota"] #settings-provider-quota'),
+    ).not.toBeNull();
+
+    // Quota is not a cell in the cost infobar next to the models histogram.
+    const dashboardJs = readFileSync(join(process.cwd(), "public/cost/dashboard.js"), "utf8");
+    expect(dashboardJs).not.toContain("usage-provider-quota");
+  });
+
   test("keeps a dedicated drag region above the Settings overlay controls", () => {
     const dom = new JSDOM(html, { url: "http://localhost" });
     const { document } = dom.window;

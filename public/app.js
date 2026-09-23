@@ -620,27 +620,46 @@ const oauthGateway = createOauthGateway({
 // dynamically AFTER initI18n so the custom-element upgrade (whose shell
 // renders t() strings immediately) never runs against empty dictionaries —
 // the old iframe loaded its own copy post-init for the same reason.
+let settingsQuotaPanel = null;
 {
   const { setCostDashboardTransport } = await import("./cost/dashboard.js");
   setCostDashboardTransport(transport);
-  // Provider quota section (spec 2026-09-22): the gateway lives in this
-  // document; the section itself renders inside the dashboard shadow root.
+  // Provider quota (spec 2026-09-22) is its own Settings tab: the gateway
+  // lives in this document, so the section mounts here rather than inside the
+  // cost dashboard's shadow root.
   const { createProviderQuotaPanel } = await import("./cost/provider-quota-panel.js");
   const { quotaLocaleBundle } = await import("./cost/quota-locale.js");
-  const quotaPanel = createProviderQuotaPanel(
+  settingsQuotaPanel = createProviderQuotaPanel(
     {
-      container: () =>
-        document
-          .querySelector("cost-dashboard")
-          ?.shadowRoot?.querySelector("#usage-provider-quota") ?? null,
+      container: () => document.getElementById("settings-provider-quota"),
       gateway: configGateway,
       dataTransport: transport,
     },
     { locale: quotaLocaleBundle() },
   );
-  document.addEventListener("cost-dashboard-rendered", () => quotaPanel.render());
-  window.addEventListener("localechange", () => quotaPanel.render());
-  void quotaPanel.loadReports();
+  window.addEventListener("localechange", () => settingsQuotaPanel?.render());
+  void settingsQuotaPanel.loadReports();
+}
+
+// Usage page sub-tabs: the cost dashboard and the provider quota section are
+// two views of one Settings page, each lazy-loading on first selection.
+{
+  const usageTabs = Array.from(document.querySelectorAll("[data-usage-tab]"));
+  const usagePanels = Array.from(document.querySelectorAll("[data-usage-panel]"));
+  const selectUsageView = (view) => {
+    for (const tab of usageTabs) {
+      const active = tab.dataset.usageTab === view;
+      tab.setAttribute("aria-selected", String(active));
+    }
+    for (const panel of usagePanels) {
+      panel.classList.toggle("hidden", panel.dataset.usagePanel !== view);
+    }
+    if (view === "quota") void settingsQuotaPanel?.loadReports();
+    else void document.getElementById("settings-cost-dashboard")?.ensureLoaded?.();
+  };
+  for (const tab of usageTabs) {
+    tab.addEventListener("click", () => selectUsageView(tab.dataset.usageTab));
+  }
 }
 // Mobile LAN QR: header button + modal over the native pairing controls
 // (token minted on open; visibility follows the running host's LAN bind).

@@ -2368,6 +2368,34 @@ body.landing-mode #landing {
   display: block;
 }
 
+/* Usage page sub-tabs: the cost dashboard and the provider quota section are
+   two views of one Settings page. */
+.usage-page-tabs {
+  display: flex;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.usage-page-tab {
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.usage-page-tab:hover {
+  color: var(--text-primary);
+}
+
+.usage-page-tab[aria-selected="true"] {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+
 .settings-usage-embed {
   height: calc(100dvh - 140px);
   min-height: 460px;

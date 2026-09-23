@@ -771,6 +771,8 @@
       "addMcp": "+ 添加MCP"
     },
     "usage": "使用量",
+    "quota": "配额",
+    "usageSections": "用量分区",
     "configuration": "高级配置",
     "backToChat": "返回",
     "appearance": "外观",

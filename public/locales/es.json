@@ -771,6 +771,8 @@
       "addMcp": "+ Añadir MCP"
     },
     "usage": "Uso",
+    "quota": "Cuota",
+    "usageSections": "Secciones de uso",
     "configuration": "Configuración avanzada",
     "backToChat": "Volver",
     "appearance": "Apariencia",

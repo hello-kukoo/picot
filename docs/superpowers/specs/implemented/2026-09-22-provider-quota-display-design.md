@@ -124,7 +124,7 @@ CREATE TABLE IF NOT EXISTS reset_credit_operations (
 
 ## WebView UI（public/cost/dashboard.js 新区块）
 
-1. `renderShell` 模板追加 `<section id="usage-provider-quota">`，位于 usage-models 区块之后；区块标题「提供方配额」+ 整体刷新按钮。
+1. 配额是「使用量」页内的独立子页签（「使用量」/「配额」两个 tab，2026-09-23 修订：原设计为 `renderShell` 追加 `<section id="usage-provider-quota">` 于 usage-models 之后，实装改为 Settings 主 DOM 的 `#settings-provider-quota`——配额不是成本统计的一格）；区块标题「提供方配额」+ 整体刷新按钮。
 2. 每个有报告的 provider 一张卡：显示名（id→显示名映射表，未知 id 原样显示）+ 窗口条列表（percent 进度条 + label + 相对重置时间）+ 数据更新时间。
 3. openai-codex 卡额外显示「重置额度 N 个」；点击 → 确认对话框（列 credits 明细 granted_at/expires_at）→ 确认后走 open→consume→settle 流程，结果 toast（成功/无可重置/无额度/结果未知）。
 4. `ambiguous` 结果 toast 引导用户重开对话框（触发恢复策略的 inspect 对比）。

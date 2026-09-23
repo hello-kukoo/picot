@@ -744,26 +744,23 @@ void updater.initUpdaterUI();
 
 // The Usage tab's cost dashboard element lazy-loads on first activation and
 // shares this page's transport (same contract as the workspace shell).
+let landingQuotaPanel = null;
 {
   const { setCostDashboardTransport } = await import("./cost/dashboard.js");
   setCostDashboardTransport(transport);
-  // Provider quota section rides the landing ConfigGateway (same temporary
-  // pi instance the model/MCP pages use).
+  // Provider quota rides the landing ConfigGateway (same temporary pi instance
+  // the model/MCP pages use) and mounts in its own Settings tab.
   const { createProviderQuotaPanel } = await import("./cost/provider-quota-panel.js");
   const { quotaLocaleBundle } = await import("./cost/quota-locale.js");
-  const quotaPanel = createProviderQuotaPanel(
+  landingQuotaPanel = createProviderQuotaPanel(
     {
-      container: () =>
-        document
-          .querySelector("cost-dashboard")
-          ?.shadowRoot?.querySelector("#usage-provider-quota") ?? null,
+      container: () => document.getElementById("settings-provider-quota"),
       gateway: landingConfig.configGateway,
       dataTransport: transport,
     },
     { locale: quotaLocaleBundle() },
   );
-  document.addEventListener("cost-dashboard-rendered", () => quotaPanel.render());
-  void quotaPanel.loadReports();
+  void landingQuotaPanel.loadReports();
 }
 
 // ── Skills page (discovered + install; packages sub-tab is bridge-bound) ──

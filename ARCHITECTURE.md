@@ -260,7 +260,7 @@ Pi 以 `~/.pi/agent/trust.json`（键为 canonical 路径，值为 true/false/nu
 - **图片策略**：转换文档的 Markdown 渲染只接受 base64 栅格 data URI（png/jpeg/gif/webp），其余来源（SVG/远程/相对/未知 MIME）替换为本地化文本 `files.preview.converted.remoteImageHidden`。
 - **无网络/无 OCR**：不调用 AnyDoc 托管 OCR/API key/任何网络路径；PDF 留在既有 PDF 预览路由。
 
-## Provider 配额探针（Usage → 提供方配额）
+## Provider 配额探针（Settings → 使用量 → 配额）
 
 `extensions/provider-quota.ts` 在 pi 进程内对已配置 provider 的用量端点做只读探针（spec 2026-09-22，端点语义照抄 opencodex 生产实现）。边界：
 
@@ -269,6 +269,7 @@ Pi 以 `~/.pi/agent/trust.json`（键为 canonical 路径，值为 true/false/nu
 - **探针纪律**：`redirect:"manual"`（3xx 显式记为 `destination_blocked` 而非误报 timeout）、8s 超时、256KB 响应体上限（**流式**断读：`fetch` 的 `text()/json()` 会先缓冲全文，故按 reader 分块计字节，超限即 cancel）；瞬时失败（429/5xx/超时）保留 last-good 行 30 分钟，`response_unusable` 丢弃旧行；进程内缓存 TTL 5 分钟 + in-flight 去重，`force` 跳过。
 - **Codex 重置额度双通道（不可逆操作）**：WebView → Rust 账本 `reset_credit_open`（单条条件 INSERT——未决行存在即不插入，故并发开单也不会留下两条 pending；operationId 即上游幂等键 `redeem_request_id`）→ pi 内 `consume` POST → Rust `reset_credit_settle`（settled/ambiguous）。启动清扫 60s 前的 pending 行为 abandoned；ambiguous 行下次重开对话框时先 `inspect` 对比 `available_count` 再决定重放同 id。账本表 `reset_credit_operations` 为 public-owned、existence-based 建表（session_bucket 先例，不动 Corp 拥有的版本戳）。
 - **owner 门禁**：`reset_credit_open/settle` 与 `cost_dashboard` 同款——已认证 desktop owner、landing 可见。
+- **UI 归属**：配额是「使用量」页内的独立子页签（「使用量」/「配额」两个 tab），面板挂载于 Settings 主 DOM 的 `#settings-provider-quota`，**不在**成本仪表盘 shadow root 内（原实装把它放进 infobar 的模型直方图旁，2026-09-23 拆出）。两页签各自首次选中时懒加载；`provider_quota_report` 经 `ConfigGateway`，载荷为 `{ok, data:{reports}}`——`ConfigGateway.call` 兑现 handler 载荷，不是 handler 自己的 data 对象。
 
 ## 浏览器面板与元素标注（browser pane）
 
@@ -277,8 +278,8 @@ Pi 以 `~/.pi/agent/trust.json`（键为 canonical 路径，值为 true/false/nu
 - **外部 webview 无 capability 初始化脚本**——它不是 owner，没有任何 host 控制权；`on_new_window` 一律 Deny。
 - **URL 白名单**：仅 http(s)；file:/自定义 scheme 拒绝。host 自身按**别名 + 端口**封禁而非只比序列化 origin——`http://localhost:<host端口>/`、`http://0.0.0.0:<host端口>/`、`http://[::1]:<host端口>/` 以及 LAN 地址（含 RFC1918/链路本地）在 host 端口上全部拒绝，因为这些别名都指向同一台服务器却序列化不同（`pane_url_allowed` + `resolves_to_host`）。`on_navigation` 运行时同策略，防外部页跳回 host 窃取窗口上下文；userinfo 不是 host 旁路（`http://x@evil.com` 的 host 就是 evil.com，属普通外部页）。非 host 端口上的私有地址照常放行（LAN dev server 是正当目标）。
 - **pane 身份窗口限定**：pane key = `<windowLabel>:<tabId>`（WebView 侧生成），故两个 workspace 窗口可同时持有同一文件的两份 pane，派生 webview label 也全局唯一。
-- **布局同步**：pane 容器 ResizeObserver → rAF 合并 → `browser_pane_set_rect`（logical 坐标）；宽/高 < 2px 隐藏原生视图。tab 切换走 hide（webview 存活）；tab 关闭才 destroy。窗口销毁时 `destroy_all_for_window` 清映射，label 可复用。
-- **eval 桥**：`browser_pane_eval` = Rust `eval_with_callback` + try/catch 包装（Windows 异常被平台吞掉，靠包装脚本返回 `{ok:false,error}` 传回）+ 5s oneshot 超时；pane 锁作用域块级收束（MutexGuard 不得跨 await）。
+- **布局同步**：pane 容器 ResizeObserver → rAF 合并 → `browser_pane_set_rect`（logical 坐标）。rect 统一由 `paneRect()` 计算 = 容器盒 − 底部内缩（内缩用于把空间让给宿主 DOM，如标注评论框，上限为容器高 − 24px）；宽/高 < 2px 隐藏原生视图。ResizeObserver 只报尺寸、不报位移，故侧栏展开/收起这类**纯平移**由 app 广播 `picot-layout-settled`（`transitionend` + 350ms fallback），面板收到后重下发 rect。标注评论框因此**不隐藏**页面（原生视图压不住宿主 DOM，隐藏会让页面变空白），只缩短 pane。tab 切换走 hide（webview 存活）；tab 关闭才 destroy。窗口销毁时 `destroy_all_for_window` 清映射，label 可复用。
+- **eval 桥**：`browser_pane_eval` = Rust `eval_with_callback` + try/catch 包装（Windows 异常被平台吞掉，靠包装脚本返回 `{ok:false,error}` 传回）+ 5s oneshot 超时；pane 锁作用域块级收束（MutexGuard 不得跨 await）。WebView 侧拿到的**就是 envelope 本身**（`data_response` 的兑现值），不是 `{result}` 包装，且编码层数随运行时可变（对象或 1..N 层 JSON 字符串），故 `unwrapEnvelope()` 逐层解到非字符串为止；读不出来时必须报形状（`eval_failed:keys:…`），不得退化成裸 `eval_failed`。
 - **元素选择器**（`public/browser-pane/element-selector.js`，Paseo 移植）：IIFE 注入 + `window.__picotSelectorResult` 200ms 轮询 + session token 防串台 + Esc 取消 + 30s 超时；增强 `closest('[data-path]')` 采集 `docPath`。officecli watch 页面 `data-path` 与 `officecli set/add` 坐标同源——标注即**可执行修改坐标**（`<office-element>` 附件含 `suggested: officecli set …`）；普通网页走 Paseo `<browser-element>` 格式。附件以文本块进 composer（`#message-input`），用户可改后再发送。
 - **officecli watch 生命周期**（`officecli_watch.rs`）：canonical 路径去重（同文件多 tab 共享一个 watch；启动竞态在锁内二次确认，输家进程立即回收而不会被覆盖泄漏）；空闲端口分配；stdout 解析 `Watch: http://localhost:PORT`（15s 启动超时）；`WatchEntry` 的 `Drop` 统一 SIGTERM→2s→SIGKILL 并 wait 收尸，故任何丢弃路径（覆盖插入、死进程清理、stop、退出清场）都不留孤儿进程或僵尸。面板销毁时同步停掉其 office 文件的 watch。`watch mark` 服务端打标（刷新不丢）。Rust 侧 watch 与 pane 均 owner 门禁 data op。
 - **入口分工**：office 文件点击 → anydoc markdown 预览（快、零依赖）→「内置浏览器打开」按钮 → `officecli_watch_start` → browser tab（保真 + 标注 + agent 闭环）。无 officecli 时按钮报 `officecli_missing` toast。

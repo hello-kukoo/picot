@@ -1969,14 +1969,48 @@
           <div class="settings-header">
             <h3 data-i18n="settings.usage">Usage</h3>
           </div>
-          <div class="settings-usage-embed">
-            <cost-dashboard
-              id="settings-cost-dashboard"
-              data-i18n-title="settings.costDashboard"
-              title="Cost Dashboard"
-              class="settings-usage-iframe"
-              defer-load
-            ></cost-dashboard>
+          <div
+            class="usage-page-tabs"
+            role="tablist"
+            data-i18n-aria-label="settings.usageSections"
+            aria-label="Usage sections"
+          >
+            <button
+              type="button"
+              id="usage-cost-tab"
+              class="usage-page-tab"
+              role="tab"
+              data-usage-tab="cost"
+              aria-selected="true"
+              data-i18n="settings.usage"
+            >
+              Usage
+            </button>
+            <button
+              type="button"
+              id="usage-quota-tab"
+              class="usage-page-tab"
+              role="tab"
+              data-usage-tab="quota"
+              aria-selected="false"
+              data-i18n="settings.quota"
+            >
+              Quota
+            </button>
+          </div>
+          <div class="usage-page-panel" data-usage-panel="cost">
+            <div class="settings-usage-embed">
+              <cost-dashboard
+                id="settings-cost-dashboard"
+                data-i18n-title="settings.costDashboard"
+                title="Cost Dashboard"
+                class="settings-usage-iframe"
+                defer-load
+              ></cost-dashboard>
+            </div>
+          </div>
+          <div class="usage-page-panel hidden" data-usage-panel="quota">
+            <div class="settings-section" id="settings-provider-quota"></div>
           </div>
         </div>
 

@@ -69,8 +69,6 @@ function renderShell(target) {
               </div>
             </div>
 
-            <div class="infobar-panel is-active" id="usage-provider-quota"></div>
-
             <div class="infobar-right-col">
               <div class="infobar-panel is-active" id="usage-tool-cost">
                 <div class="infobar-cost-block">
