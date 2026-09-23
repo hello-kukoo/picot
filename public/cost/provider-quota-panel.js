@@ -82,9 +82,11 @@ export function createProviderQuotaPanel(seams, { locale }) {
     loading = true;
     render();
     try {
-      const data = await seams.gateway.call("provider_quota_report", { force });
+      // The gateway resolves with the handler payload `{ ok, data }`, not the
+      // handler's own data object — the reports live one level down.
+      const payload = await seams.gateway.call("provider_quota_report", { force });
       reportsById.clear();
-      for (const report of data?.reports ?? []) {
+      for (const report of payload?.data?.reports ?? []) {
         reportsById.set(report.provider, report);
       }
     } catch {
@@ -113,7 +115,8 @@ export function createProviderQuotaPanel(seams, { locale }) {
       await seams.dataTransport?.resetCreditSettle({ operationId, ambiguous: true });
       return { toast: locale.toastUnknown };
     }
-    const failure = result?.failure;
+    const payload = result?.data ?? {};
+    const failure = payload.failure;
     if (failure === "ambiguous") {
       await seams.dataTransport?.resetCreditSettle({ operationId, ambiguous: true });
       return { toast: locale.toastUnknown };
@@ -121,10 +124,10 @@ export function createProviderQuotaPanel(seams, { locale }) {
     if (failure === "operation_in_flight") return { toast: locale.toastInFlight };
     if (failure === "needs_login") return { toast: locale.toastNeedsLogin };
     await seams.dataTransport?.resetCreditSettle({ operationId, ambiguous: false });
-    if (result?.code === "reset") return { toast: locale.toastResetDone };
-    if (result?.code === "already_redeemed") return { toast: locale.toastResetDone };
-    if (result?.code === "nothing_to_reset") return { toast: locale.toastNothingToReset };
-    if (result?.code === "no_credit") return { toast: locale.toastNoCredit };
+    if (payload.code === "reset") return { toast: locale.toastResetDone };
+    if (payload.code === "already_redeemed") return { toast: locale.toastResetDone };
+    if (payload.code === "nothing_to_reset") return { toast: locale.toastNothingToReset };
+    if (payload.code === "no_credit") return { toast: locale.toastNoCredit };
     return { toast: locale.toastUnknown };
   }
 

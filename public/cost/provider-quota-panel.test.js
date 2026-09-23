@@ -42,8 +42,12 @@ afterEach(() => {
 function makeSeams({ reports = [], consumeResult, openError } = {}) {
   const gateway = {
     call: vi.fn(async (op) => {
-      if (op === "provider_quota_report") return { reports };
-      if (op === "codex_reset_credits_consume") return consumeResult ?? { code: "reset" };
+      // The gateway resolves with the handler payload `{ ok, data }` — the
+      // shape extensions/picot-config.ts returns and models-page.js reads.
+      if (op === "provider_quota_report") return { ok: true, data: { reports } };
+      if (op === "codex_reset_credits_consume") {
+        return { ok: true, data: consumeResult ?? { code: "reset" } };
+      }
       return {};
     }),
   };
