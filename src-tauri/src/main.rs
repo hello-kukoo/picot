@@ -6,6 +6,7 @@
 // Retired compatibility handlers remain explicit and fail closed where needed.
 #[allow(dead_code)]
 mod anydoc_preview;
+mod browser_pane;
 mod cache_optimizer_config;
 mod caveman_config;
 mod child_supervision;
@@ -25,6 +26,7 @@ mod mutation_types;
 mod native_pi_manager;
 #[allow(dead_code)]
 mod oauth_manager;
+mod officecli_watch;
 mod operation_registry;
 mod package_manager;
 mod paste_offload;
@@ -1768,6 +1770,17 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
         window_owner::TemporaryKind::Landing,
     )?;
     host.set_owner_registry(owner_registry.clone());
+    // Browser panes (spec 2026-09-22): child webviews keyed by tab id, plus
+    // the officecli watch subprocess pool they render from.
+    let browser_panes = std::sync::Arc::new(browser_pane::BrowserPaneRuntime::new(
+        app.handle().clone(),
+        host.origin(),
+    ));
+    let officecli_watches = std::sync::Arc::new(officecli_watch::OfficecliWatchRuntime::new());
+    host.set_browser_panes(browser_panes.clone());
+    host.set_officecli_watches(officecli_watches.clone());
+    app.manage(browser_pane::BrowserPaneState(browser_panes));
+    app.manage(officecli_watch::OfficecliWatchState(officecli_watches));
     let host_events = host.event_sink();
     terminal_manager.set_event_sink({
         let host_events = host_events.clone();
@@ -4161,6 +4174,11 @@ fn handle_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) 
 /// the same cleanup as a workspace window despite its immutable label.
 fn handle_window_destroyed(window: &tauri::Window) {
     let label = window.label();
+    // Browser panes die with their window; drop the manager's stale entries
+    // so labels can be reused without collisions.
+    if let Some(panes) = window.try_state::<browser_pane::BrowserPaneState>() {
+        panes.0.destroy_all_for_window(label);
+    }
     let Some(registry) = window.try_state::<OwnerRegistryState>() else {
         return;
     };
@@ -4481,6 +4499,11 @@ fn main() {
                 }
                 if let Some(terminal_manager) = app_handle.try_state::<TerminalManagerState>() {
                     terminal_manager.kill_all();
+                }
+                if let Some(officecli_watches) =
+                    app_handle.try_state::<officecli_watch::OfficecliWatchState>()
+                {
+                    officecli_watches.0.stop_all();
                 }
                 child_supervision::clear_registry();
             }

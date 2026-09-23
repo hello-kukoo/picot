@@ -43,6 +43,7 @@ export class FileTabState {
       .map((tab) => ({
         id: tab.id,
         kind: tab.kind || "file",
+        ...(tab.url ? { url: tab.url } : {}),
         filePath: tab.filePath,
         fileName: tab.fileName || basenameLocalPath(tab.filePath) || tab.filePath,
         mode: tab.mode || "preview",
@@ -198,6 +199,53 @@ export class FileTabState {
   /**
    * Subscribe to state changes. Returns an unsubscribe function.
    */
+  /**
+   * Open a browser tab (spec 2026-09-22) pointing at `url`. For office
+   * files, `file` is the workspace file the watch server renders; the URL
+   * then refreshes when the tab is reopened via the office entry point.
+   */
+  openBrowserTab(url, { file, fileName } = {}) {
+    const tabId = `browser:${file || url}`;
+    const existing = this.tabs.find((tab) => tab.id === tabId);
+    if (existing) {
+      if (url !== existing.url) this.updateTab(tabId, { url });
+      this.activeTabId = tabId;
+      this.persist();
+      this._notify();
+      // updateTab replaces the tab object; return the fresh instance.
+      return this.getTab(tabId);
+    }
+    const tab = {
+      id: tabId,
+      kind: "browser",
+      url,
+      filePath: file || url,
+      fileName: fileName || hostOf(url) || url,
+      mode: "preview",
+      content: null,
+      originalContent: null,
+      dirty: false,
+      loading: false,
+      saving: false,
+      conflict: false,
+      error: null,
+      mtimeMs: null,
+      editable: null,
+      renderAs: null,
+      truncated: false,
+      isBinary: false,
+      mimeType: null,
+      size: null,
+      saveError: null,
+      errorDetail: null,
+    };
+    this.tabs.push(tab);
+    this.activeTabId = tabId;
+    this.persist();
+    this._notify();
+    return tab;
+  }
+
   subscribe(listener) {
     this._listeners.add(listener);
     return () => this._listeners.delete(listener);
@@ -218,6 +266,7 @@ export class FileTabState {
         filePath: t.filePath,
         fileName: t.fileName,
         mode: t.mode,
+        ...(t.url ? { url: t.url } : {}),
       })),
       activeTabId: this.activeTabId,
       touchedAt: Date.now(),
@@ -269,5 +318,13 @@ export class FileTabState {
         // Listener error — non-fatal.
       }
     }
+  }
+}
+
+function hostOf(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
   }
 }

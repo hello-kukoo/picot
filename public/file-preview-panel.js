@@ -10,6 +10,8 @@
  * Markdown parsing, or CodeMirror configuration.
  */
 
+import { closePane } from "./browser-pane/browser-pane-manager.js";
+import { createBrowserTabRenderer } from "./browser-pane/browser-tab-renderer.js";
 import { classifyFilePath } from "./file-language.js";
 import { createFileRenderer } from "./file-preview-renderers.js";
 import { FileTabState } from "./file-tab-state.js";
@@ -207,6 +209,30 @@ export class FilePreviewPanel {
   }
 
   /**
+   * Open (or focus) a browser tab (spec 2026-09-22). Office tabs carry the
+   * workspace file so their watch server lifecycle follows the tab.
+   */
+  async openBrowserTab(url, opts = {}) {
+    const existing = this.state
+      .getTabs()
+      .find((tab) => tab.kind === "browser" && tab.id === `browser:${opts.file || url}`);
+    if (this.activeContent?.kind === "transient") this._deactivateCurrent();
+    if (existing && existing.id === this.state.activeTabId && this.currentRenderer) {
+      this._openPanel();
+      this._renderTabBar();
+      return existing;
+    }
+    this._captureActiveRenderer();
+    const tab = this.state.openBrowserTab(url, opts);
+    this._openPanel();
+    this._renderTabBar();
+    await this._mountRenderer(tab);
+    this.activeContent = { kind: "file", id: tab.id };
+    this._renderTabBar();
+    return tab;
+  }
+
+  /**
    * Open a file the agent just wrote. Reloads an existing clean tab so the
    * live preview (including HTML iframes) picks up disk changes; leaves a
    * dirty tab alone aside from focusing it.
@@ -266,6 +292,9 @@ export class FilePreviewPanel {
     this.autoSaveTimers.clear();
     this._abortAllTabLoads();
     this.loadTokens.clear();
+    for (const tab of this.state.getTabs()) {
+      if (tab.kind === "browser") closePane(tab.id);
+    }
     this._destroyRenderer();
     this.activeDialogCancel?.();
     this.activeDialogCancel = null;
@@ -519,7 +548,13 @@ export class FilePreviewPanel {
 
   _destroyRenderer() {
     if (!this.currentRenderer) return;
-    this.currentRenderer.destroy();
+    // Browser renderers keep their native webview alive across tab switches;
+    // file renderers tear down completely.
+    if (typeof this.currentRenderer.detach === "function") {
+      this.currentRenderer.detach();
+    } else {
+      this.currentRenderer.destroy();
+    }
     this.currentRenderer = null;
   }
 
@@ -717,7 +752,7 @@ export class FilePreviewPanel {
         id: tab.id,
         label: tab.fileName,
         title: tab.filePath,
-        icon: this._getFileIcon(tab.fileName),
+        icon: tab.kind === "browser" ? this._getBrowserIcon() : this._getFileIcon(tab.fileName),
         iconIsElement: true,
         dirty: tab.dirty,
         conflict: tab.conflict,
@@ -789,6 +824,14 @@ export class FilePreviewPanel {
     tabs[0].setAttribute("tabindex", "0");
   }
 
+  _getBrowserIcon() {
+    const icon = document.createElement("span");
+    icon.className = "file-tab-icon browser-tab-icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = "🌐";
+    return icon;
+  }
+
   _getFileIcon(fileName) {
     return createFileTypeIcon({ name: fileName });
   }
@@ -826,6 +869,7 @@ export class FilePreviewPanel {
   async _closeTab(tabId) {
     const tab = this.state.getTab(tabId);
     if (!tab) return false;
+    if (tab.kind === "browser") this._teardownBrowserTab(tab);
     if (tab.id === this.state.activeTabId) this._captureActiveRenderer();
 
     const freshTab = this.state.getTab(tabId);
@@ -886,11 +930,48 @@ export class FilePreviewPanel {
     return true;
   }
 
+  /** Office upgrade flow (spec 2026-09-22 §4.4): markdown preview →
+   * officecli watch → browser tab with annotation support. */
+  async _openOfficeInBrowserTab(tab) {
+    const relative = relativeLocalPath(tab.filePath, this.workspaceRoot);
+    const absolute = relative === null ? tab.filePath : `${this.workspaceRoot}/${relative}`;
+    try {
+      const response = await this.transport.officecliWatchStart({ file: absolute });
+      await this.openBrowserTab(response.url, { file: absolute, fileName: tab.fileName });
+    } catch (error) {
+      const message =
+        error?.failure === "officecli_missing"
+          ? t("files.browser.officecliMissing")
+          : t("files.browser.watchStartFailed");
+      window.dispatchEvent(new CustomEvent("picot-toast", { detail: { message } }));
+    }
+  }
+
+  /** Close the pane and stop the office watch when its last tab closes. */
+  _teardownBrowserTab(tab) {
+    closePane(tab.id);
+    if (tab.filePath && tab.filePath !== tab.url) {
+      const watchStillUsed = this.state
+        .getTabs()
+        .some((t) => t.id !== tab.id && t.kind === "browser" && t.filePath === tab.filePath);
+      if (!watchStillUsed) {
+        this.transport?.officecliWatchStop?.({ file: tab.filePath }).catch(() => {});
+      }
+    }
+  }
+
   async _loadTabContent(tab) {
     this._abortTabLoad(tab.id);
     const token = (this.loadTokens.get(tab.id) || 0) + 1;
     this.loadTokens.set(tab.id, token);
     this.state.updateTab(tab.id, { loading: true, error: null, errorDetail: null });
+
+    if (tab.kind === "browser") {
+      // Browser tabs point at an external URL rendered by a native child
+      // webview; there is no file content to load.
+      await this._mountIfActive(tab.id);
+      return true;
+    }
 
     const controller = new AbortController();
     this.loadAbortControllers.set(tab.id, controller);
@@ -1051,6 +1132,16 @@ export class FilePreviewPanel {
       return;
     }
 
+    if (tab.kind === "browser") {
+      this.currentRenderer = createBrowserTabRenderer({
+        tab,
+        transport: this.transport,
+      });
+      this.currentRenderer.mount(this.content);
+      this._renderToolbar();
+      return;
+    }
+
     this.currentRenderer = createFileRenderer({
       filePath: tab.filePath,
       fileName: tab.fileName,
@@ -1078,6 +1169,7 @@ export class FilePreviewPanel {
         this.state.persist();
       },
       rawUrl: this.transport?.fileRawUrl?.(relativeLocalPath(tab.filePath, this.workspaceRoot)),
+      onOpenInBrowser: tab.renderAs === "markdown" ? () => this._openOfficeInBrowserTab(tab) : null,
       onError: (error) => {
         this.state.updateTab(tab.id, {
           error: t("files.preview.loadError"),

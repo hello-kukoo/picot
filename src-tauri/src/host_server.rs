@@ -139,6 +139,8 @@ struct HostState {
     #[allow(dead_code)]
     desktop_capabilities: Mutex<HostCapabilityStore>,
     owner_registry: Mutex<Option<Arc<WindowOwnerRegistry>>>,
+    browser_panes: Mutex<Option<Arc<crate::browser_pane::BrowserPaneRuntime>>>,
+    officecli_watches: Mutex<Option<Arc<crate::officecli_watch::OfficecliWatchRuntime>>>,
     runtimes: NativePiManager,
     auth: Arc<Mutex<RemoteAuth>>,
     data: HostDataPlane,
@@ -229,6 +231,8 @@ impl HostServer {
             static_dir: static_dir.clone(),
             desktop_capabilities: Mutex::new(HostCapabilityStore::default()),
             owner_registry: Mutex::new(None),
+            browser_panes: Mutex::new(None),
+            officecli_watches: Mutex::new(None),
             runtimes,
             auth,
             data,
@@ -469,6 +473,23 @@ impl HostServer {
     pub fn set_owner_registry(&self, registry: Arc<WindowOwnerRegistry>) {
         if let Ok(mut slot) = self.state.owner_registry.lock() {
             *slot = Some(registry);
+        }
+    }
+
+    /// Attach the browser-pane runtime (child webviews) after host bind.
+    pub fn set_browser_panes(&self, runtime: Arc<crate::browser_pane::BrowserPaneRuntime>) {
+        if let Ok(mut slot) = self.state.browser_panes.lock() {
+            *slot = Some(runtime);
+        }
+    }
+
+    /// Attach the officecli watch runtime after host bind.
+    pub fn set_officecli_watches(
+        &self,
+        runtime: Arc<crate::officecli_watch::OfficecliWatchRuntime>,
+    ) {
+        if let Ok(mut slot) = self.state.officecli_watches.lock() {
+            *slot = Some(runtime);
         }
     }
     /// Test-only read-back beside the setter; production code re-reads the
@@ -2861,6 +2882,17 @@ async fn dispatch(
                         | "cost_dashboard"
                         | "reset_credit_open"
                         | "reset_credit_settle"
+                        | "browser_pane_create"
+                        | "browser_pane_set_rect"
+                        | "browser_pane_set_visible"
+                        | "browser_pane_eval"
+                        | "browser_pane_navigate"
+                        | "browser_pane_url"
+                        | "browser_pane_destroy"
+                        | "officecli_watch_start"
+                        | "officecli_watch_stop"
+                        | "officecli_watch_status"
+                        | "officecli_watch_mark"
                 ) {
                     return true;
                 }
@@ -3131,6 +3163,281 @@ async fn dispatch(
                         "type": "data_response",
                         "requestId": request_id,
                         "operation": "reset_credit_settle",
+                    }))
+                }
+                Some("browser_pane_create") => {
+                    let panes = state
+                        .browser_panes
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .ok_or(("unavailable", "browser panes are not initialized".into()))?;
+                    let pane_id = frame
+                        .get("paneId")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_operation", "paneId is required".into()))?;
+                    let window_label = frame
+                        .get("windowLabel")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_operation", "windowLabel is required".into()))?;
+                    let url = frame
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_operation", "url is required".into()))?;
+                    let num = |key: &str| -> Result<f64, (&'static str, String)> {
+                        frame
+                            .get(key)
+                            .and_then(Value::as_f64)
+                            .ok_or(("invalid_operation", format!("{key} is required")))
+                    };
+                    panes
+                        .create(
+                            pane_id,
+                            window_label,
+                            url,
+                            crate::browser_pane::PaneRect {
+                                x: num("x")?,
+                                y: num("y")?,
+                                width: num("width")?,
+                                height: num("height")?,
+                            },
+                        )
+                        .map_err(|e| ("browser_pane_failed", e))?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "browser_pane_create",
+                    }))
+                }
+                Some("browser_pane_set_rect") => {
+                    let panes = state
+                        .browser_panes
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .ok_or(("unavailable", "browser panes are not initialized".into()))?;
+                    let pane_id = frame
+                        .get("paneId")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_operation", "paneId is required".into()))?;
+                    let num = |key: &str| -> Result<f64, (&'static str, String)> {
+                        frame
+                            .get(key)
+                            .and_then(Value::as_f64)
+                            .ok_or(("invalid_operation", format!("{key} is required")))
+                    };
+                    panes
+                        .set_rect(
+                            pane_id,
+                            crate::browser_pane::PaneRect {
+                                x: num("x")?,
+                                y: num("y")?,
+                                width: num("width")?,
+                                height: num("height")?,
+                            },
+                        )
+                        .map_err(|e| ("browser_pane_failed", e))?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "browser_pane_set_rect",
+                    }))
+                }
+                Some("browser_pane_set_visible") => {
+                    let panes = state
+                        .browser_panes
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .ok_or(("unavailable", "browser panes are not initialized".into()))?;
+                    let pane_id = frame
+                        .get("paneId")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_operation", "paneId is required".into()))?;
+                    let visible = frame.get("visible") == Some(&Value::Bool(true));
+                    panes
+                        .set_visible(pane_id, visible)
+                        .map_err(|e| ("browser_pane_failed", e))?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "browser_pane_set_visible",
+                    }))
+                }
+                Some("browser_pane_eval") => {
+                    let panes = state
+                        .browser_panes
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .ok_or(("unavailable", "browser panes are not initialized".into()))?;
+                    let pane_id = frame
+                        .get("paneId")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_operation", "paneId is required".into()))?;
+                    let expression = frame
+                        .get("js")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_operation", "js is required".into()))?;
+                    let result = panes
+                        .eval_json(pane_id, expression)
+                        .await
+                        .map_err(|e| ("browser_pane_failed", e))?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "browser_pane_eval",
+                        "result": result,
+                    }))
+                }
+                Some("browser_pane_navigate") => {
+                    let panes = state
+                        .browser_panes
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .ok_or(("unavailable", "browser panes are not initialized".into()))?;
+                    let pane_id = frame
+                        .get("paneId")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_operation", "paneId is required".into()))?;
+                    let url = frame
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_operation", "url is required".into()))?;
+                    panes
+                        .navigate(pane_id, url)
+                        .map_err(|e| ("browser_pane_failed", e))?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "browser_pane_navigate",
+                    }))
+                }
+                Some("browser_pane_url") => {
+                    let panes = state
+                        .browser_panes
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .ok_or(("unavailable", "browser panes are not initialized".into()))?;
+                    let pane_id = frame
+                        .get("paneId")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_operation", "paneId is required".into()))?;
+                    let url = panes.url(pane_id).map_err(|e| ("browser_pane_failed", e))?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "browser_pane_url",
+                        "url": url,
+                    }))
+                }
+                Some("browser_pane_destroy") => {
+                    let panes = state
+                        .browser_panes
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .ok_or(("unavailable", "browser panes are not initialized".into()))?;
+                    let pane_id = frame
+                        .get("paneId")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_operation", "paneId is required".into()))?;
+                    let _ = panes.destroy(pane_id);
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "browser_pane_destroy",
+                    }))
+                }
+                Some("officecli_watch_start") => {
+                    let watches = state
+                        .officecli_watches
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .ok_or(("unavailable", "officecli watch is not initialized".into()))?;
+                    let file = frame
+                        .get("file")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_operation", "file is required".into()))?
+                        .to_string();
+                    let url = tokio::task::spawn_blocking(move || {
+                        watches.start(&file, std::time::Duration::from_secs(15))
+                    })
+                    .await
+                    .map_err(|e| ("host_operation_failed", e.to_string()))?
+                    .map_err(|e| ("officecli_watch_failed", e))?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "officecli_watch_start",
+                        "url": url,
+                    }))
+                }
+                Some("officecli_watch_stop") => {
+                    let watches = state
+                        .officecli_watches
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .ok_or(("unavailable", "officecli watch is not initialized".into()))?;
+                    let file = frame
+                        .get("file")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_operation", "file is required".into()))?;
+                    let _ = watches.stop(file);
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "officecli_watch_stop",
+                    }))
+                }
+                Some("officecli_watch_status") => {
+                    let watches = state
+                        .officecli_watches
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .ok_or(("unavailable", "officecli watch is not initialized".into()))?;
+                    let file = frame
+                        .get("file")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_operation", "file is required".into()))?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "officecli_watch_status",
+                        "url": watches.status(file),
+                    }))
+                }
+                Some("officecli_watch_mark") => {
+                    let watches = state
+                        .officecli_watches
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .ok_or(("unavailable", "officecli watch is not initialized".into()))?;
+                    let file = frame
+                        .get("file")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_operation", "file is required".into()))?
+                        .to_string();
+                    let path = frame
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_operation", "path is required".into()))?
+                        .to_string();
+                    let output = tokio::task::spawn_blocking(move || watches.mark(&file, &path))
+                        .await
+                        .map_err(|e| ("host_operation_failed", e.to_string()))?
+                        .map_err(|e| ("officecli_watch_failed", e))?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "officecli_watch_mark",
+                        "output": output,
                     }))
                 }
                 Some("file_read") => {

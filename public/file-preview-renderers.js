@@ -11,6 +11,7 @@ import { classifyFilePath } from "./file-language.js";
 import { createPdfRenderer } from "./file-pdf-preview.js";
 import { createHtmlRenderer } from "./file-preview-html.js";
 import { attachCopyButtonDelegation, renderFileMarkdown } from "./file-preview-markdown.js";
+import { t } from "./i18n.js";
 
 export function createFileRenderer({
   filePath,
@@ -24,6 +25,7 @@ export function createFileRenderer({
   onError,
   renderAs,
   rawUrl,
+  onOpenInBrowser,
 } = {}) {
   const classification = classifyFilePath(filePath || "");
   // Priority 1: a trusted host directive wins over filename classification
@@ -36,6 +38,7 @@ export function createFileRenderer({
       readOnly: true,
       onError,
       convertedDocument: true,
+      onOpenInBrowser,
     });
   }
 
@@ -103,6 +106,7 @@ function createMarkdownRenderer({
   onModeChange,
   onError,
   convertedDocument = false,
+  onOpenInBrowser = null,
 }) {
   let editor = null;
   let cleanupCopy = null;
@@ -203,6 +207,17 @@ function createMarkdownRenderer({
 
     if (currentMode === "preview") {
       container.replaceChildren();
+      if (convertedDocument && typeof onOpenInBrowser === "function") {
+        // Office conversion preview (spec 2026-09-22): one-click upgrade to
+        // the faithful browser-pane view with annotation support.
+        const upgrade = document.createElement("button");
+        upgrade.type = "button";
+        upgrade.className = "office-upgrade-button";
+        upgrade.textContent = t("files.browser.openInBrowser");
+        upgrade.title = t("files.browser.openInBrowserTooltip");
+        upgrade.addEventListener("click", () => onOpenInBrowser());
+        container.appendChild(upgrade);
+      }
       const frag = renderFileMarkdown(currentContent, { convertedDocument });
       const mdDiv = document.createElement("div");
       mdDiv.className = "file-markdown-preview";

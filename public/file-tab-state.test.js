@@ -51,6 +51,52 @@ describe("FileTabState", () => {
     });
   });
 
+  describe("openBrowserTab", () => {
+    test("creates a browser tab keyed by office file and persists url", () => {
+      const state = new FileTabState({ storage });
+      state.load("/workspace/project");
+      const tab = state.openBrowserTab("http://127.0.0.1:41001/", {
+        file: "/workspace/project/报告.docx",
+        fileName: "报告.docx",
+      });
+      expect(tab.kind).toBe("browser");
+      expect(tab.id).toBe("browser:/workspace/project/报告.docx");
+      expect(tab.url).toBe("http://127.0.0.1:41001/");
+      expect(state.getTabs()).toHaveLength(1);
+
+      const state2 = new FileTabState({ storage });
+      state2.load("/workspace/project");
+      const restored = state2.getTabs()[0];
+      expect(restored.kind).toBe("browser");
+      expect(restored.url).toBe("http://127.0.0.1:41001/");
+      expect(restored.fileName).toBe("报告.docx");
+    });
+
+    test("reuses an existing tab and refreshes its url", () => {
+      const state = new FileTabState({ storage });
+      state.load("/workspace/project");
+      state.openBrowserTab("http://127.0.0.1:41001/", {
+        file: "/workspace/project/报告.docx",
+        fileName: "报告.docx",
+      });
+      const again = state.openBrowserTab("http://127.0.0.1:42002/", {
+        file: "/workspace/project/报告.docx",
+        fileName: "报告.docx",
+      });
+      expect(state.getTabs()).toHaveLength(1);
+      expect(again.url).toBe("http://127.0.0.1:42002/");
+    });
+
+    test("generic web tabs are keyed by url with host label", () => {
+      const state = new FileTabState({ storage });
+      state.load("/workspace/project");
+      const tab = state.openBrowserTab("http://localhost:5173/");
+      expect(tab.id).toBe("browser:http://localhost:5173/");
+      expect(tab.fileName).toBe("localhost");
+      expect(tab.filePath).toBe("http://localhost:5173/");
+    });
+  });
+
   describe("selectTab", () => {
     test("selects an existing tab", () => {
       const state = new FileTabState({ storage });

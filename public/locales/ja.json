@@ -237,6 +237,28 @@
       "save": "変更を保存",
       "discard": "破棄",
       "cancel": "キャンセル"
+    },
+    "browser": {
+      "annotate": "注釈",
+      "annotateTooltip": "ページ要素を選んで注釈する",
+      "refresh": "更新",
+      "refreshTooltip": "ページを再読み込み",
+      "restartWatch": "再レンダリング",
+      "restartTooltip": "外部編集は自動検出されません。再レンダリングで反映",
+      "loading": "読み込み中…",
+      "restarting": "レンダリングサービスを再起動中…",
+      "restartFailed": "再起動に失敗",
+      "cannotOpen": "開けません",
+      "pickHint": "要素をクリック、Esc でキャンセル",
+      "selectorUnavailable": "セレクターを利用できません",
+      "dialogTitle": "要素に注釈",
+      "dialogPlaceholder": "この要素に agent に何をさせますか？",
+      "cancel": "キャンセル",
+      "addToComposer": "入力欄に追加",
+      "openInBrowser": "内蔵ブラウザで開く",
+      "openInBrowserTooltip": "忠実なレンダリングと要素注釈（officecli 必要）",
+      "officecliMissing": "officecli をインストールすると内蔵ブラウザ表示が使えます",
+      "watchStartFailed": "レンダリングサービスの起動に失敗"
     }
   },
   "dialogs": {

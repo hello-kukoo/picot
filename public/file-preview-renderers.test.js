@@ -147,3 +147,31 @@ describe("createFileRenderer — renderer selection", () => {
     expect(container.querySelector(".cm-editor")).toBeNull();
   });
 });
+
+describe("office upgrade button (spec 2026-09-22)", () => {
+  test("converted markdown preview offers the built-in browser entry", () => {
+    const calls = [];
+    const renderer = createFileRenderer({
+      filePath: "/ws/报告.docx",
+      fileName: "报告.docx",
+      content: "# 标题\n\n段落",
+      renderAs: "markdown",
+      onOpenInBrowser: () => calls.push("open"),
+    });
+    renderer.mount(container);
+    const button = container.querySelector(".office-upgrade-button");
+    expect(button).toBeTruthy();
+    button.click();
+    expect(calls).toEqual(["open"]);
+  });
+
+  test("no upgrade button without the onOpenInBrowser hook", () => {
+    const renderer = createFileRenderer({
+      filePath: "/ws/报告.docx",
+      content: "# 标题",
+      renderAs: "markdown",
+    });
+    renderer.mount(container);
+    expect(container.querySelector(".office-upgrade-button")).toBeNull();
+  });
+});

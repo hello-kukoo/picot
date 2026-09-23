@@ -364,6 +364,62 @@ export class WsTransport {
     return this.wsClient.sendData("reset_credit_settle", { operationId, ambiguous });
   }
 
+  /** Browser panes (spec 2026-09-22): child webviews in the file-preview
+   * panel. Rect coordinates are logical (CSS) pixels relative to the window. */
+  browserPaneCreate({ paneId, windowLabel, url, x, y, width, height }) {
+    return this.wsClient.sendData("browser_pane_create", {
+      paneId,
+      windowLabel,
+      url,
+      x,
+      y,
+      width,
+      height,
+    });
+  }
+
+  browserPaneSetRect({ paneId, x, y, width, height }) {
+    return this.wsClient.sendData("browser_pane_set_rect", { paneId, x, y, width, height });
+  }
+
+  browserPaneSetVisible({ paneId, visible }) {
+    return this.wsClient.sendData("browser_pane_set_visible", { paneId, visible });
+  }
+
+  /** Promise-style eval: resolves with the JSON serialization of the
+   * expression's value (or rejects on timeout). */
+  browserPaneEval({ paneId, js }) {
+    return this.wsClient.sendData("browser_pane_eval", { paneId, js });
+  }
+
+  browserPaneNavigate({ paneId, url }) {
+    return this.wsClient.sendData("browser_pane_navigate", { paneId, url });
+  }
+
+  browserPaneUrl({ paneId }) {
+    return this.wsClient.sendData("browser_pane_url", { paneId });
+  }
+
+  browserPaneDestroy({ paneId }) {
+    return this.wsClient.sendData("browser_pane_destroy", { paneId });
+  }
+
+  officecliWatchStart({ file }) {
+    return this.wsClient.sendData("officecli_watch_start", { file });
+  }
+
+  officecliWatchStop({ file }) {
+    return this.wsClient.sendData("officecli_watch_stop", { file });
+  }
+
+  officecliWatchStatus({ file }) {
+    return this.wsClient.sendData("officecli_watch_status", { file });
+  }
+
+  officecliWatchMark({ file, path }) {
+    return this.wsClient.sendData("officecli_watch_mark", { file, path });
+  }
+
   hostHealth() {
     return this._control("host_health", {});
   }

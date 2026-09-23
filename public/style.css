@@ -10451,3 +10451,117 @@ button.skills-group-status:disabled {
 .lan-qr-btn {
   color: var(--accent-text);
 }
+
+/* ─── Browser pane tabs (spec 2026-09-22) ─────────────────────────── */
+
+.browser-tab-root {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.browser-pane-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--border-default);
+}
+
+.browser-pane-url {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-solid);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.browser-pane-actions {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.browser-pane-action {
+  height: 26px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-solid);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.browser-pane-action:hover {
+  border-color: var(--border-hover);
+}
+
+.browser-pane-action.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.browser-pane-status {
+  flex-shrink: 1;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The native child webview floats above this rect; keep it clear of any
+ * in-DOM chrome so the two stay visually aligned. */
+.browser-pane-content {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.browser-tab-icon {
+  font-size: var(--font-size-sm);
+  line-height: 1;
+}
+
+.office-upgrade-button {
+  margin: var(--space-3);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-solid);
+  color: var(--accent);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.office-upgrade-button:hover {
+  border-color: var(--accent);
+}
+
+.browser-annotation-meta {
+  overflow: hidden;
+  margin: 0 0 var(--space-2);
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--font-size-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-annotation-input {
+  width: 100%;
+  margin-bottom: var(--space-3);
+  padding: var(--space-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-solid);
+  color: var(--text-primary);
+  font-size: var(--font-size-md);
+  resize: vertical;
+}

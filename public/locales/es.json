@@ -237,6 +237,28 @@
       "save": "Guardar cambios",
       "discard": "Descartar",
       "cancel": "Cancelar"
+    },
+    "browser": {
+      "annotate": "Anotar",
+      "annotateTooltip": "Elige un elemento de la página y anótalo",
+      "refresh": "Actualizar",
+      "refreshTooltip": "Recargar la página",
+      "restartWatch": "Re-renderizar",
+      "restartTooltip": "Las ediciones externas no se detectan; re-renderiza para aplicarlas",
+      "loading": "Cargando…",
+      "restarting": "Reiniciando el servicio…",
+      "restartFailed": "Fallo al reiniciar",
+      "cannotOpen": "No se puede abrir",
+      "pickHint": "Haz clic en un elemento; Esc para cancelar",
+      "selectorUnavailable": "Selector no disponible",
+      "dialogTitle": "Anotar elemento",
+      "dialogPlaceholder": "¿Qué debe hacer el agent con este elemento?",
+      "cancel": "Cancelar",
+      "addToComposer": "Añadir al compositor",
+      "openInBrowser": "Abrir en navegador integrado",
+      "openInBrowserTooltip": "Render fiel con anotación de elementos (requiere officecli)",
+      "officecliMissing": "Instala officecli para usar la vista integrada",
+      "watchStartFailed": "No se pudo iniciar el servicio de render"
     }
   },
   "dialogs": {

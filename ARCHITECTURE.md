@@ -272,6 +272,19 @@ Pi 以 `~/.pi/agent/trust.json`（键为 canonical 路径，值为 true/false/nu
 - **Codex 重置额度双通道（不可逆操作）**：WebView → Rust 账本 `reset_credit_open`（sqlite 记 pending，operationId 即上游幂等键 `redeem_request_id`，未决行复用不开新单）→ pi 内 `consume` POST → Rust `reset_credit_settle`（settled/ambiguous）。启动清扫 60s 前的 pending 行为 abandoned；ambiguous 行下次重开对话框时先 `inspect` 对比 `available_count` 再决定重放同 id。账本表 `reset_credit_operations` 为 public-owned、existence-based 建表（session_bucket 先例，不动 Corp 拥有的版本戳）。
 - **owner 门禁**：`reset_credit_open/settle` 与 `cost_dashboard` 同款——已认证 desktop owner、landing 可见。
 
+## 浏览器面板与元素标注（browser pane）
+
+右侧 file-preview 面板的 `browser` tab 在主窗口内叠加 `tauri::webview` child webview（spec 2026-09-22，需 `unstable` feature；`window.add_child(builder, position, size)` 创建即定位）。安全边界：
+
+- **外部 webview 无 capability 初始化脚本**——它不是 owner，没有任何 host 控制权；`on_new_window` 一律 Deny。
+- **URL 白名单**：仅 http(s) 且 origin ≠ host origin（`browser_pane.rs::pane_url_allowed`）；file:/自定义 scheme 拒绝。`on_navigation` 运行时同策略，防外部页跳回 host 窃取窗口上下文；userinfo 不是 host 旁路（`http://x@evil.com` 的 host 就是 evil.com，属普通外部页）。
+- **布局同步**：pane 容器 ResizeObserver → rAF 合并 → `browser_pane_set_rect`（logical 坐标）；宽/高 < 2px 隐藏原生视图。tab 切换走 hide（webview 存活）；tab 关闭才 destroy。窗口销毁时 `destroy_all_for_window` 清映射，label 可复用。
+- **eval 桥**：`browser_pane_eval` = Rust `eval_with_callback` + try/catch 包装（Windows 异常被平台吞掉，靠包装脚本返回 `{ok:false,error}` 传回）+ 5s oneshot 超时；pane 锁作用域块级收束（MutexGuard 不得跨 await）。
+- **元素选择器**（`public/browser-pane/element-selector.js`，Paseo 移植）：IIFE 注入 + `window.__picotSelectorResult` 200ms 轮询 + session token 防串台 + Esc 取消 + 30s 超时；增强 `closest('[data-path]')` 采集 `docPath`。officecli watch 页面 `data-path` 与 `officecli set/add` 坐标同源——标注即**可执行修改坐标**（`<office-element>` 附件含 `suggested: officecli set …`）；普通网页走 Paseo `<browser-element>` 格式。附件以文本块进 composer（`#message-input`），用户可改后再发送。
+- **officecli watch 生命周期**（`officecli_watch.rs`）：canonical 路径去重（同文件多 tab 共享一个 watch）；空闲端口分配；stdout 解析 `Watch: http://localhost:PORT`（15s 启动超时）；stop 走 SIGTERM→2s→SIGKILL；app 退出 `stop_all` 清场。`watch mark` 服务端打标（刷新不丢）。Rust 侧 watch 与 pane 均 owner 门禁 data op。
+- **入口分工**：office 文件点击 → anydoc markdown 预览（快、零依赖）→「内置浏览器打开」按钮 → `officecli_watch_start` → browser tab（保真 + 标注 + agent 闭环）。无 officecli 时按钮报 `officecli_missing` toast。
+- **不做（一期）**：元素截图、普通网页徽标 overlay、历史/书签、agent 反向自动化（Paseo 22 命令，三期）。
+
 ## 兼容路由（P8 删除候选）
 
 `/api/*` compatibility routes maintain existing shell behavior on host origin. Each route uses owner capability authorization. Runtime traffic must use `/v2/*` and `/v2/ws`; retained HTTP routes are explicit compatibility or retirement responses, never Pi-origin forwarding.

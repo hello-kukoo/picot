@@ -237,6 +237,28 @@
       "save": "保存更改",
       "discard": "丢弃",
       "cancel": "取消"
+    },
+    "browser": {
+      "annotate": "标注",
+      "annotateTooltip": "选取页面元素并标注",
+      "refresh": "刷新",
+      "refreshTooltip": "重新加载页面",
+      "restartWatch": "重启渲染",
+      "restartTooltip": "外部修改不自动刷新；重启渲染服务重新渲染",
+      "loading": "加载中…",
+      "restarting": "重启渲染服务…",
+      "restartFailed": "重启失败",
+      "cannotOpen": "无法打开",
+      "pickHint": "点选页面元素，Esc 取消",
+      "selectorUnavailable": "选择器不可用",
+      "dialogTitle": "标注元素",
+      "dialogPlaceholder": "想让 agent 对这个元素做什么？",
+      "cancel": "取消",
+      "addToComposer": "加入输入框",
+      "openInBrowser": "内置浏览器打开",
+      "openInBrowserTooltip": "保真渲染并支持元素标注（需 officecli）",
+      "officecliMissing": "安装 officecli 后可用内置浏览器视图",
+      "watchStartFailed": "渲染服务启动失败"
     }
   },
   "dialogs": {

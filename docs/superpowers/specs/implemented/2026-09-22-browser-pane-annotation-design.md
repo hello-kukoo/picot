@@ -1,6 +1,8 @@
 # 浏览器面板与元素标注：源码调试 + Office 办公双场景
 
-**状态：** Approved — 2026-09-22 Dr. Lin 拍板三项（§9），待实施
+**状态：** Implemented — 2026-09-23（Phase 1 + 2 全量；三期项按 spec 不做）
+
+实施记录：Rust `browser_pane.rs`（child webview 管理 + URL 白名单 + eval_with_callback 桥[Windows 异常靠包装脚本回传] + 窗口销毁清扫）+ `officecli_watch.rs`（canonical 去重 + SIGTERM 清场 + watch mark）+ host_server 11 个 owner 门禁 data op + main.rs 注入/退出钩子。JS `browser-pane/` 四模块：pane-manager（ResizeObserver→rAF 矩形同步）、element-selector（Paseo IIFE 移植 + docPath 采集 + token/超时/Esc 状态机）、browser-annotations（office/browser 双格式 + 对话框 + composer 文本块）、browser-tab-renderer（工具条 + 标注流 + watch 重启）。tab-state 支持 browser kind 持久化（url 随存）。anydoc markdown 预览工具条新增「内置浏览器打开」。i18n `files.browser.*` ×4。测试：选择器 jsdom 6 + 附件 4 + manager 5 + tab-state 3 + renderer 升级按钮 2 + Rust 7；vitest 2106 / check / check:rust 全绿。实测：docx/pptx/xlsx watch 冒烟通过（~2.5s 就绪，data-path 全命中）。真实 dev-run 视觉验证（child webview 叠加/布局同步延迟）留 Dr. Lin 走查。
 **日期：** 2026-09-22
 **参照：** Paseo `packages/app/src/desktop/browser/pane/`（浏览器 pane 全套）、`element-selector.electron.ts`（492 行选择器）、`attachments/types.ts::BrowserElementAttachment`；officecli 1.0.149 本机实测；Picot 既有 file-preview 面板与子进程基建。
 **演化关系：** 独立于 daemon/relay spec，可并行。与 `2026-09-17-anydoc-office-preview-design.md`（Approved 未实施）构成**升级流水线**：点击 office 文件先走 anydoc markdown 只读预览，preview 面板提供「内置浏览器打开」入口升级到本 spec 的 browser tab（officecli watch 渲染 + 标注闭环）。两 spec 独立实施、互不阻塞。

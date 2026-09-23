@@ -237,6 +237,28 @@
       "save": "Save changes",
       "discard": "Discard",
       "cancel": "Cancel"
+    },
+    "browser": {
+      "annotate": "Annotate",
+      "annotateTooltip": "Pick a page element and annotate it",
+      "refresh": "Refresh",
+      "refreshTooltip": "Reload the page",
+      "restartWatch": "Re-render",
+      "restartTooltip": "External edits are not auto-detected; re-render to pick them up",
+      "loading": "Loading…",
+      "restarting": "Restarting render service…",
+      "restartFailed": "Restart failed",
+      "cannotOpen": "Cannot open",
+      "pickHint": "Click an element; Esc to cancel",
+      "selectorUnavailable": "Selector unavailable",
+      "dialogTitle": "Annotate element",
+      "dialogPlaceholder": "What should the agent do with this element?",
+      "cancel": "Cancel",
+      "addToComposer": "Add to composer",
+      "openInBrowser": "Open in built-in browser",
+      "openInBrowserTooltip": "Faithful rendering with element annotation (requires officecli)",
+      "officecliMissing": "Install officecli to use the built-in browser view",
+      "watchStartFailed": "Failed to start the render service"
     }
   },
   "dialogs": {
