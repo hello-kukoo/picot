@@ -50,6 +50,10 @@
 - App 启动序：探测 daemon（pidfile + `/health` 探针）→ 未运行则 spawn 并等 ready → 连接。App 退出不向 daemon 发停机。
 - Daemon 单实例：文件锁；重复启动即退出复用现有实例。
 
+### 3.2.1 会话视图绑定不变量（为 companion session-chat 预留）
+
+daemon 使 session 成为可独立于 GUI 持续的对象，main window 与将来的 companion panel 都只是 session 的订阅视图。**同一 session 在整个窗口内最多绑定一个可写聊天视图**（main 与所有 companion tab 合计）；用户试图在第二处打开它时，必须聚焦并显露既有视图，绝不创建第二个 composer。关闭 companion 只解除订阅，不 stop runtime、不关闭 session。v1 明确不支持同一 session 的多视图/双 composer：它意义不足以抵消输入 owner、草稿、queue/steer、焦点交接和读写不对称的额外契约；若未来出现真实需求，另立 spec。
+
 ### 3.3 迁移步骤（工程序）
 
 1. host 栈状态对象迁出 `app.manage`，进独立 `DaemonState`（纯 tokio，无 Tauri 依赖）。对象已是 Arc 共享，主要工作是 main.rs 的 setup 与命令分发拆出（main.rs 的 IPC handler 表迁到 daemon 进程的 WS/host_request 路径——WebView 本就大量走 HostServer，残余 Tauri command 需逐个收编）。
