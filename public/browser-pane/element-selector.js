@@ -168,7 +168,7 @@ export function buildElementSelectorScript(sessionToken) {
         });
         return out;
       }
-      function onClick(e) {
+      function captureSelection(e) {
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
@@ -199,6 +199,12 @@ export function buildElementSelectorScript(sessionToken) {
         destroy();
         window.__picotSelectorResult = result;
       }
+      function onClick(e) {
+        captureSelection(e);
+      }
+      function onPointerDown(e) {
+        captureSelection(e);
+      }
       function onKey(e) {
         if (e.key === 'Escape') {
           destroy();
@@ -208,6 +214,7 @@ export function buildElementSelectorScript(sessionToken) {
       function destroy() {
         document.removeEventListener('mousemove', onMove, true);
         document.removeEventListener('click', onClick, true);
+        document.removeEventListener('pointerdown', onPointerDown, true);
         document.removeEventListener('keydown', onKey, true);
         document.documentElement.classList.remove('__picot-select-mode');
         if (last) last.classList.remove('__picot-hover');
@@ -217,6 +224,7 @@ export function buildElementSelectorScript(sessionToken) {
       }
       document.addEventListener('mousemove', onMove, true);
       document.addEventListener('click', onClick, true);
+      document.addEventListener('pointerdown', onPointerDown, true);
       document.addEventListener('keydown', onKey, true);
       window.__picotSelector = { destroy: destroy, sessionToken: sessionToken };
       return { installed: true, sessionToken: sessionToken };

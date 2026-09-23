@@ -86,7 +86,12 @@ export function createBrowserTabRenderer({ tab, transport }) {
         annotateBtn?.classList.remove("active");
         setStatus("");
         if (outcome.type !== "selected") {
-          if (outcome.type === "failed") setStatus(t("files.browser.selectorUnavailable"));
+          // The reason distinguishes "install rejected" (unavailable) from
+          // "no pick arrived" (timeout); without it a failed annotate is
+          // indistinguishable in the UI from a silent no-op.
+          if (outcome.type === "failed") {
+            setStatus(`${t("files.browser.selectorUnavailable")}：${outcome.reason}`);
+          }
           return;
         }
         const selection = outcome.selection;

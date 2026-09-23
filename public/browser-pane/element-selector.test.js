@@ -59,16 +59,18 @@ test("installs select mode and reports the session token", () => {
   expect(document.documentElement.classList.contains("__picot-select-mode")).toBe(true);
 });
 
-test("does not cancel pointer events before the browser dispatches click", () => {
+test("captures a pick on pointerdown before WebKit text selection can consume click", () => {
   installScript("tok-pointer");
   const el = document.createElement("p");
+  el.setAttribute("data-path", "/body/p[4]");
   document.body.append(el);
   const down = new Event("pointerdown", { bubbles: true, cancelable: true });
-  const up = new Event("pointerup", { bubbles: true, cancelable: true });
   el.dispatchEvent(down);
-  el.dispatchEvent(up);
-  expect(down.defaultPrevented).toBe(false);
-  expect(up.defaultPrevented).toBe(false);
+  expect(down.defaultPrevented).toBe(true);
+  expect(window.__picotSelectorResult).toMatchObject({
+    __picotSessionToken: "tok-pointer",
+    docPath: "/body/p[4]",
+  });
   el.remove();
 });
 
