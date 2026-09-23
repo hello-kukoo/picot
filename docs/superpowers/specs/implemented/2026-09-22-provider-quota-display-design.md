@@ -120,14 +120,15 @@ CREATE TABLE IF NOT EXISTS reset_credit_operations (
 - `reset_credit_open`：插入 pending 行，返回 uuid。同账户已有 pending/ambiguous 未决行时返回该行 id（阻止开新单）。
 - `reset_credit_settle {operationId, code}`：按 code 落 `settled`（reset/already_redeemed/nothing_to_reset/no_credit）或 `ambiguous`（超时/不可读）。
 
-**恢复策略**：启动时扫 `pending` 且 `opened_at` 早于 60s 的行标 `abandoned`（扩展进程已亡，重放无门）；`ambiguous` 行在用户下次点「重置额度」时先由扩展 `GET rate-limit-reset-credits` 对比 `available_count` 是否已减少，减少则提示「上次操作可能已生效」，未减少则允许带同一 operationId 重放（上游幂等返回 `already_redeemed` 或 `nothing_to_reset`）。账本行只存 id/时间/状态，不存任何凭据或上游响应。
+**恢复策略**：启动时扫 `pending` 且 `opened_at` 早于 60s 的行标 `abandoned`（扩展进程已亡，重放无门）；`ambiguous` 行在用户下次点「重置额度」时**允许带同一 operationId 重放**——账本至多保留一条未决行并复用其 id（`metadata_store.rs::reset_credit_open`），该 id 即上游幂等键，故重放已生效的操作只会得到 `already_redeemed` / `nothing_to_reset`，不会双花。账本行只存 id/时间/状态，不存任何凭据或上游响应。
+> **2026-09-23 修订**：原设计要求扩展先 `GET rate-limit-reset-credits` 对比 `available_count` 是否减少，再决定能否重放。该对比不做——基线取自带 5 分钟 TTL、可能为 30 分钟 last-good 的配额报告，且另一设备或 chatgpt.com 网页端的重置同样会让当前值变小，两个方向都不可靠，用它驱动「可能已生效」的提示反而会误导。重放安全性由 id 幂等提供，与计数无关；UI 改为如实提示。
 
 ## WebView UI（public/cost/dashboard.js 新区块）
 
 1. 配额是「使用量」页内的独立子页签（「使用量」/「配额」两个 tab，2026-09-23 修订：原设计为 `renderShell` 追加 `<section id="usage-provider-quota">` 于 usage-models 之后，实装改为 Settings 主 DOM 的 `#settings-provider-quota`——配额不是成本统计的一格）；区块标题「提供方配额」+ 整体刷新按钮。
 2. 每个有报告的 provider 一张卡：显示名（id→显示名映射表，未知 id 原样显示）+ 窗口条列表（percent 进度条 + label + 相对重置时间）+ 数据更新时间。
 3. openai-codex 卡额外显示「重置额度 N 个」；点击 → 确认对话框（列 credits 明细 granted_at/expires_at）→ 确认后走 open→consume→settle 流程，结果 toast（成功/无可重置/无额度/结果未知）。
-4. `ambiguous` 结果 toast 引导用户重开对话框（触发恢复策略的 inspect 对比）。
+4. `ambiguous` 结果 toast 如实提示「可能已生效，重试安全（沿用同一请求 id）」；不做 inspect 计数对比（见上「恢复策略」2026-09-23 修订）。
 5. 空态：无可探测 provider 时整块隐藏（不显示「暂无数据」占位）。
 6. landing：用量页 landing 本就可见，本区块随 ConfigGateway 可用性正常工作；ConfigGateway 不可用（无任何 pi）时区块隐藏。
 

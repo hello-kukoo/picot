@@ -27,7 +27,8 @@ const locale = {
   dialogConfirm: "Reset now",
   dialogCancel: "Cancel",
   toastUnavailable: "Cannot open the reset operation right now",
-  toastUnknown: "Result unknown — reopen the dialog to verify",
+  toastUnknown:
+    "Result unknown: it may already have applied. Retrying is safe — the same request id is reused, so the server reports if it already applied.",
   toastInFlight: "An operation is already in progress",
   toastNeedsLogin: "Re-login required before resetting",
   toastResetDone: "Quota reset",
@@ -185,7 +186,9 @@ test("an ambiguous consume settles ambiguous and toasts the unknown result", asy
     operationId: "op-uuid-1",
     ambiguous: true,
   });
-  expect(toasts).toContain("Result unknown — reopen the dialog to verify");
+  expect(toasts).toContain(
+    "Result unknown: it may already have applied. Retrying is safe — the same request id is reused, so the server reports if it already applied.",
+  );
 });
 
 test("a failed ledger open never reaches consume", async () => {

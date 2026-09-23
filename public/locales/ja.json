@@ -1273,7 +1273,7 @@
       "dialogConfirm": "リセット実行",
       "dialogCancel": "キャンセル",
       "toastUnavailable": "現在リセット操作を開けません",
-      "toastUnknown": "結果不明 — ダイアログを開き直して確認してください",
+      "toastUnknown": "結果不明：すでに反映された可能性があります。再試行は安全です（同じリクエスト ID を再利用するため、反映済みならサーバーが通知します）。",
       "toastInFlight": "操作が既に進行中です",
       "toastNeedsLogin": "リセット前に再ログインしてください",
       "toastResetDone": "クォータをリセットしました",

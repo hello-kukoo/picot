@@ -1273,7 +1273,7 @@
       "dialogConfirm": "确认重置",
       "dialogCancel": "取消",
       "toastUnavailable": "暂时无法开启重置操作",
-      "toastUnknown": "结果未知，请重新打开对话框核对",
+      "toastUnknown": "结果未知：可能已经生效。重试是安全的 —— 沿用同一请求 id，服务端若已生效会直接告知。",
       "toastInFlight": "已有操作进行中",
       "toastNeedsLogin": "需先重新登录再重置",
       "toastResetDone": "额度已重置",

@@ -1273,7 +1273,7 @@
       "dialogConfirm": "Restablecer",
       "dialogCancel": "Cancelar",
       "toastUnavailable": "No se puede abrir la operación de restablecimiento ahora",
-      "toastUnknown": "Resultado desconocido — reabre el diálogo para verificar",
+      "toastUnknown": "Resultado desconocido: puede que ya se haya aplicado. Reintentar es seguro: se reutiliza el mismo id de solicitud y el servidor avisa si ya se aplicó.",
       "toastInFlight": "Ya hay una operación en curso",
       "toastNeedsLogin": "Inicia sesión de nuevo antes de restablecer",
       "toastResetDone": "Cuota restablecida",
