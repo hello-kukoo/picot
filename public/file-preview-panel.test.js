@@ -162,7 +162,8 @@ function createPanel(options = {}) {
       return response.json();
     }),
     fileRawUrl: vi.fn((path) => `/v2/files/raw?path=${encodeURIComponent(path)}`),
-    fileRaw: vi.fn(async () => ({ contentBase64: "aGk=", modifiedAtMs: 1 })),
+    fileRaw: vi.fn(async () => ({ contentBase64: "-_8", modifiedAtMs: 1 })),
+    openExternal: vi.fn(async () => ({})),
     browserPaneCreate: vi.fn(async () => ({})),
     browserPaneSetVisible: vi.fn(async () => ({})),
     browserPaneSetRect: vi.fn(async () => ({})),
@@ -253,7 +254,18 @@ describe("FilePreviewPanel", () => {
     const p = createPanel();
     await p.openFile("/test/workspace/photo.png");
     const img = content.querySelector(".file-image-img");
-    expect(img?.getAttribute("src")).toBe("data:image/png;base64,aGk=");
+    expect(img?.getAttribute("src")).toBe("data:image/png;base64,+/8=");
+    p.destroy();
+  });
+
+  test("browser tab toolbar opens its URL in the system browser", async () => {
+    const p = createPanel();
+    await p.openBrowserTab("http://127.0.0.1:41001/", {
+      file: "/test/workspace/a.docx",
+      fileName: "a.docx",
+    });
+    p.controls.openDesktop.click();
+    expect(p.transport.openExternal).toHaveBeenCalledWith("http://127.0.0.1:41001/");
     p.destroy();
   });
 

@@ -193,6 +193,7 @@
       "close": "关闭面板",
       "showControls": "显示控制",
       "openDesktop": "在桌面打开",
+      "openExternal": "系统浏览器打开",
       "disableLineWrap": "关闭自动换行",
       "enableLineWrap": "开启自动换行",
       "edit": "编辑",
@@ -256,8 +257,6 @@
       "cancel": "取消",
       "addToComposer": "加入输入框",
       "openInBrowser": "内置浏览器打开",
-      "openExternal": "系统浏览器打开",
-      "openExternalTooltip": "用系统默认浏览器打开当前 URL",
       "openInBrowserTooltip": "保真渲染并支持元素标注（需 officecli）",
       "officecliMissing": "安装 officecli 后可用内置浏览器视图",
       "watchStartFailed": "渲染服务启动失败"

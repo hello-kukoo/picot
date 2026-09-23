@@ -33,6 +33,7 @@ export function createBrowserTabRenderer({ tab, transport }) {
   let urlInput = null;
   let statusEl = null;
   let annotateBtn = null;
+  let attached = false;
   let destroyed = false;
   const selector = createElementSelectorController({
     webviewAdapter: createPaneWebviewAdapter({
@@ -144,18 +145,9 @@ export function createBrowserTabRenderer({ tab, transport }) {
     refreshBtn.textContent = t("files.browser.refresh");
     refreshBtn.addEventListener("click", () => void navigate(tab.url));
 
-    const externalBtn = document.createElement("button");
-    externalBtn.type = "button";
-    externalBtn.className = "browser-pane-action";
-    externalBtn.title = t("files.browser.openExternalTooltip");
-    externalBtn.textContent = t("files.browser.openExternal");
-    externalBtn.addEventListener("click", () => {
-      void transport.openExternal?.(tab.url);
-    });
-
     const actions = document.createElement("div");
     actions.className = "browser-pane-actions";
-    actions.append(annotateBtn, refreshBtn, externalBtn);
+    actions.append(annotateBtn, refreshBtn);
     if (isOfficeTab(tab)) {
       const restartBtn = document.createElement("button");
       restartBtn.type = "button";
@@ -176,6 +168,7 @@ export function createBrowserTabRenderer({ tab, transport }) {
 
   return {
     mount(container) {
+      attached = true;
       root = document.createElement("div");
       root.className = "browser-tab-root";
       contentEl = document.createElement("div");
@@ -183,7 +176,9 @@ export function createBrowserTabRenderer({ tab, transport }) {
       root.append(buildToolbar(), contentEl);
       container.appendChild(root);
       void openPane({ paneId: tab.id, url: tab.url, container: contentEl, transport })
-        .then(() => showPane(tab.id, true))
+        .then(() => {
+          if (attached && !destroyed) showPane(tab.id, true);
+        })
         .catch((error) => {
           setStatus(
             `${t("files.browser.cannotOpen")}：${error?.failure ?? error?.message ?? error}`,
@@ -192,6 +187,7 @@ export function createBrowserTabRenderer({ tab, transport }) {
     },
     detach() {
       // Tab switch: keep the native webview alive, just hide it.
+      attached = false;
       showPane(tab.id, false);
       selector.cancel();
       root?.remove();
@@ -200,6 +196,7 @@ export function createBrowserTabRenderer({ tab, transport }) {
     destroy() {
       if (destroyed) return;
       destroyed = true;
+      attached = false;
       selector.cancel();
       closePane(tab.id);
       root?.remove();

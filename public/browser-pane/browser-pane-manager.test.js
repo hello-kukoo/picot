@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
   closePane,
   evalPane,
+  hideAllPanes,
   navigatePane,
   openPane,
   paneUrl,
@@ -127,4 +128,56 @@ test("an unknown window label fails loudly instead of colliding", async () => {
     "window_label_unavailable",
   );
   expect(transport.browserPaneCreate).not.toHaveBeenCalled();
+});
+
+test("reopening a pane id rebinds it to its new container rect", async () => {
+  const transport = makeTransport();
+  const first = document.createElement("div");
+  Object.defineProperty(first, "getBoundingClientRect", {
+    value: () => ({ x: 10, y: 20, width: 300, height: 400 }),
+  });
+  const second = document.createElement("div");
+  Object.defineProperty(second, "getBoundingClientRect", {
+    value: () => ({ x: 100, y: 200, width: 500, height: 600 }),
+  });
+  await openPane({ paneId: "p-rebind", url: "http://x/", container: first, transport });
+  showPane("p-rebind", false);
+  await openPane({ paneId: "p-rebind", url: "http://x/", container: second, transport });
+  expect(transport.browserPaneSetRect).toHaveBeenCalledWith({
+    paneId: "native-workspace-w1:p-rebind",
+    x: 100,
+    y: 200,
+    width: 500,
+    height: 600,
+  });
+  closePane("p-rebind");
+});
+
+test("hideAllPanes hides every visible native webview", async () => {
+  const transport = makeTransport();
+  await openPane({
+    paneId: "p-hide-1",
+    url: "http://x/",
+    container: document.createElement("div"),
+    transport,
+  });
+  await openPane({
+    paneId: "p-hide-2",
+    url: "http://x/",
+    container: document.createElement("div"),
+    transport,
+  });
+  showPane("p-hide-1", true);
+  showPane("p-hide-2", true);
+  hideAllPanes();
+  expect(transport.browserPaneSetVisible).toHaveBeenCalledWith({
+    paneId: "native-workspace-w1:p-hide-1",
+    visible: false,
+  });
+  expect(transport.browserPaneSetVisible).toHaveBeenCalledWith({
+    paneId: "native-workspace-w1:p-hide-2",
+    visible: false,
+  });
+  closePane("p-hide-1");
+  closePane("p-hide-2");
 });

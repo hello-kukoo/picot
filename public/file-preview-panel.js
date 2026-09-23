@@ -10,7 +10,7 @@
  * Markdown parsing, or CodeMirror configuration.
  */
 
-import { closePane } from "./browser-pane/browser-pane-manager.js";
+import { closePane, hideAllPanes } from "./browser-pane/browser-pane-manager.js";
 import { createBrowserTabRenderer } from "./browser-pane/browser-tab-renderer.js";
 import { classifyFilePath } from "./file-language.js";
 import { createFileRenderer } from "./file-preview-renderers.js";
@@ -31,6 +31,11 @@ function appendCloseIcon(button) {
 
 function appendTabBarActionIcon(button, icon) {
   if (icon === "chat-plus") button.appendChild(createIcon("message-square-plus", { size: 14 }));
+}
+
+function standardBase64(value) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  return normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), "=");
 }
 
 export class FilePreviewPanel {
@@ -549,6 +554,9 @@ export class FilePreviewPanel {
     this.enlarged = false;
     this.panel?.classList.add("collapsed");
     this.panel?.classList.remove("enlarged");
+    // Native child webviews float above the host DOM; CSS collapse cannot
+    // hide them. Hide every pane before tearing down the active renderer.
+    hideAllPanes();
     this.resizer?.classList.add("collapsed");
     this.mainContainer?.classList.remove("preview-enlarged");
     if (this.activeContent) this._deactivateCurrent();
@@ -1224,7 +1232,7 @@ export class FilePreviewPanel {
     if (typeof data?.contentBase64 !== "string" || !data.contentBase64) {
       throw new Error("Raw file preview returned no bytes");
     }
-    const url = `data:${tab.mimeType || "application/octet-stream"};base64,${data.contentBase64}`;
+    const url = `data:${tab.mimeType || "application/octet-stream"};base64,${standardBase64(data.contentBase64)}`;
     this.rawDataUrls.set(tab.id, url);
     return url;
   }
@@ -1494,7 +1502,9 @@ export class FilePreviewPanel {
     this._listen(this.controls.copy, "click", () => void this._copyActiveContent());
     this._listen(this.controls.openDesktop, "click", () => {
       const tab = this.state.getActiveTab();
-      if (tab) this.onOpenDesktop(tab.filePath);
+      if (!tab) return;
+      if (tab.kind === "browser") void this.transport?.openExternal?.(tab.url);
+      else this.onOpenDesktop(tab.filePath);
     });
     this._listen(this.controls.openBrowser, "click", () => {
       const tab = this.state.getActiveTab();
@@ -1644,6 +1654,11 @@ export class FilePreviewPanel {
     if (controls.openDesktop) {
       controls.openDesktop.disabled = isDiff || !tab;
       controls.openDesktop.classList.toggle("hidden", isDiff || !tab);
+      const label = t(
+        tab?.kind === "browser" ? "files.preview.openExternal" : "files.preview.openDesktop",
+      );
+      controls.openDesktop.title = label;
+      controls.openDesktop.setAttribute("aria-label", label);
     }
     if (controls.wrap) controls.wrap.checked = this.wrapLines;
     if (controls.autoSave) controls.autoSave.checked = this.autoSaveEnabled;

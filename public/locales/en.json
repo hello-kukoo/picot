@@ -193,6 +193,7 @@
       "close": "Close panel",
       "showControls": "Show controls",
       "openDesktop": "Open in desktop",
+      "openExternal": "Open in system browser",
       "disableLineWrap": "Disable line wrap",
       "enableLineWrap": "Enable line wrap",
       "edit": "Edit",
@@ -256,8 +257,6 @@
       "cancel": "Cancel",
       "addToComposer": "Add to composer",
       "openInBrowser": "Open in built-in browser",
-      "openExternal": "Open in system browser",
-      "openExternalTooltip": "Open the current URL in your default browser",
       "openInBrowserTooltip": "Faithful rendering with element annotation (requires officecli)",
       "officecliMissing": "Install officecli to use the built-in browser view",
       "watchStartFailed": "Failed to start the render service"

@@ -12,7 +12,22 @@ const PANES = new Map();
  * geometry must mirror the container's window-relative rect at all times.
  */
 export async function openPane({ paneId, url, container, transport }) {
-  if (PANES.has(paneId)) return PANES.get(paneId);
+  const existing = PANES.get(paneId);
+  if (existing) {
+    if (existing.container === container) return existing;
+    existing.observer?.disconnect();
+    existing.container = container;
+    const rect = container.getBoundingClientRect();
+    await existing.transport.browserPaneSetRect({
+      paneId: existing.paneKey,
+      x: rect.x,
+      y: rect.y,
+      width: Math.max(1, rect.width),
+      height: Math.max(1, rect.height),
+    });
+    existing.observer = observeContainer(existing);
+    return existing;
+  }
   const windowLabel = currentWindowLabel();
   if (!windowLabel) {
     // A missing label cannot address the native webview; failing loudly beats
@@ -51,12 +66,17 @@ export async function openPane({ paneId, url, container, transport }) {
     PANES.delete(paneId);
     throw error;
   }
-  entry.observer = new ResizeObserver(() => {
-    entry.dirty = container.getBoundingClientRect();
+  entry.observer = observeContainer(entry);
+  return entry;
+}
+
+function observeContainer(entry) {
+  const observer = new ResizeObserver(() => {
+    entry.dirty = entry.container.getBoundingClientRect();
     scheduleSync(entry);
   });
-  entry.observer.observe(container);
-  return entry;
+  observer.observe(entry.container);
+  return observer;
 }
 
 function currentWindowLabel() {
@@ -98,6 +118,11 @@ function setVisible(entry, visible) {
 export function showPane(paneId, visible) {
   const entry = PANES.get(paneId);
   if (entry) setVisible(entry, visible);
+}
+
+/** Hide all native panes when their DOM host is collapsed or replaced. */
+export function hideAllPanes() {
+  for (const entry of PANES.values()) setVisible(entry, false);
 }
 
 /** Destroy the child webview and stop syncing (tab close / panel teardown). */

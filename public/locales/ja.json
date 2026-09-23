@@ -193,6 +193,7 @@
       "close": "パネルを閉じる",
       "showControls": "コントロールを表示",
       "openDesktop": "デスクトップで開く",
+      "openExternal": "システムブラウザで開く",
       "disableLineWrap": "折り返しを無効にする",
       "enableLineWrap": "折り返しを有効にする",
       "edit": "編集",
@@ -256,8 +257,6 @@
       "cancel": "キャンセル",
       "addToComposer": "入力欄に追加",
       "openInBrowser": "内蔵ブラウザで開く",
-      "openExternal": "システムブラウザで開く",
-      "openExternalTooltip": "現在のURLを既定のブラウザで開く",
       "openInBrowserTooltip": "忠実なレンダリングと要素注釈（officecli 必要）",
       "officecliMissing": "officecli をインストールすると内蔵ブラウザ表示が使えます",
       "watchStartFailed": "レンダリングサービスの起動に失敗"
