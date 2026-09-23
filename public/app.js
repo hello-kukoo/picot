@@ -115,6 +115,7 @@ import {
   setupSettingsToggles,
   THINKING_LEVELS,
 } from "./settings/toggles.js";
+import { setupUsageTabs } from "./settings/usage-tabs.js";
 import { SideChatManager } from "./side-chat-manager.js";
 import { buildSessionItem } from "./sidebar/build-session-item.js";
 import {
@@ -643,24 +644,14 @@ let settingsQuotaPanel = null;
 
 // Usage page sub-tabs: the cost dashboard and the provider quota section are
 // two views of one Settings page, each lazy-loading on first selection.
-{
-  const usageTabs = Array.from(document.querySelectorAll("[data-usage-tab]"));
-  const usagePanels = Array.from(document.querySelectorAll("[data-usage-panel]"));
-  const selectUsageView = (view) => {
-    for (const tab of usageTabs) {
-      const active = tab.dataset.usageTab === view;
-      tab.setAttribute("aria-selected", String(active));
-    }
-    for (const panel of usagePanels) {
-      panel.classList.toggle("hidden", panel.dataset.usagePanel !== view);
-    }
+// Usage page sub-tabs (cost / provider quota). The switching itself lives in
+// its own module so it is unit-testable and independent of this file's size.
+setupUsageTabs({
+  onSelect: (view) => {
     if (view === "quota") void settingsQuotaPanel?.loadReports();
     else void document.getElementById("settings-cost-dashboard")?.ensureLoaded?.();
-  };
-  for (const tab of usageTabs) {
-    tab.addEventListener("click", () => selectUsageView(tab.dataset.usageTab));
-  }
-}
+  },
+});
 // Mobile LAN QR: header button + modal over the native pairing controls
 // (token minted on open; visibility follows the running host's LAN bind).
 setupLanQr({
