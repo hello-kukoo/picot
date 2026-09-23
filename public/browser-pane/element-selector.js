@@ -244,11 +244,22 @@ export function createPaneWebviewAdapter({ paneId, isAlive, evaluate }) {
   };
 }
 
+/** Name what actually arrived instead of collapsing every mismatch into one
+ * word: the pane bridge, the eval callback, and the script's own payload fail
+ * in ways a single "unavailable" cannot tell apart. */
+function describeValue(value) {
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  if (typeof value !== "object") return typeof value;
+  const keys = Object.keys(value);
+  return keys.length > 0 ? `object:${keys.slice(0, 4).join("|")}` : "object:empty";
+}
+
 function readSelectorInstallation(value, sessionToken) {
-  if (!value || typeof value !== "object") return "unavailable";
-  if (value.sessionToken !== sessionToken) return "unavailable";
+  if (!value || typeof value !== "object") return `unavailable:${describeValue(value)}`;
+  if (value.sessionToken !== sessionToken) return "unavailable:token-mismatch";
   if (value.installed === true) return "installed";
-  return value.reason === "document-loading" ? "loading" : "unavailable";
+  return value.reason === "document-loading" ? "loading" : "unavailable:not-installed";
 }
 
 /**
@@ -264,18 +275,21 @@ export function createElementSelectorController({ webviewAdapter }) {
     return `${sequence}:${crypto.randomUUID()}`;
   }
 
+  /** {ok: true, value} on success; {ok: false, reason} names the failing layer. */
   async function execute(webview, code) {
-    if (!webview.isConnected()) return null;
+    if (!webview.isConnected()) return { ok: false, reason: "pane-not-visible" };
     try {
-      return await webview.executeJavaScript(code);
-    } catch {
-      return null;
+      return { ok: true, value: await webview.executeJavaScript(code) };
+    } catch (error) {
+      return { ok: false, reason: `eval-error:${error?.message ?? error}` };
     }
   }
 
   async function install(session) {
-    const raw = await execute(session.webview, buildElementSelectorScript(session.token));
-    const state = readSelectorInstallation(raw, session.token);
+    const probe = await execute(session.webview, buildElementSelectorScript(session.token));
+    const state = probe.ok
+      ? readSelectorInstallation(probe.value, session.token)
+      : `unavailable:${probe.reason}`;
     if (current !== session) {
       if (state === "installed") void destroyWebview(session.webview, session.token);
       return;
@@ -284,24 +298,31 @@ export function createElementSelectorController({ webviewAdapter }) {
       finish(session, { type: "failed", reason: state }, "destroy");
       return;
     }
-    session.stopPolling = watch(session.webview, session.token, (selection) =>
+    session.stopPolling = watch(session, (selection) =>
       finish(session, selection ? { type: "selected", selection } : { type: "cancelled" }, null),
     );
   }
 
-  function watch(webview, sessionToken, onResult) {
+  function watch(session, onResult) {
+    const { webview } = session;
+    const sessionToken = session.token;
     let stopped = false;
     let timerId;
     const poll = async () => {
-      const result = await execute(
+      const probe = await execute(
         webview,
         `window.__picotSelectorResult?.__picotSessionToken === ${JSON.stringify(sessionToken)} ? window.__picotSelectorResult : null`,
       );
       if (stopped) return;
+      const result = probe.ok ? probe.value : null;
       if (!result) {
+        // Kept so a session that dies at the deadline can report whether the
+        // poll was reading the page at all, or failing at the bridge.
+        session.probeReason = probe.ok ? undefined : probe.reason;
         timerId = setTimeout(poll, POLL_INTERVAL_MS);
         return;
       }
+      session.probeReason = undefined;
       stopped = true;
       void execute(
         webview,
@@ -357,10 +378,12 @@ export function createElementSelectorController({ webviewAdapter }) {
         onFinish,
         stopPolling: undefined,
         timeoutId: undefined,
+        probeReason: undefined,
       };
       current = session;
       session.timeoutId = setTimeout(
-        () => finish(session, { type: "failed", reason: "timeout" }, "destroy"),
+        () =>
+          finish(session, { type: "failed", reason: session.probeReason ?? "timeout" }, "destroy"),
         SELECTOR_TIMEOUT_MS,
       );
       void install(session);

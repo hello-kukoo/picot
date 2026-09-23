@@ -158,6 +158,29 @@ test("controller resolves a selection end to end", async () => {
   }
 });
 
+test("install names the failing layer instead of one opaque word", async () => {
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  const offline = [];
+  createElementSelectorController({
+    webviewAdapter: { isConnected: () => false, executeJavaScript: vi.fn() },
+  }).start({ onFinish: (outcome) => offline.push(outcome) });
+  await settle();
+  expect(offline[0]).toEqual({ type: "failed", reason: "unavailable:pane-not-visible" });
+
+  const broken = [];
+  createElementSelectorController({
+    webviewAdapter: {
+      isConnected: () => true,
+      executeJavaScript: async () => {
+        throw new Error("eval_timeout");
+      },
+    },
+  }).start({ onFinish: (outcome) => broken.push(outcome) });
+  await settle();
+  expect(broken[0]).toEqual({ type: "failed", reason: "unavailable:eval-error:eval_timeout" });
+});
+
 test("controller fails with timeout when nothing is picked", async () => {
   vi.useFakeTimers();
   try {
