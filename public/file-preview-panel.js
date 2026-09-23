@@ -101,6 +101,11 @@ export class FilePreviewPanel {
     this.goToLineInputOpen = false;
     this.transientStatus = "";
     this.cleanupListeners = [];
+    // A neighbouring panel moving this one (the file sidebar animating its
+    // margin) shifts every rect without resizing anything, so no observer can
+    // see it; the app announces when such a layout has settled.
+    this._onLayoutSettled = () => this._syncActiveBrowserPane();
+    window.addEventListener("picot-layout-settled", this._onLayoutSettled);
     this.activeDialogCancel = null;
     // Transient (non-file) content tabs — Side Chats — projected into the same
     // tab strip as file tabs but never persisted to FileTabState.
@@ -298,6 +303,7 @@ export class FilePreviewPanel {
   }
 
   destroy() {
+    window.removeEventListener("picot-layout-settled", this._onLayoutSettled);
     this._cancelPaneLayoutSync?.();
     this._cancelPaneLayoutSync = null;
     for (const timer of this.autoSaveTimers.values()) clearTimeout(timer);
@@ -598,6 +604,12 @@ export class FilePreviewPanel {
     const collapseBtn = document.getElementById("file-preview-collapse");
     enlargeBtn?.classList.toggle("hidden", this.enlarged);
     collapseBtn?.classList.toggle("hidden", !this.enlarged);
+  }
+
+  /** Re-push the active browser pane's rect after an external layout shift. */
+  _syncActiveBrowserPane() {
+    const tab = this.state.getActiveTab();
+    if (tab?.kind === "browser") void syncPane(tab.id).catch(() => {});
   }
 
   _syncActiveBrowserPaneAfterLayout() {

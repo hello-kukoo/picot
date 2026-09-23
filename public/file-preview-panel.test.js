@@ -293,6 +293,30 @@ describe("FilePreviewPanel", () => {
     delete window.__TAURI__;
   });
 
+  test("a settled layout re-syncs the active browser pane", async () => {
+    global.ResizeObserver = class {
+      observe() {}
+      disconnect() {}
+    };
+    window.__TAURI__ = { window: { getCurrentWindow: () => ({ label: "sidebar-test" }) } };
+    const p = createPanel();
+    await p.openBrowserTab("http://127.0.0.1:41001/", {
+      file: "/test/workspace/a.docx",
+      fileName: "a.docx",
+    });
+    await Promise.resolve();
+    p.transport.browserPaneSetRect.mockClear();
+    // A neighbouring panel animating its margin moves this panel without
+    // resizing it, so nothing observes the shift on its own.
+    window.dispatchEvent(new Event("picot-layout-settled"));
+    await Promise.resolve();
+    expect(p.transport.browserPaneSetRect).toHaveBeenCalledWith(
+      expect.objectContaining({ paneId: "sidebar-test:browser:/test/workspace/a.docx" }),
+    );
+    p.destroy();
+    delete window.__TAURI__;
+  });
+
   test("switching back to a browser tab does not stick on loading", async () => {
     const p = createPanel();
     await p.openBrowserTab("http://127.0.0.1:41001/", {

@@ -1849,6 +1849,43 @@ fileSidebarToggleHidden?.addEventListener("click", () => {
 infoPanelRefresh?.addEventListener("click", () => void refreshInfoTree());
 gitPanelRefresh?.addEventListener("click", () => void gitPanel.refresh());
 
+// The open/close of either side panel moves the preview panel without
+// resizing it, so the native browser pane it hosts would keep a stale rect:
+// ResizeObserver reports size, never position. Announce the settled layout so
+// the preview panel can re-push the rect. One class observer covers every
+// entry point (header toggle, tab pill, close button, restore-at-boot).
+{
+  const cancelSettle = new WeakMap();
+  const announceLayoutSettled = (element) => {
+    cancelSettle.get(element)?.();
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      element.removeEventListener("transitionend", onTransitionEnd);
+      cancelSettle.delete(element);
+      window.dispatchEvent(new Event("picot-layout-settled"));
+    };
+    const onTransitionEnd = (event) => {
+      if (event.target === element && event.propertyName === "margin-right") finish();
+    };
+    const timer = setTimeout(finish, 350);
+    element.addEventListener("transitionend", onTransitionEnd);
+    cancelSettle.set(element, () => {
+      settled = true;
+      clearTimeout(timer);
+      element.removeEventListener("transitionend", onTransitionEnd);
+    });
+  };
+  for (const element of [fileSidebar, sidebarEl]) {
+    new MutationObserver(() => announceLayoutSettled(element)).observe(element, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+  }
+}
+
 fileSidebarToggle.addEventListener("click", () => {
   const isCollapsed = fileSidebar.classList.toggle("collapsed");
   fileSidebarToggle.setAttribute("aria-pressed", String(!isCollapsed));
