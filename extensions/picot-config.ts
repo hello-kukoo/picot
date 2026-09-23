@@ -55,6 +55,7 @@ import {
   consumeCodexResetCredit,
   createQuotaProbeCache,
   inspectCodexResetCredits,
+  originOfBaseUrl,
   type ProviderInstance,
   providersOfInterest,
 } from "./provider-quota.ts";
@@ -1125,25 +1126,22 @@ type QuotaProviderRuntime = {
 
 function quotaProviderCandidates(runtime: QuotaProviderRuntime): {
   providers: Array<{ providerId: string; baseUrl?: string }>;
-  configuredProviderIds: string[];
 } {
   const providerIds = new Set<string>(runtime.getRegisteredProviderIds?.() ?? []);
   for (const provider of runtime.getProviders?.() ?? []) {
     if (provider?.id) providerIds.add(provider.id);
   }
-  const providers: Array<{ providerId: string; baseUrl?: string }> = [];
-  const configuredProviderIds: string[] = [];
-  for (const providerId of providerIds) {
-    // Unconfigured providers produce no probe — no card, no failed request.
-    if (runtime.hasConfiguredAuth?.(providerId) !== true) continue;
-    configuredProviderIds.push(providerId);
-    providers.push({
+  // No credential filter here: `hasConfiguredAuth` is true for every api-key
+  // provider (it reports an auth *mechanism*), so it never excluded anything.
+  // Configuration is settled by the probe, which reports `not_configured` when
+  // no credential resolves and the UI then hides that provider.
+  return {
+    providers: [...providerIds].map((providerId) => ({
       providerId,
       baseUrl:
         runtime.getProvider?.(providerId)?.baseUrl ?? runtime.getModels?.(providerId)?.[0]?.baseUrl,
-    });
-  }
-  return { providers, configuredProviderIds };
+    })),
+  };
 }
 
 async function resolveQuotaInstance(
@@ -1170,7 +1168,7 @@ async function resolveQuotaInstance(
       const accountId = typeof stored?.accountId === "string" ? stored.accountId : undefined;
       return {
         providerId,
-        baseUrl: baseUrl ?? "https://chatgpt.com",
+        baseUrl: originOfBaseUrl(baseUrl) || "https://chatgpt.com",
         accessToken,
         accountId,
       };
@@ -1178,12 +1176,28 @@ async function resolveQuotaInstance(
       return null;
     }
   }
-  // api-key providers: auth.json key, else a models.json custom entry.
+  // api-key providers. pi's own resolver is the authority and is env-aware —
+  // a key may live only in the shell environment (the host syncs the login
+  // shell into the embedded pi), so auth.json/models.json are the fallbacks,
+  // not the only sources.
+  let resolvedKey: string | undefined;
+  try {
+    const runtime = await ModelRuntime.create();
+    const auth = await runtime.getAuth(providerId);
+    if (typeof auth?.auth?.apiKey === "string" && auth.auth.apiKey) {
+      resolvedKey = auth.auth.apiKey;
+    }
+  } catch {
+    // Fall through to the explicit stores below.
+  }
   const stored = readStoredCredential(providerId) as { key?: string } | undefined;
   const apiKey =
-    (typeof stored?.key === "string" && stored.key) || modelsJsonProviders[providerId]?.apiKey;
+    resolvedKey ||
+    (typeof stored?.key === "string" && stored.key) ||
+    modelsJsonProviders[providerId]?.apiKey;
   if (!apiKey) return null;
-  return { providerId, baseUrl: baseUrl ?? "", apiKey };
+  // Origin, not the full baseUrl: the specs append their own canonical path.
+  return { providerId, baseUrl: originOfBaseUrl(baseUrl), apiKey };
 }
 
 export async function handlePicotConfig(

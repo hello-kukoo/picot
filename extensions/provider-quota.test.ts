@@ -8,6 +8,7 @@ import {
   consumeCodexResetCredit,
   createQuotaProbeCache,
   LAST_GOOD_RETENTION_MS,
+  originOfBaseUrl,
   parseDeepseekBalance,
   parseMinimaxRemains,
   parseMoonshotBalance,
@@ -141,38 +142,95 @@ test("parseOllamaUsage maps weekly/monthly/session usage", () => {
   expect(parsed.customWindows).toEqual([{ label: "session", percent: 5 }]);
 });
 
+describe("originOfBaseUrl", () => {
+  test("reduces a versioned baseUrl to its origin so the spec path stays correct", () => {
+    expect(originOfBaseUrl("https://api.z.ai/api/coding/paas/v4")).toBe("https://api.z.ai");
+    expect(originOfBaseUrl("https://open.bigmodel.cn/api/coding/paas/v4")).toBe(
+      "https://open.bigmodel.cn",
+    );
+    expect(originOfBaseUrl("https://api.moonshot.ai/v1")).toBe("https://api.moonshot.ai");
+    expect(originOfBaseUrl(undefined)).toBe("");
+    expect(originOfBaseUrl("not a url")).toBe("");
+  });
+});
+
+describe("probe isolation", () => {
+  test("a spec that throws while building its request fails one report, not the run", async () => {
+    const cache = createQuotaProbeCache();
+    const report = await cache.report(
+      "zai",
+      {
+        source: "zai:quota-limit",
+        canonicalBaseUrls: ["https://api.z.ai"],
+        buildRequest: () => {
+          throw new TypeError("url.trim is not a function");
+        },
+        parse: () => ({}),
+      } as never,
+      { providerId: "zai", baseUrl: "", apiKey: "k" },
+      true,
+    );
+    expect(report.failure).toBe("response_unusable");
+  });
+});
+
+describe("parseDeepseekBalance", () => {
+  test("reads balances that arrive as numeric strings", () => {
+    const parsed = parseDeepseekBalance({
+      is_available: true,
+      balance_infos: [
+        {
+          currency: "CNY",
+          total_balance: "642.65",
+          granted_balance: "0.00",
+          topped_up_balance: "642.65",
+        },
+      ],
+    });
+    expect(parsed.customWindows).toEqual([{ label: "CNY 642.65", percent: 0 }]);
+  });
+});
+
 describe("providersOfInterest", () => {
-  test("probes configured providers whose canonical baseUrl matches", () => {
+  test("matches canonical hosts even when the provider endpoint carries a path", () => {
     const picked = providersOfInterest({
+      // pi's real provider list: every one of these carries a path.
       providers: [
-        { providerId: "zai-coding-cn", baseUrl: "https://open.bigmodel.cn" },
-        { providerId: "my-relay", baseUrl: "https://open.bigmodel.cn.evil.example" },
-        { providerId: "zai", baseUrl: "https://api.z.ai/" },
-        // Canonical endpoint, but pi reports no credential for it → no card.
+        { providerId: "openai-codex", baseUrl: "https://chatgpt.com/backend-api" },
+        { providerId: "zai", baseUrl: "https://api.z.ai/api/coding/paas/v4" },
+        { providerId: "zai-coding-cn", baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4" },
+        { providerId: "opencode-go", baseUrl: "https://opencode.ai/zen/go" },
         { providerId: "deepseek", baseUrl: "https://api.deepseek.com" },
       ],
-      configuredProviderIds: ["zai", "zai-coding-cn", "my-relay", "openai-codex"],
-      modelsJsonProviders: {
-        "my-ollama": { baseUrl: "https://ollama.com", apiKey: "k" },
-        "other-relay": { baseUrl: "https://example.com" },
-        // Canonical endpoint without a stored key → not probed.
-        "keyless-ollama": { baseUrl: "https://ollama.com" },
-      },
     });
     expect(picked.map((entry) => entry.providerId).sort()).toEqual([
-      "my-ollama",
+      "deepseek",
+      "openai-codex",
+      "opencode-go",
       "zai",
       "zai-coding-cn",
     ]);
+    expect(picked.find((entry) => entry.providerId === "openai-codex")?.spec.source).toBe(
+      "openai-codex:wham",
+    );
   });
 
-  test("probes a configured provider that the model catalog never listed", () => {
+  test("still refuses a look-alike host and a provider without a baseUrl", () => {
     const picked = providersOfInterest({
-      providers: [{ providerId: "openai-codex", baseUrl: "https://chatgpt.com" }],
-      configuredProviderIds: ["openai-codex"],
+      providers: [
+        { providerId: "my-relay", baseUrl: "https://open.bigmodel.cn.evil.example/api" },
+        { providerId: "no-url" },
+      ],
+      modelsJsonProviders: { "relay-without-key": { baseUrl: "https://ollama.com" } },
     });
-    expect(picked.map((entry) => entry.providerId)).toEqual(["openai-codex"]);
-    expect(picked[0].spec.source).toBe("openai-codex:wham");
+    expect(picked).toEqual([]);
+  });
+
+  test("keeps a custom models.json provider that carries its own apiKey", () => {
+    const picked = providersOfInterest({
+      modelsJsonProviders: { "my-ollama": { baseUrl: "https://ollama.com/v1", apiKey: "k" } },
+    });
+    expect(picked.map((entry) => entry.providerId)).toEqual(["my-ollama"]);
   });
 });
 

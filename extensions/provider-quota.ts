@@ -79,7 +79,15 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function numberOr(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  // Upstreams disagree on numeric encoding: WHAM sends numbers, deepseek sends
+  // numeric strings ("642.65"). Coercing beats dropping the datum — parsed as
+  // "missing" it rendered a card with no windows.
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
 }
 
 function epochSecondsToMs(value: unknown): number | undefined {
@@ -254,6 +262,31 @@ export function parseOllamaUsage(json: unknown): Partial<NonNullable<QuotaReport
 
 // ─── Probe registry ────────────────────────────────────────────────────────
 
+/** Canonical matching is by HOST. The specs list canonical hosts, while a live
+ * provider's baseUrl carries a path (coding-plan gateways, `/backend-api`,
+ * `/zen/go`), so comparing whole URLs dropped every provider whose endpoint
+ * has a path — codex, zai and opencode-go all failed to match. */
+/** Specs append their own path to a canonical host, so a provider whose own
+ * baseUrl carries a version path (`.../api/coding/paas/v4`) must be reduced to
+ * its origin: pasting the full baseUrl in front of the spec's path produced
+ * `/v4/api/monitor/...` and a 404 for zai, moonshot and minimax. */
+export function originOfBaseUrl(url: string | undefined): string {
+  if (!url) return "";
+  try {
+    return new URL(url.trim()).origin;
+  } catch {
+    return "";
+  }
+}
+
+function baseUrlHost(url: string): string | null {
+  try {
+    return new URL(url.trim()).host.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
 function normalizeBaseUrl(url: string): string {
   return url.trim().replace(/\/+$/, "").toLowerCase();
 }
@@ -359,26 +392,27 @@ const SPECS: ProviderSpec[] = [
  * The candidate list comes from pi's own provider list (`ModelRuntime`), not
  * from the model catalog: a provider exists whether or not one of its models
  * happens to carry a baseUrl, and `codex`/`opencode-go`/`zai-coding-cn` only
- * ever appear as providers. The canonical-baseUrl match is unchanged — it is
- * the anti-spoof guard, not the id→endpoint mapping — and a provider that pi
- * reports as unconfigured is not probed at all (spec: 未配置的 provider 配额区
- * 不显示). */
+ * ever appear as providers. The canonical-host match stays (it is the
+ * anti-spoof guard, not an id→endpoint map); being *configured* is not decided
+ * here — pi reports an auth mechanism for every api-key provider, so that
+ * predicate cannot distinguish a stored key from none. The probe decides:
+ * with no resolvable credential it returns `not_configured`, and the UI hides
+ * that provider (spec: 未配置的 provider 配额区不显示). */
 export function providersOfInterest(input: {
-  /** Providers from pi's provider list: id + canonical baseUrl. */
+  /** Providers from pi's provider list: id + its own baseUrl. */
   providers?: Array<{ providerId: string; baseUrl?: string }>;
-  /** Provider ids pi reports as having configured credentials. */
-  configuredProviderIds?: readonly string[];
   /** Custom provider entries from models.json (id → {baseUrl, apiKey?}); their
    * credential is the entry's own apiKey, not an auth.json provider entry. */
   modelsJsonProviders?: Record<string, { baseUrl?: string; apiKey?: string }>;
 }): Array<{ providerId: string; spec: ProviderSpec }> {
   const out: Array<{ providerId: string; spec: ProviderSpec }> = [];
   const seen = new Set<string>();
-  const configured = new Set(input.configuredProviderIds ?? []);
   const consider = (providerId: string, baseUrl: string | undefined) => {
     if (!baseUrl) return;
+    const host = baseUrlHost(baseUrl);
+    if (!host) return;
     const spec = SPECS.find((candidate) =>
-      candidate.canonicalBaseUrls.includes(normalizeBaseUrl(baseUrl)),
+      candidate.canonicalBaseUrls.some((canonical) => baseUrlHost(canonical) === host),
     );
     if (!spec) return;
     const key = `${providerId}:${spec.source}`;
@@ -387,7 +421,6 @@ export function providersOfInterest(input: {
     out.push({ providerId, spec });
   };
   for (const { providerId, baseUrl } of input.providers ?? []) {
-    if (!configured.has(providerId)) continue;
     consider(providerId, baseUrl);
   }
   for (const [providerId, entry] of Object.entries(input.modelsJsonProviders ?? {})) {
@@ -444,7 +477,14 @@ export function createQuotaProbeCache(deps: QuotaProbeDeps = {}) {
     if (!instance) {
       return { provider: providerId, source: spec.source, failure: "not_configured" };
     }
-    const request = spec.buildRequest(instance);
+    let request: { url: string; init?: RequestInit } | null = null;
+    try {
+      request = spec.buildRequest(instance);
+    } catch {
+      // A spec bug or an unusable baseUrl must cost one card, not the whole
+      // report: this throw used to escape and blank the entire section.
+      return { provider: providerId, source: spec.source, failure: "response_unusable" };
+    }
     if (!request) {
       // openai-codex without a live OAuth token needs a re-login.
       return {

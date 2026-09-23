@@ -290,3 +290,22 @@ test("inspect reporting needs_login shows no dialog and no ledger call", async (
   expect(toasts).toContain("Re-login required before resetting");
   expect(seams.dataTransport.resetCreditOpen).not.toHaveBeenCalled();
 });
+
+test("an unconfigured provider is absent instead of shown as unavailable", async () => {
+  const seams = makeSeams({
+    reports: [
+      { provider: "openai-codex", source: "openai-codex:wham", failure: "not_configured" },
+      { provider: "deepseek", source: "deepseek:balance", failure: "not_configured" },
+      {
+        provider: "opencode-go",
+        source: "opencode-go:usage",
+        quota: { fiveHourPercent: 42, updatedAt: Date.now() },
+      },
+    ],
+  });
+  const panel = createProviderQuotaPanel(seams, { locale });
+  await panel.loadReports();
+  const names = [...container.querySelectorAll(".quota-card-name")].map((el) => el.textContent);
+  expect(names).toEqual(["Opencode Go"]);
+  expect(container.querySelectorAll(".quota-failure")).toHaveLength(0);
+});

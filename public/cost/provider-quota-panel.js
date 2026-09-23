@@ -260,7 +260,11 @@ export function createProviderQuotaPanel(seams, { locale }) {
   function render() {
     const container = seams.container();
     if (!container) return;
-    const reports = [...reportsById.values()];
+    // `not_configured` = no credential resolved, so the provider is absent
+    // rather than shown as unavailable (spec: 未配置的 provider 不显示).
+    const reports = [...reportsById.values()].filter(
+      (report) => report.failure !== "not_configured",
+    );
     // Empty state hides the whole section (spec: no placeholder).
     const hasContent = reports.length > 0;
     container.classList.toggle("hidden", !hasContent);
