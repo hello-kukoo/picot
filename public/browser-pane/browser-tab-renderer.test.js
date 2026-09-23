@@ -103,8 +103,11 @@ test("a picked element opens a dialog that names its docPath", async () => {
   anchor.dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true }));
   await vi.advanceTimersByTimeAsync(300);
 
-  const dialog = document.querySelector(".browser-annotation-meta");
-  expect(dialog?.textContent).toContain("/slide[2]/shape[@id=7]");
+  const meta = document.querySelector(".browser-annotation-meta");
+  expect(meta?.textContent).toContain("/slide[2]/shape[@id=7]");
+  // Inline in the pane's own area — not a window-wide modal.
+  expect(container.querySelector(".browser-annotation-input")).toBeTruthy();
+  expect(document.querySelector(".file-preview-dialog-overlay")).toBeNull();
   renderer.destroy();
 });
 

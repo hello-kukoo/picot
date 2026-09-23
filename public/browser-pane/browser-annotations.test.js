@@ -69,6 +69,22 @@ test("browser format matches Paseo field density", () => {
   expect(block).toContain("</browser-element>");
 });
 
+test("the comment box mounts inline where asked, with no modal overlay", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const promise = openAnnotationDialog({
+    docPath: "/body/p[1]",
+    url: "http://x/",
+    container: host,
+  });
+  expect(host.querySelector(".browser-annotation-input")).toBeTruthy();
+  expect(document.querySelector(".file-preview-dialog-overlay")).toBeNull();
+  document.querySelector(".file-preview-dialog-button.primary").click();
+  await promise;
+  expect(host.querySelector(".browser-annotation-input")).toBeNull();
+  host.remove();
+});
+
 test("dialog resolves with the comment and honours cancel", async () => {
   const dialogPromise = openAnnotationDialog({ docPath: "/body/p[2]", url: "http://x/" });
   const textarea = document.querySelector(".browser-annotation-input");

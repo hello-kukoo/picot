@@ -66,16 +66,18 @@ export function formatOfficeElementAttachment(selection, comment, file) {
   ].join("\n");
 }
 
-/** Comment dialog: plain textarea over the shared file-preview dialog
- * styling. Resolves with the comment (possibly empty) or null on cancel. */
-export function openAnnotationDialog({ docPath, url } = {}) {
+/** Comment box: plain textarea over the shared file-preview dialog styling.
+ * Resolves with the comment (possibly empty) or null on cancel.
+ *
+ * It mounts inline in `container` (the pane's content area) rather than as a
+ * window-wide modal: the page is hidden while the box is up, so the comment
+ * takes the page's place instead of dimming everything else. */
+export function openAnnotationDialog({ docPath, url, container } = {}) {
   return new Promise((resolve) => {
-    const overlay = document.createElement("div");
-    overlay.className = "file-preview-dialog-overlay";
     const dialog = document.createElement("div");
-    dialog.className = "file-preview-dialog";
+    dialog.className = "file-preview-dialog browser-annotation-card";
     dialog.setAttribute("role", "dialog");
-    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-label", t("files.browser.dialogTitle"));
 
     const heading = document.createElement("h3");
     heading.textContent = t("files.browser.dialogTitle");
@@ -98,15 +100,14 @@ export function openAnnotationDialog({ docPath, url } = {}) {
     confirm.textContent = t("files.browser.addToComposer");
     actions.append(cancel, confirm);
     dialog.append(heading, meta, textarea, actions);
-    overlay.appendChild(dialog);
-    document.body.appendChild(overlay);
+    (container ?? document.body).appendChild(dialog);
 
     let settled = false;
     const finish = (value) => {
       if (settled) return;
       settled = true;
       document.removeEventListener("keydown", onKeyDown);
-      overlay.remove();
+      dialog.remove();
       resolve(value);
     };
     const onKeyDown = (event) => {

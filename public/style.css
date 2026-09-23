@@ -10551,6 +10551,14 @@ button.skills-group-status:disabled {
   border-color: var(--accent);
 }
 
+/* Inline annotation comment box: it renders in the pane's content area, so it
+   needs placement inside the panel rather than a full-window overlay. */
+.browser-annotation-card {
+  width: auto;
+  max-width: min(560px, 100%);
+  margin: var(--space-3);
+}
+
 .browser-annotation-meta {
   overflow: hidden;
   margin: 0 0 var(--space-2);

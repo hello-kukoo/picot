@@ -104,6 +104,7 @@ export function createBrowserTabRenderer({ tab, transport }) {
           comment = await openAnnotationDialog({
             docPath: selection.docPath,
             url: selection.url,
+            container: contentEl,
           });
         } finally {
           // Restore only while this renderer still owns the pane: re-showing
