@@ -218,8 +218,38 @@ export function parseDeepseekBalance(json: unknown): Partial<NonNullable<QuotaRe
   return labels.length > 0 ? { customWindows: labels } : {};
 }
 
+/** MiniMax's token-plan endpoint answers with one row per model
+ * (`model_remains[]`), each carrying an interval (5h) and a weekly window as
+ * *remaining* percents — that is the live shape for api.minimaxi.com. The
+ * single-window `data.remains_time` form the spec recorded is kept as a
+ * fallback (the other canonical host may still serve it). */
 export function parseMinimaxRemains(json: unknown): Partial<NonNullable<QuotaReport["quota"]>> {
-  const data = asRecord(asRecord(json)?.data);
+  const root = asRecord(json);
+  const rows = Array.isArray(root?.model_remains) ? (root.model_remains as unknown[]) : [];
+  if (rows.length > 0) {
+    const records = rows.map((row) => asRecord(row));
+    // "general" is the chat plan; video/audio rows are separate plans.
+    const row = records.find((entry) => entry?.model_name === "general") ?? records[0];
+    const windows: QuotaWindow[] = [];
+    const intervalRemaining = numberOr(row?.current_interval_remaining_percent);
+    if (intervalRemaining !== undefined) {
+      windows.push({
+        label: "5h",
+        percent: Math.max(0, Math.min(100, Math.round(100 - intervalRemaining))),
+        resetAt: numberOr(row?.end_time),
+      });
+    }
+    const weeklyRemaining = numberOr(row?.current_weekly_remaining_percent);
+    if (weeklyRemaining !== undefined) {
+      windows.push({
+        label: "weekly",
+        percent: Math.max(0, Math.min(100, Math.round(100 - weeklyRemaining))),
+        resetAt: numberOr(row?.weekly_end_time),
+      });
+    }
+    if (windows.length > 0) return { customWindows: windows };
+  }
+  const data = asRecord(root?.data);
   const remainsMs = numberOr(data?.remains_time);
   const totalMs = numberOr(data?.total_time);
   if (totalMs !== undefined && remainsMs !== undefined && totalMs > 0) {

@@ -174,6 +174,35 @@ describe("probe isolation", () => {
   });
 });
 
+describe("parseMinimaxRemains", () => {
+  test("reads the model_remains rows the CN endpoint actually returns", () => {
+    const parsed = parseMinimaxRemains({
+      model_remains: [
+        {
+          model_name: "general",
+          remains_time: 5909395,
+          end_time: 1790179200000,
+          current_interval_remaining_percent: 100,
+          weekly_end_time: 1790524800000,
+          current_weekly_remaining_percent: 40,
+        },
+        { model_name: "video", current_interval_remaining_percent: 0 },
+      ],
+    });
+    expect(parsed.customWindows).toEqual([
+      { label: "5h", percent: 0, resetAt: 1790179200000 },
+      { label: "weekly", percent: 60, resetAt: 1790524800000 },
+    ]);
+  });
+
+  test("still reads the single-window shape the spec recorded", () => {
+    const parsed = parseMinimaxRemains({
+      data: { remains_time: 1_800_000, total_time: 3_600_000 },
+    });
+    expect(parsed.customWindows).toEqual([{ label: "5h", percent: 50 }]);
+  });
+});
+
 describe("parseDeepseekBalance", () => {
   test("reads balances that arrive as numeric strings", () => {
     const parsed = parseDeepseekBalance({
