@@ -41,6 +41,25 @@ function formatResetAt(resetAt, locale) {
   );
 }
 
+/** Credit timestamps arrive as ISO strings or epoch numbers; both must render
+ * as one absolute local time (spec: the confirm dialog shows expires_at
+ * absolutely, since it is the last check before an irreversible charge). */
+function toEpochMs(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value > 1e11 ? value : value * 1000;
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return null;
+}
+
+function formatAbsoluteTime(value) {
+  const ms = toEpochMs(value);
+  return ms === null ? "" : new Date(ms).toLocaleString();
+}
+
 function windowBar({ label, percent, resetAt }, locale) {
   const clamped = Math.max(0, Math.min(100, Math.round(percent)));
   const reset = formatResetAt(resetAt, locale);
@@ -131,6 +150,81 @@ export function createProviderQuotaPanel(seams, { locale }) {
     return { toast: locale.toastUnknown };
   }
 
+  /** Inspect the reset credits, then ask. Returns {confirmed} or {toast}. */
+  async function decideReset() {
+    let payload = null;
+    try {
+      payload = await seams.gateway.call("codex_reset_credits_inspect", {});
+    } catch {
+      return { confirmed: false, toast: locale.toastUnavailable };
+    }
+    const data = payload?.data ?? {};
+    if (data.failure === "needs_login") return { confirmed: false, toast: locale.toastNeedsLogin };
+    const credits = Array.isArray(data.credits) ? data.credits : [];
+    return { confirmed: await confirmReset(credits) };
+  }
+
+  /** Modal confirm listing each credit with its absolute granted/expires time. */
+  function confirmReset(credits) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "file-preview-dialog-overlay";
+      const dialog = document.createElement("div");
+      dialog.className = "file-preview-dialog";
+      dialog.setAttribute("role", "dialog");
+      dialog.setAttribute("aria-modal", "true");
+      const heading = document.createElement("h3");
+      heading.textContent = locale.resetDialogTitle;
+      const body = document.createElement("p");
+      body.textContent = locale.resetDialogBody;
+      const list = document.createElement("div");
+      list.className = "quota-credits";
+      if (credits.length > 0) {
+        for (const credit of credits) {
+          const row = document.createElement("div");
+          row.className = "quota-credit-row";
+          row.textContent = `${locale.creditGranted.replace("{time}", formatAbsoluteTime(credit?.granted_at))} · ${locale.creditExpires.replace("{time}", formatAbsoluteTime(credit?.expires_at))}`;
+          list.append(row);
+        }
+      } else {
+        const row = document.createElement("div");
+        row.className = "quota-credit-row";
+        row.textContent = locale.creditUnknown;
+        list.append(row);
+      }
+      const actions = document.createElement("div");
+      actions.className = "file-preview-dialog-actions";
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "file-preview-dialog-button";
+      cancel.textContent = locale.dialogCancel;
+      const confirm = document.createElement("button");
+      confirm.type = "button";
+      confirm.className = "file-preview-dialog-button primary";
+      confirm.textContent = locale.dialogConfirm;
+      actions.append(cancel, confirm);
+      dialog.append(heading, body, list, actions);
+      overlay.append(dialog);
+      document.body.append(overlay);
+
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        document.removeEventListener("keydown", onKeyDown);
+        overlay.remove();
+        resolve(value);
+      };
+      const onKeyDown = (event) => {
+        if (event.key === "Escape") finish(false);
+      };
+      document.addEventListener("keydown", onKeyDown);
+      cancel.addEventListener("click", () => finish(false));
+      confirm.addEventListener("click", () => finish(true));
+      confirm.focus();
+    });
+  }
+
   function renderResetArea(codexReport) {
     const credits = codexReport?.quota?.resetCredits;
     if (typeof credits !== "number" || credits <= 0) return "";
@@ -140,10 +234,25 @@ export function createProviderQuotaPanel(seams, { locale }) {
     button.textContent = locale.resetCredits.replace("{n}", String(credits));
     button.addEventListener("click", async () => {
       button.disabled = true;
-      const outcome = await consumeResetCredit();
-      button.disabled = false;
-      window.dispatchEvent(new CustomEvent("picot-toast", { detail: { message: outcome.toast } }));
-      void loadReports(true);
+      try {
+        // Inspect before charging: the dialog lists exactly which credits are
+        // spent, and cancelling must leave the ledger untouched.
+        const decision = await decideReset();
+        if (decision.toast) {
+          window.dispatchEvent(
+            new CustomEvent("picot-toast", { detail: { message: decision.toast } }),
+          );
+          return;
+        }
+        if (!decision.confirmed) return;
+        const outcome = await consumeResetCredit();
+        window.dispatchEvent(
+          new CustomEvent("picot-toast", { detail: { message: outcome.toast } }),
+        );
+        void loadReports(true);
+      } finally {
+        button.disabled = false;
+      }
     });
     return button;
   }
