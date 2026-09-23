@@ -234,6 +234,22 @@ describe("controller on a synthetic 60-turn fixture", () => {
     expect(nav.getActiveIndex()).toBe(59);
   });
 
+  test("hides the rail when the tick stack cannot fit the chat area", async () => {
+    // Short window (or an open terminal panel shrinks the chat the same way):
+    // 300px chat minus the 68/100 insets leaves ~108px of rail room, while the
+    // rendered stack claims 400px - the stack would paint over the composer.
+    Object.defineProperty(container, "clientHeight", { value: 300, configurable: true });
+    const track = document.getElementById("track");
+    Object.defineProperty(track, "scrollHeight", { value: 400, configurable: true });
+    nav.refresh();
+    expect(document.getElementById("nav").classList.contains("hidden")).toBe(true);
+
+    // Taller chat area: the same stack fits and the rail returns.
+    Object.defineProperty(container, "clientHeight", { value: 800, configurable: true });
+    nav.refresh();
+    expect(document.getElementById("nav").classList.contains("hidden")).toBe(false);
+  });
+
   test("track is the single listbox hit surface; ticks are non-interactive", () => {
     const track = document.getElementById("track");
     expect(track.getAttribute("role")).toBe("listbox");

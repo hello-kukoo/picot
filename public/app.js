@@ -144,7 +144,11 @@ import { repaintContextViz, setupContextViz } from "./ui/context-viz.js";
 import { createConversationNav } from "./ui/conversation-nav.js";
 import { DialogHandler } from "./ui/dialogs.js";
 import { createHeaderStatusBar } from "./ui/header-status-bar.js";
-import { disconnectGateAutoReveal, observeGateAutoReveal } from "./ui/history-gate-auto-reveal.js";
+import {
+  AUTO_REVEAL_THRESHOLD_PX,
+  disconnectGateAutoReveal,
+  observeGateAutoReveal,
+} from "./ui/history-gate-auto-reveal.js";
 import { initImageLightbox } from "./ui/image-lightbox.js";
 import { setupMessagesInsets } from "./ui/layout-insets.js";
 import { MessageRenderer } from "./ui/message-renderer.js";
@@ -5068,6 +5072,9 @@ setupSessionSearchDialog({
     for (const project of sidebar?.projects ?? []) {
       const target = (project.sessions ?? []).find((item) => item.filePath === session.id);
       if (target) {
+        // A collapsed workspace group hides the row the search jumps to:
+        // expand the group and center the row before the select lands.
+        sidebar?.revealSessionInWorkspace?.(project, target);
         void handleSessionSelect(target, project);
         return;
       }
@@ -6126,11 +6133,17 @@ function buildHistoryGateControl({ remaining, onOlder, onAll }) {
 
 /** Insert a rendered turn fragment before the gate control, anchored. */
 function insertTurnFragmentBeforeControl(fragment) {
-  const before = messagesElement.scrollHeight;
-  const anchorTop = messagesElement.scrollTop;
-  historyGate.control.parentNode.insertBefore(fragment, historyGate.control);
-  const delta = messagesElement.scrollHeight - before;
-  if (delta > 0) messagesElement.scrollTop = anchorTop + delta;
+  const control = historyGate.control;
+  const scrollerTop = messagesElement.getBoundingClientRect().top;
+  const gateY = () => control.getBoundingClientRect().top - scrollerTop;
+  control.parentNode.insertBefore(fragment, control);
+  // Settle the gate just below the auto-reveal margin. Compensating the full
+  // insert delta instead pins the gate inside the trigger zone: the reveal
+  // chain then never comes to rest, loads the entire history in one run, and
+  // the gate removes itself - its buttons become impossible to see or click.
+  const settleY = AUTO_REVEAL_THRESHOLD_PX + 32;
+  const currentY = gateY();
+  if (currentY < settleY) messagesElement.scrollTop += settleY - currentY;
 }
 
 function updateHistoryGateControl() {

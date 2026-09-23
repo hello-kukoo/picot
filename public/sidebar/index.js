@@ -911,6 +911,7 @@ export class SessionSidebar {
         for (const project of this.projects) {
           const session = project.sessions.find((s) => s.filePath === result.filePath);
           if (session) {
+            this.revealSessionInWorkspace(project, session);
             this.onSessionSelect(session, project);
             return;
           }
@@ -1562,6 +1563,23 @@ export class SessionSidebar {
     } else {
       this.expandedWorkspaces.delete(key);
     }
+  }
+
+  /** A search hit can live under a collapsed workspace group: expand the
+   *  group and center the row, so the selected session is actually visible
+   *  instead of highlighted somewhere the user cannot see. */
+  revealSessionInWorkspace(project, session) {
+    const key = this.getWorkspaceExpansionKey(project);
+    if (key && !this.expandedWorkspaces.has(key)) {
+      this.setWorkspaceExpanded(project, true);
+      this.render();
+    }
+    requestAnimationFrame(() => {
+      const row = this.container.querySelector(
+        `.session-item[data-file-path="${CSS.escape(session.filePath)}"]`,
+      );
+      row?.scrollIntoView({ block: "center" });
+    });
   }
 
   getProjectVisibleSessionCount(project, sessionCount) {

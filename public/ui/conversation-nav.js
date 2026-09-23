@@ -76,6 +76,11 @@ export function tickWidthFor(distance) {
  * recomputes offsets only when dirty (resize/mutation, debounced) and
  * coalesces scroll events into one rAF per frame.
  */
+/** Below this chat-container height the rail hides entirely (the height
+ *  analogue of the narrow-window media query): a short window and an open
+ *  terminal panel both shrink the container without the window changing. */
+const NAV_MIN_CHAT_HEIGHT = 440;
+
 export function createConversationNav({
   navEl,
   trackEl,
@@ -229,6 +234,12 @@ export function createConversationNav({
     return points.length > limit ? points.slice(0, limit).join("") : collapsed;
   }
 
+  function chatAreaTooShort() {
+    const height = container.clientHeight;
+    if (height === 0) return false; // unmeasured (test) container
+    return height < NAV_MIN_CHAT_HEIGHT;
+  }
+
   function renderTicks() {
     const list = ticks();
     const hasConvs = list.length > 1;
@@ -273,6 +284,13 @@ export function createConversationNav({
     // leave the attribute dangling on an id that is no longer in the DOM.
     const activeInWindow = activeIndex >= windowRange.start && activeIndex < windowRange.end;
     trackEl.setAttribute("aria-activedescendant", activeInWindow ? tickId(activeIndex) : "");
+
+    // Hidden when the stack cannot fit: painting past the clamped box would
+    // overlay the composer (a short window or an open terminal panel both
+    // shrink the chat area; the narrow-window media query cannot see either).
+    const tooShort = chatAreaTooShort();
+    if (tooShort) hideTooltipNow();
+    navEl.classList.toggle("hidden", !hasConvs || tooShort);
   }
 
   function showTooltip(index) {
@@ -306,8 +324,26 @@ export function createConversationNav({
     }
   }
 
+  /** Delayed hide: the pointer-leave grace window that lets the user move
+   *  onto the tooltip without it vanishing. */
   function hideTooltip() {
-    tooltipHideTimer = setTimeout(() => tooltipEl.classList.add("hidden"), 120);
+    clearTimeout(tooltipHideTimer);
+    tooltipHideTimer = setTimeout(() => {
+      tooltipHideTimer = null;
+      tooltipEl.classList.add("hidden");
+    }, 120);
+  }
+
+  /** Immediate hide for layout changes. The tooltip is anchored to a tick
+   *  rect, so once the window relayouts that anchor is stale — and because the
+   *  tooltip is pointer-events: auto and sits right beside the rail, leaving
+   *  it up swallows every pointer event over the rail: no hover surface, no
+   *  tick glide, no preview. A window drag can resize without ever delivering
+   *  the pointerleave that would have hidden it. */
+  function hideTooltipNow() {
+    clearTimeout(tooltipHideTimer);
+    tooltipHideTimer = null;
+    tooltipEl.classList.add("hidden");
   }
 
   function jumpTo(index, { smooth = true } = {}) {
@@ -442,6 +478,8 @@ export function createConversationNav({
     () => tooltipHideTimer && clearTimeout(tooltipHideTimer),
   );
   tooltipEl.addEventListener("mouseleave", hideTooltip);
+  win.addEventListener("resize", hideTooltipNow);
+  win.addEventListener("blur", hideTooltipNow);
 
   if (typeof win.ResizeObserver === "function") {
     containerResizeObserver = new win.ResizeObserver(() => {
@@ -477,6 +515,8 @@ export function createConversationNav({
       trackEl.removeEventListener("click", onTrackClick);
       trackEl.removeEventListener("keydown", onTrackKeydown);
       container.removeEventListener("scroll", onContainerScroll);
+      win.removeEventListener("resize", hideTooltipNow);
+      win.removeEventListener("blur", hideTooltipNow);
       containerResizeObserver?.disconnect();
       ticksResizeObserver?.disconnect();
       mutationObserver?.disconnect();

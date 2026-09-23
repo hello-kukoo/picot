@@ -4038,7 +4038,14 @@ body.landing-mode #landing {
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-top: var(--messages-top-inset);
-  padding-bottom: var(--messages-bottom-inset);
+  /* The input-area overlays .main's bottom (absolute, opaque background).
+     Ending the scrollport at the composer's top keeps the native scrollbar
+     fully visible; without the margin the track runs under the overlay and
+     the thumb's lower end is hidden when fully scrolled. Breathing room
+     only — the JS-maintained inset below the composer no longer needs to
+     live inside the scrollport as padding. */
+  margin-bottom: var(--messages-bottom-inset);
+  padding-bottom: var(--space-4);
   /* The conversation rail hugs the chat's LEFT edge (Info panel design):
      reserve its width so ticks never overlap message text or focus rings. */
   padding-left: max(var(--space-12), calc((100% - 960px) / 2));
@@ -10564,4 +10571,38 @@ button.skills-group-status:disabled {
   color: var(--text-primary);
   font-size: var(--font-size-md);
   resize: vertical;
+}
+
+/* ── Scroll-to-latest floating control (centered above the composer, Paseo) ── */
+.scroll-bottom-btn {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(var(--messages-bottom-inset) + 8px);
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-pill);
+  background: var(--bg-solid);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+}
+
+/* The arrow itself is the lucide icon app.js installs into
+   .scroll-bottom-icon; the badge appears only for genuinely new messages. */
+.scroll-bottom-btn:hover {
+  border-color: var(--accent);
+}
+
+.scroll-bottom-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--accent);
+  font-weight: 500;
 }
