@@ -10,33 +10,67 @@ trusted-local object-icon vocabulary embedded in
 - **Author:** Philipp Kief (<https://github.com/PKief>)
 - **License:** MIT (see `LICENSE` below)
 - **Repository:** <https://github.com/vscode-material-icon-theme/vscode-material-icon-theme>
-- **Pinned release tag:** v5.x (latest stable at the time of vendoring)
+- **Pinned snapshot:** Paseo `material-icon-theme` **5.32.0**
+  (<https://github.com/earendil-works/paseo>, `packages/app/src/components/material-file-icons.ts`)
+- **Snapshot date:** 2026-09-23
 
 ## What is vendored
 
-Only a curated **whitelist** of object-icon names required by the
-integrated UI modernization plan is represented, as trusted inline SVG
-definitions inside `public/file-type-icons.js`. **No upstream asset files
-are copied verbatim**; the inline definitions are Picot-authored SVG that
-reproduce the Material Icon Theme visual language (folder, source file,
-config document) for object recognition. No remote URL, emoji fallback,
-or Material asset is ever used for an action control.
+Two blocks in `public/file-type-icons.js` are **verbatim copies** of Paseo's
+transcription of the upstream theme, so re-copying an icon stays a mechanical
+edit and a diff against the pinned snapshot is meaningful:
 
-Vendored vocabulary (resolver names): `folder`, `folder-open`,
-`folder-git`, `folder-git-open`, `file`, `ts`, `js`, `python`, `json`,
-`markdown`, `html`, `css`, `yaml`, `toml`, `shell`, `rust`, `image`,
-`pdf`, `env`, `lock`, `config`.
+- `FILE_ICON_SVG` — the 53-icon vocabulary plus the `_default` generic file
+  glyph (the `SVG_ICONS` object in Paseo's file).
+- `EXTENSION_TO_ICON` — the extension → icon-name map.
+
+### Office additions (same snapshot, Picot-copied)
+
+Paseo's curated table carries no office glyphs. Four more icons are therefore
+**verbatim copies from the same pinned upstream 5.32.0 package** (`icons/*.svg`,
+regenerate with `npm pack material-icon-theme@5.32.0`), kept in their own
+clearly-marked blocks so the two Paseo blocks above still diff cleanly:
+
+- `PICOT_FILE_ICON_SVG` — `pdf`, `word`, `powerpoint`, `table`.
+- `PICOT_EXTENSION_TO_ICON` — `pdf`; `doc`/`docx`/`odt`/`rtf` → `word`;
+  `ppt`/`pptx`/`pptm`/`odp` → `powerpoint`; `xls`/`xlsx`/`xlsm`/`ods`/`csv` →
+  `table`.
+
+The extension choices mirror upstream's own `material-icons.json` exactly.
+Upstream has **no Excel-branded glyph** — it maps the whole spreadsheet family
+to `table` — and we follow the upstream choice instead of inventing artwork.
+`doc`/`docx`/`rtf`/`odt`/`ppt`/`pptx`/`odp`/`xls`/`xlsx`/`ods` are exactly the
+suffixes Picot's anydoc office preview recognizes: what Picot previews as an
+office file gets an office glyph.
+
+An extension neither table knows still falls back to `_default` — the honest
+answer for a glyph we do not own — which is why `*.env` renders as a generic
+file while `.env` and `.gitignore` reach the config gear through Picot's own
+`SPECIAL_NAMES` table.
+
+Four directory glyphs are **Picot-authored**, not vendored: Paseo's table has
+no directory icons (Paseo draws its folders with lucide). They live in
+`FOLDER_ICONS` and share the file icons' chroma rule.
+
+Colour: every hex fill in both blocks is scaled to `ICON_CHROMA = 0.65` in
+OKLab (perceived lightness held) by the single `desaturateHexColor` knob.
+Per-icon colour overrides are not allowed.
+
+No remote URL, emoji fallback, or Material asset is ever used for an action
+control.
 
 ## Policy
 
 - File/Git object icons use these trusted local definitions only.
+- Re-vendoring means re-copying both blocks from the pinned snapshot, then
+  running `bun run vitest run public/file-type-icons.test.js`.
 - Action controls (maximize, minimize, text-collapse, refresh-cw, etc.)
   remain the separate local monochrome registry in `public/icons.js`
   and never reuse Material artwork.
 
 ## LICENSE (upstream MIT)
 
-```
+```text
 MIT License
 
 Copyright (c) Philipp Kief and contributors
