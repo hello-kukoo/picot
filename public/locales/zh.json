@@ -116,6 +116,7 @@
     "summary": "入 {in} · 出 {out} · 缓存 {cache}"
   },
   "context": {
+    "used": "已用 {pct}%",
     "cached": "已缓存",
     "input": "输入",
     "available": "可用",

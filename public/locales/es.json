@@ -116,6 +116,7 @@
     "summary": "Entrada {in} · Salida {out} · Caché {cache}"
   },
   "context": {
+    "used": "Usado {pct}%",
     "cached": "En caché",
     "input": "Entrada",
     "available": "Disponible",

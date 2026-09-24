@@ -116,6 +116,7 @@
     "summary": "In {in} · Out {out} · Cache {cache}"
   },
   "context": {
+    "used": "Used {pct}%",
     "cached": "Cached",
     "input": "Input",
     "available": "Available",

@@ -116,6 +116,7 @@
     "summary": "入力 {in} · 出力 {out} · キャッシュ {cache}"
   },
   "context": {
+    "used": "使用 {pct}%",
     "cached": "キャッシュ済み",
     "input": "入力",
     "available": "利用可能",
