@@ -413,6 +413,17 @@ impl NativePiManager {
         Ok(())
     }
 
+    /// Whether this runtime is mid-turn (`agent_start` … `agent_end`): the
+    /// authoritative streaming flag surfaced in `runtime_instances`.
+    pub fn is_working(&self, target: &crate::runtime_coordinator::RuntimeTarget) -> bool {
+        self.inner
+            .coordinator
+            .lock()
+            .ok()
+            .and_then(|coordinator| coordinator.state_of(target))
+            .is_some_and(|state| state == crate::runtime_coordinator::RuntimeState::Working)
+    }
+
     #[cfg(test)]
     pub(crate) fn register_in_memory(
         &self,

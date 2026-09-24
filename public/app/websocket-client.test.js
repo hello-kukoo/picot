@@ -524,6 +524,26 @@ describe("WebSocketClient broker routing", () => {
     await expect(result).resolves.toEqual({ version: "0.84.2" });
   });
 
+  test("forwards runtime_started owner events to refresh subscriptions", () => {
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
+    const events = [];
+    client.addEventListener("runtimeStarted", (event) => events.push(event.detail));
+    client.handleMessage({
+      type: "runtime_started",
+      workspaceId: "workspace-a",
+      sessionId: "session-a",
+      instanceId: "instance-a",
+    });
+    expect(events).toEqual([
+      {
+        type: "runtime_started",
+        workspaceId: "workspace-a",
+        sessionId: "session-a",
+        instanceId: "instance-a",
+      },
+    ]);
+  });
+
   test("sequence gap requests one authoritative snapshot for current target", () => {
     const sent = [];
     const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");

@@ -57,10 +57,13 @@ workspace 与 generation。owner 当前在 B 时，A runtime 的 prompt、abort�
 
 工作树中的 `runtime_instances` 改动向 authenticated native desktop owner 返回可解析为已注册 workspace
 和 session file 的所有 live runtime 摘要，包括 `workspaceId`、`sessionId`、`instanceId`、
-`cwd`、`sessionFile`、`pid`。它不承诺返回每个 registered workspace 的每个 runtime：无法解析
+`cwd`、`sessionFile`、`pid`、`streaming`。`streaming` 直接镜像 coordinator 的 event-driven
+状态：`agent_start` 后为 true，`agent_end` 或 `agent_settled` 后为 false。它让页面在错过
+`agent_start` 后仍能以正确绿点恢复。它不承诺返回每个 registered workspace 的每个 runtime：无法解析
 workspace 或 session file 的 target 留在 host 内部。
 
-恢复完成后，页面据此订阅 live target。工作树中的 Subscribe 改动只要求 authenticated desktop owner 和 live target，
+恢复完成后，页面据此订阅 live target。首次恢复与同 owner 的每次 spawn 后均刷新该摘要：host 在成功 spawn 后
+向 owner 发 `runtime_started`，前端只订阅新增 instance 并请求其 snapshot。工作树中的 Subscribe 改动只要求 authenticated desktop owner 和 live target，
 不再要求当前 workspace/generation 匹配。`runtime_request` 命令面没有放宽，仍经过
 `authorize_target`。
 
@@ -83,10 +86,10 @@ workspace 或 session file 的 target 留在 host 内部。
 | 环节 | 现有实现 |
 | --- | --- |
 | 非当前 runtime 事件 | `handleRPCEvent` 转交 `handleBackgroundRPCEvent` |
-| 工作中 | `agent_start` 调 `sidebar.setStreaming(sessionFile, true)` |
-| 未读 | `agent_end` 清 streaming 后 `markUnread(sessionFile)` |
+| 工作中 | `agent_start` 调 `sidebar.setStreaming(sessionFile, true)`；恢复/新增订阅以摘要 `streaming: true` 补亮错过的绿点 |
+| 停止/未读 | `agent_end` 清 streaming 后 `markUnread(sessionFile)`；`runtime_stopped` 无条件清 streaming |
 | 查看 session | `setActive` 清 unread；streaming 优先显示 |
-| 订阅来源 | `subscribeToLiveRuntimeTargets` 遍历 `runtime_instances` |
+| 订阅来源 | `subscribeToLiveRuntimeTargets` 遍历 `runtime_instances`；`runtime_started` 触发幂等增量刷新 |
 
 不做项目级汇总点、折叠 workspace 状态点、轮询或跨 workspace 控制入口。
 
@@ -135,12 +138,14 @@ workspace 或 session file 的 target 留在 host 内部。
    选中行清除 unread。
 11. 切到 B 时 A 的 background event 不渲染进 B 的 transcript；其 session 行状态仍更新。
 12. A 的 blocking dialog 在 B 不出现，返回 A 后 pending replay 只呈现一次。
+12. A 的 blocking dialog 在 B 不出现，返回 A 后 pending replay 只呈现一次。
+13. A streaming 中切到 B 后返回 A：JSONL 快照先显示；任意后续 `message_update` 接入同一 live turn，绿点保持，transcript 继续实时增长。
 
 ### 手工 e2e
 
-13. 在 A 让 agent 执行一段可观察的长任务，切到 B，再回 A：任务不中断、同一 session 继续输出；
+14. 在 A 让 agent 执行一段可观察的长任务，切到 B，再回 A：任务不中断、同一 session 继续输出；
     B 侧栏中的 A 行先绿后蓝。
-14. 在 A 打开 blocking questionnaire 后切到 B：B 不弹问卷；回到 A 后可继续回答。
+15. 在 A 打开 blocking questionnaire 后切到 B：B 不弹问卷；回到 A 后可继续回答。
 
 运行 `bun run check:rust`、`bun run check`、相关 focused tests，最后运行 `bun run test`。当前
 `cross_workspace_return_reuses_the_prior_runtime` 仅覆盖 helper 级 rebind，且曾出现

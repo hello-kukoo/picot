@@ -156,6 +156,14 @@ impl RuntimeCoordinator {
         Ok(())
     }
 
+    /// Read-only state probe for summaries: `Working` is the event-driven
+    /// streaming signal (agent_start sets it, agent_end/agent_settled clear).
+    pub fn state_of(&self, target: &RuntimeTarget) -> Option<RuntimeState> {
+        self.instances
+            .get(&target.instance_id)
+            .map(|record| record.state)
+    }
+
     pub fn validate(&self, target: &RuntimeTarget) -> Result<(), CoordinatorError> {
         let record = self
             .instances

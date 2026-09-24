@@ -128,6 +128,7 @@ async fn record_session_bucket_after_spawn(
     metadata: SharedMetadataStore,
     host_events: crate::host_control::HostEventSink,
     target: RuntimeTarget,
+    owner: Option<window_owner::OwnerId>,
 ) {
     let response = match runtimes
         .request(
@@ -158,19 +159,26 @@ async fn record_session_bucket_after_spawn(
         .unwrap_or_default()
         .join(".pi/agent/sessions");
     let data = host_data::HostDataPlane::new(metadata).with_session_root(session_root);
-    match data.record_pi_session_bucket(&target.workspace_id, session_file) {
+    let bucket_resolved = match data.record_pi_session_bucket(&target.workspace_id, session_file) {
         Ok(true) => {
             host_events.broadcast_native_event(serde_json::json!({
                 "type": "registry_changed",
                 "reason": "session_bucket_recorded",
             }));
+            true
         }
-        Ok(false) => {}
+        Ok(false) => true,
         Err(error) => {
             log::warn!(
                 "[picot-native] Pi returned invalid session bucket for workspace {}: {error}",
                 target.workspace_id
             );
+            false
+        }
+    };
+    if bucket_resolved {
+        if let Some(owner) = owner {
+            host_events.send_owner_event(&owner, runtime_started_event(&target));
         }
     }
 }
@@ -767,6 +775,15 @@ fn target_for_owner_in_workspace(
         })
 }
 
+fn runtime_started_event(target: &RuntimeTarget) -> serde_json::Value {
+    serde_json::json!({
+        "type": "runtime_started",
+        "workspaceId": target.workspace_id,
+        "sessionId": target.session_id,
+        "instanceId": target.instance_id,
+    })
+}
+
 /// Running-runtime summaries for every registered workspace regardless of
 /// owner: a page viewing workspace B still sees workspace A's live sessions
 /// (sidebar streaming/unread dots). Runtimes whose workspace or session file
@@ -798,6 +815,9 @@ fn runtime_instance_summaries(
                 "sessionFile": session_file.to_string_lossy(),
                 "pid": runtimes.pid_for(&target),
                 "startedAt": serde_json::Value::Null,
+                // Event-driven mid-turn flag: lets a late subscriber light the
+                // green dot for a turn whose agent_start it never saw.
+                "streaming": runtimes.is_working(&target),
             }))
         })
         .collect()
@@ -839,7 +859,7 @@ mod tests {
     use super::{
         cancel_should_stop_target, filter_session_delete_paths, find_existing_runtime_for_prepare,
         image_mime_from_path, new_session_menu_enabled, persisted_session_id_for_workspace,
-        quick_chat_snapshot, resolve_static_dir, runtime_instance_summaries,
+        quick_chat_snapshot, resolve_static_dir, runtime_instance_summaries, runtime_started_event,
         should_stop_owner_runtimes_on_transition, side_chat_startup_rpc_commands,
         skill_scope_context, target_for_owner_in_workspace, touch_registered_workspace,
         workspace_snapshot_for,
@@ -935,13 +955,15 @@ mod tests {
         );
         let mut fake = manager.register_in_memory(target.clone()).unwrap();
 
-        let (event_tx, _event_rx) = tokio::sync::broadcast::channel(16);
+        let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(16);
         let sink = crate::host_control::HostEventSink::new(event_tx);
+        let owner = crate::window_owner::OwnerId::from_string("owner-a".to_string());
         let task = tokio::spawn(super::record_session_bucket_after_spawn(
             manager.clone(),
             metadata.clone(),
             sink,
             target.clone(),
+            Some(owner.clone()),
         ));
 
         // Pi answers get_state with the session file it allocated at start.
@@ -957,6 +979,15 @@ mod tests {
         .await
         .unwrap();
         task.await.unwrap();
+
+        let event = loop {
+            let event = event_rx.recv().await.unwrap();
+            if event.owner.is_some() {
+                break event;
+            }
+        };
+        assert_eq!(event.owner, Some(owner));
+        assert_eq!(event.value, runtime_started_event(&target));
 
         let stored = metadata
             .lock()
@@ -1018,6 +1049,22 @@ mod tests {
         assert_eq!(
             persisted_session_id_for_workspace(&session, &canonical).unwrap(),
             "saved",
+        );
+    }
+
+    #[test]
+    fn runtime_started_event_identifies_spawned_runtime() {
+        use crate::runtime_coordinator::RuntimeTarget;
+        let target =
+            RuntimeTarget::with_owner("workspace-a", "session-a", "instance-a", "owner-a", 4);
+        assert_eq!(
+            runtime_started_event(&target),
+            json!({
+                "type": "runtime_started",
+                "workspaceId": "workspace-a",
+                "sessionId": "session-a",
+                "instanceId": "instance-a",
+            })
         );
     }
 
@@ -1121,6 +1168,63 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("session-a.jsonl"));
+    }
+
+    #[tokio::test]
+    async fn runtime_instance_summaries_report_streaming_state() {
+        use crate::native_pi_manager::NativePiManager;
+        use crate::runtime_coordinator::RuntimeTarget;
+
+        // `streaming` mirrors the coordinator's event-driven state so the
+        // sidebar can light the green dot for a turn that began before this
+        // page subscribed (missed agent_start). agent_start flips the runtime
+        // to Working; agent_end flips it back to Idle.
+        let manager = NativePiManager::new(8);
+        let (metadata, temp) = shared_test_metadata("instance-streaming");
+        let sessions_root = temp.join("sessions");
+        let bucket = sessions_root.join("--ws-a--");
+        fs::create_dir_all(&bucket).unwrap();
+        let root_a = {
+            fs::create_dir_all(temp.join("a")).unwrap();
+            temp.join("a").canonicalize().unwrap()
+        };
+        let (row_a, _) = metadata.lock().unwrap().add_workspace(&root_a).unwrap();
+        metadata
+            .lock()
+            .unwrap()
+            .set_workspace_session_bucket_from_pi(&row_a.workspace_id, "--ws-a--")
+            .unwrap();
+        fs::write(
+            bucket.join("2026-09-18T00-00-00-000Z_session-a.jsonl"),
+            format!(
+                "{{\"type\":\"session\",\"version\":3,\"id\":\"session-a\",\"cwd\":\"{}\"}}\n\
+                 {{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n",
+                root_a.to_string_lossy(),
+            ),
+        )
+        .unwrap();
+        let target =
+            RuntimeTarget::with_owner(&row_a.workspace_id, "session-a", "instance-a", "owner-a", 1);
+        let mut fake = manager.register_in_memory(target).unwrap();
+
+        let streaming = || {
+            runtime_instance_summaries(&manager, &metadata, Some(&sessions_root))
+                .into_iter()
+                .find(|entry| entry["sessionId"] == "session-a")
+                .map(|entry| entry["streaming"].clone())
+                .unwrap_or(serde_json::Value::Null)
+        };
+        assert_eq!(streaming(), serde_json::json!(false), "idle at rest");
+        fake.write_frame(serde_json::json!({"type":"agent_start"}))
+            .await
+            .unwrap();
+        tokio::task::yield_now().await;
+        assert_eq!(streaming(), serde_json::json!(true), "working mid-turn");
+        fake.write_frame(serde_json::json!({"type":"agent_end"}))
+            .await
+            .unwrap();
+        tokio::task::yield_now().await;
+        assert_eq!(streaming(), serde_json::json!(false), "idle after end");
     }
 
     #[test]
@@ -2703,6 +2807,7 @@ fn install_control_handler(
                             metadata.clone(),
                             host_events.clone(),
                             target.clone(),
+                            Some(owner.clone()),
                         ));
                         if arg_bool("forceNewSession").unwrap_or(false) {
                             if let Err(error) = runtimes
@@ -3558,6 +3663,7 @@ fn install_control_handler(
                             metadata.clone(),
                             host_events.clone(),
                             new_target.clone(),
+                            Some(owner.clone()),
                         ));
                         Ok(serde_json::json!({ "instanceId": new_target.instance_id }))
                     }
@@ -3850,6 +3956,7 @@ fn install_control_handler(
                                     metadata.clone(),
                                     host_events.clone(),
                                     new_target.clone(),
+                                    Some(owner.clone()),
                                 )
                                 .await;
                                 (new_target, generation)
