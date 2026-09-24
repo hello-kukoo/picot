@@ -143,8 +143,9 @@ body.landing-mode .workspace {
 body.landing-mode #landing {
   display: flex;
 }
-/* The pi.dev hero mark verbatim (three fixed colors, no container per Dr.
-   Lin 2026-09-17): theme-independent, so no light/dark swap is needed. */
+/* The pi.dev hero mark geometry with the three Palan brand colors (blue
+   #00A0E9 / green #6EB92B / orange #F08200, no container per Dr. Lin
+   2026-09-17): theme-independent, so no light/dark swap is needed. */
 .pi-logo-mark {
   width: 88px;
   height: 88px;
@@ -168,7 +169,7 @@ body.landing-mode #landing {
   display: block;
 }
 .landing-slogan-accent {
-  color: #6a9fcc;
+  color: #00a0e9;
 }
 .landing-name {
   /* Tight pairing under the tagline above it (logo → slogan → wordmark). */

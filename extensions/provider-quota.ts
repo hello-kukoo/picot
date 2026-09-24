@@ -53,8 +53,8 @@ type ProviderSpec = {
   canonicalBaseUrls: string[];
   /** Builds the request for a configured provider instance. */
   buildRequest: (instance: ProviderInstance) => { url: string; init: RequestInit } | null;
-  /** Parses the vendor JSON into the normalized quota shape. */
-  parse: (json: unknown) => Partial<NonNullable<QuotaReport["quota"]>>;
+  /** Parses vendor JSON into the normalized quota shape. */
+  parse: (json: unknown, instance?: ProviderInstance) => Partial<NonNullable<QuotaReport["quota"]>>;
 };
 
 export type ProviderInstance = {
@@ -177,10 +177,12 @@ export function parseZaiQuota(json: unknown): Partial<NonNullable<QuotaReport["q
     if (unit === 3 && number === 5) label = "5h";
     else if (unit === 6 && number === 1) label = "week";
     else label = `${number ?? "?"}`;
+    const currentValue = numberOr(limit.currentValue);
+    const usage = numberOr(limit.usage);
     const percent =
       numberOr(limit.percentage) ??
-      (numberOr(limit.currentValue) !== undefined && numberOr(limit.usage) === 100
-        ? 100
+      (currentValue !== undefined && usage !== undefined && usage > 0
+        ? Math.max(0, Math.min(100, Math.round((currentValue / usage) * 100)))
         : undefined);
     const resetAt = epochSecondsToMs(limit.nextResetTime);
     if (percent === undefined) continue;
@@ -272,11 +274,27 @@ export function parseMinimaxRemains(json: unknown): Partial<NonNullable<QuotaRep
   return {};
 }
 
-export function parseMoonshotBalance(json: unknown): Partial<NonNullable<QuotaReport["quota"]>> {
+export function parseMoonshotBalance(
+  json: unknown,
+  instance?: Pick<ProviderInstance, "baseUrl">,
+): Partial<NonNullable<QuotaReport["quota"]>> {
   const data = asRecord(asRecord(json)?.data);
-  const available = numberOr(data?.available_balance);
-  if (available === undefined) return {};
-  return { customWindows: [{ label: `$${available.toFixed(2)}`, percent: 0 }] };
+  if (!data) return {};
+  const isCn = normalizeBaseUrl(instance?.baseUrl ?? "").includes("moonshot.cn");
+  const currency = isCn ? "¥" : "$";
+  const rows: QuotaWindow[] = [];
+  const balances: [string, unknown][] = [
+    ["余额", data.available_balance],
+    ["代金券", data.voucher_balance],
+    ["现金", data.cash_balance],
+  ];
+  for (const [label, raw] of balances) {
+    const value = numberOr(raw);
+    if (value !== undefined) {
+      rows.push({ label: `${label} ${currency}${value.toFixed(2)}`, percent: 0 });
+    }
+  }
+  return rows.length > 0 ? { customWindows: rows } : {};
 }
 
 export function parseOllamaUsage(json: unknown): Partial<NonNullable<QuotaReport["quota"]>> {
@@ -497,6 +515,8 @@ export function createQuotaProbeCache(deps: QuotaProbeDeps = {}) {
     }
     if (response.status === 429)
       throw Object.assign(new Error("rate_limited"), { code: "rate_limited" });
+    if (response.status === 401)
+      throw Object.assign(new Error("needs_login"), { code: "needs_login" });
     if (!response.ok)
       throw Object.assign(new Error(`upstream_${response.status}`), { code: "upstream_error" });
     const text = await readCappedText(response, RESPONSE_BODY_CAP_BYTES);
@@ -533,7 +553,7 @@ export function createQuotaProbeCache(deps: QuotaProbeDeps = {}) {
     }
     try {
       const json = await fetchJson(request.url, request.init);
-      const quota = spec.parse(json);
+      const quota = spec.parse(json, instance);
       const report: QuotaReport = {
         provider: providerId,
         source: spec.source,
@@ -544,7 +564,14 @@ export function createQuotaProbeCache(deps: QuotaProbeDeps = {}) {
     } catch (error) {
       const code = (error as { code?: string })?.code ?? "timeout";
       const failure = (
-        ["rate_limited", "upstream_error", "timeout", "response_unusable"].includes(code)
+        [
+          "needs_login",
+          "rate_limited",
+          "upstream_error",
+          "timeout",
+          "response_unusable",
+          "destination_blocked",
+        ].includes(code)
           ? code
           : "upstream_error"
       ) as QuotaFailureCode;

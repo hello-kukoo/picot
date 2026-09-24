@@ -24,7 +24,7 @@ GUI 回退 `ctx.ui.select(长文本)` → Picot 通用对话框被撑爆（不�
 | 2 | 设置页 | 复用现有 `safetyGuard.config.*` bridge ops 与 renderer，第二个 source gate 指向 fork |
 | 3 | 对话框数据契约 | **改扩展**：非 TUI 模式 `ctx.ui.select` 的 message = 人类可读标题行 + `{"__safetyGuardBash":1,"version":1,"sections":[…],"command":"…","choices":[…]}`；Picot 检测标记渲染富卡片，解析失败剥标记回退通用对话框 |
 | 4 | 布局（卡内） | 命令等宽代码块（横向滚动）+ 各 section 卡片；**上下文摘录默认折叠**；底部固定操作按钮（Block 第一 + 默认焦点），各放行按钮带 scope hint（lifetime 语义） |
-| 4a | 布局（落点，09-22 修订） | 卡片渲染在**触发它的那个 live turn 内联槽位**（`createTurnSection` 的 `card`，位于 rail 与 answer 之间，随对话滚动），不再默认走 `#dialog-container` 全屏模态。无 live turn 可承载时（后台重放的请求、transcript 重渲染、abort）回退到模态容器——回退是**有意的**，不是遗漏 |
+| 4a | 布局（落点，09-23 再修订） | 卡片渲染在**触发它的那个 live turn 内联槽位**（`createTurnSection` 的 `card`，turn 的最后一个元素：answer 与其 footer 之后，随对话滚动），不再默认走 `#dialog-container` 全屏模态。该槽位与 ask-user-question 问卷卡**统一**（同一宿主解析模式）。无 live turn 可承载时（后台重放的请求、transcript 重渲染、abort）回退到模态容器——回退是**有意的**，不是遗漏 |
 | 5 | thinkingLevel | datarx 设置页暴露 `autoReview.model.thinkingLevel` select（off…max） |
 | 6 | 响应机制不动 | options 原样传 select；Picot 按钮 → 现有 `extension_ui_response`（`{value: label}`）；取消/Esc → `{cancelled: true}` = Block（与 TUI 取消语义一致，index.ts:685） |
 | 7 | firstpick 善后 | 删 firstpick renderer gate，保留 ops（共享基础设施）；firstpick spec 加 Uninstalled 注记 |
@@ -60,6 +60,6 @@ GUI 回退 `ctx.ui.select(长文本)` → Picot 通用对话框被撑爆（不�
 - Picot：内联落点单测（`resolveHost` 命中 → 卡片进 turn 槽位且模态容器不动、
   `role="group"`；`resolveHost` 返回 null → 回退模态且 `role="dialog"`；
   `rehost()` 移动卡片、不代答、移动后仍可应答；无 pending 时 `rehost()` 无副作用）；
-  `turn.test.js` 锁槽位顺序 rail → card → answer → status，且 history 变体无 card 槽位。
+  `turn.test.js` 锁槽位顺序 rail → answer → status → card，且 history 变体无 card 槽位。
 - `bun run check`、`bun run test`；手动 e2e：rm 触发审批 → 富卡片 → 各按钮
   → allow/block 语义与 TUI 一致。

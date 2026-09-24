@@ -23,10 +23,11 @@ let localTurnCounter = 0;
  * blocker state to rebuild), as the chat-window spec describes history
  * rendering.
  *
- * The `card` slot hosts blocking prompts that belong to this turn — today the
- * datarx-safety-guard bash approval, which renders in the conversation instead
- * of the full-screen dialog. It sits between the rail and the answer so a
- * required decision is never hidden inside the rail's collapsible disclosure.
+ * The `card` slot hosts blocking prompts that belong to this turn — the
+ * datarx-safety-guard bash approval and the ask-user-question questionnaire.
+ * It is the turn's LAST element: a blocking prompt reads as the newest item
+ * of this turn's stream, after the answer and its footer, never hidden
+ * inside the rail's collapsible disclosure.
  */
 export function createTurnSection({
   turnId = null,
@@ -73,17 +74,37 @@ export function createTurnSection({
   // The user slot sits before everything else: the rail wrapper is always the
   // first element to insert the user bubble before.
   const userSlotRef = group.wrapper;
-  section.append(group.wrapper, ...(card ? [card] : []), answer, ...(status ? [status] : []));
+  section.append(group.wrapper, answer, ...(status ? [status] : []), ...(card ? [card] : []));
 
   let elapsedTimer = null;
+  // Null until a clock exists: an adopted live turn has no known run start, so
+  // it counts from the first live output instead of from when it was mounted.
+  // `Number(null)` is 0, which would render an epoch-sized elapsed time, so an
+  // absent start is normalized before it is parsed.
+  const parsedStart = startedAt === null || startedAt === undefined ? null : Number(startedAt);
+  let elapsedFrom = Number.isFinite(parsedStart) ? parsedStart : null;
   const liveParts = () => {
     const parts = [t("messages.turnWorking")];
     if (modelLabel) parts.push(modelLabel);
-    if (Number.isFinite(Number(startedAt))) {
-      const seconds = Math.max(0, Math.round((Date.now() - Number(startedAt)) / 1000));
+    if (elapsedFrom !== null) {
+      const seconds = Math.max(0, Math.round((Date.now() - elapsedFrom) / 1000));
       parts.push(`${seconds}s`);
     }
     return parts.join(" · ");
+  };
+  const startElapsedTimer = () => {
+    if (elapsedTimer) clearInterval(elapsedTimer);
+    // One interval per live turn, never per render (spec P1.5). A client
+    // clock can drift from the daemon's runStartedAt; the settled value
+    // uses the same client clock so live and settled never disagree (D2).
+    elapsedTimer = setInterval(() => {
+      if (!section.isConnected) {
+        clearInterval(elapsedTimer);
+        elapsedTimer = null;
+        return;
+      }
+      statusText.textContent = liveParts();
+    }, 1000);
   };
 
   return {
@@ -96,18 +117,18 @@ export function createTurnSection({
         status.classList.add("live");
         status.classList.remove("settled");
         statusText.textContent = liveParts();
-        if (elapsedTimer) clearInterval(elapsedTimer);
-        // One interval per live turn, never per render (spec P1.5). A client
-        // clock can drift from the daemon's runStartedAt; the settled value
-        // uses the same client clock so live and settled never disagree (D2).
-        elapsedTimer = setInterval(() => {
-          if (!section.isConnected) {
-            clearInterval(elapsedTimer);
-            elapsedTimer = null;
-            return;
-          }
-          statusText.textContent = liveParts();
-        }, 1000);
+        startElapsedTimer();
+      },
+      /**
+       * Start the clock on a live turn that adopted an already-running session:
+       * the run began while the user was elsewhere, and a clock that counts only
+       * what was watched never understates the run.
+       */
+      beginElapsed(from = Date.now()) {
+        if (!status) return;
+        elapsedFrom = Number(from);
+        statusText.textContent = liveParts();
+        startElapsedTimer();
       },
       setSettled(durationMs) {
         if (!status) return;

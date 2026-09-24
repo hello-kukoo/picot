@@ -546,3 +546,157 @@ test("the jump-to-bottom button appears when scrolled up and hides at the bottom
   messages.dispatchEvent(new Event("scroll"));
   expect(button.classList.contains("hidden")).toBe(true);
 });
+
+test("a plain re-render with more turns (snapshot then disk) never re-gates", async () => {
+  // Pi's compacted snapshot carries fewer turns than the session file (the
+  // compaction drops pre-compaction messages, the disk read keeps them). The
+  // snapshot render must not shrink the reveal count below the mount default,
+  // or the disk render that follows mounts a gate for turns it just proved.
+  const compacted = makeTurnEntries(1);
+  const disk = makeTurnEntries(2);
+  await import("./app.js?history-gate-regrow");
+  const ws = wsInstances.at(-1);
+  const snapshot = (entries, seq) =>
+    ws.onmessage({
+      data: JSON.stringify({
+        type: "runtime_snapshot",
+        protocolVersion: 2,
+        sequence: seq,
+        target,
+        state: {
+          pi: { sessionFile: "/pi/sessions/s3.jsonl", isStreaming: false },
+          messages: entries.map((entry) => entry.message),
+        },
+      }),
+    });
+  snapshot(compacted, 1);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  // The compacted snapshot itself renders ungated (1 turn).
+  expect(document.getElementById("messages").querySelector(".history-gate")).toBeNull();
+
+  snapshot(disk, 2);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const messages = document.getElementById("messages");
+  expect(messages.querySelector(".history-gate")).toBeNull();
+  expect([...messages.querySelectorAll(".message.user")]).toHaveLength(2);
+});
+
+test("a leading session system row is not a foldable turn", async () => {
+  // Pi sessions open with a system entry the renderer never draws. Counting
+  // it as its own turn makes every session gate one empty section.
+  const entries = [
+    {
+      id: "sys",
+      parentId: null,
+      type: "message",
+      message: { role: "system", content: "session header" },
+    },
+    ...makeTurnEntries(2),
+  ];
+  await import("./app.js?history-gate-system-row");
+  const ws = wsInstances.at(-1);
+  ws.onmessage({
+    data: JSON.stringify({
+      type: "runtime_snapshot",
+      protocolVersion: 2,
+      sequence: 1,
+      target,
+      state: {
+        pi: { sessionFile: "/pi/sessions/s4.jsonl", isStreaming: false },
+        messages: entries.map((entry) => entry.message),
+      },
+    }),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const messages = document.getElementById("messages");
+  expect(messages.querySelector(".history-gate")).toBeNull();
+  expect([...messages.querySelectorAll(".message.user")]).toHaveLength(2);
+  expect(messages.querySelectorAll("section.turn")).toHaveLength(2);
+});
+
+test("revealed turns mount below the control so it stays the transcript's first element", async () => {
+  // The gate is the transcript's top anchor: loading older turns inserts them
+  // directly below it, so a reader who scrolled up to the newly mounted
+  // history finds the control (and its count) right above, not buried under
+  // the turns it just revealed.
+  const entries = makeTurnEntries(6);
+  await import("./app.js?history-gate-anchor-below");
+  const ws = wsInstances.at(-1);
+  ws.onmessage({
+    data: JSON.stringify({
+      type: "runtime_snapshot",
+      protocolVersion: 2,
+      sequence: 1,
+      target,
+      state: {
+        pi: { sessionFile: "/pi/sessions/s5.jsonl", isStreaming: false },
+        messages: entries.map((entry) => entry.message),
+      },
+    }),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  const messages = document.getElementById("messages");
+  expect(messages.querySelector(".history-gate")).not.toBeNull();
+
+  messages.querySelector(".history-gate-btn")?.click(); // Load older history
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  const gate = messages.querySelector(".history-gate");
+  expect(messages.firstElementChild).toBe(gate);
+  // The batch lands immediately below the control, ahead of the turns that
+  // were already mounted (turns 4-5), so the transcript still reads
+  // oldest → newest and the control keeps its place at the very top.
+  expect(gate.nextElementSibling.classList.contains("turn")).toBe(true);
+  expect([...messages.querySelectorAll(".message.user")].map((el) => el.textContent)).toEqual([
+    "prompt 2",
+    "prompt 3",
+    "prompt 4",
+    "prompt 5",
+  ]);
+});
+
+test("the reveal chain stops once the transcript fills the viewport", async () => {
+  // The control is anchored at the top, so it never leaves the trigger zone
+  // after a batch: intersection can no longer signal "the viewport is still
+  // empty". The chain must stop on geometry instead, or one arrival at the
+  // top would drain the whole gate.
+  const entries = makeTurnEntries(6);
+  let rafQueue = [];
+  globalThis.requestAnimationFrame = (callback) => {
+    rafQueue.push(callback);
+    return rafQueue.length;
+  };
+  await import("./app.js?history-gate-chain-overflow");
+  const ws = wsInstances.at(-1);
+  ws.onmessage({
+    data: JSON.stringify({
+      type: "runtime_snapshot",
+      protocolVersion: 2,
+      sequence: 1,
+      target,
+      state: {
+        pi: { sessionFile: "/pi/sessions/s6.jsonl", isStreaming: false },
+        messages: entries.map((entry) => entry.message),
+      },
+    }),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  const messages = document.getElementById("messages");
+  // Fake scroll geometry: content taller than the viewport from the start.
+  Object.defineProperty(messages, "scrollHeight", { configurable: true, value: 3000 });
+  Object.defineProperty(messages, "clientHeight", { configurable: true, value: 800 });
+
+  globalThis.IntersectionObserver.instances.at(-1).fire(true);
+  expect([...messages.querySelectorAll(".message.user")]).toHaveLength(4);
+
+  const frame = rafQueue.splice(0);
+  rafQueue = [];
+  for (const callback of frame) callback();
+
+  // The viewport is full: the chain stops and the gate keeps its remaining
+  // count for the next scroll-up.
+  expect([...messages.querySelectorAll(".message.user")]).toHaveLength(4);
+  expect(messages.querySelector(".history-gate").textContent).toContain("2");
+});

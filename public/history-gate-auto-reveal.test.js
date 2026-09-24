@@ -70,7 +70,7 @@ test("observes the gate control against the scroller with a top rootMargin", () 
   expect(observer.observed).toEqual([control]);
 });
 
-test("intersection reveals one batch and keeps filling the viewport while it stays intersecting", () => {
+test("intersection reveals one batch and keeps filling while the scroller has not overflowed", () => {
   const control = document.createElement("div");
   document.body.appendChild(control);
   let remaining = 6;
@@ -96,18 +96,26 @@ test("intersection reveals one batch and keeps filling the viewport while it sta
   expect(rafQueue).toHaveLength(0);
 });
 
-test("chain stops when the control leaves the viewport", () => {
+test("chain stops once the scroller overflows", () => {
+  // The control is the transcript's top anchor and stays inside the trigger
+  // zone after a batch, so intersection can no longer signal "the viewport is
+  // still empty" — geometry does.
+  const root = document.createElement("div");
   const control = document.createElement("div");
-  document.body.appendChild(control);
+  root.appendChild(control);
+  document.body.appendChild(root);
+  Object.defineProperty(root, "scrollHeight", { configurable: true, value: 3000 });
+  Object.defineProperty(root, "clientHeight", { configurable: true, value: 800 });
   const reveal = vi.fn(() => 5);
 
-  observeGateAutoReveal(control, document.body, reveal);
+  observeGateAutoReveal(control, root, reveal);
   const observer = FakeIntersectionObserver.instances.at(-1);
 
   observer.fire(true);
-  observer.fire(false);
+  expect(reveal).toHaveBeenCalledTimes(1);
   flushRaf();
   expect(reveal).toHaveBeenCalledTimes(1);
+  expect(rafQueue).toHaveLength(0);
 });
 
 test("chain stops when the control is disconnected from the DOM", () => {

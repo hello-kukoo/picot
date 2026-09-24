@@ -42,6 +42,7 @@ let swallowClearQueue = false;
 let promptFails = false;
 let deferPromptResponse = false;
 let deferredPromptId = null;
+let runtimeInstancesData = [];
 
 class FakeWebSocket extends EventTarget {
   static CONNECTING = 0;
@@ -78,7 +79,8 @@ class FakeWebSocket extends EventTarget {
     if (envelope.type === "host_request") {
       let response = null;
       if (envelope.operation === "workspace.list") response = { workspaces: [], removed: [] };
-      else if (envelope.operation === "runtime_instances") response = { instances: [] };
+      else if (envelope.operation === "runtime_instances")
+        response = { instances: runtimeInstancesData };
       if (response) {
         this.reply({ type: "host_response", requestId: envelope.requestId, ok: true, response });
       }
@@ -138,6 +140,7 @@ beforeEach(async () => {
   promptFails = false;
   deferPromptResponse = false;
   deferredPromptId = null;
+  runtimeInstancesData = [];
   window.history.pushState(null, "", "/workspaces/w1/sessions/s1");
   document.documentElement.innerHTML = readFileSync(
     join(process.cwd(), "public/index.html"),
@@ -601,6 +604,134 @@ test("switching the session identity drops the previous session's queue pills", 
   snapshot("/pi/sessions/s2.jsonl", 3);
   await settle();
 
+  expect(queueEl.classList.contains("hidden")).toBe(true);
+});
+
+test("a queue parked by the session switch comes back with that session", async () => {
+  await import("./app.js?steering-queue-park");
+  const ws = wsInstances.at(-1);
+  await settle();
+  const snapshot = (sessionFile, sequence) =>
+    ws.onmessage({
+      data: JSON.stringify({
+        type: "runtime_snapshot",
+        protocolVersion: 2,
+        sequence,
+        target,
+        state: { pi: { sessionFile, isStreaming: true }, messages: [] },
+      }),
+    });
+
+  snapshot("/pi/sessions/s1.jsonl", 1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start", turnId: "t15" });
+  await settle();
+  renderPiQueue(ws, ["belongs to s1"], ["and its follow-up"], 2);
+  await settle();
+  const queueEl = document.getElementById("pi-queue");
+  expect(queueEl.classList.contains("hidden")).toBe(false);
+
+  // Same-runtime session switch: s2 has no queue of its own.
+  snapshot("/pi/sessions/s2.jsonl", 3);
+  await settle();
+  expect(queueEl.classList.contains("hidden")).toBe(true);
+
+  // pi re-emits queue_update only when the queue mutates, and get_state
+  // carries no queue text: the pills for s1 can only come from the park.
+  snapshot("/pi/sessions/s1.jsonl", 4);
+  await settle();
+  expect(queueEl.classList.contains("hidden")).toBe(false);
+  expect([...queueEl.querySelectorAll(".queued-msg-label")].map((el) => el.textContent)).toEqual([
+    "Steer",
+    "Follow-up",
+  ]);
+  expect([...queueEl.querySelectorAll(".queued-msg-text")].map((el) => el.textContent)).toEqual([
+    "belongs to s1",
+    "and its follow-up",
+  ]);
+});
+
+test("a freshly spawned runtime starts with an empty parked queue", async () => {
+  await import("./app.js?steering-queue-park-spawn");
+  const ws = wsInstances.at(-1);
+  await settle();
+  const snapshot = (sessionFile, sequence) =>
+    ws.onmessage({
+      data: JSON.stringify({
+        type: "runtime_snapshot",
+        protocolVersion: 2,
+        sequence,
+        target,
+        state: { pi: { sessionFile, isStreaming: true }, messages: [] },
+      }),
+    });
+
+  snapshot("/pi/sessions/s1.jsonl", 1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start", turnId: "t17" });
+  await settle();
+  renderPiQueue(ws, ["orphaned by a restart"], [], 2);
+  await settle();
+  const queueEl = document.getElementById("pi-queue");
+  expect(queueEl.classList.contains("hidden")).toBe(false);
+
+  // A spawn is a new process: its queue is empty by construction, so a park
+  // left over from the previous one (or a missed stop event) must not repaint.
+  runtimeInstancesData = [
+    {
+      workspaceId: "w1",
+      sessionId: "s1",
+      instanceId: "secondary",
+      sessionFile: "/pi/sessions/s1.jsonl",
+      streaming: false,
+    },
+  ];
+  ws.onmessage({
+    data: JSON.stringify({
+      type: "runtime_started",
+      workspaceId: "w1",
+      sessionId: "s1",
+      instanceId: "secondary",
+    }),
+  });
+  await settle();
+  expect(queueEl.classList.contains("hidden")).toBe(true);
+});
+
+test("a stopped runtime's parked queue does not come back", async () => {
+  await import("./app.js?steering-queue-park-stopped");
+  const ws = wsInstances.at(-1);
+  await settle();
+  const snapshot = (sessionFile, sequence) =>
+    ws.onmessage({
+      data: JSON.stringify({
+        type: "runtime_snapshot",
+        protocolVersion: 2,
+        sequence,
+        target,
+        state: { pi: { sessionFile, isStreaming: true }, messages: [] },
+      }),
+    });
+
+  snapshot("/pi/sessions/s1.jsonl", 1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start", turnId: "t16" });
+  await settle();
+  renderPiQueue(ws, ["dies with the process"], [], 2);
+  await settle();
+  const queueEl = document.getElementById("pi-queue");
+  expect(queueEl.classList.contains("hidden")).toBe(false);
+
+  runtimeEvent(ws, { type: "runtime_stopped" }, 3);
+  await settle();
+  expect(queueEl.classList.contains("hidden")).toBe(true);
+
+  // A later return to that session spawns a fresh runtime with an empty
+  // queue, so the dead process's pills must not be replayed.
+  snapshot("/pi/sessions/s2.jsonl", 4);
+  await settle();
+  snapshot("/pi/sessions/s1.jsonl", 5);
+  await settle();
   expect(queueEl.classList.contains("hidden")).toBe(true);
 });
 

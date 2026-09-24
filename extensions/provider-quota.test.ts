@@ -99,6 +99,15 @@ describe("parseZaiQuota", () => {
       { label: "week", percent: 12, resetAt: undefined },
     ]);
   });
+
+  test("computes percent from currentValue and usage", () => {
+    const parsed = parseZaiQuota({
+      data: {
+        limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, currentValue: 25, usage: 200 }],
+      },
+    });
+    expect(parsed.customWindows).toEqual([{ label: "5h", percent: 13, resetAt: undefined }]);
+  });
 });
 
 test("parseOpencodeUsage reads rolling/weekly/monthly", () => {
@@ -138,9 +147,18 @@ test("parseMinimaxRemains computes a used percent with total, degrades to a labe
   });
 });
 
-test("parseMoonshotBalance formats the available balance", () => {
-  expect(parseMoonshotBalance({ data: { available_balance: 12.3, voucher_balance: 1 } })).toEqual({
-    customWindows: [{ label: "$12.30", percent: 0 }],
+test("parseMoonshotBalance formats all balances with the host currency", () => {
+  expect(
+    parseMoonshotBalance(
+      { data: { available_balance: 12.3, voucher_balance: 1, cash_balance: 11.3 } },
+      { baseUrl: "https://api.moonshot.cn/v1" },
+    ),
+  ).toEqual({
+    customWindows: [
+      { label: "余额 ¥12.30", percent: 0 },
+      { label: "代金券 ¥1.00", percent: 0 },
+      { label: "现金 ¥11.30", percent: 0 },
+    ],
   });
 });
 
@@ -323,6 +341,33 @@ describe("createQuotaProbeCache", () => {
   function jsonResponse(body: unknown, ok = true, status = 200) {
     return streamResponse(JSON.stringify(body), ok, status);
   }
+
+  test("drops stale quota after a blocked redirect", async () => {
+    let redirect = false;
+    const fetchImpl = vi.fn(async () =>
+      redirect ? jsonResponse({}, false, 302) : jsonResponse({ ok: true }),
+    );
+    const cache = createQuotaProbeCache({ fetchImpl, now: () => 1_000_000 });
+    const instance = { providerId: "p", baseUrl: "https://example.test", apiKey: "k" };
+    await cache.report("p", spec, instance, true);
+    redirect = true;
+    const report = await cache.report("p", spec, instance, true);
+    expect(report.failure).toBe("destination_blocked");
+    expect(report.quota).toBeUndefined();
+  });
+
+  test("reports unauthorized quota probes as needs_login", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({}, false, 401));
+    const cache = createQuotaProbeCache({ fetchImpl });
+    const report = await cache.report(
+      "p",
+      spec,
+      { providerId: "p", baseUrl: "https://example.test", apiKey: "k" },
+      true,
+    );
+    expect(report.failure).toBe("needs_login");
+    expect(report.quota).toBeUndefined();
+  });
 
   test("a body past the cap fails closed while streaming", async () => {
     // 300 KiB: past the 256 KiB cap. The cap must trip during the read, not

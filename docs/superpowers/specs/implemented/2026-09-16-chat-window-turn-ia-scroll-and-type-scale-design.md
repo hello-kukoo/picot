@@ -197,15 +197,19 @@ fallback for non-turn paths (auto-retry, abort/reconnect recovery, and ephemeral
 
 - `renderSessionHistory()` gains a mount gate: the newest **2** settled turns render in full;
   all older turns are represented by **one** centred batch control with the remaining count.
-  `Load older history` reveals the next **2** turns immediately before that control. `Load all
-  history` remains available but mounts in cancellable rAF/idle batches at the control's position,
-  preserving the viewport anchor instead of synchronously mounting the whole session. Constants
-  live in `turn-model.js`.
+  `Load older history` reveals the next **2** turns immediately **after** that control. `Load all
+  history` remains available but mounts in cancellable rAF/idle batches at the control's position
+  instead of synchronously mounting the whole session. Constants live in `turn-model.js`.
+  *2026-09-24 revision (Dr. Lin):* the control is the transcript's **first element** and stays
+  there — revealed batches insert below it. Inserting above it buried the control under the turns
+  it had just revealed, so a reader who scrolled up to read them had to scroll back down to load
+  more. The control never moves, so no scroll compensation is applied (a reveal only runs while
+  the control is on screen: auto-reveal margin or a click).
 - Folding **only affects mounting** — the session log, the Info tree, fork/edit entry ids, and
   the file-chips rows are untouched.
-- Revealing keeps the viewport anchored: reuse the existing anchor discipline
-  (`anchorHistoryToBottom()` with its `preserveScrollTarget` behaviour is already the
-  precedent for "don't fight the user").
+- Revealing keeps the viewport anchored by construction: the control does not move when a batch
+  lands below it, so the reader's position is never fought. (`anchorHistoryToBottom()` with its
+  `preserveScrollTarget` behaviour remains the precedent for the auto-scroll path.)
 - **Search interacts with the gate, explicitly.** `renderSessionHistory({ searchQuery })`
   currently calls `messageRenderer.highlightSearchQuery(searchQuery)` after rendering. A
   hidden turn must still be searchable: when `searchQuery` is present, unmount the gate

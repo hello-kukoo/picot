@@ -33,7 +33,7 @@ Picot 与 Paseo 的一个关键差别让这件事更简单：Picot 的全量 ent
 | --- | --- |
 | gate 结构：初始挂载 `HISTORY_FULL_MOUNT_TURNS = 2` turn，其余折叠 | `public/ui/turn-model.js:6`、`app.js:5864` 注释 |
 | 按钮揭示单批 `HISTORY_REVEAL_BATCH_TURNS = 2`；「全部」走 rAF 分批 `HISTORY_GATE_BATCH_TURNS = 10`，`loadToken` 可取消 | `public/ui/turn-model.js:7`、`app.js:6224-6243` |
-| 揭示插入已有滚动锚定（`insertTurnFragmentBeforeControl`：记录 scrollHeight/scrollTop，插入后补偿） | `app.js:5895-5901` |
+| 揭示插入已有滚动锚定（`insertTurnFragmentBeforeControl`：记录 scrollHeight/scrollTop，插入后补偿）——**2026-09-24 修订**：插入点改为 control 之后（`insertTurnFragmentBelowControl`），control 不再移动，补偿随之删除 | `app.js:5895-5901`（旧）、`app.js:6161`（新） |
 | 搜索渲染挂载全部 turn，gate 在下一次普通渲染重建（`forceReset`） | `app.js:6185, 6247-6250` |
 | gate control 生命周期：`gateApplies` 时 append 到 messagesElement，`remaining <= 0` 或非 gate 渲染时移除/置 null | `app.js:6226-6246 updateHistoryGateControl` |
 | Paseo 触发阈值 96px、加载中不重复触发、进度键防重、填不满视口续页 | `paseo/.../history-start-pagination.ts`（`HISTORY_START_THRESHOLD_PX = 96`、settle 后续页判断） |
@@ -55,9 +55,13 @@ Picot 与 Paseo 的一个关键差别让这件事更简单：Picot 的全量 ent
 1. `observe(gateControl, messagesElement, reveal)`：以 `messagesElement` 为 root、
    `rootMargin: "96px 0px 0px 0px"`（顶端方向）观察 gate control。
 2. 进入视口回调 `reveal()`：调用 `mountOlder(HISTORY_REVEAL_BATCH_TURNS)`。
-3. **填满视口语义**：插入后若 control 仍连接且仍 intersecting（内容没填满视口），
-   `requestAnimationFrame` 续一批，直至不 intersecting、`remaining <= 0`、control
-   失连。单条 rAF 链串行，无并发。
+3. **填满视口语义**：插入后若 control 仍连接且**滚动容器尚未溢出**
+   （`root.scrollHeight <= root.clientHeight`），`requestAnimationFrame` 续一批，
+   直至溢出、`remaining <= 0`、control 失连。单条 rAF 链串行，无并发。
+   *2026-09-24 修订*：判据从「仍 intersecting」改为几何溢出。control 现在是
+   流内首个元素（新揭示的批次插在它之后），一批之后它不会离开触发区，
+   intersecting 无法再表达「视口还没填满」；沿用旧判据会在一次到顶时把整个
+   gate 抽干。
 4. `disconnect()` 在 `updateHistoryGateControl` 的 `remaining <= 0` 移除分支、以及
    `renderSessionHistory` 的非 gate 分支（`historyGate.control = null` 处）调用。
    observer 实例挂在 `historyGate` 记录上，随 gate 生命周期走。
@@ -112,7 +116,7 @@ gate 本身是 v3 09-16 spec P2 引入（upstream 无折叠门）。本 spec 是
 
 1. vitest + jsdom，stub IntersectionObserver（记录 observe/unobserve 与回调注入）：
    - control 进入视口 → `revealedCount` 增加一个批次。
-   - 插入后仍 intersecting → rAF 续批；不 intersecting → 停。
+   - 插入后容器仍未溢出 → rAF 续批；已溢出 → 停（等下一次到顶或点击）。
    - `remaining = 0` → disconnect 被调用。
    - gate 重建（切换 session）→ 旧 observer disconnect，新 control 被观察。
    - 搜索渲染路径不注册观察。

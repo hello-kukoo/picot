@@ -471,18 +471,32 @@ impl HostDataPlane {
     }
 
     /// Append a `session_info` name record to a session file (rename).
-    #[allow(dead_code)]
+    ///
+    /// The record is a full tree entry — id, parentId linking to the file's
+    /// current tip, timestamp. Pi resolves the leaf from the newest entry, so a
+    /// bare `{type,name}` record (this function's shape before 2026-09-24)
+    /// leaves the tip id-less: Pi's next resume then appends a fresh root
+    /// instead of continuing the branch, and every earlier entry falls off the
+    /// active chain — the transcript silently drops the whole history
+    /// (incident: 2026-09-24, `准备一开集团的PPT`).
     pub fn append_session_info_name(
         &self,
         session_file: &Path,
         name: &str,
     ) -> Result<(), HostDataError> {
         use std::io::Write;
+        let parent_id = session_tip_id(session_file);
+        let record = serde_json::json!({
+            "type": "session_info",
+            "id": new_session_entry_id(),
+            "parentId": parent_id,
+            "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "name": name,
+        });
         let mut file = std::fs::OpenOptions::new()
             .append(true)
             .open(session_file)
             .map_err(|error| HostDataError::Io(error.to_string()))?;
-        let record = serde_json::json!({ "type": "session_info", "name": name });
         writeln!(file, "{record}").map_err(|error| HostDataError::Io(error.to_string()))?;
         Ok(())
     }
@@ -1676,6 +1690,27 @@ fn parse_session_lines(file: std::fs::File) -> Vec<SessionLine> {
             })
         })
         .collect()
+}
+
+/// Pi session entry ids are 8 lowercase hex characters (for example
+/// `42233c7f`). Host-written records must use the same shape or Pi's loader
+/// cannot address them.
+fn new_session_entry_id() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 4];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// The id of the file's newest entry — the parent a freshly appended record
+/// must link to. `None` when the file holds no entry yet: the header line
+/// carries an id but sits outside the tree, so it is never a parent.
+fn session_tip_id(session_file: &Path) -> Option<String> {
+    let file = std::fs::File::open(session_file).ok()?;
+    parse_session_lines(file)
+        .into_iter()
+        .rfind(|line| line.entry.get("type").and_then(serde_json::Value::as_str) != Some("session"))
+        .map(|line| line.id)
 }
 
 /// The active branch: indices from root to the LAST message entry (the tip)
@@ -3213,6 +3248,69 @@ mod tests {
         let record: serde_json::Value = serde_json::from_str(last).unwrap();
         assert_eq!(record["type"], "session_info");
         assert_eq!(record["name"], "Renamed");
+        let _ = fs::remove_file(&session_file);
+    }
+
+    /// A rename record must be a real tree entry: Pi resolves the leaf from the
+    /// file's newest entry, so a bare `{type,name}` record (the pre-2026-09-24
+    /// shape) leaves the tip id-less and Pi's next resume appends a fresh root
+    /// instead — orphaning the whole prior lineage from the transcript.
+    #[test]
+    fn append_session_info_name_links_the_new_record_to_the_current_tip() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let session_file = std::env::temp_dir().join(format!("picot-rename-tip-{nonce}.jsonl"));
+        fs::write(
+            &session_file,
+            concat!(
+                "{\"type\":\"session\",\"id\":\"hdr\"}\n",
+                "{\"type\":\"model_change\",\"id\":\"aaaa1111\",\"parentId\":null,\"timestamp\":\"2026-09-11T09:11:33.397Z\"}\n",
+                "{\"type\":\"message\",\"id\":\"bbbb2222\",\"parentId\":\"aaaa1111\",\"timestamp\":\"2026-09-11T09:14:48.686Z\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n",
+            ),
+        )
+        .unwrap();
+
+        let (data, _) = test_data(std::path::Path::new("/"));
+        data.append_session_info_name(&session_file, "Renamed")
+            .unwrap();
+
+        let content = fs::read_to_string(&session_file).unwrap();
+        let record: serde_json::Value =
+            serde_json::from_str(content.lines().last().unwrap()).unwrap();
+        assert_eq!(record["type"], "session_info");
+        assert_eq!(record["name"], "Renamed");
+        let id = record["id"].as_str().expect("entry id");
+        assert_eq!(id.len(), 8);
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(record["parentId"], "bbbb2222");
+        assert!(record["timestamp"]
+            .as_str()
+            .is_some_and(|timestamp| timestamp.ends_with('Z')));
+        let _ = fs::remove_file(&session_file);
+    }
+
+    /// A session file whose entries carry no ids (header only) has no tip to
+    /// link to: the record is still well-formed, rooted like Pi's first entry.
+    #[test]
+    fn append_session_info_name_roots_a_record_when_no_tip_exists() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let session_file = std::env::temp_dir().join(format!("picot-rename-root-{nonce}.jsonl"));
+        fs::write(&session_file, "{\"type\":\"session\",\"id\":\"hdr\"}\n").unwrap();
+
+        let (data, _) = test_data(std::path::Path::new("/"));
+        data.append_session_info_name(&session_file, "Renamed")
+            .unwrap();
+
+        let content = fs::read_to_string(&session_file).unwrap();
+        let record: serde_json::Value =
+            serde_json::from_str(content.lines().last().unwrap()).unwrap();
+        assert!(record["parentId"].is_null());
+        assert!(record["id"].as_str().is_some());
         let _ = fs::remove_file(&session_file);
     }
 

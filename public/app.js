@@ -56,6 +56,7 @@ import { createIcon, replaceButtonGlyph, setButtonIcon } from "./icons.js";
 import { processImageFile, processImagePayload } from "./image-attachments.js";
 import { InfoPanel } from "./info-panel.js";
 import { setupLanQr } from "./lan-qr.js";
+import { createLiveRuntimeSubscriptions } from "./live-runtime-subscriptions.js";
 import { getLastModel, setLastModel } from "./models/last-model-store.js";
 import {
   filterModelsByCatalogVisibility,
@@ -144,14 +145,12 @@ import { repaintContextViz, setupContextViz } from "./ui/context-viz.js";
 import { createConversationNav } from "./ui/conversation-nav.js";
 import { DialogHandler } from "./ui/dialogs.js";
 import { createHeaderStatusBar } from "./ui/header-status-bar.js";
-import {
-  AUTO_REVEAL_THRESHOLD_PX,
-  disconnectGateAutoReveal,
-  observeGateAutoReveal,
-} from "./ui/history-gate-auto-reveal.js";
+import { disconnectGateAutoReveal, observeGateAutoReveal } from "./ui/history-gate-auto-reveal.js";
 import { initImageLightbox } from "./ui/image-lightbox.js";
 import { setupMessagesInsets } from "./ui/layout-insets.js";
 import { MessageRenderer } from "./ui/message-renderer.js";
+import { findPendingQuestionnaire } from "./ui/pending-questionnaire.js";
+import { createPiQueuePark } from "./ui/pi-queue-park.js";
 import { summarizeProcessGroup } from "./ui/process-group.js";
 import { QuestionnaireCard } from "./ui/questionnaire-card.js";
 import { setupResizablePanel } from "./ui/resizable-panel.js";
@@ -718,9 +717,13 @@ const safetyGuardDialog = new SafetyGuardDialog({
   send: (message) => wsClient.send(message),
 });
 const questionnaireCard = new QuestionnaireCard({
-  // Inline stream anchor: the card lives at the tail of the message flow so
-  // the pending question reads as part of the conversation, not a modal.
-  container: messagesElement,
+  // The question belongs to the live turn whose ask_user_question call
+  // opened it: render in that turn's inline card slot (unified blocker slot,
+  // same host as the safety-guard approval). No live turn to host it
+  // (parked restore, replayed request, transcript re-render) falls back to
+  // the modal container.
+  container: document.getElementById("dialog-container"),
+  resolveHost: () => activeTurn?.card?.host ?? null,
   send: (message) => wsClient.send(message),
   wsClient,
   confirmAbandon: ({ title, message }) => dialogHandler.showLocalConfirm({ title, message }),
@@ -728,6 +731,12 @@ const questionnaireCard = new QuestionnaireCard({
 // Backgrounded runtimes wait forever on extension_ui_response; park their
 // questionnaire state here so the wait stays answerable after the user returns.
 const backgroundQuestionnaires = new BackgroundQuestionnaireStore();
+// Log-derived unanswered ask_user_question per session file: the durable
+// counterpart to the park, so an arriving blocking request can rebuild the
+// card even after a reload or a cross-workspace return. Recomputed by every
+// transcript render (a tool result removes it) and read only for its own
+// session.
+const pendingQuestionsBySession = new Map();
 
 function clearConversationRenderers() {
   // P5.1: the registry is session-scoped state; a view reset drops it so the
@@ -935,6 +944,25 @@ setupMessagesInsets({
 // Ambient extension widgets are mirrored into panels owned by their Pi runtime.
 const widgetMirrorRegistry = createWidgetMirrorRegistry({ container: inputAreaEl });
 const backgroundSessionFiles = createBackgroundSessionFiles();
+const liveRuntimeSubscriptions = createLiveRuntimeSubscriptions({
+  transport,
+  wsClient,
+  sidebar,
+  backgroundSessionFiles,
+});
+// Runtime spawns reach this page as owner events (same window owns every
+// runtime it navigates to); each one may need a fresh subscription.
+wsClient.addEventListener("runtimeStarted", (event) => {
+  void liveRuntimeSubscriptions.refresh().then(() => {
+    // A spawn is a new process, so its queue is empty by construction: a park
+    // left behind by the runtime it replaced (or by a stop this page missed)
+    // must not repaint. The refreshed instance summaries resolve the session
+    // file the park is keyed by.
+    const sessionFile = backgroundSessionFiles.resolve(event.detail);
+    piQueuePark.forget(sessionFile);
+    if (sessionFile && sessionFile === activeUiSessionFile) renderPiQueue(null);
+  });
+});
 widgetMirrorRegistry.registerRenderer({
   widgetKey: "rpiv-todos",
   toolNames: ["todo"],
@@ -2458,7 +2486,7 @@ function revealTurnsUpTo(turnIdx) {
   if (to > from) {
     const fragment = document.createDocumentFragment();
     for (let i = from; i < to; i++) gate.renderTurn(gate.turns[i], fragment);
-    insertTurnFragmentBeforeControl(fragment);
+    insertTurnFragmentBelowControl(fragment);
     updateHistoryGateControl();
   }
 }
@@ -2754,6 +2782,11 @@ wsClient.addEventListener("runtimeSnapshot", (e) => {
   handleMirrorSync({
     ...pi,
     workspaceId: frame.target?.workspaceId,
+    // The host state machine is the authority on "this run is going": it flips
+    // to Working on agent_start and back to Idle on agent_end/agent_settled.
+    // Pi's own `isStreaming` is an instantaneous `!isIdle()` sample that can read
+    // false in the gaps between messages and tool calls of a live run.
+    lifecycle: snapshotState.lifecycle,
     // Preserve Pi's persisted session identity from `get_state`; route
     // runtime identity is separate and must never overwrite `sessionId`.
     instanceId: frame.target?.instanceId,
@@ -2865,7 +2898,15 @@ function handleRPCEvent(event) {
       handleCompactionEnd(event);
       break;
     case "queue_update":
+      piQueuePark.set(mirrorActiveSessionFile, event);
       renderPiQueue(event);
+      break;
+    case "runtime_stopped":
+    case "runtime_crashed":
+      // The process that held the queued messages is gone, so its pills must
+      // not outlive it: returning to that session spawns a fresh runtime.
+      piQueuePark.forget(eventSessionFile);
+      renderPiQueue(piQueuePark.get(activeUiSessionFile));
       break;
     case "auto_retry_start":
       handleAutoRetryStart(event);
@@ -2909,6 +2950,18 @@ function handleBackgroundRPCEvent(sessionFile, event, runtimeId) {
     }
     case "message_end":
       sidebar.markUnread(sessionFile);
+      break;
+    case "queue_update":
+      // A backgrounded runtime can still dequeue a steer into its running turn:
+      // park the report so the pills are truthful when the user returns.
+      piQueuePark.set(sessionFile, event);
+      break;
+    case "runtime_stopped":
+    case "runtime_crashed":
+      // The host stops the runtime (window destroy, owner revoke, restart):
+      // the green dot must not outlive its process, and neither may its queue.
+      sidebar.setStreaming(sessionFile, false);
+      piQueuePark.forget(sessionFile);
       break;
     case "tool_execution_start":
       // ask_user_question in a background session parks its card state; the
@@ -3067,10 +3120,24 @@ function runtimeKeyOf(target) {
 
 function closeLiveTurn({ settled = false } = {}) {
   // A card hosted by this turn cannot outlive it: re-home a still-pending
-  // approval in the modal container before the transcript drops the turn, or
-  // its runtime would wait on extension_ui_response forever.
+  // blocker (approval or questionnaire) in the modal container before the
+  // transcript drops the turn, or its runtime would wait on
+  // extension_ui_response forever.
   safetyGuardDialog.rehost();
+  questionnaireCard.rehost();
   if (!activeTurn) return;
+  // A turn adopted mid-run can end before it produced anything (the run ended
+  // while its session was coming back): an empty rail label, an empty answer
+  // and a status row with no clock would all just leave gaps, so drop it.
+  if (turnProducedNothing(activeTurn)) {
+    activeTurn.status.destroy();
+    activeTurn.element.remove();
+    activeTurn = null;
+    activeTurnStartedAt = null;
+    pendingUserEl = null;
+    pendingUserKey = null;
+    return;
+  }
   if (!settled) {
     // A turn that never saw agent_end (reconnect, session switch): settle it
     // with no duration rather than leaving a live spinner behind.
@@ -3085,10 +3152,22 @@ function closeLiveTurn({ settled = false } = {}) {
   pendingUserKey = null;
 }
 
-function openLiveTurn(event = null) {
+function turnProducedNothing(turn) {
+  return (
+    turn.element.querySelector(".message.user") === null &&
+    turn.rail.host.childElementCount === 0 &&
+    turn.answer.host.childElementCount === 0 &&
+    !turn.card.host?.childElementCount
+  );
+}
+
+function openLiveTurn(event = null, { deferElapsed = false } = {}) {
   if (!TURNS_RENDERING) return;
   closeLiveTurn();
-  activeTurnStartedAt = Date.now();
+  // Adoption (a session returning to the front mid-run) has no known start:
+  // Pi never re-emits agent_start, so the clock waits for the first live output
+  // instead of counting from the moment we mounted the turn.
+  activeTurnStartedAt = deferElapsed ? null : Date.now();
   activeTurn = createTurnSection({
     turnId: event?.__turnId ?? null,
     modelLabel: currentModelId || "",
@@ -3115,6 +3194,31 @@ function openLiveTurn(event = null) {
     mountedElement: activeTurn.element,
   });
   pendingPromptPreview = "";
+}
+
+/**
+ * The first live output of a run whose turn was adopted counts from here: the
+ * reader was elsewhere for the earlier part of the run, and Pi reports no run
+ * start, so a clock that only counts what was watched never lies.
+ */
+function startAdoptedTurnClock() {
+  if (!activeTurn || activeTurnStartedAt !== null) return;
+  activeTurnStartedAt = Date.now();
+  activeTurn.status.beginElapsed(activeTurnStartedAt);
+}
+
+/**
+ * Adopting a session whose Pi run is still going must not read as a finished
+ * transcript: history rendering has no status row and folds every rail
+ * ("history rails render folded"), and Pi never re-emits `agent_start`, so
+ * without a live turn the run's remaining output appends flat with no working
+ * indicator — a run blocked on a question then looks dead. Its rail is empty
+ * (this run's earlier rows are already persisted history above it); its clock
+ * starts at the first live output.
+ */
+function maybeOpenAdoptedLiveTurn() {
+  if (!state.isStreaming || activeTurn) return;
+  openLiveTurn(null, { deferElapsed: true });
 }
 
 function settleLiveTurn() {
@@ -3274,6 +3378,7 @@ async function appendTurnFilesCard() {
 let currentStreamingThinking = "";
 
 function handleMessageStart(message) {
+  startAdoptedTurnClock();
   if (message.role === "assistant") {
     currentStreamingText = "";
     currentStreamingThinking = "";
@@ -3391,6 +3496,7 @@ function ensureStreamingAssistantElement(message = null) {
 }
 
 function handleMessageUpdate(event) {
+  startAdoptedTurnClock();
   const { assistantMessageEvent, message } = event;
   if (message?.role === "assistant") {
     ensureStreamingAssistantElement(message);
@@ -3495,6 +3601,7 @@ function handleMessageEnd(message, eventSessionFile = null, entryId = null) {
 }
 
 function handleToolExecutionStart(event) {
+  startAdoptedTurnClock();
   const { toolCallId, toolName, args } = event;
   if (questionnaireCard.handleToolExecutionStart(event)) {
     // The inline card lands at the stream tail: bring it into view like any
@@ -3532,8 +3639,14 @@ function handleToolExecutionUpdate(event) {
 }
 
 function handleToolExecutionEnd(event) {
+  // The question is answered (or errored): its log-derived entry must not
+  // rebuild a card for the next blocking request.
   questionnaireCard.handleToolExecutionEnd(event);
   const { toolCallId, result, isError } = event;
+  const pendingKey = sessionKeyForDialogs();
+  if (pendingQuestionsBySession.get(pendingKey)?.toolCallId === toolCallId) {
+    pendingQuestionsBySession.delete(pendingKey);
+  }
   const output = formatToolOutput(result);
 
   state.updateToolExecution(toolCallId, {
@@ -3557,12 +3670,48 @@ function handleToolExecutionEnd(event) {
   }
 }
 
+/**
+ * A blocking request whose questionnaire card nothing rebuilt — the in-memory
+ * park is gone (page reload, cross-workspace return) or its delivery never
+ * reached this page — still has its questions in the session log. Rebuild the
+ * card from there and hand it the request, so the walker's wait stays
+ * answerable instead of degrading to one plain dialog per question.
+ *
+ * Only this session's log entry is eligible, and the card's own matcher decides
+ * whether the request belongs to it: a mismatch rolls the card back and the
+ * plain dialog path takes over, so a stale entry can never swallow another
+ * tool's dialog.
+ */
+function adoptLoggedPendingQuestionnaire(request) {
+  if (questionnaireCard.isActive()) return false;
+  // Only the walker's answerable methods can belong to a questionnaire; the
+  // non-blocking frames (notify/setWidget/setStatus) never do.
+  if (request?.method !== "select" && request?.method !== "input") return false;
+  const pending = pendingQuestionsBySession.get(sessionKeyForDialogs());
+  if (!pending) return false;
+  const started = questionnaireCard.start({
+    toolCallId: pending.toolCallId,
+    toolName: "ask_user_question",
+    args: { questions: pending.questions },
+  });
+  if (!started) return false;
+  if (questionnaireCard.handleExtensionUIRequest(request)) return true;
+  questionnaireCard.teardown({ cancelPending: false });
+  return false;
+}
+
+/** The identity dialogs and the parked/looked-up questionnaire share. */
+function sessionKeyForDialogs() {
+  return activeUiSessionFile ?? mirrorActiveSessionFile ?? null;
+}
+
 function handleExtensionUIRequest(
   event,
   runtimeId = runtimeIdForTarget(event?.__target || wsClient.getRuntimeTarget()),
 ) {
   if (questionnaireCard.handleExtensionUIRequest(event)) return;
   if (safetyGuardDialog.handleExtensionUIRequest(event)) return;
+  if (adoptLoggedPendingQuestionnaire(event)) return;
   switch (event.method) {
     case "select":
       dialogHandler.showSelect(event);
@@ -3862,8 +4011,10 @@ function switchComposerIdentityState(previousIdentity) {
   // that produced them. This seam is where every session-identity change lands
   // — including the in-page same-workspace switch, which does not reload the
   // page — so the previous session's queue must not stay on screen as if it
-  // were the new session's. pi repaints the truth on its next queue_update.
-  document.getElementById("pi-queue")?.classList.add("hidden");
+  // were the new session's. The incoming session's own parked queue paints in
+  // its place: pi re-emits queue_update only on mutation, so the park (not pi)
+  // restores a queue that is still live in the runtime we are returning to.
+  renderPiQueue(piQueuePark.get(activeUiSessionFile));
 
   const nextIdentity = composerIdentity();
   mainImageAttachments.replacePendingImages(attachmentStash.get(nextIdentity) || []);
@@ -3879,17 +4030,7 @@ function markPendingNewSessionRefresh() {
 }
 
 function subscribeToLiveRuntimeTargets() {
-  transport
-    .runtimeInstances()
-    .then((data) => {
-      for (const instance of data?.instances || []) {
-        if (!instance?.workspaceId || !instance?.sessionId || !instance?.instanceId) continue;
-        backgroundSessionFiles.rememberInstance(instance);
-        wsClient.subscribeRuntimeTarget(instance);
-        wsClient.requestRuntimeSnapshot(instance);
-      }
-    })
-    .catch(() => {});
+  void liveRuntimeSubscriptions.refresh();
 }
 
 function sendMessage() {
@@ -4070,6 +4211,10 @@ async function sendFollowUp() {
   });
 }
 
+// The park mirrors pi's live queue for a session whose runtime is backgrounded;
+// see ARCHITECTURE on runtimes surviving session switches.
+const piQueuePark = createPiQueuePark();
+
 const queuedMessagesEl = document.getElementById("queued-messages");
 
 function renderQueuedMessages() {
@@ -4108,12 +4253,13 @@ function renderQueuedMessages() {
   }
 }
 
-function renderPiQueue(event) {
+function renderPiQueue(queue) {
   // pi 侧 steer/followUp 队列（queue_update 事件）。本地客户端队列已删除
   // （2026-09-19 steering spec）：Enter=steer、Alt+Enter=follow_up 都排 pi 队列，
   // 这里是唯一的队列展示面，pill 只读；清空走 clear_queue（Q2-A）。
-  const steering = Array.isArray(event?.steering) ? event.steering : [];
-  const followUp = Array.isArray(event?.followUp) ? event.followUp : [];
+  // Accepts a live queue_update event or the session's parked report.
+  const steering = Array.isArray(queue?.steering) ? queue.steering : [];
+  const followUp = Array.isArray(queue?.followUp) ? queue.followUp : [];
   const el = getOrCreatePiQueueEl();
   el.replaceChildren();
   const items = [
@@ -5708,8 +5854,6 @@ function handleMirrorSync(data) {
     sidebar.setActive(receivedSessionFile);
     restoreSessionUiState(receivedSessionFile);
     resolveAndApplyFocus();
-    // The parked questionnaire (if any) belongs to exactly this session/runtime.
-    restoreParkedQuestionnaire(receivedSessionFile, snapshotRuntimeId);
   }
   if (!appliedForegroundSession) {
     logSessionRoute("mirrorSync:ignored-background", {
@@ -5839,7 +5983,11 @@ function handleMirrorSync(data) {
   // OR the two: only treat the session as idle when both agree it is idle.
   const liveFile = data.sessionFile || data.stats?.sessionFile || mirrorActiveSessionFile;
   const sidebarStreaming = liveFile ? sidebar.isStreaming(liveFile) : false;
-  const isStreaming = Boolean(data.isStreaming) || sidebarStreaming;
+  // Three signals, OR'd: the host state machine (authoritative, event-driven),
+  // the sidebar set (driven by agent_start/agent_end), and Pi's instantaneous
+  // sample. Only when all of them say idle is the session treated as idle.
+  const hostWorking = data.lifecycle === "Working";
+  const isStreaming = hostWorking || Boolean(data.isStreaming) || sidebarStreaming;
   state.setStreaming(isStreaming);
   showTypingIndicator(isStreaming);
   if (liveFile) sidebar.setStreaming(liveFile, isStreaming);
@@ -5886,6 +6034,9 @@ function handleMirrorSync(data) {
   if (!sidebar.activeSessionFile && hasAnySessionsLoaded()) {
     renderWorkspaceWelcome();
     updateTokenUsage();
+    // The parked questionnaire belongs to exactly this session/runtime; with no
+    // transcript to host it inline it falls back to the modal container.
+    restoreParkedQuestionnaire(receivedSessionFile, snapshotRuntimeId);
     void hydrateHeaderSessionStats();
     return;
   }
@@ -5942,6 +6093,12 @@ function handleMirrorSync(data) {
   void refreshInfoTree();
 
   updateTokenUsage();
+  // The returning session's live turn (when its run is still going) now exists,
+  // so a parked blocking prompt lands inline in it instead of in the modal
+  // container shared with the plain dialogs.
+  maybeOpenAdoptedLiveTurn();
+  // The parked questionnaire (if any) belongs to exactly this session/runtime.
+  restoreParkedQuestionnaire(receivedSessionFile, snapshotRuntimeId);
   // Hydrate the aggregate from the authoritative server totals now that
   // history replay is done. Repeated mirror syncs replace (never accumulate).
   void hydrateHeaderSessionStats();
@@ -5989,6 +6146,7 @@ function renderTranscriptEntries(entries, { leafId = null } = {}) {
   lastInputTokens = 0;
   resetHeaderStatusBar();
   renderSessionHistory(entries, { searchQuery: sidebar.searchQuery, leafId });
+  maybeOpenAdoptedLiveTurn();
 }
 
 /** Upstream switch hydration: read the session file in parallel with the
@@ -6144,19 +6302,16 @@ function buildHistoryGateControl({ remaining, onOlder, onAll }) {
   return control;
 }
 
-/** Insert a rendered turn fragment before the gate control, anchored. */
-function insertTurnFragmentBeforeControl(fragment) {
+/** Insert a rendered turn fragment just below the gate control. */
+function insertTurnFragmentBelowControl(fragment) {
+  // The control is the transcript's first element and stays there: a reader
+  // who scrolled up to the newly mounted history finds the control (and its
+  // remaining count) directly above, instead of buried under the turns it
+  // just revealed. No scroll compensation: a reveal only runs while the
+  // control is on screen (auto-reveal margin or a click), so the batch lands
+  // where the reader is already looking.
   const control = historyGate.control;
-  const scrollerTop = messagesElement.getBoundingClientRect().top;
-  const gateY = () => control.getBoundingClientRect().top - scrollerTop;
-  control.parentNode.insertBefore(fragment, control);
-  // Settle the gate just below the auto-reveal margin. Compensating the full
-  // insert delta instead pins the gate inside the trigger zone: the reveal
-  // chain then never comes to rest, loads the entire history in one run, and
-  // the gate removes itself - its buttons become impossible to see or click.
-  const settleY = AUTO_REVEAL_THRESHOLD_PX + 32;
-  const currentY = gateY();
-  if (currentY < settleY) messagesElement.scrollTop += settleY - currentY;
+  control.parentNode.insertBefore(fragment, control.nextSibling);
 }
 
 function updateHistoryGateControl() {
@@ -6219,15 +6374,33 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
   // Split into turns anchored at each user message so each turn's
   // thinking/tool-call noise can be folded into one collapsed group, leaving
   // only the user prompt and the final answer visible (mirrors pi-web).
+  // A leading prefix with no user row (Pi sessions open with a system entry
+  // the renderer never draws) belongs to no turn: counting it as one gates an
+  // empty section on every session.
   const turns = [];
-  let turnStart = 0;
-  for (let i = 0; i < messages.length; i++) {
+  let turnStart = messages.findIndex((m) => m?.role === "user");
+  if (turnStart < 0) turnStart = 0;
+  for (let i = turnStart; i < messages.length; i++) {
     if (messages[i].role === "user" && i !== turnStart) {
       turns.push([turnStart, i]);
       turnStart = i;
     }
   }
   turns.push([turnStart, messages.length]);
+  // Record (or clear) this session's unanswered ask_user_question so an
+  // arriving blocking request can rebuild its card from the log alone. Keyed by
+  // the identity dialogs use, and only the newest turn counts: an unanswered
+  // call in an older turn is history, not someone waiting on an answer.
+  const pendingQuestion = findPendingQuestionnaire(
+    messages,
+    toolResults,
+    turns[turns.length - 1][0],
+  );
+  const historySessionKey = sessionKeyForDialogs();
+  if (historySessionKey) {
+    if (pendingQuestion) pendingQuestionsBySession.set(historySessionKey, pendingQuestion);
+    else pendingQuestionsBySession.delete(historySessionKey);
+  }
 
   const renderUserFromMsg = (msg, entryId = null, host = null) => {
     const content =
@@ -6275,6 +6448,13 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
   // element whose top is the user bubble's top.
   const renderHistoryTurnInto = ([start, end], host) => {
     const anchor = messages[start];
+    // The LAST turn is never folded: its thinking, tool calls and pending
+    // question are the newest thing the reader came back for, and a run waiting
+    // on an answer must be visible the moment the session is on screen. This is
+    // unconditional on purpose — a streaming flag, a snapshot or any other cached
+    // signal can be momentarily wrong exactly when the model is blocked, and a
+    // folded question reads as "still working" when it is actually waiting.
+    const newestTurn = start === turns[turns.length - 1]?.[0];
     let bodyStart = start;
     let turnUserEl = null;
     const turnId = messageEntryIds[start] ?? `hist-${start}`;
@@ -6305,7 +6485,7 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
     const ensureGroup = () => {
       if (!group) {
         group = turnSection.rail;
-        group.setDisclosure(false); // history rails render folded
+        group.setDisclosure(newestTurn);
       }
       return group;
     };
@@ -6457,9 +6637,13 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
     historyGate.turns = turns;
     historyGate.messageEntryIds = messageEntryIds;
   }
+  // A plain render never shrinks the reveal below the mount default: Pi's
+  // compacted snapshot renders first with fewer turns (compaction drops
+  // pre-compaction messages the disk read keeps), and that smaller render
+  // must not re-gate the disk render that follows it.
   const revealedCount = searchRender
     ? turns.length
-    : Math.min(historyGate.revealedCount, turns.length);
+    : Math.min(Math.max(historyGate.revealedCount, HISTORY_FULL_MOUNT_TURNS), turns.length);
   const gateApplies = turns.length > revealedCount && !searchRender;
 
   // Batch control first, then the newest revealed turns.
@@ -6474,7 +6658,7 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
       const to = historyGate.turnCount - previous;
       const fragment = document.createDocumentFragment();
       for (let i = from; i < to; i++) historyGate.renderTurn(turns[i], fragment);
-      insertTurnFragmentBeforeControl(fragment);
+      insertTurnFragmentBelowControl(fragment);
       updateHistoryGateControl();
     };
     const mountAll = () => {
@@ -6492,7 +6676,7 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
         // Cancellable rAF batches at the control's position, anchored (spec P2).
         const fragment = document.createDocumentFragment();
         for (let i = from; i < to; i++) gate.renderTurn(gate.turns[i], fragment);
-        insertTurnFragmentBeforeControl(fragment);
+        insertTurnFragmentBelowControl(fragment);
         updateHistoryGateControl();
         if (gate.revealedCount < gate.turnCount) requestAnimationFrame(mountChunk);
       };
@@ -6592,9 +6776,12 @@ async function clearPiQueueAndRestore() {
       messageInput.value = `${messageInput.value}\n${cleared}`;
     messageInput.dispatchEvent(new Event("input", { bubbles: true }));
   }
-  // pi re-emits queue_update on clear; hide now too so the pills drop
-  // immediately. A late queue_update with content would restore the truth.
-  document.getElementById("pi-queue")?.classList.add("hidden");
+  // pi re-emits queue_update on clear; drop the pills now too so they do not
+  // linger, and park the confirmed-empty queue so a session switch in that
+  // window cannot repaint what pi just cleared. A late queue_update with
+  // content would restore the truth on its own.
+  piQueuePark.set(activeUiSessionFile, { steering: [], followUp: [] });
+  renderPiQueue(null);
   return cleared;
 }
 

@@ -35,14 +35,13 @@ describe("createTurnSection", () => {
     expect(turn.element.classList.contains("turn")).toBe(true);
     expect(turn.element.dataset.turnId).toBe("t-42");
     const slots = [...turn.element.children].map((el) => el.className);
-    // The status row is last so the live model + elapsed readout stays at the
-    // bottom edge, where auto-scroll keeps it visible while content streams in.
     expect(slots[0]).toContain("turn-rail");
-    // The card slot sits between rail and answer: a required decision must not
-    // live inside the rail's collapsible disclosure.
-    expect(slots[1]).toContain("turn-card-slot");
-    expect(slots[2]).toContain("turn-answer");
-    expect(slots[3]).toContain("turn-status");
+    expect(slots[1]).toContain("turn-answer");
+    expect(slots[2]).toContain("turn-status");
+    // The card slot is the turn's last element: a blocking prompt (safety
+    // guard approval, ask-user-question) reads as the newest item of the
+    // turn's stream, after the answer and its footer.
+    expect(slots[3]).toContain("turn-card-slot");
     expect(turn.card.host.classList.contains("hidden")).toBe(true);
     expect(turn.rail.host.classList.contains("process-details-body")).toBe(true);
   });
@@ -127,9 +126,11 @@ describe("createTurnSection", () => {
 
     expect(actions.lastElementChild.classList.contains("turn-duration")).toBe(true);
     expect(actions.lastElementChild.textContent).toBe("Worked for 12s");
-    // One meta line: the standalone status row is gone.
+    // One meta line: the standalone status row is gone, and with it removed
+    // only the (empty, hidden) card slot follows the answer.
     expect(turn.element.querySelector(".turn-status")).toBeNull();
-    expect(turn.element.lastElementChild.classList.contains("turn-answer")).toBe(true);
+    expect(turn.element.lastElementChild.classList.contains("turn-card-slot")).toBe(true);
+    expect(turn.answer.host.nextElementSibling).toBe(turn.card.host);
   });
   test("withStatus:false builds the history variant — no status row", () => {
     const turn = createTurnSection({ turnId: "h-1", withStatus: false });

@@ -10,7 +10,7 @@ function asText(value) {
   return typeof value === "string" ? value : value == null ? "" : String(value);
 }
 
-function parseArgs(args) {
+export function parseArgs(args) {
   if (args && typeof args === "object") return args;
   if (typeof args !== "string") return {};
   try {
@@ -69,6 +69,7 @@ function createElement(tag, className, text = "") {
 export class QuestionnaireCard {
   constructor({
     container,
+    resolveHost = null,
     send = null,
     respond = null,
     confirmAbandon = null,
@@ -76,6 +77,7 @@ export class QuestionnaireCard {
     abortSignal = null,
   } = {}) {
     this.container = container;
+    this.resolveHost = typeof resolveHost === "function" ? resolveHost : null;
     this.send = typeof respond === "function" ? respond : send;
     this.confirmAbandon = confirmAbandon;
     this.wsClient = wsClient;
@@ -89,6 +91,7 @@ export class QuestionnaireCard {
     this.cancelRequested = false;
     this.confirming = false;
     this._destroyed = false;
+    this._activeContainer = null;
 
     this._onDisconnected = () => this.handleAbort();
     this._onAbortSignal = () => this.handleAbort();
@@ -154,7 +157,7 @@ export class QuestionnaireCard {
   submit() {
     if (!this.isActive()) return false;
     this.submitted = true;
-    this.container?.querySelector(".questionnaire-submit")?.setAttribute("aria-busy", "true");
+    this.overlay?.querySelector(".questionnaire-submit")?.setAttribute("aria-busy", "true");
     this._drainPendingRequest();
     return true;
   }
@@ -260,8 +263,8 @@ export class QuestionnaireCard {
     this.submitted = false;
     this.cancelRequested = false;
     this.confirming = false;
-    this._anchorObserver?.disconnect();
-    this._anchorObserver = null;
+    this._activeContainer?.classList.add("hidden");
+    this._activeContainer = null;
     this.overlay?.remove();
     this.overlay = null;
   }
@@ -358,9 +361,14 @@ export class QuestionnaireCard {
 
   render() {
     if (!this.container || !this.isActive()) return;
+    // Inline when the caller resolves a host (the live turn the question
+    // belongs to); the modal container otherwise. An inline card is not
+    // modal, so it is a group, not a dialog.
+    const host = this.resolveHost?.() ?? null;
+    this._activeContainer = host ?? this.container;
     this.overlay?.remove();
     const overlay = createElement("div", "questionnaire-inline");
-    overlay.setAttribute("role", "group");
+    overlay.setAttribute("role", host ? "group" : "dialog");
     overlay.setAttribute("aria-label", t("questionnaire.title"));
     // Inline cards sit in the stream flow: Esc abandons only when focus is
     // inside the card, so page-level Esc (composer focus, stop button) is
@@ -393,28 +401,25 @@ export class QuestionnaireCard {
     actions.append(abandon, submit);
     card.appendChild(actions);
     overlay.appendChild(card);
-    this.container.appendChild(overlay);
+    this._activeContainer.appendChild(overlay);
+    this._activeContainer.classList.remove("hidden");
     this.overlay = overlay;
-    this._watchStreamTail();
     const firstControl = overlay.querySelector("input, button");
     firstControl?.focus();
   }
 
   /**
-   * Keep the card anchored at the stream's tail: later appends (streaming
-   * messages, system rows) must never land below a pending questionnaire.
-   * One re-anchor per mutation batch; appendChild moves the node in place.
+   * A card hosted by a turn cannot outlive it: move a still-pending card to
+   * the modal container before the transcript drops the hosting turn.
    */
-  _watchStreamTail() {
-    this._anchorObserver?.disconnect();
-    if (typeof MutationObserver === "undefined") return;
-    this._anchorObserver = new MutationObserver(() => {
-      if (!this.overlay || !this.container) return;
-      if (this.container.lastElementChild !== this.overlay) {
-        this.container.appendChild(this.overlay);
-      }
-    });
-    this._anchorObserver.observe(this.container, { childList: true });
+  rehost() {
+    if (!this.overlay || !this.container || this._activeContainer === this.container) return;
+    const previous = this._activeContainer;
+    this._activeContainer = this.container;
+    this.overlay.setAttribute("role", "dialog");
+    this.container.appendChild(this.overlay);
+    this.container.classList.remove("hidden");
+    previous?.classList.add("hidden");
   }
 
   _renderQuestion(question, questionIndex) {

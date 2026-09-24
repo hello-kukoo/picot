@@ -139,25 +139,29 @@ keyed by session file with runtime-id fallback:
   `cancelled` as before. Entries are in-memory only — a page reload drops
   them together with the runtime connection, which the abort path owns.
 
-## Inline stream anchor (2026-09-22 second revision)
+## Inline stream anchor (2026-09-23 third revision: the unified turn slot)
 
 A window-blocking modal conflicts with Picot's multi-runtime model — the
 user reads the stream, scrolls history, or works in another session while
-a questionnaire waits. The card now renders as an in-flow element at the
-tail of `#messages` (Paseo's pending-permission pattern):
+a questionnaire waits. The card renders as an in-flow element inside the
+**live turn's card slot** — the same unified blocker slot the safety-guard
+approval uses, as the turn's last element (after the answer and its footer,
+matching Paseo's pending-permission pattern):
 
-- `.questionnaire-inline` is a plain stream child (role `group`, no
-  `aria-modal`, no backdrop); the card spans the 960px message column and
-  caps at `min(60vh, 720px)` with internal scroll.
-- A `MutationObserver` re-anchors the card to the stream tail whenever
-  later nodes (streaming messages, system rows) are appended, so the
-  pending question always reads as the newest stream item.
+- `.questionnaire-inline` lives in the turn's `.turn-card-slot` (role
+  `group`, no `aria-modal`, no backdrop); the card spans the message column
+  and caps at `min(60vh, 720px)` with internal scroll. Answer content
+  streams into the answer slot ABOVE the card by DOM order, so no
+  re-anchoring observer is needed.
 - Esc abandons only when focus is inside the card; page-level Esc
   (composer, stop button) is never hijacked. The abandon button remains.
-- Reveal paths (tool start, parked-restore) scroll the stream to the
-  card via the scroll owner; re-anchoring does not force scroll.
-- `#questionnaire-container` and its fixed-position CSS are gone; the
-  card's container is `#messages` itself.
+- Host resolution mirrors SafetyGuardDialog: `resolveHost()` returns the
+  live turn's card slot, else `#dialog-container` (modal fallback, role
+  `dialog`) — parked restores and replayed requests with no live turn land
+  in the fallback. `closeLiveTurn` calls `rehost()` so a still-pending card
+  moves to the modal container before the transcript drops its turn.
+- `#questionnaire-container` and its fixed-position CSS are gone, and the
+  card is no longer a direct child of `#messages`.
 
 ## Hard constraints
 

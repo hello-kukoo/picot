@@ -1,4 +1,5 @@
-/* ABOUTME: Styles the inline questionnaire card anchored at the chat stream's tail. */
+/* ABOUTME: Styles the ask-user-question card: inline in its turn's card slot, */
+/* ABOUTME: or in the modal fallback container when no turn can host it. */
 /* ABOUTME: Keeps all questions reviewable while preserving the app's glass-surface language. */
 
 .questionnaire-inline {
@@ -6,6 +7,14 @@
   width: 100%;
   flex-shrink: 0;
   animation: msgIn 0.25s var(--ease);
+}
+
+/* Modal fallback (no live turn to host the card): mirror the dialog sheet's
+   width discipline instead of stretching the full viewport. */
+#dialog-container .questionnaire-inline {
+  width: 92%;
+  max-width: 560px;
+  animation: sheetIn 0.3s var(--ease);
 }
 
 .questionnaire-card {

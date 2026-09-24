@@ -41,6 +41,53 @@ beforeEach(() => {
 });
 
 describe("QuestionnaireCard rendering", () => {
+  it("renders into the resolved turn host and unhides the slot", () => {
+    const fallback = document.createElement("div");
+    document.body.appendChild(fallback);
+    const host = document.createElement("div");
+    host.className = "turn-card-slot hidden";
+    document.body.appendChild(host);
+    const { card } = makeCard({ container: fallback, resolveHost: () => host });
+
+    start(card, [{ id: "q1", prompt: "Pick one", options: ["a", "b"] }]);
+
+    expect(host.querySelector(".questionnaire-inline")).not.toBeNull();
+    expect(fallback.querySelector(".questionnaire-inline")).toBeNull();
+    expect(host.classList.contains("hidden")).toBe(false);
+    expect(host.querySelector(".questionnaire-inline")?.getAttribute("role")).toBe("group");
+  });
+
+  it("rehost() moves a pending card to the fallback container before its turn dies", () => {
+    const fallback = document.createElement("div");
+    document.body.appendChild(fallback);
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    let resolve = () => host;
+    const { card } = makeCard({ container: fallback, resolveHost: () => resolve() });
+    start(card, [{ id: "q1", prompt: "Pick one", options: ["a", "b"] }]);
+
+    resolve = () => null; // the turn hosting the card is gone
+    card.rehost();
+
+    expect(fallback.querySelector(".questionnaire-inline")).not.toBeNull();
+    expect(host.querySelector(".questionnaire-inline")).toBeNull();
+    expect(host.classList.contains("hidden")).toBe(true);
+  });
+
+  it("clear() re-hides the turn slot it was mounted in", () => {
+    const fallback = document.createElement("div");
+    const host = document.createElement("div");
+    host.className = "turn-card-slot hidden";
+    const { card } = makeCard({ container: fallback, resolveHost: () => host });
+    start(card, [{ id: "q1", prompt: "Pick one", options: ["a", "b"] }]);
+    expect(host.classList.contains("hidden")).toBe(false);
+
+    card.clear();
+
+    expect(host.classList.contains("hidden")).toBe(true);
+    expect(host.querySelector(".questionnaire-inline")).toBeNull();
+  });
+
   it("renders every question with descriptions, previews, and real controls", () => {
     const { card, container } = makeCard();
     start(card, [
@@ -62,7 +109,8 @@ describe("QuestionnaireCard rendering", () => {
     expect(container.querySelector(".questionnaire-preview strong")?.textContent).toBe("Preview");
     expect(container.querySelectorAll("input[type='radio']")).toHaveLength(1);
     expect(container.querySelectorAll("input[type='checkbox']")).toHaveLength(2);
-    expect(container.querySelector(".questionnaire-inline")?.getAttribute("role")).toBe("group");
+    // The bare container IS the modal fallback: role dialog, like SafetyGuard.
+    expect(container.querySelector(".questionnaire-inline")?.getAttribute("role")).toBe("dialog");
     expect(document.activeElement).toBe(container.querySelector("input[type='radio']"));
   });
 });
@@ -294,15 +342,16 @@ describe("QuestionnaireCard capture and restore across session switches", () => 
   });
 });
 
-describe("QuestionnaireCard inline stream anchoring", () => {
-  it("stays the last child of the stream when later nodes are appended", async () => {
-    const { card, container } = makeCard();
+describe("QuestionnaireCard stream anchoring", () => {
+  it("stays at the tail of its hosting turn slot when answer content streams in", () => {
+    // Anchoring moved from a stream-tail observer to the turn's card slot:
+    // answer content lands in the answer slot ABOVE the card by DOM order,
+    // so no re-pinning is needed.
+    const host = document.createElement("div");
+    host.className = "turn-card-slot hidden";
+    const { card } = makeCard({ resolveHost: () => host });
     start(card, [{ prompt: "Pick one", options: [{ label: "One" }] }]);
-
-    container.appendChild(document.createElement("div", { className: "later-message" }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(container.lastElementChild?.classList.contains("questionnaire-inline")).toBe(true);
+    expect(host.lastElementChild?.classList.contains("questionnaire-inline")).toBe(true);
   });
 
   it("answers Escape only from inside the card, not from the page", async () => {
