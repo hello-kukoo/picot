@@ -949,11 +949,20 @@
               <button
                 type="button"
                 class="icon-btn file-sidebar-action"
-                id="file-sidebar-up"
-                title="Parent directory"
-                aria-label="Parent directory"
-                data-i18n-title="files.parentDirectory"
-                data-i18n-aria-label="files.parentDirectory"
+                id="file-sidebar-new-file"
+                title="New file"
+                aria-label="New file"
+                data-i18n-title="files.newFile"
+                data-i18n-aria-label="files.newFileAria"
+              ></button>
+              <button
+                type="button"
+                class="icon-btn file-sidebar-action"
+                id="file-sidebar-new-folder"
+                title="New folder"
+                aria-label="New folder"
+                data-i18n-title="files.newFolder"
+                data-i18n-aria-label="files.newFolderAria"
               ></button>
               <button
                 type="button"
@@ -1021,7 +1030,7 @@
               id="info-panel"
               role="tabpanel"
             ></div>
-            <div class="file-list" id="file-list"></div>
+            <div class="file-list" id="file-list" role="tree" aria-label="Files"></div>
             <div class="git-panel hidden" id="git-panel" role="tabpanel"></div>
           </div>
         </div>
@@ -1977,28 +1986,31 @@
           >
             <button
               type="button"
-              id="usage-cost-tab"
-              class="usage-page-tab"
-              role="tab"
-              data-usage-tab="cost"
-              aria-selected="true"
-              data-i18n="settings.usage"
-            >
-              Usage
-            </button>
-            <button
-              type="button"
               id="usage-quota-tab"
               class="usage-page-tab"
               role="tab"
               data-usage-tab="quota"
-              aria-selected="false"
+              aria-selected="true"
               data-i18n="settings.quota"
             >
               Quota
             </button>
+            <button
+              type="button"
+              id="usage-cost-tab"
+              class="usage-page-tab"
+              role="tab"
+              data-usage-tab="cost"
+              aria-selected="false"
+              data-i18n="settings.usage"
+            >
+              Usage
+            </button>
           </div>
-          <div class="usage-page-panel" data-usage-panel="cost">
+          <div class="usage-page-panel" data-usage-panel="quota">
+            <div class="settings-section" id="settings-provider-quota"></div>
+          </div>
+          <div class="usage-page-panel hidden" data-usage-panel="cost">
             <div class="settings-usage-embed">
               <cost-dashboard
                 id="settings-cost-dashboard"
@@ -2008,9 +2020,6 @@
                 defer-load
               ></cost-dashboard>
             </div>
-          </div>
-          <div class="usage-page-panel hidden" data-usage-panel="quota">
-            <div class="settings-section" id="settings-provider-quota"></div>
           </div>
         </div>
 

@@ -40,11 +40,21 @@ describe("settings page split", () => {
     const page = document.querySelector('[data-settings-panel="usage"]');
     expect(page).not.toBeNull();
     const tabs = [...page.querySelectorAll("[data-usage-tab]")].map((tab) => tab.dataset.usageTab);
-    expect(tabs).toEqual(["cost", "quota"]);
+    expect(tabs).toEqual(["quota", "cost"]);
     const panels = [...page.querySelectorAll("[data-usage-panel]")].map(
       (panel) => panel.dataset.usagePanel,
     );
-    expect(panels).toEqual(["cost", "quota"]);
+    expect(panels).toEqual(["quota", "cost"]);
+    expect(page.querySelector('[data-usage-tab="quota"]').getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(page.querySelector('[data-usage-panel="quota"]').classList.contains("hidden")).toBe(
+      false,
+    );
+    expect(page.querySelector('[data-usage-tab="cost"]').getAttribute("aria-selected")).toBe(
+      "false",
+    );
+    expect(page.querySelector('[data-usage-panel="cost"]').classList.contains("hidden")).toBe(true);
     expect(page.querySelector('[data-usage-panel="cost"] #settings-cost-dashboard')).not.toBeNull();
     expect(
       page.querySelector('[data-usage-panel="quota"] #settings-provider-quota'),
