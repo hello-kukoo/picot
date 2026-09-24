@@ -1,8 +1,7 @@
+import { createIcon } from "../icons.js";
+
 // ABOUTME: Settings → Usage "Provider Quota" section (spec 2026-09-22).
 // ABOUTME: Renders normalized quota reports; owns the codex reset-credit flow.
-
-/** A credit expiring within this many days is flagged in the list. */
-const URGENT_CREDIT_DAYS = 7;
 
 const DISPLAY_NAMES = {
   "openai-codex": "OpenAI Codex",
@@ -31,19 +30,6 @@ function formatRelativeTime(timestamp, locale) {
   return locale.hoursAgo.replace("{n}", String(hours));
 }
 
-function formatResetAt(resetAt, locale) {
-  if (typeof resetAt !== "number") return "";
-  const remainingMs = resetAt - Date.now();
-  if (remainingMs <= 0) return "";
-  const hours = Math.floor(remainingMs / 3_600_000);
-  if (hours >= 24) return locale.resetsInDays.replace("{n}", String(Math.round(hours / 24)));
-  if (hours >= 1) return locale.resetsInHours.replace("{n}", String(hours));
-  return locale.resetsInMinutes.replace(
-    "{n}",
-    String(Math.max(1, Math.round(remainingMs / 60000))),
-  );
-}
-
 /** Credit timestamps arrive as ISO strings or epoch numbers; both must render
  * as one absolute local time (spec: the confirm dialog shows expires_at
  * absolutely, since it is the last check before an irreversible charge). */
@@ -58,16 +44,28 @@ function toEpochMs(value) {
   return null;
 }
 
-function formatAbsoluteTime(value) {
+function formatDateOnly(value) {
   const ms = toEpochMs(value);
-  return ms === null ? "" : new Date(ms).toLocaleString();
+  return ms === null ? "" : new Date(ms).toLocaleDateString();
 }
 
-/** Upstream spends the earliest-granted credit first (FIFO), so list them in
- * that order and mark the first as the one this reset will consume. */
+function formatDateTime(value) {
+  const ms = toEpochMs(value);
+  if (ms === null) return "";
+  return new Date(ms).toLocaleString([], {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** Upstream spends the earliest-granted credit first (FIFO), so the list is
+ * ordered the way it will be consumed and the first row is the next one. */
 function sortCreditsFifo(credits) {
   return [...credits].sort(
-    (left, right) => (toEpochMs(left?.granted_at) ?? 0) - (toEpochMs(right?.granted_at) ?? 0),
+    (left, right) => (toEpochMs(left?.grantedAt) ?? 0) - (toEpochMs(right?.grantedAt) ?? 0),
   );
 }
 
@@ -77,57 +75,76 @@ function daysUntil(value) {
   return Math.ceil((ms - Date.now()) / 86_400_000);
 }
 
-/** One credit row: when it was granted, and when it expires (absolute time
- * plus the days left, which is what makes an imminent expiry visible). */
-function creditRow(credit, isNext, locale) {
-  const row = document.createElement("div");
-  row.className = "quota-credit-row";
-  if (isNext) row.classList.add("is-next");
-  const head = document.createElement("div");
-  head.className = "quota-credit-head";
-  const granted = locale.creditGranted.replace("{time}", formatAbsoluteTime(credit?.granted_at));
-  head.textContent = isNext ? `${locale.creditNext} · ${granted}` : granted;
-  const expiry = document.createElement("div");
-  expiry.className = "quota-credit-expiry";
-  const days = daysUntil(credit?.expires_at);
-  if (days === null) {
-    expiry.textContent = locale.creditUnknown;
-  } else if (days <= 0) {
-    expiry.textContent = locale.creditExpired;
-  } else {
-    if (days <= URGENT_CREDIT_DAYS) row.classList.add("is-urgent");
-    expiry.textContent = `${locale.creditExpires.replace("{time}", formatAbsoluteTime(credit?.expires_at))} · ${locale.creditDaysLeft.replace("{days}", String(days))}`;
-  }
-  row.append(head, expiry);
-  return row;
+/** Reset stamps read like opencodex's: "重置 今天 14:26" while it is today,
+ * otherwise "重置 9月26日 09:58" — an absolute stamp, never "in 3h". */
+function formatResetStamp(resetAt, locale) {
+  const ms = toEpochMs(resetAt);
+  if (ms === null) return "";
+  const at = new Date(ms);
+  const now = new Date();
+  const sameDay =
+    at.getFullYear() === now.getFullYear() &&
+    at.getMonth() === now.getMonth() &&
+    at.getDate() === now.getDate();
+  const day = sameDay ? locale.today : `${at.getMonth() + 1}月${at.getDate()}日`;
+  const time = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+  return `${locale.resetPrefix} ${day} ${time}`;
 }
 
-function windowBar({ label, percent, resetAt }, locale) {
+/** Usage tone: low usage is healthy, then warning, then critical. */
+/** A custom window whose label is a currency amount is a balance, not a
+ * percentage window (deepseek / moonshot shape). */
+function isBalanceLabel(label) {
+  return /[$¥€]|CNY|USD|EUR|RMB/i.test(String(label ?? ""));
+}
+
+function toneFor(percent) {
+  if (percent >= 95) return "is-critical";
+  if (percent >= 80) return "is-warning";
+  return "is-ok";
+}
+
+function windowRow({ label, percent, resetAt }, locale) {
   const clamped = Math.max(0, Math.min(100, Math.round(percent)));
-  const reset = formatResetAt(resetAt, locale);
-  const root = document.createElement("div");
-  root.className = "quota-window";
-  const head = document.createElement("div");
-  head.className = "quota-window-head";
-  const labelEl = document.createElement("span");
-  labelEl.className = "quota-window-label";
-  labelEl.textContent = label;
-  const valueEl = document.createElement("span");
-  valueEl.className = "quota-window-value";
-  valueEl.textContent = `${clamped}%${reset ? ` \u00b7 ${reset}` : ""}`;
-  head.append(labelEl, valueEl);
+  const row = document.createElement("div");
+  row.className = "quota-row";
+  const name = document.createElement("span");
+  name.className = "quota-row-label";
+  name.textContent = label;
+  const stamp = document.createElement("span");
+  stamp.className = "quota-row-reset";
+  stamp.textContent = formatResetStamp(resetAt, locale);
   const bar = document.createElement("div");
   bar.className = "quota-bar";
   bar.setAttribute("role", "presentation");
   const fill = document.createElement("div");
-  let fillTone = "";
-  if (clamped >= 90) fillTone = " is-critical";
-  else if (clamped >= 70) fillTone = " is-warning";
-  fill.className = `quota-bar-fill${fillTone}`;
+  fill.className = `quota-bar-fill ${toneFor(clamped)}`;
   fill.style.width = `${clamped}%`;
   bar.append(fill);
-  root.append(head, bar);
-  return root;
+  const pct = document.createElement("span");
+  pct.className = "quota-row-pct";
+  pct.textContent = `${clamped}%`;
+  row.append(name, stamp, bar, pct);
+  return row;
+}
+
+/** Balance providers (deepseek / moonshot) have no percentage: the amount takes
+ * the percent slot and the bar stays empty, as opencodex does. */
+function balanceRow(window, locale) {
+  const row = document.createElement("div");
+  row.className = "quota-row is-balance";
+  const name = document.createElement("span");
+  name.className = "quota-row-label";
+  name.textContent = locale.balance;
+  const stamp = document.createElement("span");
+  stamp.className = "quota-row-reset";
+  const bar = document.createElement("div");
+  bar.className = "quota-bar";
+  const value = document.createElement("span");
+  value.className = "quota-row-pct is-amount";
+  value.textContent = String(window?.label ?? "");
+  row.append(name, stamp, bar, value);
+  return row;
 }
 
 /**
@@ -206,9 +223,9 @@ export function createProviderQuotaPanel(seams, { locale }) {
     return { confirmed: await confirmReset(credits) };
   }
 
-  /** Reset dialog, ported from opencodex's codex account reset modal: step one
-   * lists the credits (FIFO, the next one marked), step two confirms the spend
-   * with the credit that will actually be consumed. Resolves true on confirm. */
+  /** Reset dialog, copied from opencodex's codex reset modal (screenshot):
+   * ticket-icon title, "you have N credits", one sub-card per credit with the
+   * next one highlighted, a FIFO note, and a single full-width action. */
   function confirmReset(credits) {
     return new Promise((resolve) => {
       const overlay = document.createElement("div");
@@ -218,11 +235,93 @@ export function createProviderQuotaPanel(seams, { locale }) {
       dialog.setAttribute("role", "dialog");
       dialog.setAttribute("aria-modal", "true");
       dialog.setAttribute("aria-label", locale.resetDialogTitle);
+
+      const heading = document.createElement("h3");
+      heading.className = "quota-dialog-title";
+      const ticket = createIcon("ticket", { size: 18 });
+      if (ticket) heading.append(ticket);
+      heading.append(document.createTextNode(locale.resetDialogTitle));
+      const sub = document.createElement("p");
+      sub.className = "quota-dialog-sub";
+      sub.textContent = locale.resetDialogScope;
+
+      const ordered = sortCreditsFifo(credits);
+      const count = document.createElement("p");
+      count.className = "quota-dialog-count";
+      const [lead, tail] = locale.resetCreditsAvailable.split("{count}");
+      const strong = document.createElement("b");
+      strong.textContent = String(ordered.length);
+      count.append(
+        document.createTextNode(lead ?? ""),
+        strong,
+        document.createTextNode(tail ?? ""),
+      );
+
+      const list = document.createElement("div");
+      list.className = "quota-credits";
+      if (ordered.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "quota-credit-row";
+        empty.textContent = locale.creditNone;
+        list.append(empty);
+      }
+      ordered.forEach((credit, index) => {
+        const row = document.createElement("div");
+        row.className = "quota-credit-row";
+        if (index === 0) row.classList.add("is-next");
+        const head = document.createElement("div");
+        head.className = "quota-credit-head";
+        const mark = createIcon("ticket", { size: 14 });
+        if (mark) head.append(mark);
+        head.append(
+          document.createTextNode(
+            index === 0
+              ? locale.creditNext
+              : locale.creditIndexed.replace("{n}", String(index + 1)),
+          ),
+        );
+        if (index === 0) {
+          const chip = document.createElement("span");
+          chip.className = "quota-credit-chip";
+          chip.textContent = "NEXT";
+          head.append(chip);
+        }
+        const meta = document.createElement("div");
+        meta.className = "quota-credit-meta";
+        const granted = document.createElement("span");
+        granted.textContent = locale.creditGranted.replace(
+          "{time}",
+          formatDateOnly(credit?.grantedAt),
+        );
+        const expires = document.createElement("span");
+        const days = daysUntil(credit?.expiresAt);
+        const expiresAt = formatDateTime(credit?.expiresAt);
+        if (days === null) {
+          expires.textContent = locale.creditUnknown;
+        } else if (days <= 0) {
+          expires.textContent = `${locale.creditExpires.replace("{time}", expiresAt)} ${locale.creditExpired}`;
+        } else {
+          expires.textContent = `${locale.creditExpires.replace("{time}", expiresAt)}${locale.creditDaysLeft.replace("{days}", String(days))}`;
+        }
+        meta.append(granted, expires);
+        row.append(head, meta);
+        list.append(row);
+      });
+
+      const note = document.createElement("p");
+      note.className = "quota-dialog-note";
+      note.textContent = locale.fifoNote;
+      const action = document.createElement("button");
+      action.type = "button";
+      action.className = "quota-dialog-action";
+      action.textContent = locale.dialogRedeem;
+      action.disabled = ordered.length === 0;
+      action.addEventListener("click", () => finish(true));
+
+      dialog.append(heading, sub, count, list, note, action);
       overlay.append(dialog);
       document.body.append(overlay);
 
-      const ordered = sortCreditsFifo(credits);
-      let step = "list";
       let settled = false;
       const finish = (value) => {
         if (settled) return;
@@ -235,84 +334,7 @@ export function createProviderQuotaPanel(seams, { locale }) {
         if (event.key === "Escape") finish(false);
       };
       document.addEventListener("keydown", onKeyDown);
-
-      const paint = () => {
-        dialog.replaceChildren();
-        const heading = document.createElement("h3");
-        heading.textContent = locale.resetDialogTitle;
-        const count = document.createElement("p");
-        count.className = "quota-reset-count";
-        count.textContent = locale.resetCreditsAvailable.replace("{count}", String(ordered.length));
-        const list = document.createElement("div");
-        list.className = "quota-credits";
-        if (ordered.length > 0) {
-          ordered.forEach((credit, index) => {
-            list.append(creditRow(credit, index === 0, locale));
-          });
-        } else {
-          const row = document.createElement("div");
-          row.className = "quota-credit-row";
-          row.textContent = locale.creditNone;
-          list.append(row);
-        }
-        const actions = document.createElement("div");
-        actions.className = "file-preview-dialog-actions";
-        const cancel = document.createElement("button");
-        cancel.type = "button";
-        cancel.className = "file-preview-dialog-button";
-        cancel.textContent = locale.dialogCancel;
-        cancel.addEventListener("click", () => finish(false));
-
-        if (step === "list") {
-          if (ordered.length > 0) {
-            const note = document.createElement("p");
-            note.className = "quota-reset-note";
-            note.textContent = locale.fifoNote;
-            const proceed = document.createElement("button");
-            proceed.type = "button";
-            proceed.className = "file-preview-dialog-button primary";
-            proceed.textContent = locale.dialogProceed;
-            proceed.addEventListener("click", () => {
-              step = "confirm";
-              paint();
-            });
-            actions.append(cancel, proceed);
-            dialog.append(heading, count, list, note, actions);
-          } else {
-            const hint = document.createElement("p");
-            hint.className = "quota-reset-note";
-            hint.textContent = locale.creditEarnHint;
-            actions.append(cancel);
-            dialog.append(heading, count, list, hint, actions);
-          }
-          (dialog.querySelector(".file-preview-dialog-button.primary") ?? cancel).focus();
-          return;
-        }
-
-        const desc = document.createElement("p");
-        desc.textContent = locale.confirmResetDesc.replace("{count}", String(ordered.length));
-        const which = document.createElement("p");
-        which.className = "quota-reset-note";
-        if (ordered[0]) {
-          which.textContent = locale.confirmWhichCredit.replace(
-            "{date}",
-            formatAbsoluteTime(ordered[0]?.granted_at),
-          );
-        }
-        const irreversible = document.createElement("p");
-        irreversible.className = "quota-reset-irreversible";
-        irreversible.textContent = locale.irreversible;
-        const confirm = document.createElement("button");
-        confirm.type = "button";
-        confirm.className = "file-preview-dialog-button primary";
-        confirm.textContent = locale.dialogConfirm;
-        confirm.addEventListener("click", () => finish(true));
-        actions.append(cancel, confirm);
-        dialog.append(heading, desc, which, irreversible, actions);
-        confirm.focus();
-      };
-
-      paint();
+      action.focus();
     });
   }
 
@@ -408,12 +430,10 @@ export function createProviderQuotaPanel(seams, { locale }) {
       }
       const quota = report.quota;
       if (quota) {
-        const windows = document.createElement("div");
-        windows.className = "quota-windows";
-        const bars = [];
+        const rows = [];
         if (typeof quota.fiveHourPercent === "number") {
-          bars.push(
-            windowBar(
+          rows.push(
+            windowRow(
               {
                 label: locale.fiveHour,
                 percent: quota.fiveHourPercent,
@@ -424,16 +444,16 @@ export function createProviderQuotaPanel(seams, { locale }) {
           );
         }
         if (typeof quota.weeklyPercent === "number") {
-          bars.push(
-            windowBar(
+          rows.push(
+            windowRow(
               { label: locale.weekly, percent: quota.weeklyPercent, resetAt: quota.weeklyResetAt },
               locale,
             ),
           );
         }
         if (typeof quota.monthlyPercent === "number") {
-          bars.push(
-            windowBar(
+          rows.push(
+            windowRow(
               {
                 label: locale.monthly,
                 percent: quota.monthlyPercent,
@@ -444,10 +464,14 @@ export function createProviderQuotaPanel(seams, { locale }) {
           );
         }
         for (const custom of quota.customWindows ?? []) {
-          bars.push(windowBar(custom, locale));
+          rows.push(
+            isBalanceLabel(custom?.label) ? balanceRow(custom, locale) : windowRow(custom, locale),
+          );
         }
-        windows.append(...bars);
-        card.append(windows);
+        const list = document.createElement("div");
+        list.className = "quota-rows";
+        list.append(...rows);
+        card.append(list);
         const updated = document.createElement("div");
         updated.className = "quota-updated";
         updated.textContent = formatRelativeTime(quota.updatedAt, locale);

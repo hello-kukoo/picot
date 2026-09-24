@@ -24,13 +24,19 @@ const locale = {
   creditGranted: "Granted {time}",
   creditExpires: "Expires {time}",
   creditUnknown: "Expiry unknown",
-  resetCreditsAvailable: "Reset credits available: {count}",
-  creditNext: "Next to use",
-  creditDaysLeft: "{days} days left",
-  creditExpired: "Expired",
+  resetDialogScope: "OpenAI Codex plan",
+  dialogRedeem: "Use 1 credit",
+  creditIndexed: "Credit #{n}",
+  resetPrefix: "Resets",
+  today: "today",
+  balance: "Balance",
+  resetCreditsAvailable: "You have {count} available reset credits.",
+  creditNext: "Up next",
+  creditDaysLeft: " ({days} days left)",
+  creditExpired: "(expired)",
   creditNone: "No reset credits available",
   creditEarnHint: "Reset credits are granted by the plan.",
-  fifoNote: "Credits are spent oldest first.",
+  fifoNote: "The earliest credit is used first.",
   confirmResetDesc: "This spends one of your {count} reset credits and cannot be undone.",
   confirmWhichCredit: "Will spend the credit granted {date}.",
   irreversible: "This cannot be undone.",
@@ -57,9 +63,8 @@ let container;
 async function confirmResetDialog() {
   container.querySelector(".quota-reset-btn").click();
   await advance();
-  document.querySelector(".file-preview-dialog-button.primary").click(); // continue
-  await advance();
-  document.querySelector(".file-preview-dialog-button.primary").click(); // confirm
+  // Single screen: the action button is the only step (screenshot layout).
+  document.querySelector(".quota-dialog-action").click();
   await advance();
 }
 
@@ -80,7 +85,7 @@ afterEach(() => {
   }
 });
 
-const SAMPLE_CREDITS = [{ granted_at: 1_760_000_000, expires_at: 1_790_000_000 }];
+const SAMPLE_CREDITS = [{ grantedAt: 1_760_000_000, expiresAt: 1_790_000_000 }];
 
 function makeSeams({ reports = [], consumeResult, openError, inspectData } = {}) {
   const gateway = {
@@ -136,7 +141,7 @@ test("renders one card per report with window bars and hides when empty", async 
   await panel.loadReports();
   expect(container.classList.contains("hidden")).toBe(false);
   expect(container.querySelectorAll(".quota-card")).toHaveLength(2);
-  const bars = container.querySelectorAll(".quota-window");
+  const bars = container.querySelectorAll(".quota-row");
   expect(bars).toHaveLength(4); // 3 codex windows + 1 balance label
   expect(container.textContent).toContain("OpenAI Codex");
   expect(container.textContent).toContain("Reset quota (2 left)");
@@ -236,7 +241,7 @@ test("a failed ledger open never reaches consume", async () => {
   expect(toasts).toContain("Cannot open the reset operation right now");
 });
 
-test("reset lists credits oldest-first with absolute times, then confirms", async () => {
+test("reset lists credits oldest-first and highlights the next one", async () => {
   const seams = makeSeams({
     reports: [
       {
@@ -247,10 +252,8 @@ test("reset lists credits oldest-first with absolute times, then confirms", asyn
     ],
     inspectData: {
       credits: [
-        // Deliberately out of order: the list must come back oldest-first.
-        // The older credit also expires within the urgency window.
-        { granted_at: NOW_SEC - 3 * DAY, expires_at: NOW_SEC + 40 * DAY },
-        { granted_at: NOW_SEC - 30 * DAY, expires_at: NOW_SEC + 5 * DAY },
+        { grantedAt: NOW_SEC - 3 * DAY, expiresAt: NOW_SEC + 40 * DAY },
+        { grantedAt: NOW_SEC - 30 * DAY, expiresAt: NOW_SEC + 5 * DAY },
       ],
     },
   });
@@ -259,39 +262,29 @@ test("reset lists credits oldest-first with absolute times, then confirms", asyn
   container.querySelector(".quota-reset-btn").click();
   await advance();
 
-  // Step 1: inventory only — nothing spent.
   expect(seams.gateway.call).toHaveBeenCalledWith("codex_reset_credits_inspect", {});
-  expect(document.querySelector(".quota-reset-count")?.textContent).toContain("2");
+  expect(document.querySelector(".quota-dialog-count")?.textContent).toContain("2");
   const rows = [...document.querySelectorAll(".quota-credit-row")];
   expect(rows).toHaveLength(2);
-  const oldestGranted = new Date((NOW_SEC - 30 * DAY) * 1000).toLocaleString();
+  const oldestGranted = new Date((NOW_SEC - 30 * DAY) * 1000).toLocaleDateString();
   expect(rows[0].classList.contains("is-next")).toBe(true);
-  expect(rows[0].textContent).toContain("Next to use");
+  expect(rows[0].textContent).toContain("Up next");
+  expect(rows[0].querySelector(".quota-credit-chip")?.textContent).toBe("NEXT");
+  expect(rows[0].textContent).toContain("Granted");
   expect(rows[0].textContent).toContain(oldestGranted);
-  expect(rows[0].textContent).toContain(new Date((NOW_SEC + 5 * DAY) * 1000).toLocaleString());
+  expect(rows[0].textContent).toContain("Expires");
   expect(rows[0].textContent).toContain("days left");
-  expect(rows[0].classList.contains("is-urgent")).toBe(true);
-  expect(rows[1].classList.contains("is-next")).toBe(false);
-  expect(document.querySelector(".quota-reset-note")?.textContent).toContain("oldest first");
+  expect(rows[1].textContent).toContain("Credit #2");
+  expect(document.querySelector(".quota-dialog-note")?.textContent).toContain("earliest");
   expect(seams.dataTransport.resetCreditOpen).not.toHaveBeenCalled();
 
-  // Step 2: which credit this spends, and that it cannot be undone.
-  document.querySelector(".file-preview-dialog-button.primary").click();
-  await advance();
-  const text = document.querySelector(".quota-reset-dialog")?.textContent ?? "";
-  expect(text).toContain("Will spend the credit granted");
-  expect(text).toContain(oldestGranted);
-  expect(text).toContain("This cannot be undone.");
-  expect(seams.dataTransport.resetCreditOpen).not.toHaveBeenCalled();
-
-  // Escape abandons it; the ledger stays untouched.
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   await advance();
   expect(document.querySelector(".file-preview-dialog-overlay")).toBeNull();
   expect(seams.dataTransport.resetCreditOpen).not.toHaveBeenCalled();
 });
 
-test("cancelling the reset dialog never touches the ledger", async () => {
+test("escaping the reset dialog never touches the ledger", async () => {
   const seams = makeSeams({
     reports: [
       {
@@ -305,8 +298,7 @@ test("cancelling the reset dialog never touches the ledger", async () => {
   await panel.loadReports();
   container.querySelector(".quota-reset-btn").click();
   await advance();
-  // Step 1's ghost button is cancel; step 2 has its own cancel as well.
-  document.querySelectorAll(".file-preview-dialog-button")[0].click();
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   await advance();
   expect(document.querySelector(".file-preview-dialog-overlay")).toBeNull();
   expect(seams.dataTransport.resetCreditOpen).not.toHaveBeenCalled();

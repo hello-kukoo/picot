@@ -2400,11 +2400,193 @@ body.landing-mode #landing {
    Settings DOM, not inside the cost dashboard's shadow root, so these styles
    must live here — the panel's classes had no definitions at all while the
    section was silently hidden. */
+
+/* Layout follows opencodex's provider card: two per row, one grid row per
+   quota window (label · reset stamp · bar · percent) with tabular numbers. */
 #settings-provider-quota {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
   gap: var(--space-3);
+}
+
+.quota-section-head {
+  grid-column: 1 / -1;
+}
+
+.quota-card {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-glass);
+}
+
+.quota-card-name {
+  margin-bottom: var(--space-2);
+  color: var(--text-primary);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+}
+
+.quota-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.quota-row {
+  display: grid;
+  grid-template-columns: max-content max-content minmax(48px, 1fr) max-content;
+  align-items: center;
+  gap: var(--space-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.quota-row-label {
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.quota-row-reset {
+  color: var(--text-dim);
+  font-size: var(--font-size-sm);
+}
+
+.quota-row-pct {
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  text-align: right;
+}
+
+.quota-bar {
+  /* design-token-ignore: bar thickness is a visual constant, not spacing */
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--bg-glass-strong);
+}
+
+.quota-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--duration) var(--ease);
+}
+
+.quota-bar-fill.is-ok {
+  background: var(--success, var(--accent));
+}
+
+.quota-bar-fill.is-warning {
+  background: var(--warning);
+}
+
+.quota-bar-fill.is-critical {
+  background: var(--error);
+}
+
+/* Reset dialog (screenshot: ticket title, credit sub-cards, one action). */
+.quota-reset-dialog {
+  width: min(520px, 92vw);
+}
+
+.quota-dialog-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.quota-dialog-title svg {
+  color: var(--warning);
+}
+
+.quota-dialog-sub {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--font-size-sm);
+}
+
+.quota-dialog-count {
+  margin: var(--space-3) 0 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.quota-credits {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.quota-credit-row {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.quota-credit-row.is-next {
+  border-color: color-mix(in srgb, var(--warning) 45%, transparent);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+
+.quota-credit-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.quota-credit-head svg {
+  color: var(--warning);
+}
+
+.quota-credit-chip {
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--warning) 20%, transparent);
+  color: var(--warning);
+  /* design-token-ignore: badge text is a visual constant, not body copy */
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.quota-credit-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.quota-dialog-note {
+  margin: var(--space-3) 0 0;
+  color: var(--text-dim);
+  font-size: var(--font-size-sm);
+  text-align: center;
+}
+
+.quota-dialog-action {
+  width: 100%;
+  margin-top: var(--space-2);
+  padding: var(--space-2) 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--bg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.quota-dialog-action:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .quota-section-head {
@@ -2440,113 +2622,14 @@ body.landing-mode #landing {
   background: var(--bg-glass-hover);
 }
 
-.quota-card {
-  flex: 1 1 240px;
-  max-width: 340px;
-  padding: var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-glass);
-}
-
-.quota-card-name {
-  margin-bottom: var(--space-2);
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
 .quota-windows {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
 }
 
-.quota-window-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-2);
-  margin-bottom: var(--space-1);
-  font-size: var(--font-size-sm);
-}
-
-.quota-window-label {
-  color: var(--text-secondary);
-}
-
-.quota-window-value {
-  color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
-}
-
-.quota-bar {
-  /* design-token-ignore: bar thickness is a visual constant, not spacing */
-  height: 6px;
-  overflow: hidden;
-  border-radius: var(--radius-sm);
-  background: var(--bg-glass-strong);
-}
-
-.quota-bar-fill {
-  height: 100%;
-  border-radius: inherit;
-  background: var(--accent);
-  transition: width var(--duration) var(--ease);
-}
-
-.quota-bar-fill.is-warning {
-  background: var(--warning);
-}
-
-.quota-bar-fill.is-critical {
-  background: var(--error);
-}
-
-.quota-reset-count {
-  margin: var(--space-2) 0 0;
-  color: var(--text-primary);
-  font-size: var(--font-size-sm);
-}
-
 .quota-reset-dialog .quota-credits {
   margin-top: var(--space-2);
-}
-
-.quota-credit-row.is-next {
-  border-left: 2px solid var(--accent);
-  padding-left: var(--space-2);
-}
-
-.quota-credit-row.is-urgent .quota-credit-expiry {
-  color: var(--warning);
-}
-
-.quota-credit-head {
-  color: var(--text-primary);
-}
-
-.quota-credit-expiry {
-  color: var(--text-dim);
-}
-
-.quota-reset-note,
-.quota-reset-irreversible {
-  margin: var(--space-2) 0 0;
-  color: var(--text-secondary);
-  font-size: var(--font-size-sm);
-}
-
-.quota-reset-irreversible {
-  color: var(--warning);
-}
-
-.quota-credits {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  margin: var(--space-2) 0 0;
-  color: var(--text-secondary);
-  font-size: var(--font-size-sm);
 }
 
 .quota-updated,
@@ -6326,12 +6409,15 @@ details.sg-section > summary {
     border-color 0.2s var(--ease);
 }
 
+/* No backdrop-filter here, deliberately: with one, WKWebView leaves the rail's
+   raster stale after a layout change (cold-start settle, window resize) — the
+   hover pill and the tick magnification then never paint until the layer tree
+   is rebuilt (window focus change or a DOM move). The background is 95%
+   opaque, so the 12px blur it used to add was not visible anyway. */
 .conv-nav:hover {
   background: var(--sidebar-bg-mobile);
   border-color: var(--border);
   box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
 }
 
 /* Hide conv-nav when window is too narrow — the rail needs room beside the messages */
@@ -7497,8 +7583,8 @@ body.file-dragging * {
   cursor: copy !important;
 }
 .file-icon {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
@@ -7527,6 +7613,111 @@ body.file-dragging * {
   text-align: center;
   color: var(--text-dim);
   font-size: var(--font-size-sm);
+}
+
+/* ── Files tree ─────────────────────────────────────────────────────────── */
+
+/* One indent step per level. The depth arrives as --file-depth on the row, so
+   the tree needs no per-level rules and no inline pixel values. */
+.file-item {
+  padding-left: calc(var(--space-3) + var(--file-depth, 0) * var(--space-3));
+}
+
+.file-item.selected {
+  background: var(--bg-glass-hover);
+}
+
+.file-disclosure {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  transition: transform var(--duration) var(--ease);
+}
+
+.file-disclosure.expanded {
+  transform: rotate(90deg);
+}
+
+.file-disclosure.loading {
+  animation: spin 1s linear infinite;
+}
+
+/* A directory whose listing failed keeps its row: the tree says which branch is
+   stale and offers the retry in place, instead of blanking the whole panel. */
+.file-row-retry,
+.file-stale-retry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-0-5);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.file-row-retry {
+  flex-shrink: 0;
+}
+
+.file-row-retry:hover,
+.file-stale-retry:hover {
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.file-stale-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-1);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-sm);
+  background: var(--bg-glass);
+  color: var(--text-dim);
+  font-size: var(--font-size-sm);
+}
+
+.file-stale-message {
+  flex: 1;
+  min-width: 0;
+}
+
+.file-stale-retry {
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+}
+
+.file-edit-row {
+  background: var(--bg-glass-hover);
+}
+
+.file-edit-input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-0-5) var(--space-1-5);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-glass);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--font-size-md);
+}
+
+.file-edit-input:focus {
+  outline: none;
+}
+
+.context-menu-separator {
+  height: 1px;
+  margin: var(--space-1) var(--space-2);
+  background: var(--border-hover);
 }
 
 /* Drop zone highlight when dragging a file over the composer */
