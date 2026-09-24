@@ -90,7 +90,6 @@
 | 📋 not-started | [2026-09-22-line-review-workflow](not-started/2026-09-22-line-review-workflow-design.md) | JSONL 行级评论、reviewer/fixer 单向权限与自动单次复审；Draft 待评审 |
 | 📋 not-started | [2026-09-22-environment-toolchain](not-started/2026-09-22-environment-toolchain-design.md) | 环境检查与无会话 AI 工具安装/更新；Draft 待评审 |
 | ⛔ superseded | [2026-07-25-at-file-mention](superseded/2026-07-25-at-file-mention-design.md) | 由 [2026-09-19-file-mention-paths](implemented/2026-09-19-file-mention-paths-design.md) 扩展并部分取代 |
-| ⛔ superseded | [2026-07-26-markitdown-office-email-preview](superseded/2026-07-26-markitdown-office-email-preview-design.md) | 由 [2026-09-17-anydoc-office-preview](not-started/2026-09-17-anydoc-office-preview-design.md) 取代 |
 | ⛔ superseded | [2026-07-27-claude-skills-discovery](superseded/2026-07-27-claude-skills-discovery-design.md) | 由 [2026-08-07-composer-skill-discovery-and-execution-fixes](superseded/2026-08-07-composer-skill-discovery-and-execution-fixes.md) 取代 |
 | ⛔ superseded | [2026-08-07-composer-skill-discovery-and-execution-fixes.md](superseded/2026-08-07-composer-skill-discovery-and-execution-fixes.md) | （已被新 spec 取代） |
 
