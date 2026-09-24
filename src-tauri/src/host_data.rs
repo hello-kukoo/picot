@@ -105,6 +105,10 @@ pub enum HostDataError {
     /// Wide-root search root does not exist or is unreachable (missing drive,
     /// UNC timeout) — contract E distinguishes this from "no matches".
     MentionRootUnavailable(String),
+    /// The workspace root, or the requested directory under it, was reachable
+    /// before and is not now: unmounted volume, offline share, stale network
+    /// handle. Never a deletion signal — the WebView keeps its cache.
+    TemporarilyUnavailable,
     Io(String),
 }
 
@@ -717,12 +721,12 @@ impl HostDataPlane {
         relative_path: &str,
     ) -> Result<Vec<FileEntry>, HostDataError> {
         let root = self.workspace_root(workspace_id)?;
-        let requested = safe_join(&root, relative_path)?;
+        let requested = resolve_for_listing(&root, relative_path)?;
         if !requested.is_dir() {
             return Err(HostDataError::NotDirectory);
         }
         let mut entries = std::fs::read_dir(&requested)
-            .map_err(|error| HostDataError::Io(error.to_string()))?
+            .map_err(classify_listing_io)?
             .filter_map(Result::ok)
             .filter_map(|entry| {
                 let file_type = entry.file_type().ok()?;
@@ -2154,6 +2158,73 @@ fn build_file_mention_candidate(
         description: display_path.to_owned(),
         is_directory,
     }
+}
+
+/// Resolve a listing target under `root`, keeping "unreachable right now"
+/// distinguishable from "this path is wrong".
+///
+/// `safe_join` collapses every canonicalize failure into `Io`, which is fine
+/// for a one-shot read but wrong for a tree: an ejected volume or a dropped
+/// network share must not read to the WebView as "the user deleted this
+/// directory", because the frontend invalidates its cache on a real deletion
+/// and keeps it on a transient one.
+fn resolve_for_listing(root: &Path, relative_path: &str) -> Result<PathBuf, HostDataError> {
+    let relative = Path::new(relative_path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_) | Component::CurDir))
+    {
+        return Err(HostDataError::InvalidRelativePath);
+    }
+    let root = root.canonicalize().map_err(classify_listing_io)?;
+    let joined = root
+        .join(relative)
+        .canonicalize()
+        .map_err(classify_listing_io)?;
+    if !joined.starts_with(&root) {
+        return Err(HostDataError::OutsideWorkspace);
+    }
+    Ok(joined)
+}
+
+/// Transient-vs-permanent split for listing I/O. The errno set covers the
+/// network-filesystem answers (`ESTALE`, `ENOTCONN`, `EIO`, host-down); the
+/// `ErrorKind` arms cover everything the portable layer already names.
+fn classify_listing_io(error: std::io::Error) -> HostDataError {
+    let transient = match error.kind() {
+        std::io::ErrorKind::NotFound
+        | std::io::ErrorKind::NotConnected
+        | std::io::ErrorKind::TimedOut
+        | std::io::ErrorKind::ConnectionAborted
+        | std::io::ErrorKind::ConnectionReset => true,
+        _ => is_transient_listing_errno(&error),
+    };
+    if transient {
+        HostDataError::TemporarilyUnavailable
+    } else {
+        HostDataError::Io(error.to_string())
+    }
+}
+
+/// Unix-only: Windows reports these conditions through `ErrorKind`.
+#[cfg(unix)]
+fn is_transient_listing_errno(error: &std::io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(libc::ESTALE)
+            | Some(libc::EIO)
+            | Some(libc::ENXIO)
+            | Some(libc::ENOTCONN)
+            | Some(libc::EHOSTDOWN)
+            | Some(libc::EHOSTUNREACH)
+            | Some(libc::ETIMEDOUT)
+    )
+}
+
+#[cfg(not(unix))]
+fn is_transient_listing_errno(_error: &std::io::Error) -> bool {
+    false
 }
 
 fn safe_join(root: &Path, relative_path: &str) -> Result<PathBuf, HostDataError> {

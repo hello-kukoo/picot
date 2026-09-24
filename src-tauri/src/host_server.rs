@@ -2288,6 +2288,24 @@ fn operation_scope(
     ))
 }
 
+/// Wire name for a workspace-file mutation's registry verdict. A pending
+/// duplicate is an error the caller answers with `duplicate_pending`; the two
+/// successful verdicts are reported as an `acceptance` field on the response.
+fn file_mutation_acceptance(
+    acceptance: crate::operation_registry::OperationAcceptance,
+) -> Result<&'static str, (&'static str, String)> {
+    match acceptance {
+        crate::operation_registry::OperationAcceptance::Accepted => Ok("accepted_pending"),
+        crate::operation_registry::OperationAcceptance::DuplicatePending => Err((
+            "duplicate_pending",
+            "File mutation is still pending for this idempotency key".into(),
+        )),
+        crate::operation_registry::OperationAcceptance::DuplicateCompleted => {
+            Ok("duplicate_completed")
+        }
+    }
+}
+
 fn read_bounded_utf8(path: &Path) -> Result<String, &'static str> {
     let file = fs::File::open(path).map_err(|_| "config_not_found")?;
     let mut bytes = Vec::new();
@@ -3531,9 +3549,12 @@ async fn dispatch(
                         .map_err(host_data_error)?;
                     let path_for_write = path;
                     let content_for_write = content;
-                    let (operation_id, acceptance, modified_at_ms) = state
-                        .runtimes
-                        .host_mutation(scope, key, "file_write", "workspace-files", || {
+                    let (operation_id, acceptance, modified_at_ms) = state.runtimes.host_mutation(
+                        scope,
+                        key,
+                        "file_write",
+                        "workspace-files",
+                        || {
                             crate::host_files::write(
                                 &root,
                                 path_for_write,
@@ -3541,23 +3562,10 @@ async fn dispatch(
                                 expected,
                             )
                             .map(|modified| json!(modified))
-                            .map_err(|error| (error.code(), "File write failed".to_owned()).1)
-                        })
-                        .map_err(|message| ("file_write_failed", message))?;
-                    let acceptance = match acceptance {
-                        crate::operation_registry::OperationAcceptance::Accepted => {
-                            "accepted_pending"
-                        }
-                        crate::operation_registry::OperationAcceptance::DuplicatePending => {
-                            return Err((
-                                "duplicate_pending",
-                                "File write is still pending for this idempotency key".into(),
-                            ))
-                        }
-                        crate::operation_registry::OperationAcceptance::DuplicateCompleted => {
-                            "duplicate_completed"
-                        }
-                    };
+                            .map_err(|error| (error.code(), "File write failed".to_owned()))
+                        },
+                    )?;
+                    let acceptance = file_mutation_acceptance(acceptance)?;
                     let modified_at_ms =
                         modified_at_ms.and_then(|value| value.as_u64()).ok_or((
                             "file_write_failed",
@@ -3571,6 +3579,151 @@ async fn dispatch(
                         "acceptance": acceptance,
                         "path": path,
                         "modifiedAtMs": modified_at_ms,
+                    }))
+                }
+                Some("file_create") => {
+                    let parent_path = frame
+                        .get("parentPath")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_path", "parentPath is required".into()))?;
+                    let name = frame
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_name", "name is required".into()))?;
+                    let kind = match frame.get("kind").and_then(Value::as_str) {
+                        Some("file") => crate::host_files::CreateKind::File,
+                        Some("directory") => crate::host_files::CreateKind::Directory,
+                        _ => {
+                            return Err((
+                                "invalid_kind",
+                                "kind must be \"file\" or \"directory\"".into(),
+                            ))
+                        }
+                    };
+                    let key = frame.get("idempotencyKey").and_then(Value::as_str).ok_or((
+                        "idempotency_key_required",
+                        "File mutations require idempotencyKey".into(),
+                    ))?;
+                    let scope = operation_scope(context, "workspace-files")?;
+                    let root = state
+                        .data
+                        .workspace_root(workspace_id)
+                        .map_err(host_data_error)?;
+                    let (operation_id, acceptance, result) = state.runtimes.host_mutation(
+                        scope,
+                        key,
+                        "file_create",
+                        "workspace-files",
+                        || {
+                            crate::host_files::create(&root, parent_path, name, kind)
+                                .map(|relative| json!(relative))
+                                .map_err(|error| (error.code(), "File create failed".to_owned()))
+                        },
+                    )?;
+                    let acceptance = file_mutation_acceptance(acceptance)?;
+                    let relative_path = result
+                        .and_then(|value| value.as_str().map(str::to_owned))
+                        .ok_or((
+                            "file_create_failed",
+                            "Completed create lost its terminal result".into(),
+                        ))?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "file_create",
+                        "operationId": operation_id,
+                        "acceptance": acceptance,
+                        "path": relative_path,
+                        "kind": match kind {
+                            crate::host_files::CreateKind::File => "file",
+                            crate::host_files::CreateKind::Directory => "directory",
+                        },
+                    }))
+                }
+                Some("file_rename") => {
+                    let path = frame
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_path", "path is required".into()))?;
+                    let name = frame
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_name", "name is required".into()))?;
+                    let key = frame.get("idempotencyKey").and_then(Value::as_str).ok_or((
+                        "idempotency_key_required",
+                        "File mutations require idempotencyKey".into(),
+                    ))?;
+                    let scope = operation_scope(context, "workspace-files")?;
+                    let root = state
+                        .data
+                        .workspace_root(workspace_id)
+                        .map_err(host_data_error)?;
+                    let (operation_id, acceptance, result) = state.runtimes.host_mutation(
+                        scope,
+                        key,
+                        "file_rename",
+                        "workspace-files",
+                        || {
+                            crate::host_files::rename(&root, path, name)
+                                .map(|relative| json!(relative))
+                                .map_err(|error| (error.code(), "File rename failed".to_owned()))
+                        },
+                    )?;
+                    let acceptance = file_mutation_acceptance(acceptance)?;
+                    let relative_path = result
+                        .and_then(|value| value.as_str().map(str::to_owned))
+                        .ok_or((
+                            "file_rename_failed",
+                            "Completed rename lost its terminal result".into(),
+                        ))?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "file_rename",
+                        "operationId": operation_id,
+                        "acceptance": acceptance,
+                        "path": relative_path,
+                    }))
+                }
+                Some("file_delete") => {
+                    let path = frame
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_path", "path is required".into()))?;
+                    let key = frame.get("idempotencyKey").and_then(Value::as_str).ok_or((
+                        "idempotency_key_required",
+                        "File mutations require idempotencyKey".into(),
+                    ))?;
+                    let scope = operation_scope(context, "workspace-files")?;
+                    let root = state
+                        .data
+                        .workspace_root(workspace_id)
+                        .map_err(host_data_error)?;
+                    let (operation_id, acceptance, result) = state.runtimes.host_mutation(
+                        scope,
+                        key,
+                        "file_delete",
+                        "workspace-files",
+                        || {
+                            crate::host_files::remove(&root, path)
+                                .map(|relative| json!(relative))
+                                .map_err(|error| (error.code(), "File delete failed".to_owned()))
+                        },
+                    )?;
+                    let acceptance = file_mutation_acceptance(acceptance)?;
+                    let deleted_path = result
+                        .and_then(|value| value.as_str().map(str::to_owned))
+                        .ok_or((
+                        "file_delete_failed",
+                        "Completed delete lost its terminal result".into(),
+                    ))?;
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "file_delete",
+                        "operationId": operation_id,
+                        "acceptance": acceptance,
+                        "deletedPath": deleted_path,
                     }))
                 }
                 Some("file_raw") => {
@@ -3672,6 +3825,12 @@ fn host_data_error(error: HostDataError) -> (&'static str, String) {
             "Mention query has invalid syntax".into(),
         ),
         HostDataError::MentionRootUnavailable(message) => ("mention_root_unavailable", message),
+        // §6.2: the wire carries a host-authored sentence, never an OS error or
+        // an absolute path. The frontend shows its own localized "stale" copy.
+        HostDataError::TemporarilyUnavailable => (
+            "temporarily_unavailable",
+            "Workspace is temporarily unreachable".into(),
+        ),
         HostDataError::Io(message) => ("file_access_failed", message),
     }
 }
@@ -4553,6 +4712,227 @@ mod tests {
         })
         .await
         .expect("file_read reply within 20s")
+    }
+
+    /// Send a `data_request` whose body is spelled out by the caller. Used by
+    /// the workspace-file mutation tests, which carry fields `list_files` and
+    /// `file_read` do not.
+    async fn send_data_request_body(
+        harness: &mut DesktopHarness,
+        request_id: &str,
+        mut body: serde_json::Map<String, Value>,
+    ) -> Value {
+        use tokio_tungstenite::tungstenite::Message;
+        body.insert("type".into(), json!("data_request"));
+        body.insert("protocolVersion".into(), json!(2));
+        body.insert("requestId".into(), json!(request_id));
+        harness
+            .socket
+            .send(Message::Text(Value::Object(body).to_string()))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let message = harness.socket.next().await.unwrap().unwrap();
+                let frame: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+                if frame["requestId"] == request_id {
+                    return frame;
+                }
+            }
+        })
+        .await
+        .expect("file mutation reply within 20s")
+    }
+
+    async fn send_file_mutation(
+        harness: &mut DesktopHarness,
+        request_id: &str,
+        operation: &str,
+        fields: Value,
+        idempotency_key: &str,
+    ) -> Value {
+        let mut body = fields.as_object().cloned().unwrap_or_default();
+        body.insert("operation".into(), json!(operation));
+        body.insert("workspaceId".into(), json!(harness.workspace_id.clone()));
+        body.insert("idempotencyKey".into(), json!(idempotency_key));
+        send_data_request_body(harness, request_id, body).await
+    }
+
+    #[tokio::test]
+    async fn file_mutations_create_rename_and_delete_inside_the_workspace() {
+        let (_host, mut harness, temp) = desktop_harness("file-mutations", None).await;
+        let workspace = temp.join("workspace");
+        // `.` is the workspace root; a directory then a file inside it.
+        let directory = send_file_mutation(
+            &mut harness,
+            "fm-1",
+            "file_create",
+            json!({ "parentPath": ".", "name": "notes", "kind": "directory" }),
+            "fm-key-1",
+        )
+        .await;
+        assert_eq!(directory["type"], "data_response", "{directory:?}");
+        assert_eq!(directory["path"], "notes");
+        assert_eq!(directory["kind"], "directory");
+        assert_eq!(directory["acceptance"], "accepted_pending");
+        assert!(workspace.join("notes").is_dir());
+
+        let file = send_file_mutation(
+            &mut harness,
+            "fm-2",
+            "file_create",
+            json!({ "parentPath": "notes", "name": "a.md", "kind": "file" }),
+            "fm-key-2",
+        )
+        .await;
+        assert_eq!(file["path"], "notes/a.md");
+        assert_eq!(
+            fs::read_to_string(workspace.join("notes/a.md")).unwrap(),
+            ""
+        );
+
+        // Create never overwrites, and the refusal carries no OS detail.
+        let clash = send_file_mutation(
+            &mut harness,
+            "fm-3",
+            "file_create",
+            json!({ "parentPath": "notes", "name": "a.md", "kind": "file" }),
+            "fm-key-3",
+        )
+        .await;
+        assert_eq!(clash["type"], "error", "{clash:?}");
+        assert_eq!(clash["error"]["code"], "already_exists");
+        assert_eq!(clash["error"]["message"], "File create failed");
+        assert!(
+            !clash.to_string().contains(temp.to_str().unwrap()),
+            "{clash}"
+        );
+
+        // Rename stays inside the parent directory.
+        let renamed = send_file_mutation(
+            &mut harness,
+            "fm-4",
+            "file_rename",
+            json!({ "path": "notes/a.md", "name": "b.md" }),
+            "fm-key-4",
+        )
+        .await;
+        assert_eq!(renamed["path"], "notes/b.md");
+        assert!(!workspace.join("notes/a.md").exists());
+
+        // A separator in the new name would make rename a move API.
+        let move_attempt = send_file_mutation(
+            &mut harness,
+            "fm-5",
+            "file_rename",
+            json!({ "path": "notes/b.md", "name": "../escaped.md" }),
+            "fm-key-5",
+        )
+        .await;
+        assert_eq!(move_attempt["error"]["code"], "invalid_name");
+        assert!(!temp.join("escaped.md").exists());
+
+        // A non-empty directory is refused: no recursion, no trash, no undo.
+        let not_empty = send_file_mutation(
+            &mut harness,
+            "fm-6",
+            "file_delete",
+            json!({ "path": "notes" }),
+            "fm-key-6",
+        )
+        .await;
+        assert_eq!(not_empty["error"]["code"], "directory_not_empty");
+        assert!(workspace.join("notes/b.md").exists());
+
+        let deleted_file = send_file_mutation(
+            &mut harness,
+            "fm-7",
+            "file_delete",
+            json!({ "path": "notes/b.md" }),
+            "fm-key-7",
+        )
+        .await;
+        assert_eq!(deleted_file["deletedPath"], "notes/b.md");
+        assert!(!workspace.join("notes/b.md").exists());
+
+        let deleted_directory = send_file_mutation(
+            &mut harness,
+            "fm-8",
+            "file_delete",
+            json!({ "path": "notes" }),
+            "fm-key-8",
+        )
+        .await;
+        assert_eq!(deleted_directory["deletedPath"], "notes");
+        assert!(!workspace.join("notes").exists());
+    }
+
+    #[tokio::test]
+    async fn file_mutations_replay_a_completed_operation_by_idempotency_key() {
+        let (_host, mut harness, temp) = desktop_harness("file-idempotency", None).await;
+        let create = json!({ "parentPath": ".", "name": "once.txt", "kind": "file" });
+
+        let first = send_file_mutation(
+            &mut harness,
+            "fi-1",
+            "file_create",
+            create.clone(),
+            "fi-key",
+        )
+        .await;
+        assert_eq!(first["acceptance"], "accepted_pending");
+        assert_eq!(first["path"], "once.txt");
+
+        // The replay returns the recorded terminal result and does not re-run
+        // the operation, so it never trips `already_exists`.
+        let replay =
+            send_file_mutation(&mut harness, "fi-2", "file_create", create, "fi-key").await;
+        assert_eq!(replay["type"], "data_response", "{replay:?}");
+        assert_eq!(replay["acceptance"], "duplicate_completed");
+        assert_eq!(replay["path"], "once.txt");
+        assert!(temp.join("workspace/once.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn file_mutations_require_the_registered_workspace() {
+        let (_host, mut harness, temp) = desktop_harness("file-gate", None).await;
+        let mut body = json!({
+            "operation": "file_create",
+            "parentPath": ".",
+            "name": "escape.txt",
+            "kind": "file",
+            "idempotencyKey": "fg-key",
+            "workspaceId": "some-other-workspace",
+        })
+        .as_object()
+        .cloned()
+        .unwrap();
+        body.insert("type".into(), json!("data_request"));
+        body.insert("protocolVersion".into(), json!(2));
+        body.insert("requestId".into(), json!("fg-1"));
+
+        let reply = send_data_request_body(&mut harness, "fg-1", body).await;
+        assert_eq!(reply["type"], "error", "{reply:?}");
+        assert_eq!(reply["error"]["code"], "unauthorized_target");
+        assert!(!temp.join("workspace/escape.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn list_files_reports_an_unreachable_workspace_as_temporarily_unavailable() {
+        let (_host, mut harness, temp) = desktop_harness("list-transient", None).await;
+        // An unmounted volume leaves the registered root pointing at nothing.
+        fs::rename(temp.join("workspace"), temp.join("unmounted")).unwrap();
+        let reply = send_data_request(&mut harness, "lt-1", "list_files", "").await;
+        assert_eq!(reply["type"], "error", "{reply:?}");
+        assert_eq!(reply["error"]["code"], "temporarily_unavailable");
+        assert_eq!(
+            reply["error"]["message"],
+            "Workspace is temporarily unreachable"
+        );
+        assert!(
+            !reply.to_string().contains(temp.to_str().unwrap()),
+            "{reply}"
+        );
     }
 
     #[tokio::test]

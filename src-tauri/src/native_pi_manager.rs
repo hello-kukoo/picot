@@ -681,7 +681,12 @@ impl NativePiManager {
     /// writes walk the mutation registry): accept with the caller's
     /// idempotency key, execute, then complete with the terminal result or
     /// mark indeterminate on failure. Duplicate-completed replays return the
-    /// recorded terminal result.
+    /// recorded terminal result; a duplicate-pending key is reported back as
+    /// `OperationAcceptance::DuplicatePending` so the caller can answer with
+    /// `duplicate_pending` instead of a generic failure.
+    ///
+    /// Errors are `(code, message)` pairs so a caller can propagate the
+    /// filesystem-level code straight out of `dispatch` without re-wrapping it.
     pub fn host_mutation<F>(
         &self,
         scope: crate::operation_registry::OperationScope,
@@ -695,52 +700,82 @@ impl NativePiManager {
             crate::operation_registry::OperationAcceptance,
             Option<Value>,
         ),
-        String,
+        (&'static str, String),
     >
     where
-        F: FnOnce() -> Result<Value, String>,
+        F: FnOnce() -> Result<Value, (&'static str, String)>,
     {
         use crate::operation_registry::OperationAcceptance;
         let (operation_id, acceptance) = self
             .inner
             .operations
             .lock()
-            .map_err(|_| "Operation registry lock poisoned".to_string())?
+            .map_err(|_| {
+                (
+                    "operation_registry_failed",
+                    "Operation registry lock poisoned".to_string(),
+                )
+            })?
             .accept(
                 scope,
                 idempotency_key,
                 command_type,
                 execution_instance_id.to_string(),
             )
-            .map_err(|error| format!("Operation rejected: {error:?}"))?;
+            .map_err(|error| {
+                (
+                    "operation_rejected",
+                    format!("Operation rejected: {error:?}"),
+                )
+            })?;
         match acceptance {
             OperationAcceptance::DuplicateCompleted => {
                 let record = self
                     .inner
                     .operations
                     .lock()
-                    .map_err(|_| "Operation registry lock poisoned".to_string())?
+                    .map_err(|_| {
+                        (
+                            "operation_registry_failed",
+                            "Operation registry lock poisoned".to_string(),
+                        )
+                    })?
                     .get(&operation_id)
-                    .map_err(|error| format!("Operation lookup rejected: {error:?}"))?
+                    .map_err(|error| {
+                        (
+                            "operation_rejected",
+                            format!("Operation lookup rejected: {error:?}"),
+                        )
+                    })?
                     .clone();
                 let terminal = record.terminal_response;
                 Ok((operation_id, acceptance, terminal))
             }
-            OperationAcceptance::DuplicatePending => Err("Operation is still pending".into()),
+            OperationAcceptance::DuplicatePending => Ok((operation_id, acceptance, None)),
             OperationAcceptance::Accepted => match operation() {
                 Ok(result) => {
                     let terminal = result.clone();
                     self.inner
                         .operations
                         .lock()
-                        .map_err(|_| "Operation registry lock poisoned".to_string())?
+                        .map_err(|_| {
+                            (
+                                "operation_registry_failed",
+                                "Operation registry lock poisoned".to_string(),
+                            )
+                        })?
                         .complete(&operation_id, terminal)
-                        .map_err(|error| format!("Cannot complete operation: {error:?}"))?;
+                        .map_err(|error| {
+                            (
+                                "operation_registry_failed",
+                                format!("Cannot complete operation: {error:?}"),
+                            )
+                        })?;
                     Ok((operation_id, acceptance, Some(result)))
                 }
                 Err(error) => {
                     if let Ok(mut registry) = self.inner.operations.lock() {
-                        let _ = registry.mark_indeterminate(&operation_id, error.clone());
+                        let _ = registry.mark_indeterminate(&operation_id, error.1.clone());
                     }
                     Err(error)
                 }
