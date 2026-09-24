@@ -21,6 +21,15 @@ describe("settings page split", () => {
     expect(document.querySelector('[data-settings-panel="models"]')).not.toBeNull();
   });
 
+  test("wires the usage sub-tabs for both shells", () => {
+    const appJs = readFileSync(join(process.cwd(), "public/app.js"), "utf8");
+    const landingJs = readFileSync(join(process.cwd(), "public/landing.js"), "utf8");
+    // A cold start renders the landing shell, so wiring only app.js leaves the
+    // Usage sub-tabs dead on the page a user actually opens first.
+    expect(appJs).toContain("setupUsageTabs(");
+    expect(landingJs).toContain("setupUsageTabs(");
+  });
+
   test("keeps Usage cost and provider quota as two tabs of one page", () => {
     const dom = new JSDOM(html, { url: "http://localhost" });
     const { document } = dom.window;

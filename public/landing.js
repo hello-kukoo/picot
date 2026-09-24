@@ -62,6 +62,7 @@ import { setupSkillsInstallTab } from "./settings/skills-install-tab.js";
 import { setupSkillsPage } from "./settings/skills-page.js";
 import { setupSkillsTabShell } from "./settings/skills-tab-shell.js";
 import { renderThinkingEffort } from "./settings/toggles.js";
+import { setupUsageTabs } from "./settings/usage-tabs.js";
 import { FOCUS_WORKSPACE_PARAM } from "./sidebar/focus-state.js";
 import { SessionSidebar } from "./sidebar/index.js";
 import { applyTheme, getCurrentTheme, themes } from "./themes.js";
@@ -762,6 +763,15 @@ let landingQuotaPanel = null;
   );
   void landingQuotaPanel.loadReports();
 }
+
+// The Usage page's in-page sub-tabs must work on the landing shell too: app.js
+// wires them for the workspace shell, but a cold start renders this document.
+setupUsageTabs({
+  onSelect: (view) => {
+    if (view === "quota") void landingQuotaPanel?.loadReports();
+    else void document.getElementById("settings-cost-dashboard")?.ensureLoaded?.();
+  },
+});
 
 // ── Skills page (discovered + install; packages sub-tab is bridge-bound) ──
 // Discovered-skills inventory rides host control ops, so the tab works at
