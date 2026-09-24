@@ -112,10 +112,14 @@ export function createBrowserTabRenderer({ tab, transport }) {
             url: selection.url,
             container: contentEl,
             onMount: (card) => {
+              // Reserve from the card's top edge to the container's bottom:
+              // the card's own bottom margin is part of the strip, and the
+              // card anchors to that edge, so the measurement is stable.
               const apply = () =>
-                void setPaneBottomInset(tab.id, card.getBoundingClientRect().height).catch(
-                  () => {},
-                );
+                void setPaneBottomInset(
+                  tab.id,
+                  contentEl.getBoundingClientRect().bottom - card.getBoundingClientRect().top,
+                ).catch(() => {});
               apply();
               // The textarea is user-resizable; keep the pane in step.
               cardObserver = new ResizeObserver(apply);

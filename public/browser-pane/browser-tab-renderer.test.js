@@ -113,13 +113,13 @@ test("a picked element opens a dialog that names its docPath", async () => {
 
 test("the composer shortens the pane instead of hiding the page", async () => {
   vi.useFakeTimers();
-  const box = (width, height) => ({
+  const box = (width, height, top = 100) => ({
     x: 0,
-    y: 100,
+    y: top,
     width,
     height,
-    top: 100,
-    bottom: 100 + height,
+    top,
+    bottom: top + height,
     left: 0,
     right: width,
   });
@@ -127,7 +127,9 @@ test("the composer shortens the pane instead of hiding the page", async () => {
   const originalRect = Element.prototype.getBoundingClientRect;
   Element.prototype.getBoundingClientRect = function () {
     if (this.classList?.contains("browser-pane-content")) return box(400, 600);
-    if (this.classList?.contains("browser-annotation-card")) return box(360, 180);
+    // The card anchors to the container's bottom edge (margin-top: auto)
+    // with a 12px bottom margin — the layout the pane must make room for.
+    if (this.classList?.contains("browser-annotation-card")) return box(360, 180, 508);
     return originalRect.call(this);
   };
   const transport = makeTransport();
@@ -156,7 +158,9 @@ test("the composer shortens the pane instead of hiding the page", async () => {
     x: 0,
     y: 100,
     width: 400,
-    height: 420,
+    // The reserved strip runs from the card's top (508) to the container's
+    // bottom (700): 192px, margins included — not the card's bare 180.
+    height: 408,
   });
 
   document.querySelector(".file-preview-dialog-button.primary").click();

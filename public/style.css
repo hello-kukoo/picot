@@ -10995,8 +10995,13 @@ button.skills-group-status:disabled {
 .browser-annotation-card {
   width: auto;
   max-width: min(560px, 100%);
-  /* Pushed to the bottom: the native pane keeps the space above it. */
-  margin: var(--space-3) auto auto;
+  /* Anchored to the bottom: the native pane keeps the space above it.
+     margin-top: auto is what does the anchoring — keep it longhand so the
+     shorthand can't silently swap the auto back onto the bottom edge. */
+  margin-top: auto;
+  margin-left: auto;
+  margin-right: auto;
+  margin-bottom: var(--space-3);
 }
 
 .browser-annotation-meta {
