@@ -201,7 +201,15 @@ function runtimeEvent(ws, event, sequence = 1) {
 }
 
 const commandFrames = (ws, type) =>
-  ws.sent.filter((frame) => frame.type === "runtime_request" && frame.command?.type === type);
+  ws.sent.filter(
+    (frame) =>
+      frame.type === "runtime_request" &&
+      frame.command?.type === type &&
+      // The picot-config bridge rides the same `prompt` command type; it is
+      // infrastructure traffic (config reads released by the readiness gate),
+      // never part of the chat flows these assertions count.
+      !String(frame.command.message ?? "").startsWith("/picot-config"),
+  );
 
 function typeIntoComposer(text) {
   const input = document.getElementById("message-input");

@@ -407,6 +407,66 @@ describe("FilePreviewPanel", () => {
     p.destroy();
   });
 
+  test("renameFilePathPrefix retargets open tabs and their rendered path", async () => {
+    const p = createPanel();
+    await p.openFile("/test/workspace/b.js");
+    // Opened last, so a.js is the active tab and its renderer is mounted.
+    await p.openFile("/test/workspace/a.js");
+
+    p.renameFilePathPrefix("/test/workspace/a.js", "/test/workspace/main.js");
+
+    expect(p.state.getTabs().map((tab) => tab.filePath)).toEqual([
+      "/test/workspace/b.js",
+      "/test/workspace/main.js",
+    ]);
+    expect(tabBar.children.length).toBe(2);
+    expect(p.state.getActiveTab().filePath).toBe("/test/workspace/main.js");
+    expect(p.currentRenderer).not.toBeNull();
+    p.destroy();
+  });
+
+  test("renameFilePathPrefix retargets a renamed directory's tabs", async () => {
+    const p = createPanel();
+    await p.openFile("/test/workspace/src/a.js");
+    await p.openFile("/test/workspace/other/b.js");
+
+    p.renameFilePathPrefix("/test/workspace/src", "/test/workspace/lib");
+
+    expect(p.state.getTabs().map((tab) => tab.filePath)).toEqual([
+      "/test/workspace/lib/a.js",
+      "/test/workspace/other/b.js",
+    ]);
+    p.destroy();
+  });
+
+  test("closeDeletedPathPrefix closes the deleted path's tabs without a dirty prompt", async () => {
+    const confirmDirty = vi.fn();
+    const p = createPanel({ confirmDirty });
+    const doomed = await p.openFile("/test/workspace/src/a.js");
+    await p.openFile("/test/workspace/other/b.js");
+    p.state.updateTab(doomed.id, {
+      content: "edited",
+      originalContent: "original",
+      dirty: true,
+    });
+
+    await p.closeDeletedPathPrefix("/test/workspace/src");
+
+    // The file is gone, so "save" is not an offer that can be honoured.
+    expect(confirmDirty).not.toHaveBeenCalled();
+    expect(p.state.getTabs().map((tab) => tab.filePath)).toEqual(["/test/workspace/other/b.js"]);
+    expect(tabBar.children.length).toBe(1);
+    p.destroy();
+  });
+
+  test("closeDeletedPathPrefix ignores a path with no tabs", async () => {
+    const p = createPanel();
+    await p.openFile("/test/workspace/a.js");
+    await p.closeDeletedPathPrefix("/test/workspace/ghost");
+    expect(p.state.getTabs()).toHaveLength(1);
+    p.destroy();
+  });
+
   test("revealWrite reloads the browser-opened absolute tab without duplicating it", async () => {
     const p = createPanel();
     // This is what a workspace browser open produces: an absolute normalized id.

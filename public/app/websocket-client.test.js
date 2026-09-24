@@ -622,6 +622,42 @@ describe("WebSocketClient broker routing", () => {
     await expect(pending).resolves.toEqual({});
   });
 
+  test("runtime_response controlResponse carries the request's bound target", async () => {
+    // The wire reply has no target; the pending entry remembers the triple the
+    // request was bound to. The config readiness gate keys off this re-attached
+    // triple to treat a successful round-trip as a liveness proof for that
+    // exact runtime — never for whatever runtime happens to be routed now.
+    const sent = [];
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
+    client.ws = {
+      readyState: WebSocket.OPEN,
+      send: (message) => sent.push(JSON.parse(message)),
+    };
+    client.setRoutingContext({
+      workspaceId: "workspace-a",
+      sessionId: "session-a",
+      instanceId: "instance-a",
+    });
+    const boundTarget = {
+      workspaceId: "workspace-a",
+      sessionId: "session-b",
+      instanceId: "instance-b",
+    };
+    let observed = null;
+    client.addEventListener("controlResponse", (e) => {
+      observed = e.detail;
+    });
+
+    const pending = client.sendRuntime({ type: "get_state" }, boundTarget);
+    client.handleMessage({
+      type: "runtime_response",
+      requestId: sent[0].requestId,
+      response: { success: true, data: { sessionFile: "/pi/b.jsonl" } },
+    });
+    await expect(pending).resolves.toEqual({ sessionFile: "/pi/b.jsonl" });
+    expect(observed).toMatchObject({ type: "runtime_response", target: boundTarget });
+  });
+
   test("sendRuntime correlates the v2 runtime reply and yields its data", async () => {
     const sent = [];
     const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");

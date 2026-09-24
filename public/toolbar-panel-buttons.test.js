@@ -48,7 +48,8 @@ test("sidebar action buttons share the main panel toggle visual contract", () =>
 
 test("File panel actions share the same scoped button treatment", () => {
   for (const id of [
-    "file-sidebar-up",
+    "file-sidebar-new-file",
+    "file-sidebar-new-folder",
     "file-sidebar-refresh",
     "file-sidebar-toggle-hidden",
     "info-panel-refresh",
@@ -61,7 +62,8 @@ test("File panel actions share the same scoped button treatment", () => {
     expect(button?.querySelector("svg")).toBeNull();
   }
   expect(appJs).toContain('[fileSidebarClose, "x", 16]');
-  expect(appJs).toContain('[fileSidebarUp, "arrow-up", 16]');
+  expect(appJs).toContain('[fileSidebarNewFile, "file-plus", 16]');
+  expect(appJs).toContain('[fileSidebarNewFolder, "folder-plus", 16]');
   expect(appJs).toContain('[fileSidebarRefresh, "refresh-cw", 16]');
   expect(appJs).toContain('[fileSidebarToggleHidden, "eye", 16]');
   expect(appJs).toContain('[infoPanelRefresh, "refresh-cw", 16]');

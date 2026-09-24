@@ -509,6 +509,7 @@ export class WebSocketClient extends EventTarget {
           return;
         }
         const effectiveTimeout = typeof timeoutMs === "number" ? timeoutMs : this.controlTimeoutMs;
+        const envelope = envelopeFor(requestId);
         const entry = {
           resolve: (payload) => {
             if (rejectOnFailure && payload && payload.success === false) {
@@ -520,6 +521,9 @@ export class WebSocketClient extends EventTarget {
           reject,
           onProgress: null,
           timer: null,
+          // Remember which runtime triple a runtime_request was bound to;
+          // handleMessage re-attaches it to the controlResponse detail.
+          target: envelope.type === "runtime_request" ? envelope.target : null,
         };
         if (effectiveTimeout > 0) {
           entry.timer = setTimeout(() => {
@@ -531,7 +535,7 @@ export class WebSocketClient extends EventTarget {
         }
         this.pendingControls.set(requestId, entry);
         try {
-          this.ws.send(JSON.stringify(envelopeFor(requestId)));
+          this.ws.send(JSON.stringify(envelope));
         } catch (err) {
           if (entry.timer) clearTimeout(entry.timer);
           this.pendingControls.delete(requestId);
@@ -644,6 +648,12 @@ export class WebSocketClient extends EventTarget {
         const { type, requestId, ok, ...payload } = message;
         normalized = { ...message, result: payload };
       }
+      // Runtime replies carry no target on the wire; the pending entry
+      // remembers the triple the request was bound to. Re-attach it so
+      // controlResponse consumers can tell a foreground round-trip from a
+      // bound-to-another-runtime one.
+      const pendingEntry = this.pendingControls.get(message.requestId);
+      if (pendingEntry?.target) normalized = { ...normalized, target: pendingEntry.target };
       this.resolveControl(normalized);
       this.dispatchEvent(new CustomEvent("controlResponse", { detail: normalized }));
       return;

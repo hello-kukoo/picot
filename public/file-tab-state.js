@@ -197,8 +197,51 @@ export class FileTabState {
   }
 
   /**
-   * Subscribe to state changes. Returns an unsubscribe function.
+   * Move every file tab that lives at or under `oldPath` to the matching
+   * position under `newPath`. Used when the Files panel renames a file or a
+   * directory: the bytes are unchanged, only the path is. Returns how many
+   * tabs were retargeted.
    */
+  renamePathPrefix(oldPath, newPath) {
+    const from = this._normalizePath(oldPath);
+    const to = this._normalizePath(newPath);
+    if (!from || !to || from === to) return 0;
+    const rewrittenIds = new Map();
+    this.tabs = this.tabs.map((tab) => {
+      if (tab.kind !== "file") return tab;
+      if (tab.filePath !== from && !tab.filePath.startsWith(`${from}/`)) return tab;
+      const nextPath = `${to}${tab.filePath.slice(from.length)}`;
+      const nextId = `file:${nextPath}`;
+      rewrittenIds.set(tab.id, nextId);
+      return {
+        ...tab,
+        id: nextId,
+        filePath: nextPath,
+        fileName: basenameLocalPath(nextPath) || nextPath,
+      };
+    });
+    if (rewrittenIds.size === 0) return 0;
+    // The active tab is a rewritten tab too; its id changed with its path.
+    this.activeTabId = rewrittenIds.get(this.activeTabId) ?? this.activeTabId;
+    this.persist();
+    this._notify();
+    return rewrittenIds.size;
+  }
+
+  /**
+   * Close every file tab at or under `path`, for a path that no longer exists.
+   */
+  closePathPrefix(path) {
+    const prefix = this._normalizePath(path);
+    if (!prefix) return 0;
+    const doomed = this.tabs.filter(
+      (tab) =>
+        tab.kind === "file" && (tab.filePath === prefix || tab.filePath.startsWith(`${prefix}/`)),
+    );
+    for (const tab of doomed) this.closeTab(tab.id);
+    return doomed.length;
+  }
+
   /**
    * Open a browser tab (spec 2026-09-22) pointing at `url`. For office
    * files, `file` is the workspace file the watch server renders; the URL
@@ -246,6 +289,7 @@ export class FileTabState {
     return tab;
   }
 
+  /** Subscribe to state changes. Returns an unsubscribe function. */
   subscribe(listener) {
     this._listeners.add(listener);
     return () => this._listeners.delete(listener);

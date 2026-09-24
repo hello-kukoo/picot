@@ -116,6 +116,53 @@ WindowOwnerRegistry
 - `strip_prefix` 包含性（分隔符安全，兄弟前缀拒绝）
 - atomic write + mtime conflict 检测
 
+### 工作区文件变更（2026-09-23 Files 面板树）
+
+Files 面板的新建、重命名、删除走**同一条** host 控制数据面（`file_write` 的邻居），
+不新增通用 shell 或任意路径 API：
+
+| operation | 输入 | 成功结果 | 行为 |
+| --- | --- | --- | --- |
+| `file_create` | `parentPath`、`name`、`kind`、`idempotencyKey` | `path`、`kind` | 新建空文件或空目录；目标必须不存在 |
+| `file_rename` | `path`、`name`、`idempotencyKey` | `path` | 同父目录内改名；只接受 basename |
+| `file_delete` | `path`、`idempotencyKey` | `deletedPath` | 删除文件或**空目录** |
+
+不变量：
+
+- 门禁与 `file_write` 一致：Registered desktop owner + workspace + generation，
+  走 `operation_scope(context, "workspace-files")` 与 mutation registry；
+  **不接 LAN、relay、browser child webview 或 Pi runtime 直连**
+- 路径解析走 canonicalize + `strip_prefix`；拒绝绝对路径、`..`、NUL、空名、
+  含分隔符的 name、跨 workspace path。`parentPath` 的 `"."` 就是 workspace root
+- `file_create` 用独占创建（`create_new`，unix mode 0600），**绝不覆盖**
+- `file_delete` 只 `remove_dir`，非空目录返回 `directory_not_empty`：
+  **不递归、不回收站、不 undo**——这是安全边界，不是待补的缺口
+- 成功响应只含 workspace 相对路径；错误响应只含 host 自撰文案，不回显绝对路径
+  或 OS error
+- 前端全程 workspace 相对：树键、`list_files` 参数、`parentPath` 同一套拼写
+
+### 列举可达性（mount / share 抖动）
+
+`list_files` 是唯一区分「暂时不可达」与「已删除」的数据面 op。workspace root
+或其子目录的 transient I/O（`ENOENT`、`ENOTCONN`、`ESTALE`、`EIO`、host-down）
+返回 `temporarily_unavailable`，而不是 `file_access_failed` / `not_a_directory`：
+语义是「刚刚还在，现在不在」——外接卷未挂载、网络 share 掉线——**永不作为删除
+信号**。
+
+WebView 侧契约（spec 2026-09-23 §6.2）：保留 listing cache、expanded 状态与已打开
+的预览 tab，只显示 stale + 重试；只有同一 workspace root **连续 3 次** root
+listing 失败（计数仅在内存，任何一次 list 成功归零）才丢弃该 workspace 的 cache
+与持久化展开状态。变更类 op 的 ENOENT 仍返回 `file_not_found`——只有树持有
+「一次误判就丢弃」的缓存。
+
+### Files 面板树契约
+
+- 只请求 root；展开某目录时才请求该目录，listing 缓存在内存直到显式刷新
+- 展开状态按 canonical workspace root 存浏览器 `localStorage`（不落 DB），
+  写入与恢复共用深度上限 5（root 为深度 0）
+- 隐藏项过滤在渲染层：host 始终返回全量 listing，切换显示隐藏不产生 I/O
+- 变更成功后只失效受影响的父目录 listing，不做全树 reload
+
 **列举 ≠ 读写（2026-09-19 @ 提及宽根）：** `file_mentions` 的**搜索列举**可按
 用户前缀越出 workspace（desktop capability 专属 op；spec
 `2026-09-19-file-mention-paths-design.md` 显式接受——与 Pi TUI 同机同用户语义
@@ -298,7 +345,7 @@ Pi 以 `~/.pi/agent/trust.json`（键为 canonical 路径，值为 true/false/nu
 
 1. **Loopback 默认**：HostServer 默认只绑 loopback；`mobile.lanAccessEnabled` 显式开启后才绑全部网卡（D4 移动接入；缺省一律 loopback，配对 token 仅桌面端可铸造）
 2. **Owner capability**：每个桌面窗口持唯一 32 字节随机 capability
-3. **Workspace containment**：所有文件读写限制在注册根目录内；`file_mentions` 的列举按上表根分级可越出（仅 desktop，读写不受影响）
+3. **Workspace containment**：所有文件读写限制在注册根目录内；`file_create`/`file_rename`/`file_delete` 同样只在注册根内生效，且受 owner+workspace+generation 门禁；`file_mentions` 的列举按上表根分级可越出（仅 desktop，读写不受影响）
 4. **Generation 失效**：workspace transition 使旧代授权、操作与导出令牌全部失效；旧代 runtime 进程保留存活但不可达（授权闸门拒收），至窗口销毁/owner 撤销/app 退出、显式 restart（`restart_runtime` 控制面命令，Registered owner 经 Settings 触发）或返回 rebind
 5. **跨 workspace 事件可见性**（2026-09-20 拍板）：持有 desktop capability 的本机窗口可订阅任意 live runtime 的全部非阻塞事件（消息正文、tool 输出、widget、notify）；阻塞式 `extension_ui_request`（select/confirm/input/editor）仍只投 `authorize_target` 通过的订阅者。desktop capability 只由原生窗口 owner registry 铸发，LAN 配对设备（Browser 类客户端）拿不到。
 6. **匿名遥测**：仅 allowlisted 粗粒度字段，无 per-user/per-token 维度

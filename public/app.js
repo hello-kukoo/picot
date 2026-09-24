@@ -9,7 +9,6 @@ import { createComposerDraftStore } from "./app/composer-draft-store.js";
 import { resolveComposerSessionIdentity } from "./app/composer-session-identity.js";
 import { installHostOriginFetch } from "./app/host-origin.js";
 import { createPromptDelivery } from "./app/prompt-delivery.js";
-import { createSessionViewCache, viewMatchesStamp } from "./app/session-view-cache.js";
 import { StateManager } from "./app/state.js";
 import { initTransport } from "./app/transport.js";
 import { createAppUpdater } from "./app/updater.js";
@@ -186,7 +185,7 @@ import {
   readCachedSidebarProjects,
   snapshotNavState,
 } from "./workspace/nav-state-cache.js";
-import { relativeLocalPath } from "./workspace/path-utils.js";
+import { normalizeLocalPath } from "./workspace/path-utils.js";
 import {
   createWorkspaceActionsController,
   populateAppLogo as sharedPopulateAppLogo,
@@ -813,17 +812,8 @@ const sessionUiState = new SessionUiStateStore({
   },
 });
 let activeUiSessionFile = null;
-// Session-resident views Phase A: per-session cached entries + view state,
-// enabling no-op switch-back without snapshot/disk reads.
-const sessionViewCache = createSessionViewCache();
-// File stamps from the sidebar row the user actually clicked (the row IS the
-// authoritative stamp source); fallback when the row walk finds no project.
-const selectStamps = new Map();
 // One-shot gate-reveal seed consumed by the next renderSessionHistory.
-let pendingRevealRestore = null;
-// True while a cached view is being re-rendered: the restored scroll target
-// must win over the post-render bottom anchor.
-let restoringCachedView = false;
+const pendingRevealRestore = null;
 // Monotonic counter bumped whenever restoreSessionUiState binds a different
 // session. applySessionUiProfile captures it before each await and bails when
 // the token changes, so a profile restore that resumes after the user has
@@ -1142,7 +1132,8 @@ const fileSidebar = document.getElementById("file-sidebar");
 const fileSidebarToggle = document.getElementById("file-sidebar-toggle");
 setButtonIcon(fileSidebarToggle, "panel-right", { size: 16 });
 const fileSidebarClose = document.getElementById("file-sidebar-close");
-const fileSidebarUp = document.getElementById("file-sidebar-up");
+const fileSidebarNewFile = document.getElementById("file-sidebar-new-file");
+const fileSidebarNewFolder = document.getElementById("file-sidebar-new-folder");
 const fileSidebarRefresh = document.getElementById("file-sidebar-refresh");
 const fileSidebarToggleHidden = document.getElementById("file-sidebar-toggle-hidden");
 const infoPanelRefresh = document.getElementById("info-panel-refresh");
@@ -1150,7 +1141,8 @@ const gitPanelRefresh = document.getElementById("git-panel-refresh");
 const fileSidebarFinder = document.getElementById("file-sidebar-finder");
 for (const [button, iconName, size] of [
   [fileSidebarClose, "x", 16],
-  [fileSidebarUp, "arrow-up", 16],
+  [fileSidebarNewFile, "file-plus", 16],
+  [fileSidebarNewFolder, "folder-plus", 16],
   [fileSidebarRefresh, "refresh-cw", 16],
   [fileSidebarToggleHidden, "eye", 16],
   [infoPanelRefresh, "refresh-cw", 16],
@@ -1208,20 +1200,66 @@ const gitPanel = new GitPanel({
 const syncFileSidebarHiddenToggle = (showHidden) => {
   fileSidebarToggleHidden?.setAttribute("aria-pressed", String(showHidden));
 };
+// New file / new folder are honest about why they are unavailable: no project
+// open, a mutation already in flight, or a host without the write data plane.
+const fileBrowserActionButtons = [
+  [fileSidebarNewFile, "files.newFile"],
+  [fileSidebarNewFolder, "files.newFolder"],
+];
+const syncFileBrowserMutability = (canMutate) => {
+  for (const [button, labelKey] of fileBrowserActionButtons) {
+    if (!button) continue;
+    button.disabled = !canMutate;
+    // The tooltip carries the reason while the button is dead, and goes back to
+    // naming the action when it is live.
+    button.title = t(canMutate ? labelKey : "files.mutationsUnavailable");
+  }
+};
+
+function absoluteWorkspacePath(relativePath) {
+  const root = normalizeLocalPath(getCurrentWorkspacePath());
+  if (!root) return relativePath;
+  return relativePath === "." ? root : `${root.replace(/\/$/, "")}/${relativePath}`;
+}
+
+// Every workspace-file mutation crosses one boundary: the host does the
+// filesystem work, the preview panel retargets its own tabs, and the tree only
+// invalidates its own listings.
+const workspaceFileMutations = {
+  createEntry: (parentPath, name, kind) => transport.fileCreate(parentPath, name, kind),
+  renameEntry: async (path, name) => {
+    const result = await transport.fileRename(path, name);
+    if (typeof result?.path === "string") {
+      filePreviewPanel.renameFilePathPrefix(
+        absoluteWorkspacePath(path),
+        absoluteWorkspacePath(result.path),
+      );
+    }
+    return result;
+  },
+  deleteEntry: async (path) => {
+    const result = await transport.fileDelete(path);
+    await filePreviewPanel.closeDeletedPathPrefix(absoluteWorkspacePath(path));
+    return result;
+  },
+};
 const fileBrowser = new FileBrowser(fileList, fileSidebarPath, messageInput, {
   onFileSelect: (filePath, metadata) => {
     void filePreviewPanel.openFile(filePath, metadata);
   },
   onShowHiddenChange: syncFileSidebarHiddenToggle,
   openPath: (filePath) => transport.openInApp(filePath),
-  listFiles: (path) => {
-    const requestPath = relativeLocalPath(
-      path || fileBrowser.workspaceRoot,
-      fileBrowser.workspaceRoot,
-    );
-    return transport.listFiles(requestPath ?? "");
-  },
+  // Paths cross this boundary workspace-relative: the tree's keys, the host's
+  // `list_files` argument and `file_create`'s parentPath are all the same
+  // spelling, so no side re-derives the other's paths.
+  listFiles: (path) => transport.listFiles(path),
+  ...workspaceFileMutations,
+  writesAvailable: () => nativeAvailable(),
+  onMutabilityChange: syncFileBrowserMutability,
 });
+// i18n re-applies `data-i18n-title` on a locale change, which would overwrite
+// the disabled reason; re-assert it.
+onLocaleChange(() => syncFileBrowserMutability(fileBrowser.canMutate()));
 setupResizablePanel(fileSidebar, {
   storageKey: "pi-studio-file-sidebar-width",
   defaultWidth: 360,
@@ -1263,7 +1301,7 @@ function cancelFileBrowserRefresh() {
 }
 
 function scheduleFileBrowserRefresh() {
-  if (!fileBrowser.currentPath) return;
+  if (!fileBrowser.hasListing()) return;
   if (
     shouldSuppressFileBrowserRefresh({
       pendingWorkspace: pendingFileBrowserWorkspace,
@@ -1276,7 +1314,7 @@ function scheduleFileBrowserRefresh() {
   cancelFileBrowserRefresh();
   fileBrowserRefreshTimer = setTimeout(() => {
     fileBrowserRefreshTimer = null;
-    if (!fileBrowser.currentPath) return;
+    if (!fileBrowser.hasListing()) return;
     if (
       shouldSuppressFileBrowserRefresh({
         pendingWorkspace: pendingFileBrowserWorkspace,
@@ -1920,7 +1958,8 @@ function setFileSidebarTab(tab) {
   fileSidebarPath.classList.toggle("hidden", showInfo || showGit);
   fileList.classList.toggle("hidden", showInfo || showGit);
   gitPanelElement.classList.toggle("hidden", !showGit);
-  fileSidebarUp.classList.toggle("hidden", showInfo || showGit);
+  fileSidebarNewFile.classList.toggle("hidden", showInfo || showGit);
+  fileSidebarNewFolder.classList.toggle("hidden", showInfo || showGit);
   fileSidebarRefresh.classList.toggle("hidden", showInfo || showGit);
   fileSidebarToggleHidden.classList.toggle("hidden", showInfo || showGit);
   infoPanelRefresh.classList.toggle("hidden", !showInfo);
@@ -2028,14 +2067,13 @@ fileSidebarClose.addEventListener("click", () => {
   localStorage.setItem("pi-studio-file-sidebar", "closed");
 });
 
-fileSidebarUp.addEventListener("click", () => {
-  const parent = fileBrowser.getParentPath();
-  if (parent) fileBrowser.load(parent);
-});
+fileSidebarNewFile?.addEventListener("click", () => fileBrowser.beginCreate("file"));
+fileSidebarNewFolder?.addEventListener("click", () => fileBrowser.beginCreate("directory"));
 
 document.getElementById("file-sidebar-finder").addEventListener("click", () => {
-  if (fileBrowser.currentPath) {
-    transport.openInApp(fileBrowser.currentPath).catch((error) => {
+  const target = fileBrowser.getRevealTarget();
+  if (target) {
+    transport.openInApp(target).catch((error) => {
       console.error("[App] reveal in file manager failed:", error);
     });
   }
@@ -2667,6 +2705,27 @@ wsClient.addEventListener("runtimeEvent", (e) => {
   });
 });
 
+// Any successful runtime round-trip to the CURRENT triple is the same
+// liveness proof a foreground snapshot provides. Snapshots remain the
+// primary opener, but rare orderings can strand a live runtime unproven —
+// a snapshot classified background after a rapid switch, a restarted
+// runtime whose flow never re-snapshots — and every config call then dies
+// as "timed out waiting for runtime". Strict full-triple match: a reply
+// bound to another runtime never opens this gate.
+wsClient.addEventListener("controlResponse", (e) => {
+  const detail = e.detail || {};
+  if (detail.type !== "runtime_response" || detail.ok === false || !detail.target) return;
+  const current = wsClient.getRuntimeTarget();
+  if (
+    current &&
+    detail.target.workspaceId === current.workspaceId &&
+    detail.target.sessionId === current.sessionId &&
+    (detail.target.instanceId ?? "") === (current.instanceId ?? "")
+  ) {
+    configReadiness.noteForegroundSnapshot("runtime-response");
+  }
+});
+
 wsClient.addEventListener("runtimeSnapshot", (e) => {
   const frame = e.detail;
   const snapshotState = frame?.state || {};
@@ -2850,21 +2909,6 @@ function handleBackgroundRPCEvent(sessionFile, event, runtimeId) {
     }
     case "message_end":
       sidebar.markUnread(sessionFile);
-      // Phase A: keep a cached (background) session's entries current so the
-      // switch-back no-op serves fresh content without re-reading the file.
-      if (sessionFile && sessionFile !== activeUiSessionFile) {
-        sessionViewCache.appendMessage(sessionFile, event.message, event.entryId);
-      }
-      break;
-    case "compaction_end":
-      // A background compaction rewrote the session file: cached entries are
-      // structurally stale (context replaced), drop them.
-      sessionViewCache.invalidate(sessionFile);
-      break;
-    case "session_tree":
-      // The background session's active leaf moved: the cached render path
-      // no longer matches; invalidate so the next visit re-syncs.
-      sessionViewCache.invalidate(sessionFile);
       break;
     case "tool_execution_start":
       // ask_user_question in a background session parks its card state; the
@@ -5437,49 +5481,7 @@ function handleSessionSelect(session, project) {
   return run;
 }
 
-function renderCachedSessionView(session, cachedView) {
-  const streaming = sidebar.isStreaming(session.filePath);
-  state.setStreaming(streaming);
-  showTypingIndicator(streaming);
-  sidebar.setStreaming(session.filePath, streaming);
-  pendingRevealRestore = {
-    sessionKey: session.filePath,
-    count: cachedView.revealedCount,
-  };
-  restoringCachedView = true;
-  try {
-    renderTranscriptEntries(cachedView.entries, { leafId: cachedView.leafId });
-  } finally {
-    restoringCachedView = false;
-  }
-  pendingRevealRestore = null;
-  if (typeof cachedView.scrollTop === "number" && cachedView.scrollTop > 0) {
-    const restoreScroll = cachedView.scrollTop;
-    requestAnimationFrame(() => {
-      if (historyGateKey() === session.filePath) {
-        messagesContainer.scrollTop = restoreScroll;
-      }
-    });
-  }
-}
-
 async function handleSessionSelectImpl(session, project) {
-  // Phase A: capture the outgoing session's live view state before any
-  // rebinding, so a later switch-back restores the exact reading position.
-  if (activeUiSessionFile) {
-    sessionViewCache.captureLeave(activeUiSessionFile, {
-      scrollTop: messagesContainer.scrollTop,
-      revealedCount: Number.isFinite(historyGate?.revealedCount) ? historyGate.revealedCount : null,
-      stamp: sidebarSessionStamp(activeUiSessionFile),
-    });
-  }
-  if (session?.filePath) {
-    selectStamps.set(session.filePath, {
-      mtimeMs: Number(session.mtime) || null,
-      sizeBytes: typeof session.sizeBytes === "number" ? session.sizeBytes : null,
-    });
-    while (selectStamps.size > 20) selectStamps.delete(selectStamps.keys().next().value);
-  }
   logSessionRoute("select:start", {
     selectedSession: session?.filePath,
     projectPath: project?.path,
@@ -5550,23 +5552,15 @@ async function handleSessionSelectImpl(session, project) {
     updateWorkspaceIndicator(foregroundWorkspacePath);
   }
 
-  const cachedView = sessionViewCache.get(session.filePath);
-  const stamp = {
-    mtimeMs: Number(session.mtime) || null,
-    sizeBytes: typeof session.sizeBytes === "number" ? session.sizeBytes : null,
-  };
-  const cachedViewValid = cachedView && !sidebar.searchQuery && viewMatchesStamp(cachedView, stamp);
-  const cachedViewRenderedEarly =
-    nativeAvailable() &&
-    Boolean(cachedViewValid) &&
-    selectedWorkspacePath === fileBrowserWorkspacePath;
-  if (cachedViewRenderedEarly) {
-    logSessionRoute("select:cache-render-early", { selectedSession: session.filePath });
-    renderCachedSessionView(session, cachedView);
-  }
   // Native transitions above navigate to a host-origin workspace route. The
   // remaining path is browser/dev compatibility only.
-  if (session.filePath) {
+  // Must not run on the native path: it names the session by its jsonl PATH,
+  // while the native path below adopts the host-prepared target whose identity
+  // is the runtime session id. The path form left a window in which a config
+  // call keyed the readiness gate on an identity no opener ever matches — the
+  // call then died as "Runtime target changed before configuration was sent" or
+  // burned the gateway's 30s timeout, leaving the model list empty.
+  if (!nativeAvailable() && session.filePath) {
     wsClient.setRoutingContext({
       workspaceId: `workspace:${selectedWorkspacePath || getCurrentWorkspacePath() || "unknown"}`,
       sessionId: session.filePath,
@@ -5613,40 +5607,6 @@ async function handleSessionSelectImpl(session, project) {
       viewingActiveSession = true;
       updateMirrorInputState();
       wsClient.subscribeRuntimeTarget(target);
-      // Phase A no-op switch-back: the cached view is current (event-stream
-      // trusted, or the sidebar row's mtime/size stamp still matches), so
-      // skip both the snapshot request and the disk history fetch and
-      // re-render from cache with the stored gate/scroll state.
-      if (cachedViewValid) {
-        logSessionRoute("select:cache-hit", { selectedSession: session.filePath });
-        pendingMirrorSessionFile = null; // no snapshot is coming to consume it
-        if (!cachedViewRenderedEarly) renderCachedSessionView(session, cachedView);
-        void applySessionUiProfile(session.filePath);
-        // The cached render skipped the snapshot, so no foreground snapshot
-        // frame will ever arrive for this target — and that frame is the
-        // config readiness gate's only opener. After this switch every
-        // ConfigGateway call (settings Models page, model visibility filter)
-        // would gate 30s and die as "timed out waiting for runtime". Probe
-        // get_state instead: its reply is a control response, never a
-        // snapshot frame, so the cached render/scroll/gate state stay
-        // untouched, and a runtime that is still booting answers once its
-        // extension host is up. The routing re-check guards a reply landing
-        // after yet another switch moved the target on (same rule as the
-        // background-snapshot check in the runtimeSnapshot handler).
-        wsClient
-          .sendRuntime({ type: "get_state" }, target)
-          .then(() => {
-            const current = wsClient.getRuntimeTarget();
-            if (
-              current?.workspaceId === target.workspaceId &&
-              current?.sessionId === target.sessionId
-            ) {
-              configReadiness.noteForegroundSnapshot();
-            }
-          })
-          .catch(() => {});
-        return;
-      }
       wsClient.requestRuntimeSnapshot(target);
       // Upstream switch hydration: fetch the session file in parallel with
       // the snapshot; whichever lands first paints, and the snapshot render
@@ -5996,11 +5956,10 @@ const sessionDebug = {
 };
 globalThis.__picotSessionDebug = sessionDebug;
 
-// Test/inspection seam for the Phase A session view cache and the select
-// path that consumes it (same pattern as __picotSessionDebug).
+// Test/inspection seam for the session select path and the config readiness
+// gate it feeds (same pattern as __picotSessionDebug).
 globalThis.__picotSessionView = {
   select: handleSessionSelect,
-  cache: sessionViewCache,
   configReady: () => configReadiness.isReady(),
 };
 
@@ -6166,37 +6125,6 @@ let historyGate = null;
 
 function historyGateKey() {
   return activeUiSessionFile ?? mirrorActiveSessionFile ?? "transient";
-}
-
-/** Sidebar row stamp (mtime + size) for one session file, if a row exists. */
-function sidebarSessionStamp(sessionFile) {
-  for (const project of sidebar.projects || []) {
-    const row = (project.sessions || []).find((session) => session?.filePath === sessionFile);
-    if (row) {
-      return {
-        mtimeMs: Number(row.mtime) || null,
-        sizeBytes: typeof row.sizeBytes === "number" ? row.sizeBytes : null,
-      };
-    }
-  }
-  return null;
-}
-
-/** Cache the just-rendered canonical view of the active session (Phase A). */
-function captureSessionView(entries, leafId) {
-  const sessionFile = historyGateKey();
-  if (!sessionFile || sessionFile === "transient") return;
-  if (sidebar.searchQuery) return; // search renders are not canonical views
-  const previous = sessionViewCache.get(sessionFile);
-  sessionViewCache.put(sessionFile, {
-    entries,
-    leafId: leafId ?? null,
-    revealedCount: historyGate?.revealedCount ?? null,
-    scrollTop: previous?.scrollTop ?? null,
-    stamp:
-      sidebarSessionStamp(sessionFile) ?? selectStamps.get(sessionFile) ?? previous?.stamp ?? null,
-    trusted: previous?.trusted ?? false,
-  });
 }
 
 function buildHistoryGateControl({ remaining, onOlder, onAll }) {
@@ -6596,10 +6524,6 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
     // The gate re-applies on the next plain render (spec P2).
     historyGate.forceReset = true;
   }
-  // Cache the canonical view after every plain (non-search) render so a
-  // switch-back can restore it without re-reading the session file.
-  if (!searchRender) captureSessionView(entries, leafId);
-
   toolCardCount = toolCardRenderer.toolCards.size;
   toolResultCount = toolResults.size;
   console.log(
@@ -6629,7 +6553,7 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
   fetchContextWindow();
 
   anchorHistoryToBottom(document.getElementById("messages"), {
-    preserveScrollTarget: Boolean(searchQuery) || restoringCachedView,
+    preserveScrollTarget: Boolean(searchQuery),
   });
 }
 

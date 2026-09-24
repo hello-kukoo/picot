@@ -130,6 +130,38 @@ test("oauth subscribe defers until the runtime exists", async () => {
   expect(events[0]).toEqual({ event: { type: "started" } });
 });
 
+test("oauth command responses resolve the oauth gateway, not the config gateway", async () => {
+  const { runtime, wsClient } = makeHarness();
+  await runtime.ensure();
+  const pending = runtime.oauthGateway.command({ type: "get_oauth_login_capabilities" });
+  await vi.advanceTimersByTimeAsync(5);
+  // The command left as a /picot-config prompt with an oa- request id; the
+  // bridge answers command responses as __picotConfig frames (only login
+  // events stream as __picotOauth).
+  const send = wsClient.ephemeralSends.at(-1);
+  expect(send?.payload?.type).toBe("prompt");
+  const idMatch = send?.payload?.message?.match(/"id":"(oa-[^"]+)"/);
+  expect(idMatch).toBeTruthy();
+  wsClient.dispatchEvent(
+    new CustomEvent("ephemeralEvent", {
+      detail: {
+        payload: {
+          type: "extension_ui_request",
+          message: JSON.stringify({
+            __picotConfig: idMatch[1],
+            ok: true,
+            data: { providers: [{ providerId: "openai-codex", deviceCode: true }] },
+          }),
+        },
+      },
+    }),
+  );
+  await expect(pending).resolves.toEqual({
+    success: true,
+    data: { providers: [{ providerId: "openai-codex", deviceCode: true }] },
+  });
+});
+
 test("a failed ephemeral command reports the host error instead of timing out", async () => {
   const { runtime, wsClient } = makeHarness();
   await runtime.ensure();

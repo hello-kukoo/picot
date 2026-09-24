@@ -941,6 +941,47 @@ export class FilePreviewPanel {
     return true;
   }
 
+  /**
+   * Retarget file tabs after the Files panel renamed `oldPath` to `newPath`.
+   *
+   * The bytes are the same file under a new name, so tabs are rewritten in
+   * place: closing and reopening would drop the scroll position, the view mode,
+   * and any unsaved edit that is still valid.
+   */
+  renameFilePathPrefix(oldPath, newPath) {
+    if (this.state.renamePathPrefix(oldPath, newPath) === 0) return;
+    const active = this.state.getActiveTab();
+    if (active?.kind === "file" && this.activeContent?.kind === "file") {
+      this.activeContent = { kind: "file", id: active.id };
+      // The mounted renderer captured the old path; remount so a later save
+      // writes to the file the user is actually looking at.
+      void this._mountRenderer(active);
+    }
+    this._renderTabBar();
+    this._updateControlButtons();
+  }
+
+  /**
+   * Close every file tab at or under `path`, after the Files panel deleted it.
+   *
+   * No dirty prompt: the file is gone, so "save" is not an offer we can honour.
+   * Discarding is the only truthful outcome.
+   */
+  async closeDeletedPathPrefix(path) {
+    const prefix = normalizeLocalPath(path);
+    if (!prefix) return;
+    const doomed = this.state
+      .getTabs()
+      .filter(
+        (tab) =>
+          tab.kind === "file" && (tab.filePath === prefix || tab.filePath.startsWith(`${prefix}/`)),
+      );
+    for (const tab of doomed) {
+      if (tab.dirty) this.state.updateTab(tab.id, { dirty: false });
+      await this._closeTab(tab.id);
+    }
+  }
+
   async _closeTab(tabId) {
     const tab = this.state.getTab(tabId);
     if (!tab) return false;

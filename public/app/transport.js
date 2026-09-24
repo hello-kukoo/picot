@@ -323,6 +323,34 @@ export class WsTransport {
     });
   }
 
+  // Single-item workspace-file mutations (Files panel). Each carries its own
+  // idempotency key so a double-submit replays instead of racing.
+
+  /** `parentPath` is workspace-relative; `.` is the workspace root. */
+  fileCreate(parentPath, name, kind) {
+    return this.wsClient.sendData("file_create", {
+      parentPath,
+      name,
+      kind,
+      idempotencyKey: `ui-file-create-${crypto.randomUUID?.() || Date.now()}`,
+    });
+  }
+
+  fileRename(path, name) {
+    return this.wsClient.sendData("file_rename", {
+      path,
+      name,
+      idempotencyKey: `ui-file-rename-${crypto.randomUUID?.() || Date.now()}`,
+    });
+  }
+
+  fileDelete(path) {
+    return this.wsClient.sendData("file_delete", {
+      path,
+      idempotencyKey: `ui-file-delete-${crypto.randomUUID?.() || Date.now()}`,
+    });
+  }
+
   fileRawUrl(path) {
     const query = new URLSearchParams({
       workspaceId: this.wsClient.workspaceId || "",

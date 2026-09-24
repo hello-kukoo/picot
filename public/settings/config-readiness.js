@@ -25,9 +25,11 @@ export function createConfigReadiness({ targetKeyOf }) {
   // routing has already moved past (ConfigGateway bounds the gate wait with
   // its own timeout, but an explicit rejection reports the real cause —
   // the routing moved on — instead of a generic timeout).
-  function noteForegroundSnapshot() {
+  function noteForegroundSnapshot(source = "snapshot") {
     const key = targetKeyOf();
     if (!key) return;
+    // Log only real transitions: one line per adopted target, not per event.
+    if (readyKey !== key) console.debug("[CONFIG-READY] gate opened via", source);
     readyKey = key;
     for (const [waiterKey, waiter] of [...waiters]) {
       waiters.delete(waiterKey);

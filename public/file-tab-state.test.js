@@ -114,7 +114,100 @@ describe("FileTabState", () => {
     });
   });
 
+  describe("renamePathPrefix", () => {
+    test("retargets a renamed file and its active tab id", () => {
+      const state = new FileTabState({ storage });
+      state.load("/workspace/project");
+      state.openFile("/workspace/project/a.js");
+      state.openFile("/workspace/project/b.js");
+      state.selectTab("file:/workspace/project/a.js");
+
+      expect(state.renamePathPrefix("/workspace/project/a.js", "/workspace/project/main.js")).toBe(
+        1,
+      );
+
+      expect(state.getTabs().map((tab) => tab.filePath)).toEqual([
+        "/workspace/project/main.js",
+        "/workspace/project/b.js",
+      ]);
+      expect(state.getActiveTab().id).toBe("file:/workspace/project/main.js");
+      expect(state.getActiveTab().fileName).toBe("main.js");
+    });
+
+    test("retargets a renamed directory's whole subtree", () => {
+      const state = new FileTabState({ storage });
+      state.load("/workspace/project");
+      state.openFile("/workspace/project/src/a.js");
+      state.openFile("/workspace/project/src/deep/b.js");
+      state.openFile("/workspace/project/other/c.js");
+
+      expect(state.renamePathPrefix("/workspace/project/src", "/workspace/project/lib")).toBe(2);
+
+      expect(state.getTabs().map((tab) => tab.filePath)).toEqual([
+        "/workspace/project/lib/a.js",
+        "/workspace/project/lib/deep/b.js",
+        "/workspace/project/other/c.js",
+      ]);
+    });
+
+    test("keeps the tab's content and dirty flag", () => {
+      const state = new FileTabState({ storage });
+      state.load("/workspace/project");
+      const tab = state.openFile("/workspace/project/a.js");
+      state.updateTab(tab.id, { content: "edited", originalContent: "original", dirty: true });
+
+      state.renamePathPrefix("/workspace/project/a.js", "/workspace/project/b.js");
+
+      const renamed = state.getTabs()[0];
+      expect(renamed.content).toBe("edited");
+      expect(renamed.dirty).toBe(true);
+    });
+
+    test("does nothing when no tab lives at the path", () => {
+      const state = new FileTabState({ storage });
+      state.load("/workspace/project");
+      state.openFile("/workspace/project/a.js");
+      expect(state.renamePathPrefix("/workspace/project/ghost.js", "/workspace/project/x.js")).toBe(
+        0,
+      );
+      expect(state.renamePathPrefix("/workspace/project/a.js", "")).toBe(0);
+    });
+  });
+
   describe("closeTab", () => {
+    test("closePathPrefix closes only the tabs under the deleted path", () => {
+      const state = new FileTabState({ storage });
+      state.load("/workspace/project");
+      state.openFile("/workspace/project/src/a.js");
+      state.openFile("/workspace/project/src/deep/b.js");
+      state.openFile("/workspace/project/src-other/c.js");
+
+      expect(state.closePathPrefix("/workspace/project/src")).toBe(2);
+
+      expect(state.getTabs().map((tab) => tab.filePath)).toEqual([
+        "/workspace/project/src-other/c.js",
+      ]);
+    });
+
+    test("closePathPrefix matches a single file exactly", () => {
+      const state = new FileTabState({ storage });
+      state.load("/workspace/project");
+      state.openFile("/workspace/project/a.js");
+      state.openFile("/workspace/project/a.js.map");
+
+      expect(state.closePathPrefix("/workspace/project/a.js")).toBe(1);
+
+      expect(state.getTabs().map((tab) => tab.filePath)).toEqual(["/workspace/project/a.js.map"]);
+    });
+
+    test("closePathPrefix ignores an empty path", () => {
+      const state = new FileTabState({ storage });
+      state.load("/workspace/project");
+      state.openFile("/workspace/project/a.js");
+      expect(state.closePathPrefix("")).toBe(0);
+      expect(state.getTabs()).toHaveLength(1);
+    });
+
     test("closes active tab and selects right neighbor", () => {
       const state = new FileTabState({ storage });
       state.load("/workspace/project");

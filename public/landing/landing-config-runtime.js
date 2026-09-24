@@ -126,6 +126,11 @@ export function setupLandingConfigRuntime({ transport, wsClient }) {
       return;
     }
     if (message.includes("__picotConfig")) {
+      // OAuth command responses arrive as __picotConfig frames tagged with
+      // the oa- id prefix; the oauth gateway must consume them first (M3
+      // mutual exclusion, same order as the workspace shell's runtimeEvent
+      // dispatch) or every landing oauthCall waits out its full timeout.
+      if (state.oauth?.consumeFrame({ type: "runtime_event", event: payload })) return;
       state.gateway?.consumeNotify(payload, null);
     }
   }
