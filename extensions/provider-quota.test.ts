@@ -37,6 +37,21 @@ function streamResponse(text: string, ok = true, status = 200) {
   } as unknown as Response;
 }
 
+describe("parseOpencodeUsage", () => {
+  test("keeps the reset time, which the vendor sends as an ISO string", () => {
+    const parsed = parseOpencodeUsage({
+      usage: {
+        rolling: { status: "ok", percent: 0, resetsAt: "2026-09-24T08:18:29.943Z" },
+        weekly: { status: "ok", percent: 26, resetsAt: "2026-09-28T00:00:00.000Z" },
+        monthly: { status: "ok", percent: 28, resetsAt: "2026-10-06T07:23:20.000Z" },
+      },
+    });
+    expect(parsed.weeklyPercent).toBe(26);
+    expect(parsed.weeklyResetAt).toBe(Date.parse("2026-09-28T00:00:00.000Z"));
+    expect(parsed.monthlyResetAt).toBe(Date.parse("2026-10-06T07:23:20.000Z"));
+  });
+});
+
 describe("parseWhamUsage", () => {
   test("maps weekly/5h/monthly windows and reset credits", () => {
     const json = {
@@ -171,6 +186,34 @@ describe("probe isolation", () => {
       true,
     );
     expect(report.failure).toBe("response_unusable");
+  });
+});
+
+describe("parseWhamUsage", () => {
+  test("maps windows by their own duration, so the weekly row survives", () => {
+    // Verbatim shape from a real plus account: primary is the 5h window and
+    // secondary is the weekly one. A positional rule labelled secondary as 5h
+    // and dropped the weekly row entirely.
+    const parsed = parseWhamUsage({
+      rate_limit: {
+        allowed: true,
+        primary_window: { used_percent: 4, limit_window_seconds: 18000, reset_at: 1790231203 },
+        secondary_window: { used_percent: 48, limit_window_seconds: 604800, reset_at: 1790387902 },
+      },
+      rate_limit_reset_credits: { available_count: 3 },
+    });
+    expect(parsed.fiveHourPercent).toBe(4);
+    expect(parsed.weeklyPercent).toBe(48);
+    expect(parsed.weeklyResetAt).toBe(1790387902000);
+    expect(parsed.resetCredits).toBe(3);
+  });
+
+  test("ignores a burst window shorter than a plan limit", () => {
+    const parsed = parseWhamUsage({
+      rate_limit: { primary_window: { used_percent: 9, limit_window_seconds: 1800 } },
+    });
+    expect(parsed.fiveHourPercent).toBeUndefined();
+    expect(parsed.weeklyPercent).toBeUndefined();
   });
 });
 

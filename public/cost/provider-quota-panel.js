@@ -75,20 +75,18 @@ function daysUntil(value) {
   return Math.ceil((ms - Date.now()) / 86_400_000);
 }
 
-/** Reset stamps read like opencodex's: "重置 今天 14:26" while it is today,
- * otherwise "重置 9月26日 09:58" — an absolute stamp, never "in 3h". */
+/** Reset stamps read like opencodex's: an imminent reset counts minutes, an
+ * absolute one is "<月日>, <时:分> 重置". Never "in 3 hours". */
 function formatResetStamp(resetAt, locale) {
   const ms = toEpochMs(resetAt);
   if (ms === null) return "";
+  const minutes = Math.round((ms - Date.now()) / 60_000);
+  if (minutes <= 60) {
+    return locale.resetsInMinutes.replace("{n}", String(Math.max(1, minutes)));
+  }
   const at = new Date(ms);
-  const now = new Date();
-  const sameDay =
-    at.getFullYear() === now.getFullYear() &&
-    at.getMonth() === now.getMonth() &&
-    at.getDate() === now.getDate();
-  const day = sameDay ? locale.today : `${at.getMonth() + 1}月${at.getDate()}日`;
-  const time = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
-  return `${locale.resetPrefix} ${day} ${time}`;
+  const when = `${at.getMonth() + 1}月${at.getDate()}日, ${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+  return locale.resetsAt.replace("{when}", when);
 }
 
 /** Usage tone: low usage is healthy, then warning, then critical. */
@@ -123,7 +121,7 @@ function windowRow({ label, percent, resetAt }, locale) {
   bar.append(fill);
   const pct = document.createElement("span");
   pct.className = "quota-row-pct";
-  pct.textContent = `${clamped}%`;
+  pct.textContent = locale.used.replace("{n}", String(clamped));
   row.append(name, stamp, bar, pct);
   return row;
 }
@@ -318,7 +316,15 @@ export function createProviderQuotaPanel(seams, { locale }) {
       action.disabled = ordered.length === 0;
       action.addEventListener("click", () => finish(true));
 
-      dialog.append(heading, sub, count, list, note, action);
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "quota-dialog-cancel";
+      cancel.textContent = locale.dialogCancel;
+      cancel.addEventListener("click", () => finish(false));
+      const actions = document.createElement("div");
+      actions.className = "quota-dialog-actions";
+      actions.append(cancel, action);
+      dialog.append(heading, sub, count, list, note, actions);
       overlay.append(dialog);
       document.body.append(overlay);
 
@@ -326,30 +332,39 @@ export function createProviderQuotaPanel(seams, { locale }) {
       const finish = (value) => {
         if (settled) return;
         settled = true;
-        document.removeEventListener("keydown", onKeyDown);
+        document.removeEventListener("keydown", onKeyDown, true);
         overlay.remove();
         resolve(value);
       };
+      // Capture phase + stopPropagation: the Settings overlay closes on Escape
+      // too, so an unguarded key would dismiss the dialog and the whole page.
       const onKeyDown = (event) => {
-        if (event.key === "Escape") finish(false);
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        finish(false);
       };
-      document.addEventListener("keydown", onKeyDown);
+      document.addEventListener("keydown", onKeyDown, true);
       action.focus();
     });
   }
 
-  function renderResetArea(codexReport) {
+  /** Codex reset control: a rounded chip "ticket icon + N" in the card title,
+   * exactly as opencodex renders it. Hidden when no credits are known. */
+  function renderResetChip(codexReport) {
     const credits = codexReport?.quota?.resetCredits;
-    if (typeof credits !== "number" || credits <= 0) return "";
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "quota-reset-btn";
-    button.textContent = locale.resetCredits.replace("{n}", String(credits));
-    button.addEventListener("click", async () => {
-      button.disabled = true;
+    // Quota without a credit count says nothing about credits — no chip.
+    if (typeof credits !== "number") return null;
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "quota-reset-chip";
+    chip.setAttribute("aria-label", locale.resetCredits.replace("{n}", String(credits)));
+    const icon = createIcon("ticket", { size: 12 });
+    if (icon) chip.append(icon);
+    chip.append(document.createTextNode(String(credits)));
+    chip.addEventListener("click", async () => {
+      chip.disabled = true;
       try {
-        // Inspect before charging: the dialog lists exactly which credits are
-        // spent, and cancelling must leave the ledger untouched.
         const decision = await decideReset();
         if (decision.toast) {
           window.dispatchEvent(
@@ -364,10 +379,10 @@ export function createProviderQuotaPanel(seams, { locale }) {
         );
         void loadReports(true);
       } finally {
-        button.disabled = false;
+        chip.disabled = false;
       }
     });
-    return button;
+    return chip;
   }
 
   function buildHead(isLoading) {
@@ -407,16 +422,20 @@ export function createProviderQuotaPanel(seams, { locale }) {
     container.replaceChildren();
     const head = buildHead(loading);
 
-    const codex = reportsById.get("openai-codex");
-    const resetButton = renderResetArea(codex);
-
     for (const report of reports) {
       const card = document.createElement("div");
       card.className = "quota-card";
-      const name = document.createElement("div");
+      const head = document.createElement("div");
+      head.className = "quota-card-title";
+      const name = document.createElement("span");
       name.className = "quota-card-name";
       name.textContent = providerDisplayName(report.provider);
-      card.append(name);
+      head.append(name);
+      if (report.provider === "openai-codex") {
+        const chip = renderResetChip(report);
+        if (chip) head.append(chip);
+      }
+      card.append(head);
       if (report.failure === "needs_login") {
         const note = document.createElement("div");
         note.className = "quota-failure";
@@ -477,7 +496,7 @@ export function createProviderQuotaPanel(seams, { locale }) {
         updated.textContent = formatRelativeTime(quota.updatedAt, locale);
         card.append(updated);
       }
-      if (report.provider === "openai-codex" && resetButton) card.append(resetButton);
+
       container.append(card);
     }
     container.prepend(head);

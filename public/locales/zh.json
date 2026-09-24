@@ -119,7 +119,6 @@
     "cached": "已缓存",
     "input": "输入",
     "available": "可用",
-    "used": "已用 {pct}%",
     "tooltip": "{label}：{tokens}"
   },
   "models": {
@@ -1280,9 +1279,11 @@
       "sectionTitle": "提供方配额",
       "refresh": "刷新",
       "refreshing": "刷新中…",
-      "fiveHour": "5 小时窗口",
-      "weekly": "周",
-      "monthly": "月",
+      "resetsAt": "{when} 重置",
+      "used": "已用 {n}%",
+      "fiveHour": "5 小时限额",
+      "weekly": "每周限额",
+      "monthly": "30 天限额",
       "needsLogin": "需要重新登录",
       "unavailable": "暂不可用",
       "justNow": "刚刚",

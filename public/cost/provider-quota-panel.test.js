@@ -7,15 +7,14 @@ const locale = {
   sectionTitle: "Provider Quota",
   refresh: "Refresh",
   refreshing: "Refreshing…",
-  fiveHour: "5h window",
-  weekly: "Weekly",
-  monthly: "Monthly",
+  fiveHour: "5-hour limit",
+  weekly: "Weekly limit",
+  monthly: "30-day limit",
   needsLogin: "Re-login required",
   unavailable: "Temporarily unavailable",
   justNow: "just now",
   minutesAgo: "{n}m ago",
   hoursAgo: "{n}h ago",
-  resetsInMinutes: "resets in {n}m",
   resetsInHours: "resets in {n}h",
   resetsInDays: "resets in {n}d",
   resetCredits: "Reset quota ({n} left)",
@@ -24,6 +23,9 @@ const locale = {
   creditGranted: "Granted {time}",
   creditExpires: "Expires {time}",
   creditUnknown: "Expiry unknown",
+  resetsInMinutes: "resets in {n}m",
+  resetsAt: "resets {when}",
+  used: "{n}% used",
   resetDialogScope: "OpenAI Codex plan",
   dialogRedeem: "Use 1 credit",
   creditIndexed: "Credit #{n}",
@@ -61,7 +63,7 @@ let container;
 /** Drives the two-step reset dialog to its confirm button. Every ledger op is a
  * stub in this suite, so no real reset credit can be spent. */
 async function confirmResetDialog() {
-  container.querySelector(".quota-reset-btn").click();
+  container.querySelector(".quota-reset-chip").click();
   await advance();
   // Single screen: the action button is the only step (screenshot layout).
   document.querySelector(".quota-dialog-action").click();
@@ -144,7 +146,9 @@ test("renders one card per report with window bars and hides when empty", async 
   const bars = container.querySelectorAll(".quota-row");
   expect(bars).toHaveLength(4); // 3 codex windows + 1 balance label
   expect(container.textContent).toContain("OpenAI Codex");
-  expect(container.textContent).toContain("Reset quota (2 left)");
+  const chip = container.querySelector(".quota-reset-chip");
+  expect(chip?.textContent).toContain("2");
+  expect(chip?.querySelector("svg")).not.toBeNull();
 });
 
 test("hides the whole section when no provider reports", async () => {
@@ -162,7 +166,7 @@ test("needs_login renders its note and no reset button without credits", async (
   const panel = createProviderQuotaPanel(seams, { locale });
   await panel.loadReports();
   expect(container.textContent).toContain("Re-login required");
-  expect(container.querySelector(".quota-reset-btn")).toBeNull();
+  expect(container.querySelector(".quota-reset-chip")).toBeNull();
 });
 
 test("reset click runs the open→consume→settle ledger flow", async () => {
@@ -259,7 +263,7 @@ test("reset lists credits oldest-first and highlights the next one", async () =>
   });
   const panel = createProviderQuotaPanel(seams, { locale });
   await panel.loadReports();
-  container.querySelector(".quota-reset-btn").click();
+  container.querySelector(".quota-reset-chip").click();
   await advance();
 
   expect(seams.gateway.call).toHaveBeenCalledWith("codex_reset_credits_inspect", {});
@@ -296,7 +300,7 @@ test("escaping the reset dialog never touches the ledger", async () => {
   });
   const panel = createProviderQuotaPanel(seams, { locale });
   await panel.loadReports();
-  container.querySelector(".quota-reset-btn").click();
+  container.querySelector(".quota-reset-chip").click();
   await advance();
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   await advance();
@@ -320,7 +324,7 @@ test("inspect reporting needs_login shows no dialog and no ledger call", async (
   await panel.loadReports();
   const toasts = [];
   window.addEventListener("picot-toast", (event) => toasts.push(event.detail.message));
-  container.querySelector(".quota-reset-btn").click();
+  container.querySelector(".quota-reset-chip").click();
   await new Promise((resolve) => setTimeout(resolve, 20));
   expect(document.querySelector(".file-preview-dialog-overlay")).toBeNull();
   expect(toasts).toContain("Re-login required before resetting");

@@ -71,6 +71,8 @@ export type ProviderInstance = {
 
 const DAY_SECONDS = 24 * 60 * 60;
 const MONTH_SECONDS = 28 * DAY_SECONDS;
+const WEEK_SECONDS = 7 * 24 * 3600;
+const BURST_SECONDS = 4 * 3600;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -88,6 +90,18 @@ function numberOr(value: unknown): number | undefined {
     if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
+}
+
+/** Timestamps arrive as epoch seconds, epoch millis, or ISO strings depending
+ * on the vendor (opencode sends ISO for resetsAt), so all three are accepted. */
+function toEpochMsFromWire(value: unknown): number | undefined {
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Date.parse(value);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  const numeric = numberOr(value);
+  if (numeric === undefined) return undefined;
+  return numeric > 1e11 ? numeric : numeric * 1000;
 }
 
 function epochSecondsToMs(value: unknown): number | undefined {
@@ -123,24 +137,18 @@ export function parseWhamUsage(json: unknown): Partial<NonNullable<QuotaReport["
     if (seconds === undefined || !window) continue;
     windows.push({ seconds, window });
   }
-  // Role-based mapping (opencodex parseUsageQuota semantics): the window's
-  // POSITION names its role; only the primary window may be a short burst
-  // (skipped) or a monthly window by its own duration.
+  // Role comes from the window's own duration, which is authoritative on the
+  // wire. Position-based mapping (spec 2026-09-22 §8, copied from opencodex)
+  // mislabels this plan: primary_window is 18000s (5h) and secondary_window is
+  // 604800s (7d), so a positional rule turned the weekly window into the 5h one
+  // and dropped the weekly row entirely.
   const byRole: { fiveHour?: Window; weekly?: Window; monthly?: Window } = {};
-  const primary = windows[0];
-  if (primary) {
-    if (primary.seconds >= MONTH_SECONDS) {
-      byRole.monthly = primary.window;
-    } else if (primary.seconds < DAY_SECONDS) {
-      // Short burst window: skip; the 5h secondary window speaks instead.
-    } else {
-      byRole.weekly = primary.window;
-    }
+  for (const { seconds, window } of windows) {
+    if (seconds >= MONTH_SECONDS) byRole.monthly ??= window;
+    else if (seconds >= WEEK_SECONDS) byRole.weekly ??= window;
+    else if (seconds >= BURST_SECONDS) byRole.fiveHour ??= window;
+    // A shorter window is a burst allowance; it is not a plan limit.
   }
-  const secondary = windows[1];
-  if (secondary) byRole.fiveHour ??= secondary.window;
-  const tertiary = windows[2];
-  if (tertiary) byRole.monthly ??= tertiary.window;
   const resetCredits = numberOr(asRecord(root?.rate_limit_reset_credits)?.available_count);
   return {
     fiveHourPercent: byRole.fiveHour?.percent,
@@ -188,7 +196,7 @@ export function parseOpencodeUsage(json: unknown): Partial<NonNullable<QuotaRepo
     const window = asRecord(raw);
     const percent = numberOr(window?.percent);
     if (percent === undefined) return null;
-    return { percent, resetAt: epochSecondsToMs(window?.resetsAt) };
+    return { percent, resetAt: toEpochMsFromWire(window?.resetsAt) };
   };
   const rolling = read(usage.rolling);
   const weekly = read(usage.weekly);

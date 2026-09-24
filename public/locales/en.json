@@ -119,7 +119,6 @@
     "cached": "Cached",
     "input": "Input",
     "available": "Available",
-    "used": "{pct}% used",
     "tooltip": "{label}: {tokens}"
   },
   "models": {
@@ -1280,9 +1279,11 @@
       "sectionTitle": "Provider Quota",
       "refresh": "Refresh",
       "refreshing": "Refreshing…",
-      "fiveHour": "5h window",
-      "weekly": "Weekly",
-      "monthly": "Monthly",
+      "resetsAt": "resets {when}",
+      "used": "{n}% used",
+      "fiveHour": "5-hour limit",
+      "weekly": "Weekly limit",
+      "monthly": "30-day limit",
       "needsLogin": "Re-login required",
       "unavailable": "Temporarily unavailable",
       "justNow": "just now",
