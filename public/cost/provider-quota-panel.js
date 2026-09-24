@@ -348,6 +348,21 @@ export function createProviderQuotaPanel(seams, { locale }) {
     return button;
   }
 
+  function buildHead(isLoading) {
+    const head = document.createElement("div");
+    head.className = "quota-section-head";
+    const title = document.createElement("h3");
+    title.textContent = locale.sectionTitle;
+    const refresh = document.createElement("button");
+    refresh.type = "button";
+    refresh.className = "quota-refresh-btn";
+    refresh.textContent = isLoading ? locale.refreshing : locale.refresh;
+    refresh.disabled = isLoading;
+    refresh.addEventListener("click", () => void loadReports(true));
+    head.append(title, refresh);
+    return head;
+  }
+
   function render() {
     const container = seams.container();
     if (!container) return;
@@ -358,23 +373,17 @@ export function createProviderQuotaPanel(seams, { locale }) {
     );
     // Empty state hides the whole section (spec: no placeholder).
     const hasContent = reports.length > 0;
-    container.classList.toggle("hidden", !hasContent);
+    // A settled empty state still hides the whole section (spec: no
+    // placeholder), but the first probe takes seconds — hiding the section
+    // while it is in flight is what made the page look blank.
+    container.classList.toggle("hidden", !hasContent && !loading);
     if (!hasContent) {
       container.replaceChildren();
+      if (loading) container.append(buildHead(loading));
       return;
     }
     container.replaceChildren();
-    const head = document.createElement("div");
-    head.className = "quota-section-head";
-    const title = document.createElement("h3");
-    title.textContent = locale.sectionTitle;
-    const refresh = document.createElement("button");
-    refresh.type = "button";
-    refresh.className = "quota-refresh-btn";
-    refresh.textContent = loading ? locale.refreshing : locale.refresh;
-    refresh.disabled = loading;
-    refresh.addEventListener("click", () => void loadReports(true));
-    head.append(title, refresh);
+    const head = buildHead(loading);
 
     const codex = reportsById.get("openai-codex");
     const resetButton = renderResetArea(codex);

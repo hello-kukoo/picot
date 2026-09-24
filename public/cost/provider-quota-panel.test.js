@@ -353,3 +353,28 @@ test("an unconfigured provider is absent instead of shown as unavailable", async
   expect(names).toEqual(["Opencode Go"]);
   expect(container.querySelectorAll(".quota-failure")).toHaveLength(0);
 });
+
+test("shows the head while the first probe is in flight, hides when settled empty", async () => {
+  const seams = makeSeams({ reports: [] });
+  let release = () => {};
+  seams.gateway.call = vi.fn((op) =>
+    op === "provider_quota_report"
+      ? new Promise((resolve) => {
+          release = () => resolve({ ok: true, data: { reports: [] } });
+        })
+      : Promise.resolve({ ok: true, data: { credits: [] } }),
+  );
+  const panel = createProviderQuotaPanel(seams, { locale });
+  const pending = panel.loadReports();
+
+  // In flight: the page must not look blank (this is what "配额 page is empty"
+  // looked like — the first probe takes seconds).
+  expect(container.classList.contains("hidden")).toBe(false);
+  expect(container.querySelector(".quota-refresh-btn")?.textContent).toBe("Refreshing…");
+
+  release();
+  await pending;
+  // Settled empty still hides the whole section (spec: no placeholder).
+  expect(container.classList.contains("hidden")).toBe(true);
+  expect(container.querySelector(".quota-section-head")).toBeNull();
+});

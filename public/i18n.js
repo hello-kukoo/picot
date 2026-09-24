@@ -145,7 +145,10 @@ function interpolate(text, params) {
   if (!params || typeof params !== "object") return text;
   return text.replace(/\{(\w+)\}/g, (_, name) => {
     const val = params[name];
-    return val !== undefined && val !== null ? String(val) : "";
+    // A caller that omits a param must not get a silently blanked template:
+    // `t("k")` on "resets in {n}h" used to return "resets in h", so callers
+    // that fill placeholders themselves (or pass params later) lost the token.
+    return val !== undefined && val !== null ? String(val) : `{${name}}`;
   });
 }
 

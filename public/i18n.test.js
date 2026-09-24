@@ -112,7 +112,7 @@ describe("t() lookup and fallback", () => {
     expect(t("sidebar.minutesAgo", { minutes: 5 })).toBe("5m ago");
   });
 
-  it("missing param becomes empty string", async () => {
+  it("missing param keeps its placeholder for the caller to fill", async () => {
     vi.stubGlobal(
       "fetch",
       makeFetchMock({
@@ -121,7 +121,7 @@ describe("t() lookup and fallback", () => {
     );
     const { initI18n, t } = await importFreshI18n();
     await initI18n();
-    expect(t("sidebar.minutesAgo")).toBe("m ago");
+    expect(t("sidebar.minutesAgo")).toBe("{minutes}m ago");
   });
 });
 
