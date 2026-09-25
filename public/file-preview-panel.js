@@ -10,7 +10,12 @@
  * Markdown parsing, or CodeMirror configuration.
  */
 
-import { closePane, hideAllPanes, syncPane } from "./browser-pane/browser-pane-manager.js";
+import {
+  closePane,
+  hideAllPanes,
+  showPane,
+  syncPane,
+} from "./browser-pane/browser-pane-manager.js";
 import { createBrowserTabRenderer } from "./browser-pane/browser-tab-renderer.js";
 import { classifyFilePath } from "./file-language.js";
 import { createFileRenderer } from "./file-preview-renderers.js";
@@ -106,6 +111,29 @@ export class FilePreviewPanel {
     // see it; the app announces when such a layout has settled.
     this._onLayoutSettled = () => this._syncActiveBrowserPane();
     window.addEventListener("picot-layout-settled", this._onLayoutSettled);
+    // Settings is a full-window host overlay, and native child webviews
+    // always paint above host DOM: while it is up every pane must hide, and
+    // the active one comes back when it closes. One class observer covers
+    // every entry point (header button, hash navigation, Esc, close button).
+    this._settingsObserver = null;
+    const settingsEl = document.getElementById("settings-panel");
+    if (settingsEl) {
+      this._settingsObserver = new MutationObserver(() => {
+        if (!settingsEl.classList.contains("hidden")) {
+          hideAllPanes();
+          return;
+        }
+        const tab = this.state.getActiveTab();
+        if (this.panelOpen && tab?.kind === "browser") {
+          showPane(tab.id, true);
+          void syncPane(tab.id).catch(() => {});
+        }
+      });
+      this._settingsObserver.observe(settingsEl, {
+        attributes: true,
+        attributeFilter: ["class"],
+      });
+    }
     this.activeDialogCancel = null;
     // Transient (non-file) content tabs — Side Chats — projected into the same
     // tab strip as file tabs but never persisted to FileTabState.
@@ -304,6 +332,8 @@ export class FilePreviewPanel {
 
   destroy() {
     window.removeEventListener("picot-layout-settled", this._onLayoutSettled);
+    this._settingsObserver?.disconnect();
+    this._settingsObserver = null;
     this._cancelPaneLayoutSync?.();
     this._cancelPaneLayoutSync = null;
     for (const timer of this.autoSaveTimers.values()) clearTimeout(timer);
@@ -317,7 +347,7 @@ export class FilePreviewPanel {
     const stoppedWatches = new Set();
     for (const tab of this.state.getTabs()) {
       if (tab.kind !== "browser") continue;
-      closePane(tab.id);
+      closePane(tab.id, this.transport);
       if (tab.filePath && tab.filePath !== tab.url && !stoppedWatches.has(tab.filePath)) {
         stoppedWatches.add(tab.filePath);
         this.transport?.officecliWatchStop?.({ file: tab.filePath }).catch(() => {});
@@ -1065,7 +1095,7 @@ export class FilePreviewPanel {
 
   /** Close the pane and stop the office watch when its last tab closes. */
   _teardownBrowserTab(tab) {
-    closePane(tab.id);
+    closePane(tab.id, this.transport);
     if (tab.filePath && tab.filePath !== tab.url) {
       const watchStillUsed = this.state
         .getTabs()

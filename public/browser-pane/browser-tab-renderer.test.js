@@ -103,42 +103,27 @@ test("a picked element opens a dialog that names its docPath", async () => {
   anchor.dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true }));
   await vi.advanceTimersByTimeAsync(300);
 
-  const meta = document.querySelector(".browser-annotation-meta");
-  expect(meta?.textContent).toContain("/slide[2]/shape[@id=7]");
-  // Inline in the pane's own area — not a window-wide modal.
-  expect(container.querySelector(".browser-annotation-input")).toBeTruthy();
+  const card = document.getElementById("picot-annotation-card");
+  expect(card?.textContent).toContain("/slide[2]/shape[@id=7]");
+  // The card lives inside the pane page (the eval mock runs scripts against
+  // this document), never in the host preview DOM.
+  expect(container.querySelector(".browser-annotation-card")).toBeNull();
   expect(document.querySelector(".file-preview-dialog-overlay")).toBeNull();
+
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await vi.advanceTimersByTimeAsync(300);
+  expect(document.getElementById("picot-annotation-card")).toBeNull();
   renderer.destroy();
 });
 
-test("the composer shortens the pane instead of hiding the page", async () => {
+test("the page card submits into the composer without hiding the page", async () => {
   vi.useFakeTimers();
-  const box = (width, height, top = 100) => ({
-    x: 0,
-    y: top,
-    width,
-    height,
-    top,
-    bottom: top + height,
-    left: 0,
-    right: width,
-  });
-  // jsdom has no layout: give the pane target and the composer real boxes.
-  const originalRect = Element.prototype.getBoundingClientRect;
-  Element.prototype.getBoundingClientRect = function () {
-    if (this.classList?.contains("browser-pane-content")) return box(400, 600);
-    // The card anchors to the container's bottom edge (margin-top: auto)
-    // with a 12px bottom margin — the layout the pane must make room for.
-    if (this.classList?.contains("browser-annotation-card")) return box(360, 180, 508);
-    return originalRect.call(this);
-  };
   const transport = makeTransport();
   const container = document.createElement("div");
   document.body.append(container);
   const renderer = createBrowserTabRenderer({ tab: makeTab(), transport });
   renderer.mount(container);
   await vi.advanceTimersByTimeAsync(1);
-  const paneKey = "w:browser:/w/a.docx";
 
   container.querySelector(".browser-pane-action").click();
   await vi.advanceTimersByTimeAsync(1);
@@ -148,30 +133,18 @@ test("the composer shortens the pane instead of hiding the page", async () => {
   anchor.dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true }));
   await vi.advanceTimersByTimeAsync(300);
 
-  // The page stays visible — the pane only gives up the composer's height.
-  expect(transport.browserPaneSetVisible).not.toHaveBeenCalledWith({
-    paneId: paneKey,
-    visible: false,
-  });
-  expect(transport.browserPaneSetRect).toHaveBeenLastCalledWith({
-    paneId: paneKey,
-    x: 0,
-    y: 100,
-    width: 400,
-    // The reserved strip runs from the card's top (508) to the container's
-    // bottom (700): 192px, margins included — not the card's bare 180.
-    height: 408,
-  });
+  const card = document.getElementById("picot-annotation-card");
+  card.querySelector("textarea").value = "字号大一点";
+  [...card.querySelectorAll("button")].find((b) => b.textContent === "加入输入框").click();
+  await vi.advanceTimersByTimeAsync(300);
+  const input = document.getElementById("message-input");
+  expect(input.value).toContain('<office-element file="a.docx">');
+  expect(input.value).toContain("feedback: 字号大一点");
 
-  document.querySelector(".file-preview-dialog-button.primary").click();
-  await vi.advanceTimersByTimeAsync(1);
-  expect(transport.browserPaneSetRect).toHaveBeenLastCalledWith({
-    paneId: paneKey,
-    x: 0,
-    y: 100,
-    width: 400,
-    height: 600,
-  });
+  // The page stays visible throughout: never hidden, never shrunk.
+  expect(transport.browserPaneSetVisible).not.toHaveBeenCalledWith(
+    expect.objectContaining({ visible: false }),
+  );
+  expect(transport.browserPaneSetRect).not.toHaveBeenCalled();
   renderer.destroy();
-  Element.prototype.getBoundingClientRect = originalRect;
 });

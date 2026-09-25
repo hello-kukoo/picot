@@ -6,7 +6,7 @@ import {
   appendAttachmentToComposer,
   formatBrowserElementAttachment,
   formatOfficeElementAttachment,
-  openAnnotationDialog,
+  openPageAnnotationDialog,
 } from "./browser-annotations.js";
 import {
   closePane,
@@ -14,7 +14,6 @@ import {
   navigatePane,
   openPane,
   paneVisible,
-  setPaneBottomInset,
   showPane,
 } from "./browser-pane-manager.js";
 import { createElementSelectorController, createPaneWebviewAdapter } from "./element-selector.js";
@@ -96,39 +95,16 @@ export function createBrowserTabRenderer({ tab, transport }) {
           return;
         }
         const selection = outcome.selection;
-        // The pane is an OS-level child webview that always paints above host
-        // DOM, so the composer takes space by shortening the pane rather than
-        // covering it — the annotated page stays visible while typing.
-        let cardObserver = null;
-        const releaseComposerSpace = () => {
-          cardObserver?.disconnect();
-          cardObserver = null;
-          void setPaneBottomInset(tab.id, 0).catch(() => {});
-        };
-        let comment = null;
-        try {
-          comment = await openAnnotationDialog({
-            docPath: selection.docPath,
-            url: selection.url,
-            container: contentEl,
-            onMount: (card) => {
-              // Reserve from the card's top edge to the container's bottom:
-              // the card's own bottom margin is part of the strip, and the
-              // card anchors to that edge, so the measurement is stable.
-              const apply = () =>
-                void setPaneBottomInset(
-                  tab.id,
-                  contentEl.getBoundingClientRect().bottom - card.getBoundingClientRect().top,
-                ).catch(() => {});
-              apply();
-              // The textarea is user-resizable; keep the pane in step.
-              cardObserver = new ResizeObserver(apply);
-              cardObserver.observe(card);
-            },
-          });
-        } finally {
-          releaseComposerSpace();
-        }
+        // The comment card is injected INTO the pane page (Paseo-style,
+        // centered over the page bottom): host DOM cannot paint above the
+        // OS-level child webview, so any host-side dialog would need an
+        // ugly reserved strip instead of floating over the page.
+        const comment = await openPageAnnotationDialog({
+          paneId: tab.id,
+          evaluate: (paneId, expression) => evalPane(paneId, expression, transport),
+          docPath: selection.docPath,
+          url: selection.url,
+        });
         if (comment === null) return;
         const block =
           selection.docPath && isOfficeTab(tab)
@@ -223,7 +199,6 @@ export function createBrowserTabRenderer({ tab, transport }) {
     detach() {
       // Tab switch: keep the native webview alive, just hide it.
       attached = false;
-      void setPaneBottomInset(tab.id, 0).catch(() => {});
       showPane(tab.id, false);
       selector.cancel();
       root?.remove();
@@ -233,9 +208,8 @@ export function createBrowserTabRenderer({ tab, transport }) {
       if (destroyed) return;
       destroyed = true;
       attached = false;
-      void setPaneBottomInset(tab.id, 0).catch(() => {});
       selector.cancel();
-      closePane(tab.id);
+      closePane(tab.id, transport);
       root?.remove();
       root = null;
     },

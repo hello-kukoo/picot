@@ -4,9 +4,10 @@
 import { afterEach, beforeEach, expect, test } from "vitest";
 import {
   appendAttachmentToComposer,
+  buildPageAnnotationScript,
   formatBrowserElementAttachment,
   formatOfficeElementAttachment,
-  openAnnotationDialog,
+  openPageAnnotationDialog,
 } from "./browser-annotations.js";
 
 const baseSelection = {
@@ -69,33 +70,68 @@ test("browser format matches Paseo field density", () => {
   expect(block).toContain("</browser-element>");
 });
 
-test("the comment box mounts inline where asked, with no modal overlay", async () => {
-  const host = document.createElement("div");
-  document.body.append(host);
-  const promise = openAnnotationDialog({
-    docPath: "/body/p[1]",
-    url: "http://x/",
-    container: host,
+test("the injected page card submits a comment and cancels on Escape", async () => {
+  const run = (script) => new Function(`return (${script})`)();
+  const script = buildPageAnnotationScript({
+    title: "标注元素",
+    meta: "/body/p[1] — http://x/",
+    placeholder: "想让 agent 对这个元素做什么？",
+    cancelLabel: "取消",
+    submitLabel: "加入输入框",
+    accent: "#aa3344",
   });
-  expect(host.querySelector(".browser-annotation-input")).toBeTruthy();
-  expect(document.querySelector(".file-preview-dialog-overlay")).toBeNull();
-  document.querySelector(".file-preview-dialog-button.primary").click();
-  await promise;
-  expect(host.querySelector(".browser-annotation-input")).toBeNull();
-  host.remove();
+  run(script);
+  const card = document.getElementById("picot-annotation-card");
+  expect(card).toBeTruthy();
+  expect(card.textContent).toContain("/body/p[1] — http://x/");
+  const primary = [...card.querySelectorAll("button")].find((b) => b.textContent === "加入输入框");
+  expect(primary.style.backgroundColor).toBe("rgb(170, 51, 68)");
+  const input = card.querySelector("textarea");
+  expect(document.activeElement).toBe(input);
+
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  expect(window.__picotAnnotationResult).toEqual({ comment: null });
+  expect(document.getElementById("picot-annotation-card")).toBeNull();
+
+  window.__picotAnnotationResult = undefined;
+  run(script);
+  const card2 = document.getElementById("picot-annotation-card");
+  card2.querySelector("textarea").value = "字号大一点";
+  [...card2.querySelectorAll("button")].find((b) => b.textContent === "加入输入框").click();
+  expect(window.__picotAnnotationResult).toEqual({ comment: "字号大一点" });
+  window.__picotAnnotationResult = undefined;
+  document.getElementById("picot-annotation-card")?.remove();
 });
 
-test("dialog resolves with the comment and honours cancel", async () => {
-  const dialogPromise = openAnnotationDialog({ docPath: "/body/p[2]", url: "http://x/" });
-  const textarea = document.querySelector(".browser-annotation-input");
-  expect(textarea).toBeTruthy();
-  textarea.value = "加粗这一段";
-  document.querySelector(".file-preview-dialog-button.primary").click();
-  await expect(dialogPromise).resolves.toBe("加粗这一段");
-
-  const cancelled = openAnnotationDialog({ url: "http://x/" });
-  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-  await expect(cancelled).resolves.toBeNull();
+test("openPageAnnotationDialog polls the page marker until it settles", async () => {
+  const calls = [];
+  const evaluate = async (_paneId, expression) => {
+    calls.push(expression.slice(0, 40));
+    if (expression.includes("picot-annotation-card")) return "ok";
+    if (calls.length === 2) return "pending";
+    if (calls.length === 3) return "gone";
+    return { comment: "好" };
+  };
+  const comment = await openPageAnnotationDialog({
+    paneId: "p",
+    evaluate,
+    docPath: "/body/p[1]",
+    url: "http://x/",
+  });
+  expect(comment).toBeNull();
+  const calls2 = [];
+  const evaluate2 = async (_paneId, expression) => {
+    calls2.push(1);
+    if (expression.includes("picot-annotation-card")) return "ok";
+    if (calls2.length < 3) return "pending";
+    return "好";
+  };
+  const comment2 = await openPageAnnotationDialog({
+    paneId: "p",
+    evaluate: evaluate2,
+    url: "http://x/",
+  });
+  expect(comment2).toBe("好");
 });
 
 test("appendAttachmentToComposer appends with separation and focuses", () => {

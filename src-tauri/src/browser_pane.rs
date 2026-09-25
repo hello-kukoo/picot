@@ -114,8 +114,12 @@ impl BrowserPaneRuntime {
             .app
             .get_window(window_label)
             .ok_or_else(|| "window_not_found".to_string())?;
-        if self.panes.lock().unwrap().contains_key(pane_id) {
-            return Err("pane_already_exists".to_string());
+        // A pane can outlive the host page that created it: switching
+        // workspaces reloads the WebView while the native child survives,
+        // so the reloaded page's create is authoritative — replace the
+        // stale pane instead of erroring (its tab would be wedged forever).
+        if let Some(stale) = self.panes.lock().unwrap().remove(pane_id) {
+            let _ = stale.close();
         }
         let host_origin = self.host_origin.clone();
         let host_port = self.host_port;

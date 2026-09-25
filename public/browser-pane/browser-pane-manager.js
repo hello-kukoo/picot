@@ -42,7 +42,6 @@ export async function openPane({ paneId, url, container, transport }) {
     observer: null,
     rafId: 0,
     dirty: null,
-    bottomInset: 0,
     dead: false,
   };
   PANES.set(paneId, entry);
@@ -64,17 +63,14 @@ export async function openPane({ paneId, url, container, transport }) {
   return entry;
 }
 
-/** The pane's target rect: the container's box minus any bottom inset, which
- * is how a host-DOM composer takes space without hiding the page. */
+/** The pane's target rect: the container's box in window coordinates. */
 function paneRect(entry) {
   const rect = entry.container.getBoundingClientRect();
-  const maxInset = Math.max(0, rect.height - 24);
-  const inset = Math.min(Math.max(0, entry.bottomInset || 0), maxInset);
   return {
     x: rect.x,
     y: rect.y,
     width: Math.max(1, rect.width),
-    height: Math.max(1, rect.height - inset),
+    height: Math.max(1, rect.height),
   };
 }
 
@@ -121,15 +117,6 @@ export async function syncPane(paneId) {
   await entry.transport.browserPaneSetRect({ paneId: entry.paneKey, ...paneRect(entry) });
 }
 
-/** Reserve space at the bottom of the pane for host DOM (the annotation
- * composer) without hiding the page. */
-export async function setPaneBottomInset(paneId, inset) {
-  const entry = PANES.get(paneId);
-  if (!entry || entry.dead) return;
-  entry.bottomInset = Math.max(0, Math.round(inset) || 0);
-  await syncPane(paneId);
-}
-
 /** Show/hide without destroying (tab switching keeps the page alive). */
 export function showPane(paneId, visible) {
   const entry = PANES.get(paneId);
@@ -142,9 +129,17 @@ export function hideAllPanes() {
 }
 
 /** Destroy the child webview and stop syncing (tab close / panel teardown). */
-export function closePane(paneId) {
+export function closePane(paneId, transport) {
   const entry = PANES.get(paneId);
-  if (!entry) return;
+  if (!entry) {
+    // A page reload empties PANES while the native child webview survives in
+    // Rust: closing the restored tab must still destroy it, by derived key.
+    const label = currentWindowLabel();
+    if (label && transport) {
+      void transport.browserPaneDestroy({ paneId: `${label}:${paneId}` }).catch(() => {});
+    }
+    return;
+  }
   entry.dead = true;
   if (entry.rafId) cancelAnimationFrame(entry.rafId);
   entry.observer?.disconnect();

@@ -317,6 +317,40 @@ describe("FilePreviewPanel", () => {
     delete window.__TAURI__;
   });
 
+  test("the settings overlay hides native panes and restores them on close", async () => {
+    global.ResizeObserver = class {
+      observe() {}
+      disconnect() {}
+    };
+    window.__TAURI__ = { window: { getCurrentWindow: () => ({ label: "sidebar-test" }) } };
+    const settings = document.createElement("div");
+    settings.id = "settings-panel";
+    settings.className = "hidden";
+    document.body.append(settings);
+    const p = createPanel();
+    await p.openBrowserTab("http://127.0.0.1:41001/", {
+      file: "/test/workspace/a.docx",
+      fileName: "a.docx",
+    });
+    await Promise.resolve();
+    p.transport.browserPaneSetVisible.mockClear();
+    // Settings is a full-window host overlay: the native panes always paint
+    // above host DOM, so they must hide while it is up.
+    settings.classList.remove("hidden");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(p.transport.browserPaneSetVisible).toHaveBeenCalledWith(
+      expect.objectContaining({ visible: false }),
+    );
+    settings.classList.add("hidden");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(p.transport.browserPaneSetVisible).toHaveBeenLastCalledWith(
+      expect.objectContaining({ visible: true }),
+    );
+    p.destroy();
+    settings.remove();
+    delete window.__TAURI__;
+  });
+
   test("switching back to a browser tab does not stick on loading", async () => {
     const p = createPanel();
     await p.openBrowserTab("http://127.0.0.1:41001/", {

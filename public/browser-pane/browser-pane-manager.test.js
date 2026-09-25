@@ -77,6 +77,16 @@ test("show/hide toggles transport visibility only on change", async () => {
   expect(paneVisible("p2")).toBe(false);
 });
 
+test("closePane destroys the native pane even without a host entry", async () => {
+  const transport = makeTransport();
+  // A page reload empties PANES while the native child webview survives in
+  // Rust; closing the restored tab must still destroy it by derived key.
+  closePane("p-reload", transport);
+  expect(transport.browserPaneDestroy).toHaveBeenCalledWith({
+    paneId: "native-workspace-w1:p-reload",
+  });
+});
+
 test("closePane destroys the webview exactly once", async () => {
   const transport = makeTransport();
   const container = document.createElement("div");

@@ -2,6 +2,8 @@
 
 **状态：** Implemented — 2026-09-23（Phase 1 + 2 全量；三期项按 spec 不做）
 
+修订 2026-09-25：标注评论框改为**注入 pane 页面内**（Paseo 式 fixed 底部居中卡，内联样式 + 宿主注入主题 accent），替代 09-23 的宿主侧内联卡 + pane 底部内缩方案——原生 child webview 永远压在宿主 DOM 上，宿主卡片只能活在 pane 外的预留条里（用户实测视觉不可接受）；同轮 `browser_pane_create` 改替换语义、`closePane` 无宿主记录时补发 destroy（切 workspace 整页重载后宿主/Rust 状态不对称，恢复 tab 曾恒报 `pane_already_exists`）。
+
 实施记录：Rust `browser_pane.rs`（child webview 管理 + URL 白名单 + eval_with_callback 桥[Windows 异常靠包装脚本回传] + 窗口销毁清扫）+ `officecli_watch.rs`（canonical 去重 + SIGTERM 清场 + watch mark）+ host_server 11 个 owner 门禁 data op + main.rs 注入/退出钩子。JS `browser-pane/` 四模块：pane-manager（ResizeObserver→rAF 矩形同步）、element-selector（Paseo IIFE 移植 + docPath 采集 + token/超时/Esc 状态机）、browser-annotations（office/browser 双格式 + 对话框 + composer 文本块）、browser-tab-renderer（工具条 + 标注流 + watch 重启）。tab-state 支持 browser kind 持久化（url 随存）。anydoc markdown 预览工具条新增「内置浏览器打开」。i18n `files.browser.*` ×4。测试：选择器 jsdom 6 + 附件 4 + manager 5 + tab-state 3 + renderer 升级按钮 2 + Rust 7；vitest 2106 / check / check:rust 全绿。实测：docx/pptx/xlsx watch 冒烟通过（~2.5s 就绪，data-path 全命中）。真实 dev-run 视觉验证（child webview 叠加/布局同步延迟）留 Dr. Lin 走查。
 **日期：** 2026-09-22
 **参照：** Paseo `packages/app/src/desktop/browser/pane/`（浏览器 pane 全套）、`element-selector.electron.ts`（492 行选择器）、`attachments/types.ts::BrowserElementAttachment`；officecli 1.0.149 本机实测；Picot 既有 file-preview 面板与子进程基建。

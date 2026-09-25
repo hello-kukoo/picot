@@ -10964,8 +10964,6 @@ button.skills-group-status:disabled {
 /* The native child webview floats above this rect; keep it clear of any
  * in-DOM chrome so the two stay visually aligned. */
 .browser-pane-content {
-  display: flex;
-  flex-direction: column;
   position: relative;
   flex: 1;
   min-height: 0;
@@ -10989,42 +10987,6 @@ button.skills-group-status:disabled {
 
 .office-upgrade-button:hover {
   border-color: var(--accent);
-}
-
-/* Inline annotation comment box: it renders in the pane's content area, so it
-   needs placement inside the panel rather than a full-window overlay. */
-.browser-annotation-card {
-  width: auto;
-  max-width: min(560px, 100%);
-  /* Anchored to the bottom: the native pane keeps the space above it.
-     margin-top: auto is what does the anchoring — keep it longhand so the
-     shorthand can't silently swap the auto back onto the bottom edge. */
-  margin-top: auto;
-  margin-left: auto;
-  margin-right: auto;
-  margin-bottom: var(--space-3);
-}
-
-.browser-annotation-meta {
-  overflow: hidden;
-  margin: 0 0 var(--space-2);
-  color: var(--text-secondary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: var(--font-size-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.browser-annotation-input {
-  width: 100%;
-  margin-bottom: var(--space-3);
-  padding: var(--space-2);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  background: var(--bg-solid);
-  color: var(--text-primary);
-  font-size: var(--font-size-md);
-  resize: vertical;
 }
 
 /* ── Scroll-to-latest floating control (centered above the composer, Paseo) ── */
