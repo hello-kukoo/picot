@@ -108,25 +108,6 @@ beforeEach(async () => {
 
     disconnect() {}
   };
-  // jsdom has no native IntersectionObserver; the auto-reveal gate uses it.
-  globalThis.IntersectionObserver = class {
-    static instances = [];
-    constructor(callback) {
-      this.callback = callback;
-      this.observed = [];
-      this.disconnected = false;
-      globalThis.IntersectionObserver.instances.push(this);
-    }
-    observe(target) {
-      this.observed.push(target);
-    }
-    disconnect() {
-      this.disconnected = true;
-    }
-    fire(isIntersecting, target = this.observed[0]) {
-      this.callback([{ isIntersecting, target }]);
-    }
-  };
   window.matchMedia = vi.fn(() => ({
     matches: false,
     addEventListener() {},
@@ -142,7 +123,6 @@ afterEach(() => {
   delete globalThis.fetch;
   delete globalThis.requestAnimationFrame;
   delete globalThis.ResizeObserver;
-  delete globalThis.IntersectionObserver;
 });
 
 const target = { workspaceId: "w1", sessionId: "s1", instanceId: "primary" };
@@ -453,22 +433,24 @@ test("auto-reveal mounts one batch per intersection and fills until the gate is 
   expect(gate).not.toBeNull();
   expect([...messages.querySelectorAll(".message.user")]).toHaveLength(2);
 
-  const observer = globalThis.IntersectionObserver.instances.at(-1);
-  expect(observer.observed[0]).toBe(gate);
-
-  // One intersection reveals exactly one batch …
-  observer.fire(true);
+  // One scroll arrival within the threshold reveals exactly one batch …
+  messages.scrollTop = 40;
+  messages.dispatchEvent(new Event("scroll"));
   expect([...messages.querySelectorAll(".message.user")]).toHaveLength(4);
   expect(messages.querySelector(".history-gate").textContent).toContain("2");
 
-  // … and while the control still intersects, one rAF frame continues the
-  // chain until the gate is exhausted, removing the control.
+  // … and while the scroller still cannot overflow (jsdom reports no
+  // geometry), one rAF frame continues the chain until the gate is exhausted,
+  // removing the control.
   const frame = rafQueue.splice(0);
   rafQueue = [];
   for (const callback of frame) callback();
   expect([...messages.querySelectorAll(".message.user")]).toHaveLength(6);
   expect(messages.querySelector(".history-gate")).toBeNull();
-  expect(observer.disconnected).toBe(true);
+
+  // The exhausted gate drops its listener: further scrolls reveal nothing.
+  messages.dispatchEvent(new Event("scroll"));
+  expect([...messages.querySelectorAll(".message.user")]).toHaveLength(6);
 });
 
 test("a search render disconnects the auto-reveal observer without re-observing", async () => {
@@ -494,11 +476,7 @@ test("a search render disconnects the auto-reveal observer without re-observing"
   );
   await new Promise((resolve) => setTimeout(resolve, 300));
 
-  const observer = globalThis.IntersectionObserver.instances.at(-1);
-  expect(observer).toBeDefined();
-  expect(observer.observed.length).toBe(1);
-  const instancesBefore = globalThis.IntersectionObserver.instances.length;
-
+  const messages = document.getElementById("messages");
   const searchInput = document.getElementById("session-search-input");
   searchInput.value = "1";
   searchInput.dispatchEvent(new Event("input", { bubbles: true }));
@@ -508,9 +486,14 @@ test("a search render disconnects the auto-reveal observer without re-observing"
   );
   await new Promise((resolve) => setTimeout(resolve, 300));
 
-  // No new observer during the search render; the old one is cancelled.
-  expect(globalThis.IntersectionObserver.instances).toHaveLength(instancesBefore);
-  expect(observer.disconnected).toBe(true);
+  // The search render mounts everything (no gate) and disconnects the
+  // auto-reveal listener: a scroll arrival reveals nothing further.
+  expect(messages.querySelector(".history-gate")).toBeNull();
+  const usersAfterSearch = messages.querySelectorAll(".message.user").length;
+  messages.scrollTop = 0;
+  messages.dispatchEvent(new Event("scroll"));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(messages.querySelectorAll(".message.user").length).toBe(usersAfterSearch);
 });
 
 test("the jump-to-bottom button appears when scrolled up and hides at the bottom", async () => {
@@ -688,7 +671,8 @@ test("the reveal chain stops once the transcript fills the viewport", async () =
   Object.defineProperty(messages, "scrollHeight", { configurable: true, value: 3000 });
   Object.defineProperty(messages, "clientHeight", { configurable: true, value: 800 });
 
-  globalThis.IntersectionObserver.instances.at(-1).fire(true);
+  messages.scrollTop = 40;
+  messages.dispatchEvent(new Event("scroll"));
   expect([...messages.querySelectorAll(".message.user")]).toHaveLength(4);
 
   const frame = rafQueue.splice(0);
@@ -699,4 +683,61 @@ test("the reveal chain stops once the transcript fills the viewport", async () =
   // count for the next scroll-up.
   expect([...messages.querySelectorAll(".message.user")]).toHaveLength(4);
   expect(messages.querySelector(".history-gate").textContent).toContain("2");
+});
+
+test("a reveal batch settles the scroller so the gate leaves the trigger zone", async () => {
+  // Anchoring the control at the transcript top removed the side effect that
+  // used to push it out of the trigger zone, and auto-reveal went dead at the
+  // top (regression from the anchor-below change, 2026-09-24; the trigger is
+  // now position-based). Each batch settles the scroller just below the
+  // threshold so the reader always has room to scroll up into it again.
+  const entries = makeTurnEntries(6);
+  let rafQueue = [];
+  globalThis.requestAnimationFrame = (callback) => {
+    rafQueue.push(callback);
+    return rafQueue.length;
+  };
+  await import("./app.js?history-gate-settle");
+  const ws = wsInstances.at(-1);
+  ws.onmessage({
+    data: JSON.stringify({
+      type: "runtime_snapshot",
+      protocolVersion: 2,
+      sequence: 1,
+      target,
+      state: {
+        pi: { sessionFile: "/pi/sessions/s7.jsonl", isStreaming: false },
+        messages: entries.map((entry) => entry.message),
+      },
+    }),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  // jsdom never fires rAFs: drain the render-time ones (post-render scroll
+  // settle) so the flush below only runs the reveal chain's continuations.
+  const stale = rafQueue.splice(0);
+  rafQueue = [];
+  for (const callback of stale) callback();
+
+  const messages = document.getElementById("messages");
+  Object.defineProperty(messages, "scrollHeight", { configurable: true, value: 3000 });
+  Object.defineProperty(messages, "clientHeight", { configurable: true, value: 800 });
+  // A reader arriving at the gate: inside the 96px trigger zone.
+  messages.scrollTop = 40;
+
+  messages.scrollTop = 40;
+  messages.dispatchEvent(new Event("scroll"));
+  expect([...messages.querySelectorAll(".message.user")]).toHaveLength(4);
+  const frame = rafQueue.splice(0);
+  rafQueue = [];
+  for (const callback of frame) callback();
+
+  // The chain stopped (viewport full) and the settle moved the scroller just
+  // below the threshold, so the next scroll-up has room to re-trigger.
+  expect(messages.querySelector(".history-gate").textContent).toContain("2");
+  expect(messages.scrollTop).toBe(96 + 32);
+
+  // The reader scrolls up again: another batch.
+  messages.scrollTop = 30;
+  messages.dispatchEvent(new Event("scroll"));
+  expect([...messages.querySelectorAll(".message.user")]).toHaveLength(6);
 });

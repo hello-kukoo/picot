@@ -48,13 +48,19 @@ Picot 与 Paseo 的一个关键差别让这件事更简单：Picot 的全量 ent
 
 ## 设计
 
-### 触发器：IntersectionObserver
+### 触发器：滚动位置（2026-09-24 二次修订：IntersectionObserver → scroll 监听）
 
 新增 `public/ui/history-gate-auto-reveal.js` 模块（一个职责：滚动自动揭示）：
 
-1. `observe(gateControl, messagesElement, reveal)`：以 `messagesElement` 为 root、
-   `rootMargin: "96px 0px 0px 0px"`（顶端方向）观察 gate control。
-2. 进入视口回调 `reveal()`：调用 `mountOlder(HISTORY_REVEAL_BATCH_TURNS)`。
+1. `observe(messagesElement, reveal)`：在滚动容器上挂 passive `scroll` 监听；
+   `scrollTop <= AUTO_REVEAL_THRESHOLD_PX`（96px，Paseo 值）即调用
+   `mountOlder(HISTORY_REVEAL_BATCH_TURNS)`。每次到达触发一批；揭示插入的
+   settle（`scrollTop = 96+32`）让读者始终有继续上滚的余量，连续上滚即连续加载。
+   *2026-09-24 修订*：IntersectionObserver 版本依赖「control 离开触发区再进入」
+   的可见性转变；gate 锚定为流内首元素后，一批之后 control 不再移动，转变不再
+   发生，到顶后继续上滚什么都加载不了（实测回归）。位置判定（Paseo 原语义）
+   不依赖转变。
+2. 触发即 `reveal()`。
 3. **填满视口语义**：插入后若 control 仍连接且**滚动容器尚未溢出**
    （`root.scrollHeight <= root.clientHeight`），`requestAnimationFrame` 续一批，
    直至溢出、`remaining <= 0`、control 失连。单条 rAF 链串行，无并发。
@@ -64,7 +70,7 @@ Picot 与 Paseo 的一个关键差别让这件事更简单：Picot 的全量 ent
    gate 抽干。
 4. `disconnect()` 在 `updateHistoryGateControl` 的 `remaining <= 0` 移除分支、以及
    `renderSessionHistory` 的非 gate 分支（`historyGate.control = null` 处）调用。
-   observer 实例挂在 `historyGate` 记录上，随 gate 生命周期走。
+   摘除监听并取消在途链，随 gate 生命周期走。
 
 ### 与既有机制的互斥
 

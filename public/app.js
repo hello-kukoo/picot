@@ -145,7 +145,11 @@ import { repaintContextViz, setupContextViz } from "./ui/context-viz.js";
 import { createConversationNav } from "./ui/conversation-nav.js";
 import { DialogHandler } from "./ui/dialogs.js";
 import { createHeaderStatusBar } from "./ui/header-status-bar.js";
-import { disconnectGateAutoReveal, observeGateAutoReveal } from "./ui/history-gate-auto-reveal.js";
+import {
+  AUTO_REVEAL_THRESHOLD_PX,
+  disconnectGateAutoReveal,
+  observeGateAutoReveal,
+} from "./ui/history-gate-auto-reveal.js";
 import { initImageLightbox } from "./ui/image-lightbox.js";
 import { setupMessagesInsets } from "./ui/layout-insets.js";
 import { MessageRenderer } from "./ui/message-renderer.js";
@@ -768,7 +772,10 @@ const sidebar = new SessionSidebar(
       return transport.openInApp(project.path);
     },
     onRegisterWorkspace: (targetCwd) => handleRegisteredWorkspace(targetCwd),
-    onWorkspaceFocus: (project) => enterFocus(project),
+    // Focus mode is disabled for feedback (2026-09): entry button hidden by
+    // omitting onWorkspaceFocus — _workspaceFocusEnabled() then yields false.
+    // Focus machinery (enterFocus/WorkspaceFocusSidebar/URL param) stays.
+    // To re-enable, restore: onWorkspaceFocus: (project) => enterFocus(project),
     isCurrentWorkspace: (project) => project?.path === getCurrentWorkspacePath(),
     onSessionNotice: (message) => {
       if (typeof messageRenderer?.renderSystemMessage === "function") {
@@ -6307,11 +6314,15 @@ function insertTurnFragmentBelowControl(fragment) {
   // The control is the transcript's first element and stays there: a reader
   // who scrolled up to the newly mounted history finds the control (and its
   // remaining count) directly above, instead of buried under the turns it
-  // just revealed. No scroll compensation: a reveal only runs while the
-  // control is on screen (auto-reveal margin or a click), so the batch lands
-  // where the reader is already looking.
+  // just revealed. The batch never pushes the anchored control out of the
+  // trigger zone by itself, so a reader parked inside the zone would get no
+  // further auto-reveals (the observer only fires on zone transitions): settle
+  // the scroller just below the zone so the next scroll-up is a real entry.
   const control = historyGate.control;
   control.parentNode.insertBefore(fragment, control.nextSibling);
+  if (messagesElement.scrollTop <= AUTO_REVEAL_THRESHOLD_PX) {
+    messagesElement.scrollTop = AUTO_REVEAL_THRESHOLD_PX + 32;
+  }
 }
 
 function updateHistoryGateControl() {
@@ -6688,7 +6699,7 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
       onAll: mountAll,
     });
     messagesElement.appendChild(historyGate.control);
-    observeGateAutoReveal(historyGate.control, messagesElement, () => {
+    observeGateAutoReveal(messagesElement, () => {
       mountOlder(HISTORY_REVEAL_BATCH_TURNS);
       return historyGate.turnCount - historyGate.revealedCount;
     });
