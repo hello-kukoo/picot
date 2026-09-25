@@ -203,8 +203,9 @@ fallback for non-turn paths (auto-retry, abort/reconnect recovery, and ephemeral
   *2026-09-24 revision (Dr. Lin):* the control is the transcript's **first element** and stays
   there — revealed batches insert below it. Inserting above it buried the control under the turns
   it had just revealed, so a reader who scrolled up to read them had to scroll back down to load
-  more. The control never moves, so no scroll compensation is applied (a reveal only runs while
-  the control is on screen: auto-reveal margin or a click).
+  more. Each insert compensates `scrollTop` by the inserted height: the batch lands between the
+  control and the content the reader is looking at, so without it the view jumps down by the
+  batch. A reveal loads history — it never scrolls the view.
 - Folding **only affects mounting** — the session log, the Info tree, fork/edit entry ids, and
   the file-chips rows are untouched.
 - Revealing keeps the viewport anchored by construction: the control does not move when a batch

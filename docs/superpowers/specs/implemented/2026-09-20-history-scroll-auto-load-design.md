@@ -55,7 +55,8 @@ Picot 与 Paseo 的一个关键差别让这件事更简单：Picot 的全量 ent
 1. `observe(messagesElement, reveal)`：在滚动容器上挂 passive `scroll` 监听；
    `scrollTop <= AUTO_REVEAL_THRESHOLD_PX`（96px，Paseo 值）即调用
    `mountOlder(HISTORY_REVEAL_BATCH_TURNS)`。每次到达触发一批；揭示插入的
-   settle（`scrollTop = 96+32`）让读者始终有继续上滚的余量，连续上滚即连续加载。
+   插入按插入高度补偿 `scrollTop`（视口锚定：读者看到的内容不动，**揭示只加载、
+   不滚动视图**），同时留下继续上滚的余量，连续上滚即连续加载。
    *2026-09-24 修订*：IntersectionObserver 版本依赖「control 离开触发区再进入」
    的可见性转变；gate 锚定为流内首元素后，一批之后 control 不再移动，转变不再
    发生，到顶后继续上滚什么都加载不了（实测回归）。位置判定（Paseo 原语义）

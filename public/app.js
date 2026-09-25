@@ -140,16 +140,13 @@ import {
 import { applyTheme, getCurrentTheme, themes } from "./themes.js";
 import { createHostFileMentionSearch, setupAtFileMention } from "./ui/at-file-mention.js";
 import { BackgroundQuestionnaireStore } from "./ui/background-questionnaire-store.js";
+import { guardComposerArrowInsertion } from "./ui/composer-caret-guard.js";
 import { createTriggerRouter } from "./ui/composer-triggers.js";
 import { repaintContextViz, setupContextViz } from "./ui/context-viz.js";
 import { createConversationNav } from "./ui/conversation-nav.js";
 import { DialogHandler } from "./ui/dialogs.js";
 import { createHeaderStatusBar } from "./ui/header-status-bar.js";
-import {
-  AUTO_REVEAL_THRESHOLD_PX,
-  disconnectGateAutoReveal,
-  observeGateAutoReveal,
-} from "./ui/history-gate-auto-reveal.js";
+import { disconnectGateAutoReveal, observeGateAutoReveal } from "./ui/history-gate-auto-reveal.js";
 import { initImageLightbox } from "./ui/image-lightbox.js";
 import { setupMessagesInsets } from "./ui/layout-insets.js";
 import { MessageRenderer } from "./ui/message-renderer.js";
@@ -723,15 +720,32 @@ const safetyGuardDialog = new SafetyGuardDialog({
 const questionnaireCard = new QuestionnaireCard({
   // The question belongs to the live turn whose ask_user_question call
   // opened it: render in that turn's inline card slot (unified blocker slot,
-  // same host as the safety-guard approval). No live turn to host it
-  // (parked restore, replayed request, transcript re-render) falls back to
-  // the modal container.
+  // same host as the safety-guard approval). Rebuilt cards (parked restore,
+  // replayed request, transcript re-render) have no live turn; they anchor
+  // at the transcript tail instead — never a modal popup.
   container: document.getElementById("dialog-container"),
   resolveHost: () => activeTurn?.card?.host ?? null,
+  resolveFallbackHost: () => mountQuestionnaireStreamSlot(),
   send: (message) => wsClient.send(message),
   wsClient,
   confirmAbandon: ({ title, message }) => dialogHandler.showLocalConfirm({ title, message }),
+  // A walker frame lost in transit would strand the agent forever (submit
+  // drains nothing, pi never times out). One idempotent re-subscribe makes
+  // the host replay its pending — i.e. still unanswered — dialogs.
+  resubscribe: () => wsClient.requestPendingDialogReplay(),
 });
+
+// Stable inline slot for rebuilt questionnaires, re-appended to the transcript
+// tail on every mount so the card scrolls with the conversation instead of
+// popping a modal. `appendChild` on an already-attached node just moves it to
+// the end, which is exactly the anchoring we want after new stream content.
+const questionnaireStreamSlot = document.createElement("div");
+questionnaireStreamSlot.className = "questionnaire-stream-slot hidden";
+questionnaireStreamSlot.id = "questionnaire-stream-slot";
+function mountQuestionnaireStreamSlot() {
+  messagesElement.appendChild(questionnaireStreamSlot);
+  return questionnaireStreamSlot;
+}
 // Backgrounded runtimes wait forever on extension_ui_response; park their
 // questionnaire state here so the wait stays answerable after the user returns.
 const backgroundQuestionnaires = new BackgroundQuestionnaireStore();
@@ -901,6 +915,10 @@ const typingIndicator = document.getElementById("typing-indicator");
 const sessionCostEl = document.getElementById("session-cost");
 const sessionUsageEl = document.getElementById("session-usage");
 const tokenUsageEl = document.getElementById("token-usage");
+const contextDonutArc = document.getElementById("context-donut-arc");
+const contextDonutLabel = document.getElementById("context-donut-label");
+// Donut arc length for r=11 (matches the static SVG in index.html).
+const CONTEXT_DONUT_CIRCUMFERENCE = 2 * Math.PI * 11;
 setButtonIcon(refreshSessionsBtn, "refresh-cw", { size: 16 });
 setButtonIcon(document.getElementById("quick-chat-btn"), "message-circle", { size: 16 });
 const scrollBottomBadge = document.getElementById("scroll-bottom-badge");
@@ -2857,18 +2875,24 @@ function handleRPCEvent(event) {
   // history view is not overwritten by another runtime's output.
   widgetMirrorRegistry.handleRuntimeChange(eventRuntimeId);
 
+  if (typeof event.__turnId === "string" && event.__turnId) {
+    liveTurnId = event.__turnId;
+  }
+
   switch (event.type) {
     case "agent_start":
       handleAgentStart(event);
       break;
     case "agent_end":
       handleAgentEnd(event);
+      liveTurnId = null;
       if (pendingNewSessionRefresh) {
         scheduleNewSessionSidebarRefresh(event);
       }
       break;
     case "agent_settled":
       handleAgentSettled();
+      liveTurnId = null;
       break;
     case "message_start":
       handleMessageStart(event.message);
@@ -3114,6 +3138,10 @@ const TURNS_RENDERING = true; // opt-in; reverting restores flat rendering
 
 let activeTurn = null;
 let activeTurnStartedAt = null;
+// Pi reports the running turn's id on runtime_event frames (agent_start …).
+// The host's abort gate requires it — a bare abort is rejected there and the
+// drop is silent — so the pump keeps the newest id for the abort path.
+let liveTurnId = null;
 let pendingUserEl = null; // optimistic user bubble awaiting agent_start claim
 let pendingUserKey = null; // runtime key the bubble was rendered under
 let pendingPromptPreview = ""; // prompt text for the turn registry at open
@@ -3702,7 +3730,11 @@ function adoptLoggedPendingQuestionnaire(request) {
     args: { questions: pending.questions },
   });
   if (!started) return false;
-  if (questionnaireCard.handleExtensionUIRequest(request)) return true;
+  if (questionnaireCard.handleExtensionUIRequest(request)) {
+    // The rebuilt card is anchored at the stream tail: bring it into view.
+    messagesScrollOwner.scrollToBottom();
+    return true;
+  }
   questionnaireCard.teardown({ cancelPending: false });
   return false;
 }
@@ -3793,6 +3825,10 @@ messageInput.addEventListener("keydown", (e) => {
     sendMessage();
   }
 });
+
+// WKWebView (Tauri 2) can turn an unconsumed arrow keyDown into insertText
+// with the legacy C0 encoding (U+001D = right …): strip it at the composer.
+guardComposerArrowInsertion(messageInput);
 
 // Auto-resize textarea; unsent text persists per session as a C4 draft.
 messageInput.addEventListener("input", () => {
@@ -4984,7 +5020,7 @@ function openModelDropdown() {
           // first so the new model applies to the next prompt immediately. A
           // healthy stream is left untouched — we only interrupt retry/error runs.
           if (isAutoRetrying || lastTurnErrored) {
-            wsClient.send({ type: "abort" });
+            sendAbortCommand();
             isAutoRetrying = false;
             lastTurnErrored = false;
             showTypingIndicator(false);
@@ -6314,15 +6350,16 @@ function insertTurnFragmentBelowControl(fragment) {
   // The control is the transcript's first element and stays there: a reader
   // who scrolled up to the newly mounted history finds the control (and its
   // remaining count) directly above, instead of buried under the turns it
-  // just revealed. The batch never pushes the anchored control out of the
-  // trigger zone by itself, so a reader parked inside the zone would get no
-  // further auto-reveals (the observer only fires on zone transitions): settle
-  // the scroller just below the zone so the next scroll-up is a real entry.
+  // just revealed.
   const control = historyGate.control;
+  const before = messagesElement.scrollHeight;
   control.parentNode.insertBefore(fragment, control.nextSibling);
-  if (messagesElement.scrollTop <= AUTO_REVEAL_THRESHOLD_PX) {
-    messagesElement.scrollTop = AUTO_REVEAL_THRESHOLD_PX + 32;
-  }
+  // The batch lands between the control and the turns the reader is looking
+  // at, so compensate by exactly the inserted height: the content in view
+  // holds still — a reveal loads history, it never scrolls the view. The
+  // compensation also leaves the reveal room to run again: the reader scrolls
+  // up into the threshold instead of sitting pinned at the top.
+  messagesElement.scrollTop += messagesElement.scrollHeight - before;
 }
 
 function updateHistoryGateControl() {
@@ -6750,6 +6787,9 @@ function renderSessionHistory(entries, { searchQuery = "", leafId = null } = {})
   anchorHistoryToBottom(document.getElementById("messages"), {
     preserveScrollTarget: Boolean(searchQuery),
   });
+  // The transcript wipe above can leave a still-pending questionnaire
+  // detached: re-anchor it at the tail of the fresh stream.
+  questionnaireCard.remountIfNeeded();
 }
 
 // ═══════════════════════════════════════
@@ -6796,31 +6836,20 @@ async function clearPiQueueAndRestore() {
   return cleared;
 }
 
+/** Abort the live run. Must carry the live turn's pi id: the host's abort
+ * gate rejects a bare abort ("abort requires turnId") and the drop is silent. */
+function sendAbortCommand() {
+  const command = { type: "abort" };
+  if (liveTurnId) command.turnId = liveTurnId;
+  return wsClient.send(command);
+}
+
 function abortCurrentRun() {
-  // Q3-A: abort alone would let pi CONTINUE with queued steer/followUp
-  // ("abort continues queued messages"). Clear first, restore the text to
-  // the composer, then abort — Esc means "really stop", and no text is lost.
-  // The clear races a ~1s cap: an unresponsive pi (exactly when users hit
-  // Esc) must not delay the real abort behind wsRequest's 15s default. A
-  // late clear that genuinely succeeded still restores its text — the queue
-  // was provably emptied at pi, so the text is real either way.
-  if (state.isStreaming) {
-    let aborted = false;
-    const abortNow = () => {
-      if (aborted) return;
-      aborted = true;
-      wsClient.send({ type: "abort" });
-    };
-    const cap = setTimeout(abortNow, 1000);
-    void clearPiQueueAndRestore()
-      .catch(() => {})
-      .finally(() => {
-        clearTimeout(cap);
-        abortNow();
-      });
-  } else {
-    wsClient.send({ type: "abort" });
-  }
+  // Pi-native (2026-09-25, supersedes the composer spec's Q3-A): abort ONLY.
+  // Queued steer/followUp stay at pi — it continues with them once the run
+  // terminates ("abort continues queued messages") — so no clear_queue and no
+  // composer restore on the stop path.
+  sendAbortCommand();
   messageRenderer.renderError(t("errors.abortedByUser"));
   showTypingIndicator(false);
 
@@ -6841,16 +6870,16 @@ function abortCurrentRun() {
 
 function updateTokenUsage() {
   if (lastInputTokens <= 0) {
-    tokenUsageEl.replaceChildren();
-    tokenUsageEl.removeAttribute("title");
     tokenUsageEl.classList.remove("visible", "warning", "critical");
     contextVizController?.invalidateUsage();
     return;
   }
 
   if (contextWindowSize > 0) {
-    const pct = Math.round((lastInputTokens / contextWindowSize) * 100);
-    tokenUsageEl.textContent = `${pct}%`;
+    const pct = Math.min(100, Math.round((lastInputTokens / contextWindowSize) * 100));
+    contextDonutArc.style.strokeDasharray = String(CONTEXT_DONUT_CIRCUMFERENCE);
+    contextDonutArc.style.strokeDashoffset = String(CONTEXT_DONUT_CIRCUMFERENCE * (1 - pct / 100));
+    contextDonutLabel.textContent = `${pct}%`;
     tokenUsageEl.classList.add("visible");
     tokenUsageEl.classList.remove("warning", "critical");
     if (pct >= 80) {
@@ -6862,12 +6891,14 @@ function updateTokenUsage() {
       used: (lastInputTokens / 1000).toFixed(1),
       limit: (contextWindowSize / 1000).toFixed(0),
     });
-    // Compact lives only in the context popover now; the header threshold
-    // just colors the pill. Clicking it opens the popover with the action.
+    // Compact lives only in the context popover; thresholds just recolor
+    // the donut. Clicking it opens the popover with the action.
   } else {
     // No context window info yet, just show raw tokens and suppress the
     // threshold-based action because no percentage can be computed.
-    tokenUsageEl.textContent = `${(lastInputTokens / 1000).toFixed(1)}k`;
+    contextDonutArc.style.strokeDasharray = String(CONTEXT_DONUT_CIRCUMFERENCE);
+    contextDonutArc.style.strokeDashoffset = String(CONTEXT_DONUT_CIRCUMFERENCE);
+    contextDonutLabel.textContent = "–";
     tokenUsageEl.classList.add("visible");
     tokenUsageEl.classList.remove("warning", "critical");
   }

@@ -685,19 +685,19 @@ test("the reveal chain stops once the transcript fills the viewport", async () =
   expect(messages.querySelector(".history-gate").textContent).toContain("2");
 });
 
-test("a reveal batch settles the scroller so the gate leaves the trigger zone", async () => {
-  // Anchoring the control at the transcript top removed the side effect that
-  // used to push it out of the trigger zone, and auto-reveal went dead at the
-  // top (regression from the anchor-below change, 2026-09-24; the trigger is
-  // now position-based). Each batch settles the scroller just below the
-  // threshold so the reader always has room to scroll up into it again.
+test("a revealed batch compensates the scroll so the reading position holds", async () => {
+  // The batch lands between the anchored control and the turns the reader is
+  // looking at, so the insert must be compensated: without it the reader's
+  // content jumps down by the batch height. Forcing the scroller back to the
+  // control instead (the previous settle) is the other failure mode — a
+  // reveal may load, but it must never scroll the view.
   const entries = makeTurnEntries(6);
   let rafQueue = [];
   globalThis.requestAnimationFrame = (callback) => {
     rafQueue.push(callback);
     return rafQueue.length;
   };
-  await import("./app.js?history-gate-settle");
+  await import("./app.js?history-gate-anchor-hold");
   const ws = wsInstances.at(-1);
   ws.onmessage({
     data: JSON.stringify({
@@ -706,37 +706,47 @@ test("a reveal batch settles the scroller so the gate leaves the trigger zone", 
       sequence: 1,
       target,
       state: {
-        pi: { sessionFile: "/pi/sessions/s7.jsonl", isStreaming: false },
+        pi: { sessionFile: "/pi/sessions/s8.jsonl", isStreaming: false },
         messages: entries.map((entry) => entry.message),
       },
     }),
   });
   await new Promise((resolve) => setTimeout(resolve, 300));
-  // jsdom never fires rAFs: drain the render-time ones (post-render scroll
-  // settle) so the flush below only runs the reveal chain's continuations.
+  // jsdom never fires rAFs: drain the render-time ones so the flush below
+  // only runs the reveal chain's continuations.
   const stale = rafQueue.splice(0);
   rafQueue = [];
   for (const callback of stale) callback();
 
   const messages = document.getElementById("messages");
-  Object.defineProperty(messages, "scrollHeight", { configurable: true, value: 3000 });
+  // Geometry tracks the mounted turns, so an insert has a real height.
+  Object.defineProperty(messages, "scrollHeight", {
+    configurable: true,
+    get: () => messages.querySelectorAll("section.turn").length * 500,
+  });
   Object.defineProperty(messages, "clientHeight", { configurable: true, value: 800 });
+  const turnsBefore = messages.querySelectorAll("section.turn").length;
+  expect(turnsBefore).toBe(2);
   // A reader arriving at the gate: inside the 96px trigger zone.
   messages.scrollTop = 40;
 
-  messages.scrollTop = 40;
   messages.dispatchEvent(new Event("scroll"));
   expect([...messages.querySelectorAll(".message.user")]).toHaveLength(4);
+  const inserted = (messages.querySelectorAll("section.turn").length - turnsBefore) * 500;
+
+  // Compensated by exactly the inserted height: the content in view holds
+  // still, and nothing jumps the view back to the control.
+  expect(inserted).toBe(1000);
+  expect(messages.scrollTop).toBe(40 + inserted);
+  expect(messages.scrollTop).not.toBe(96 + 32);
+
   const frame = rafQueue.splice(0);
   rafQueue = [];
   for (const callback of frame) callback();
 
-  // The chain stopped (viewport full) and the settle moved the scroller just
-  // below the threshold, so the next scroll-up has room to re-trigger.
+  // The chain stopped (viewport full) and the compensation left room to
+  // scroll up: the next arrival loads another batch.
   expect(messages.querySelector(".history-gate").textContent).toContain("2");
-  expect(messages.scrollTop).toBe(96 + 32);
-
-  // The reader scrolls up again: another batch.
   messages.scrollTop = 30;
   messages.dispatchEvent(new Event("scroll"));
   expect([...messages.querySelectorAll(".message.user")]).toHaveLength(6);
