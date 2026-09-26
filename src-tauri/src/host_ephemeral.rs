@@ -697,7 +697,10 @@ impl EphemeralHub {
             .entry(instance_id.to_string())
             .or_insert_with(EphemeralRenderState::new);
         let frame = match response {
-            Ok(value) => {
+            Ok(mut value) => {
+                if let Some(object) = value.as_object_mut() {
+                    object.insert("id".into(), Value::String(request_id.to_string()));
+                }
                 state.apply_response(&value);
                 json!({
                     "type": "ephemeral_event",
@@ -1415,6 +1418,59 @@ mod generation_token_tests {
             "routing id req-77 must not clobber the dialog id"
         );
         assert_eq!(delivered["value"], "A");
+    }
+    #[tokio::test]
+    async fn forward_command_restores_client_request_id_on_response_payload() {
+        let (hub, owner, instance_id, mut receiver) = hub_with_record("owner-a", 5);
+        let hub = Arc::new(hub);
+        let runtimes = Arc::new(NativePiManager::new(8));
+        let target = hub
+            .target_of(&instance_id)
+            .expect("target registered")
+            .target;
+        let mut fake = runtimes.register_in_memory(target).unwrap();
+        let forward = tokio::spawn({
+            let hub = Arc::clone(&hub);
+            let runtimes = Arc::clone(&runtimes);
+            let owner = owner.clone();
+            let instance_id = instance_id.clone();
+            async move {
+                hub.forward_command(
+                    &runtimes,
+                    &owner,
+                    &instance_id,
+                    1,
+                    json!({ "type": "get_available_models" }),
+                    "ep-7",
+                )
+                .await
+            }
+        });
+        let request = tokio::time::timeout(Duration::from_secs(2), fake.read_request())
+            .await
+            .expect("command must reach pi")
+            .expect("request frame");
+        let bridge_id = request["id"].as_str().expect("bridge id").to_string();
+        fake.write_frame(json!({
+            "type": "response",
+            "command": "get_available_models",
+            "success": true,
+            "id": bridge_id,
+            "data": { "models": [] }
+        }))
+        .await
+        .expect("response must reach the bridge");
+        tokio::time::timeout(Duration::from_secs(2), forward)
+            .await
+            .expect("forward must complete")
+            .expect("forward result")
+            .expect("forward must succeed");
+        let frame = receiver.try_recv().expect("owner frame").value;
+        assert_eq!(frame["type"], "ephemeral_event");
+        assert_eq!(frame["requestId"], "ep-7");
+        assert_eq!(frame["payload"]["id"], "ep-7");
+        assert_eq!(frame["payload"]["command"], "get_available_models");
+        assert_eq!(frame["payload"]["success"], true);
     }
 
     #[tokio::test]
