@@ -53,8 +53,15 @@
   --radius-pill: 999px;
 
   /* Sizing */
+  /* Floor for the chat column: every side panel's maximum width is derived from
+     this, so a wide preview or sidebar can never squeeze the conversation out. */
+  --chat-min: 400px;
   --sidebar-width: 272px;
-  --file-sidebar-width: 260px;
+  /* File tree sidebar first-open width. Its header row carries 3 tabs plus 6
+     action buttons (6 x 28px + gaps + 8px padding = 208px of chrome), which at
+     260px left the tabs ~52px — clipped to bare icons. 340px leaves ~132px,
+     enough for the active tab's icon + label. */
+  --file-sidebar-width: 340px;
   /* Motion */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --spring: cubic-bezier(0.34, 1.56, 0.64, 1);

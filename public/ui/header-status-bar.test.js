@@ -7,20 +7,13 @@ import { createHeaderStatusBar } from "./header-status-bar.js";
 
 beforeEach(() => {
   document.body.replaceChildren(
-    Object.assign(document.createElement("span"), { id: "session-cost" }),
     Object.assign(document.createElement("span"), { id: "session-usage" }),
     Object.assign(document.createElement("span"), { id: "token-usage" }),
   );
   setMessages({
     usage: {
-      input: "IN",
-      output: "OUT",
-      cache: "CACHE",
-      costSub: "{amount} (sub)",
-      costTitle: "Session cost",
       contextTitle: "Context usage",
       contextTokens: "Context: {used}k / {limit}k",
-      summary: "In {in} · Out {out} · Cache {cache}",
     },
   });
 });
@@ -31,17 +24,9 @@ afterEach(() => {
 
 function makeBar({ getContextWindowSize = () => 1000 } = {}) {
   return createHeaderStatusBar({
-    sessionCostEl: document.getElementById("session-cost"),
     sessionUsageEl: document.getElementById("session-usage"),
     tokenUsageEl: document.getElementById("token-usage"),
     getContextWindowSize,
-    t: (key, params) => {
-      if (key === "usage.costSub") return `usage.costSub(${JSON.stringify(params)})`;
-      if (key === "usage.summary") {
-        return `In ${params?.in ?? 0} · Out ${params?.out ?? 0} · Cache ${params?.cache ?? 0}`;
-      }
-      return key;
-    },
   });
 }
 
@@ -52,7 +37,6 @@ describe("createHeaderStatusBar aggregate lifecycle", () => {
     expect(typeof bar.hydrateSessionStats).toBe("function");
     expect(typeof bar.reset).toBe("function");
     expect(typeof bar.sync).toBe("function");
-    expect(document.getElementById("session-cost").textContent).toBe("");
     expect(document.getElementById("session-usage").textContent).toBe("");
   });
 
@@ -61,18 +45,21 @@ describe("createHeaderStatusBar aggregate lifecycle", () => {
     bar.hydrateSessionStats({
       sessionFile: "/s/a.jsonl",
       tokens: { input: 100, output: 50, cacheRead: 30, cacheWrite: 5, total: 185 },
-      cost: { total: 0.02 },
     });
     bar.hydrateSessionStats({
       sessionFile: "/s/a.jsonl",
       tokens: { input: 100, output: 50, cacheRead: 30, cacheWrite: 5, total: 185 },
-      cost: { total: 0.02 },
     });
-    const usage = document.getElementById("session-usage").textContent;
-    expect(usage).toContain("In 100");
-    expect(usage).toContain("Out 50");
-    expect(usage).toContain("Cache 30");
-    expect(document.getElementById("session-cost").textContent).toContain("0.02");
+    const usage = document.getElementById("session-usage");
+    const segments = usage.querySelectorAll(".composer-usage-seg");
+    expect(segments.length).toBe(3);
+    // Icon + bare number per segment; no IN/OUT/CACHE words.
+    expect(segments[0].textContent).toContain("100");
+    expect(segments[0].querySelector("svg")).toBeTruthy();
+    expect(segments[1].textContent).toContain("50");
+    expect(segments[1].querySelector("svg")).toBeTruthy();
+    expect(segments[2].textContent).toContain("30");
+    expect(segments[2].querySelector("svg")).toBeTruthy();
   });
 
   it("accumulates only newly received live usage after hydration", () => {
@@ -80,7 +67,6 @@ describe("createHeaderStatusBar aggregate lifecycle", () => {
     bar.hydrateSessionStats({
       sessionFile: "/s/a.jsonl",
       tokens: { input: 100, output: 50, cacheRead: 30, cacheWrite: 5, total: 185 },
-      cost: { total: 0.02 },
     });
     expect(
       bar.applyLiveUsage(
@@ -89,16 +75,16 @@ describe("createHeaderStatusBar aggregate lifecycle", () => {
           output: 20,
           cacheRead: 10,
           cacheWrite: 0,
-          cost: { total: 0.01 },
         },
         { sessionFile: "/s/a.jsonl" },
       ),
     ).toBe(true);
-    const usage = document.getElementById("session-usage").textContent;
-    expect(usage).toContain("In 140");
-    expect(usage).toContain("Out 70");
-    expect(usage).toContain("Cache 40");
-    expect(document.getElementById("session-cost").textContent).toContain("0.03");
+    const usage = document.getElementById("session-usage");
+    const segments = usage.querySelectorAll(".composer-usage-seg");
+    expect(segments.length).toBe(3);
+    expect(segments[0].textContent).toContain("140");
+    expect(segments[1].textContent).toContain("70");
+    expect(segments[2].textContent).toContain("40");
   });
 
   it("formats large aggregates with K/M suffixes", () => {
@@ -106,12 +92,25 @@ describe("createHeaderStatusBar aggregate lifecycle", () => {
     bar.hydrateSessionStats({
       sessionFile: "/s/big.jsonl",
       tokens: { input: 1_500_000, output: 250_000, cacheRead: 3_200_000 },
-      cost: { total: 0.5 },
     });
-    const usage = document.getElementById("session-usage").textContent;
-    expect(usage).toContain("In 1.5M");
-    expect(usage).toContain("Out 250K");
-    expect(usage).toContain("Cache 3.2M");
+    const usage = document.getElementById("session-usage");
+    const segments = usage.querySelectorAll(".composer-usage-seg");
+    expect(segments.length).toBe(3);
+    expect(segments[0].textContent).toContain("1.5M");
+    expect(segments[1].textContent).toContain("250K");
+    expect(segments[2].textContent).toContain("3.2M");
+  });
+
+  it("hides the cache segment when no tokens were cache-read", () => {
+    const bar = makeBar();
+    bar.hydrateSessionStats({
+      sessionFile: "/s/a.jsonl",
+      tokens: { input: 100, output: 50, cacheRead: 0 },
+    });
+    const segments = document
+      .getElementById("session-usage")
+      .querySelectorAll(".composer-usage-seg");
+    expect(segments.length).toBe(2);
   });
 
   it("clears both aggregate and current context on reset for a new session", () => {
@@ -119,30 +118,23 @@ describe("createHeaderStatusBar aggregate lifecycle", () => {
     bar.hydrateSessionStats({
       sessionFile: "/s/a.jsonl",
       tokens: { input: 100, output: 50, cacheRead: 30, cacheWrite: 5, total: 185 },
-      cost: { total: 0.02 },
     });
     bar.reset();
     expect(document.getElementById("session-usage").textContent).toBe("");
-    expect(document.getElementById("session-cost").textContent).toBe("");
   });
 
   it("ignores live usage without a confirmed identity", () => {
     const bar = makeBar();
-    expect(bar.applyLiveUsage({ input: 40, output: 20, cost: { total: 0.01 } })).toBe(false);
+    expect(bar.applyLiveUsage({ input: 40, output: 20 })).toBe(false);
     expect(document.getElementById("session-usage").textContent).toBe("");
 
     bar.hydrateSessionStats({
       sessionFile: "/s/a.jsonl",
       tokens: { input: 100, output: 50, cacheRead: 30 },
-      cost: { total: 0.02 },
     });
-    expect(
-      bar.applyLiveUsage(
-        { input: 40, output: 20, cost: { total: 0.01 } },
-        { sessionFile: undefined },
-      ),
-    ).toBe(false);
-    expect(document.getElementById("session-usage").textContent).toContain("In 100");
+    expect(bar.applyLiveUsage({ input: 40, output: 20 }, { sessionFile: undefined })).toBe(false);
+    expect(document.getElementById("session-usage").textContent).toContain("100");
+    expect(document.getElementById("session-usage").textContent).not.toContain("140");
   });
 
   it("resets the aggregate to authoritative zero when tokens are null", () => {
@@ -150,11 +142,9 @@ describe("createHeaderStatusBar aggregate lifecycle", () => {
     bar.hydrateSessionStats({
       sessionFile: "/s/a.jsonl",
       tokens: { input: 100, output: 50, cacheRead: 30 },
-      cost: { total: 0.02 },
     });
-    bar.hydrateSessionStats({ sessionFile: "/s/a.jsonl", tokens: null, cost: { total: 0 } });
+    bar.hydrateSessionStats({ sessionFile: "/s/a.jsonl", tokens: null });
     expect(document.getElementById("session-usage").textContent).toBe("");
-    expect(document.getElementById("session-cost").textContent).toBe("");
   });
 
   it("ignores a live usage that belongs to a different session than the hydrated one", () => {
@@ -162,15 +152,14 @@ describe("createHeaderStatusBar aggregate lifecycle", () => {
     bar.hydrateSessionStats({
       sessionFile: "/s/a.jsonl",
       tokens: { input: 100, output: 50, cacheRead: 30, cacheWrite: 5, total: 185 },
-      cost: { total: 0.02 },
     });
     bar.applyLiveUsage(
       { input: 40, output: 20, cacheRead: 10, cacheWrite: 0, cost: { total: 0.01 } },
       { sessionFile: "/s/other.jsonl" },
     );
     const usage = document.getElementById("session-usage").textContent;
-    expect(usage).toContain("In 100");
-    expect(usage).not.toContain("In 140");
+    expect(usage).toContain("100");
+    expect(usage).not.toContain("140");
   });
 
   it("renders current-context percentage with warning/critical thresholds and can clear it independently", () => {

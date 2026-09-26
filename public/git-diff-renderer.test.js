@@ -1,6 +1,8 @@
 // ABOUTME: Verifies Git diff rendering stays bounded and text-safe.
 // ABOUTME: Covers aligned rows, line gutters, and explicit raw fallback rendering.
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createGitDiffRenderer } from "./git-diff-renderer.js";
 import { setMessages } from "./i18n.js";
@@ -12,6 +14,7 @@ setMessages({
     diffEmpty: "No changes to display",
     fallback: { binary: "Binary file", rename: "Renamed only", copy: "Copied only" },
     comparison: { staged: "Staged", changes: "Changes", commit: "Commit", untracked: "Untracked" },
+    comparisonHint: "Baseline: {kind}",
   },
 });
 
@@ -100,6 +103,45 @@ describe("git diff renderer", () => {
     expect(container.querySelector(".git-diff-columns")?.classList.contains("wrap-lines")).toBe(
       true,
     );
+  });
+
+  it("follows the source editor's theme, font family and font size", () => {
+    const css = readFileSync(join(process.cwd(), "public", "style.css"), "utf8");
+    /** Whitespace-free text, so assertions survive the formatter's line breaks. */
+    const flat = (text) => text.replace(/\s+/g, "");
+    /** Declaration body of the first rule whose selector matches exactly. */
+    const ruleBody = (selector) => {
+      const start = css.indexOf(`${selector} {`);
+      return start < 0 ? "" : flat(css.slice(start, css.indexOf("}", start)));
+    };
+    const has = (selector, declaration) => expect(ruleBody(selector)).toContain(flat(declaration));
+
+    // Same face + size as CodeMirror, and the same chrome palette the editor
+    // uses (Picot defaults, overridden by a named preview theme on <html>).
+    for (const selector of [".git-diff-columns", ".git-diff-fallback pre"]) {
+      has(selector, "font-family: var(--editor-font-family)");
+      has(selector, "font-size: var(--preview-font-size, 13px)");
+    }
+    has(".git-diff-columns", "background: var(--editor-bg)");
+    has(".git-diff-columns", "color: var(--editor-fg)");
+    has(".git-diff-gutter", "color: var(--editor-gutter-fg)");
+    has(".git-diff-cell.blank", "var(--editor-active-line)");
+  });
+
+  it("explains the comparison badge without changing its label", () => {
+    const container = document.createElement("div");
+    createGitDiffRenderer({
+      patch: "@@ -1 +1 @@\n-old\n+new",
+      displayPath: "a.js",
+      comparison: "commit",
+    }).mount(container);
+
+    const badge = container.querySelector(".git-diff-comparison");
+    // The visible word stays the comparison kind; the pill is a label, not a
+    // control, so the explanation rides a tooltip instead of new chrome.
+    expect(badge.textContent).toBe("Commit");
+    expect(badge.getAttribute("title")).toBe("Baseline: Commit");
+    expect(badge.getAttribute("aria-label")).toBe("Baseline: Commit");
   });
 
   it("keeps the two independent columns when line wrapping is disabled", () => {

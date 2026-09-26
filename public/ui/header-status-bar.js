@@ -1,11 +1,20 @@
-// ABOUTME: Owns the session-aggregate usage/cost row in the header (IN/OUT/CACHE/cost).
+// ABOUTME: Owns the session-aggregate usage cluster in the composer (↑in ↓out ⚡cache).
 // ABOUTME: Completely separate from the current-context (lastUsage) lifecycle so a
 // ABOUTME: successful Compact can invalidate stale context without fabricating usage.
+// ABOUTME: Session cost lives on each turn's own footer, never in the chrome.
+
+import { createIcon } from "../icons.js";
 
 const DEFAULT_CONTEXT_THRESHOLDS = { warning: 0.6, critical: 0.8 };
 
-function formatCost(amount) {
-  return Number.isFinite(amount) ? amount.toFixed(4) : "0.0000";
+/** One icon + bare-number cluster segment (↑1.2K); icon optional. */
+function appendUsageSegment(container, iconName, tokens) {
+  const seg = document.createElement("span");
+  seg.className = "composer-usage-seg";
+  const icon = createIcon(iconName, { size: 10 });
+  if (icon) seg.appendChild(icon);
+  seg.appendChild(document.createTextNode(formatTokens(tokens)));
+  container.appendChild(seg);
 }
 
 /** Compact a raw token count into a short suffixed string (M / K / raw). */
@@ -26,24 +35,22 @@ function sum(prev, next) {
 }
 
 /**
- * Build a header status bar that renders session-aggregate token/cost totals
- * (sourced only from `hydrateSessionStats` and post-hydration `applyLiveUsage`)
- * plus the current-context percentage (sourced independently by the caller).
+ * Build the composer's session-aggregate token cluster (sourced only from
+ * `hydrateSessionStats` and post-hydration `applyLiveUsage`) plus the
+ * current-context percentage (sourced independently by the caller).
  *
  * Aggregate totals are intentionally not derived from `lastUsage`/history
  * replay: repeated mirror syncs and history rendering must never increment
  * them. Only the authoritative `get_session_stats` hydration and new live
  * assistant completions for the same active session contribute.
  *
- * @param {{sessionCostEl:HTMLElement, sessionUsageEl:HTMLElement, getContextWindowSize:()=>number, t:(k,p?)=>string, thresholds?:{warning:number,critical:number}}} deps
+ * @param {{sessionUsageEl:HTMLElement, tokenUsageEl:HTMLElement, getContextWindowSize:()=>number, thresholds?:{warning:number,critical:number}}} deps
  * @returns {{applyLiveUsage, hydrateSessionStats, reset, sync}}
  */
 export function createHeaderStatusBar({
-  sessionCostEl,
   sessionUsageEl,
   tokenUsageEl,
   getContextWindowSize,
-  t,
   thresholds = DEFAULT_CONTEXT_THRESHOLDS,
 }) {
   const totals = {
@@ -51,7 +58,6 @@ export function createHeaderStatusBar({
     output: 0,
     cacheRead: 0,
     cacheWrite: 0,
-    cost: 0,
   };
   let hydratedSessionFile = null;
   let hasHydrated = false;
@@ -63,20 +69,14 @@ export function createHeaderStatusBar({
       sessionUsageEl.removeAttribute("title");
       sessionUsageEl.classList.remove("visible");
     } else {
-      sessionUsageEl.textContent = t("usage.summary", {
-        in: formatTokens(totals.input),
-        out: formatTokens(totals.output),
-        cache: formatTokens(totals.cacheRead),
-      });
+      // Compact icon+number segments (↑in ↓out ⚡cache): no words, the
+      // title tooltip carries the semantics.
+      sessionUsageEl.replaceChildren();
+      appendUsageSegment(sessionUsageEl, "arrow-up", totals.input);
+      appendUsageSegment(sessionUsageEl, "arrow-down", totals.output);
+      // Cache reads are optional context; hide the segment at zero.
+      if (totals.cacheRead > 0) appendUsageSegment(sessionUsageEl, "zap", totals.cacheRead);
       sessionUsageEl.classList.add("visible");
-    }
-
-    if (totals.cost > 0) {
-      sessionCostEl.textContent = t("usage.costSub", { amount: `$${formatCost(totals.cost)}` });
-      sessionCostEl.classList.add("visible");
-    } else {
-      sessionCostEl.replaceChildren();
-      sessionCostEl.classList.remove("visible");
     }
     renderContextThreshold();
   }
@@ -96,17 +96,14 @@ export function createHeaderStatusBar({
     totals.output = 0;
     totals.cacheRead = 0;
     totals.cacheWrite = 0;
-    totals.cost = 0;
     hydratedSessionFile = null;
     hasHydrated = false;
     currentUsage = null;
-    tokenUsageEl?.replaceChildren();
-    tokenUsageEl?.removeAttribute("title");
     tokenUsageEl?.classList.remove("visible", "warning", "critical");
     renderAggregate();
   }
 
-  function hydrateSessionStats({ sessionFile, tokens, cost } = {}) {
+  function hydrateSessionStats({ sessionFile, tokens } = {}) {
     // The authoritative aggregate. Re-hydrating the same session replaces
     // (never accumulates) so repeated mirror syncs cannot double-count.
     // A missing identity is not safe to apply because it could belong to a
@@ -121,15 +118,11 @@ export function createHeaderStatusBar({
     totals.output = Number.isFinite(tokens?.output) ? Math.max(0, tokens.output) : 0;
     totals.cacheRead = Number.isFinite(tokens?.cacheRead) ? Math.max(0, tokens.cacheRead) : 0;
     totals.cacheWrite = Number.isFinite(tokens?.cacheWrite) ? Math.max(0, tokens.cacheWrite) : 0;
-    totals.cost = Number.isFinite(cost?.total) ? Math.max(0, cost.total) : 0;
     renderAggregate();
     return true;
   }
 
-  function applyLiveUsage(
-    { input, output, cacheRead, cacheWrite, cost } = {},
-    { sessionFile } = {},
-  ) {
+  function applyLiveUsage({ input, output, cacheRead, cacheWrite } = {}, { sessionFile } = {}) {
     // Live usage is accepted only after the active session identity has been
     // authoritatively hydrated. Unknown identities and the reset-to-hydration
     // race are deliberately dropped; the caller requests a fresh hydration
@@ -139,7 +132,6 @@ export function createHeaderStatusBar({
     totals.output = sum(totals.output, finiteAmount(output));
     totals.cacheRead = sum(totals.cacheRead, finiteAmount(cacheRead));
     totals.cacheWrite = sum(totals.cacheWrite, finiteAmount(cacheWrite));
-    totals.cost = sum(totals.cost, finiteAmount(cost?.total));
     renderAggregate();
     return true;
   }

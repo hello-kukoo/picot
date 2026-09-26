@@ -13,14 +13,23 @@
  *   storageKey  Unique localStorage key for this sidebar's width.
  *
  * Optional config:
- *   minWidth, maxWidth   Default 180 / 500.
+ *   minWidth             Default 180.
+ *   maxWidth             Default 500; may be a function, re-read on every clamp
+ *                        and on viewport resize so a panel can never starve the
+ *                        chat column (the app derives it from --chat-min).
  *   cssVar               Override the CSS variable name (defaults: --sidebar-width or --file-sidebar-width).
  *   initialWidth         Override initial width (defaults: persisted value, then sidebarEl offset).
+ *
+ * The handle is a focusable separator: ArrowLeft/ArrowRight resize it
+ * (Shift for a larger step) and aria-valuenow tracks the live width, so the
+ * same element serves pointer and keyboard users.
  */
 
 const MOBILE_MAX_WIDTH = 768;
 const DEFAULT_MIN = 180;
 const DEFAULT_MAX = 500;
+const ARROW_STEP = 12;
+const SHIFT_ARROW_STEP = 32;
 
 function resolveWidth(el) {
   if (!el) return 0;
@@ -50,12 +59,19 @@ export function createSidebarResizer({
   }
 
   const variableName = cssVar || (side === "left" ? "--sidebar-width" : "--file-sidebar-width");
+  const resolveMax = () => {
+    const value = typeof maxWidth === "function" ? maxWidth() : maxWidth;
+    return Number.isFinite(value) ? value : DEFAULT_MAX;
+  };
 
   const handle = document.createElement("div");
   handle.className = "sidebar-resizer";
   handle.dataset.side = side;
   handle.setAttribute("role", "separator");
   handle.setAttribute("aria-orientation", "vertical");
+  handle.tabIndex = 0;
+  handle.setAttribute("aria-valuemin", String(minWidth));
+  handle.setAttribute("aria-valuemax", String(resolveMax()));
   const siblingMethod = side === "left" ? "afterend" : "beforebegin";
   sidebarEl.insertAdjacentElement(siblingMethod, handle);
 
@@ -64,8 +80,11 @@ export function createSidebarResizer({
   let startWidth = 0;
 
   const applyWidth = (width) => {
-    const clamped = clamp(width, minWidth, maxWidth);
+    const max = resolveMax();
+    const clamped = clamp(width, Math.min(minWidth, max), max);
     sidebarEl.style.setProperty(variableName, `${clamped}px`);
+    handle.setAttribute("aria-valuenow", String(Math.round(clamped)));
+    handle.setAttribute("aria-valuemax", String(Math.round(max)));
     return clamped;
   };
 
@@ -118,12 +137,31 @@ export function createSidebarResizer({
     event.preventDefault();
   });
 
+  const onKeyDown = (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const step = event.shiftKey ? SHIFT_ARROW_STEP : ARROW_STEP;
+    // ArrowRight always means "towards the content": wider for a left
+    // sidebar, narrower for a right-hand panel whose handle is on its left.
+    const towardsContent = event.key === "ArrowRight";
+    const direction = side === "left" ? 1 : -1;
+    const delta = direction * (towardsContent ? step : -step);
+    event.preventDefault();
+    persist(applyWidth(resolveWidth(sidebarEl) + delta));
+  };
+  handle.addEventListener("keydown", onKeyDown);
+
   const syncForViewport = () => {
     if (window.innerWidth <= MOBILE_MAX_WIDTH) {
+      // Mobile turns the sidebar into a fixed slide-over (width: 80%), so the
+      // stored px width is out of the picture until the desktop layout returns.
       handle.style.display = "none";
-    } else {
-      handle.style.display = "";
+      return;
     }
+    handle.style.display = "";
+    // A shrinking window can invalidate a stored width that used to fit: re-clamp
+    // it so the chat column keeps its minimum instead of the row overflowing.
+    const current = resolveWidth(sidebarEl);
+    if (current > resolveMax()) persist(applyWidth(current));
   };
 
   window.addEventListener("resize", syncForViewport);
@@ -162,6 +200,7 @@ export function createSidebarResizer({
     },
     destroy() {
       window.removeEventListener("resize", syncForViewport);
+      handle.removeEventListener("keydown", onKeyDown);
       stopDrag();
       handle.remove();
     },

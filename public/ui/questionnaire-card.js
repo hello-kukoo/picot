@@ -5,6 +5,9 @@ import { onLocaleChange, t } from "../i18n.js";
 import { renderMarkdown } from "./markdown.js";
 
 const TOOL_NAME = "ask_user_question";
+// How long a live card waits for the walker's request frame before asking the
+// host to replay pending dialogs (idempotent; replays only unanswered ones).
+const REQUEST_RECOVERY_DELAY_MS = 1500;
 
 function asText(value) {
   return typeof value === "string" ? value : value == null ? "" : String(value);
@@ -70,18 +73,23 @@ export class QuestionnaireCard {
   constructor({
     container,
     resolveHost = null,
+    resolveFallbackHost = null,
     send = null,
     respond = null,
     confirmAbandon = null,
     wsClient = null,
     abortSignal = null,
+    resubscribe = null,
   } = {}) {
     this.container = container;
     this.resolveHost = typeof resolveHost === "function" ? resolveHost : null;
+    this.resolveFallbackHost =
+      typeof resolveFallbackHost === "function" ? resolveFallbackHost : null;
     this.send = typeof respond === "function" ? respond : send;
     this.confirmAbandon = confirmAbandon;
     this.wsClient = wsClient;
     this.abortSignal = abortSignal;
+    this.resubscribe = typeof resubscribe === "function" ? resubscribe : null;
     this.questions = [];
     this.answers = [];
     this.cursor = 0;
@@ -92,6 +100,8 @@ export class QuestionnaireCard {
     this.confirming = false;
     this._destroyed = false;
     this._activeContainer = null;
+    this._seenRequestIds = new Set();
+    this._recoveryTimer = null;
 
     this._onDisconnected = () => this.handleAbort();
     this._onAbortSignal = () => this.handleAbort();
@@ -143,7 +153,9 @@ export class QuestionnaireCard {
       this.teardown({ cancelPending: false });
       return true;
     }
+    if (this._seenRequestIds.has(request.id)) return true;
     if (!this._matchesCursor(request)) return false;
+    this._seenRequestIds.add(request.id);
     if (this.pendingRequest) return false;
     this.pendingRequest = request;
     if (this.submitted) this._drainPendingRequest();
@@ -158,8 +170,21 @@ export class QuestionnaireCard {
     if (!this.isActive()) return false;
     this.submitted = true;
     this.overlay?.querySelector(".questionnaire-submit")?.setAttribute("aria-busy", "true");
+    // Nothing to drain: the walker's frame was lost in transit. Ask the host
+    // to replay its pending dialogs; arrival drains automatically (submitted).
+    if (!this.pendingRequest) this._recoverMissingRequest();
     this._drainPendingRequest();
     return true;
+  }
+
+  /**
+   * The host keeps every unanswered dialog, so one idempotent re-subscribe
+   * re-delivers the lost frame. Without it the walker blocks forever: pi
+   * never times out, submit drains nothing, the turn looks dead.
+   */
+  _recoverMissingRequest() {
+    if (!this.isActive() || this.pendingRequest) return;
+    this.resubscribe?.();
   }
 
   async requestAbandon() {
@@ -254,6 +279,9 @@ export class QuestionnaireCard {
   }
 
   clear() {
+    if (this._recoveryTimer) clearTimeout(this._recoveryTimer);
+    this._recoveryTimer = null;
+    this._seenRequestIds.clear();
     this.questions = [];
     this.answers = [];
     this.toolCallId = null;
@@ -350,7 +378,22 @@ export class QuestionnaireCard {
     this.cursor += 1;
     if (this.cursor >= this.questions.length) {
       this.teardown();
+      return;
     }
+    // The walker sends the next question's frame only after this answer;
+    // keep the recovery net armed for every hop of a multi-question form.
+    this._armRecoveryTimer();
+  }
+
+  /** Arm (or re-arm) the one-shot lost-frame recovery. No-op while held. */
+  _armRecoveryTimer() {
+    if (this._recoveryTimer) clearTimeout(this._recoveryTimer);
+    this._recoveryTimer = this.pendingRequest
+      ? null
+      : setTimeout(() => {
+          this._recoveryTimer = null;
+          this._recoverMissingRequest();
+        }, REQUEST_RECOVERY_DELAY_MS);
   }
 
   respond(request, response) {
@@ -362,13 +405,14 @@ export class QuestionnaireCard {
   render() {
     if (!this.container || !this.isActive()) return;
     // Inline when the caller resolves a host (the live turn the question
-    // belongs to); the modal container otherwise. An inline card is not
-    // modal, so it is a group, not a dialog.
-    const host = this.resolveHost?.() ?? null;
-    this._activeContainer = host ?? this.container;
+    // belongs to), then in the stream fallback (rebuilt cards anchor at the
+    // transcript tail). Only the legacy modal container renders role=dialog;
+    // an inline card is not modal, so it is a group, not a dialog.
+    const host = this.resolveHost?.() ?? this.resolveFallbackHost?.() ?? this.container;
+    this._activeContainer = host;
     this.overlay?.remove();
     const overlay = createElement("div", "questionnaire-inline");
-    overlay.setAttribute("role", host ? "group" : "dialog");
+    overlay.setAttribute("role", host === this.container ? "dialog" : "group");
     overlay.setAttribute("aria-label", t("questionnaire.title"));
     // Inline cards sit in the stream flow: Esc abandons only when focus is
     // inside the card, so page-level Esc (composer focus, stop button) is
@@ -404,6 +448,10 @@ export class QuestionnaireCard {
     this._activeContainer.appendChild(overlay);
     this._activeContainer.classList.remove("hidden");
     this.overlay = overlay;
+    // Self-heal while the card waits for the walker's request frame: one
+    // silent re-subscribe recovers a frame lost in transit, without which
+    // submit would stay a dead no-op and the agent would block forever.
+    this._armRecoveryTimer();
     const firstControl = overlay.querySelector("input, button");
     firstControl?.focus();
   }
@@ -413,13 +461,29 @@ export class QuestionnaireCard {
    * the modal container before the transcript drops the hosting turn.
    */
   rehost() {
-    if (!this.overlay || !this.container || this._activeContainer === this.container) return;
+    if (!this.overlay || !this.isActive()) return;
+    // Called when the current host is dying or already gone (turn close,
+    // transcript re-render): always re-anchor on the stream fallback so the
+    // card never degrades to a popup. Callers run this BEFORE dropping the
+    // old host, so no liveness check can be trusted here.
+    const fallback = this.resolveFallbackHost?.() ?? this.container;
+    if (!fallback) return;
     const previous = this._activeContainer;
-    this._activeContainer = this.container;
-    this.overlay.setAttribute("role", "dialog");
-    this.container.appendChild(this.overlay);
-    this.container.classList.remove("hidden");
-    previous?.classList.add("hidden");
+    this._activeContainer = fallback;
+    this.overlay.setAttribute("role", fallback === this.container ? "dialog" : "group");
+    fallback.appendChild(this.overlay);
+    fallback.classList.remove("hidden");
+    if (previous && previous !== fallback) previous.classList.add("hidden");
+  }
+
+  /**
+   * Re-anchor the card after a transcript re-render dropped its host node:
+   * `messageRenderer.clear()` wipes the stream, leaving the overlay detached
+   * while the card is still logically active.
+   */
+  remountIfNeeded() {
+    if (!this.isActive() || this.overlay?.isConnected) return;
+    this.rehost();
   }
 
   _renderQuestion(question, questionIndex) {

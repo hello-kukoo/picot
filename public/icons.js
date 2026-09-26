@@ -377,6 +377,13 @@ const ICONS = {
       },
     ],
   ],
+  zap: [["polygon", { points: "13 2 3 14 12 14 11 22 21 10 12 10 13 2" }]],
+  "git-compare": [
+    ["circle", { cx: "18", cy: "18", r: "3" }],
+    ["circle", { cx: "6", cy: "6", r: "3" }],
+    ["path", { d: "M13 6h3a2 2 0 0 1 2 2v7" }],
+    ["path", { d: "M11 18H8a2 2 0 0 1-2-2V9" }],
+  ],
 };
 
 /** Create a trusted local icon. Unknown names intentionally render no SVG. */

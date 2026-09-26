@@ -79,7 +79,13 @@ export function createGitDiffRenderer(initialDescriptor = {}) {
     const comparison = document.createElement("span");
     comparison.className = "git-diff-comparison";
     const comparisonKey = descriptor.comparison || "changes";
-    comparison.textContent = t(`git.comparison.${comparisonKey}`);
+    const comparisonLabel = t(`git.comparison.${comparisonKey}`);
+    comparison.textContent = comparisonLabel;
+    // The pill styling reads as a control, but this is a label: say what the
+    // diff compares against instead of leaving the bare word to guesswork.
+    const comparisonHint = t("git.comparisonHint", { kind: comparisonLabel });
+    comparison.title = comparisonHint;
+    comparison.setAttribute("aria-label", comparisonHint);
     toolbar.append(path, comparison);
     container.append(toolbar);
 

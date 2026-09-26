@@ -567,6 +567,15 @@ export class WebSocketClient extends EventTarget {
     this.subscribeRuntimeTarget(this._wireTarget());
   }
 
+  /**
+   * Re-subscribe to the current runtime so the host replays its pending
+   * (still unanswered) extension dialogs. Idempotent; used by the
+   * questionnaire card to recover a walker frame lost in transit.
+   */
+  requestPendingDialogReplay() {
+    this._subscribeCanonicalTarget();
+  }
+
   _requestCanonicalSnapshot() {
     this.requestRuntimeSnapshot(this._wireTarget());
   }

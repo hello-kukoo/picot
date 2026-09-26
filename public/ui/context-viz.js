@@ -86,11 +86,23 @@ export function setupContextViz({
   function positionAndShow() {
     const rect = tokenUsageEl.getBoundingClientRect();
     contextViz.style.position = "fixed";
-    contextViz.style.top = `${rect.bottom + 8}px`;
-    // Right-align the popover's right edge with the button's right edge.
-    contextViz.style.right = `${window.innerWidth - rect.right}px`;
-    contextViz.style.left = "auto";
     contextViz.classList.remove("hidden");
+    // Centre the popover on the trigger button, clamped into the viewport.
+    const width = contextViz.offsetWidth;
+    const centered = rect.left + rect.width / 2 - width / 2;
+    const maxLeft = Math.max(8, window.innerWidth - width - 8);
+    contextViz.style.left = `${Math.min(Math.max(8, centered), maxLeft)}px`;
+    contextViz.style.right = "auto";
+    // The trigger now sits in the composer near the viewport bottom: flip
+    // above the button when the popover would overflow below the fold.
+    const height = contextViz.offsetHeight;
+    if (rect.bottom + 8 + height > window.innerHeight) {
+      contextViz.style.top = "auto";
+      contextViz.style.bottom = `${window.innerHeight - rect.top + 8}px`;
+    } else {
+      contextViz.style.bottom = "auto";
+      contextViz.style.top = `${rect.bottom + 8}px`;
+    }
   }
 
   tokenUsageEl.addEventListener("click", (e) => {

@@ -1,5 +1,8 @@
 // ABOUTME: Renders and manages a composer-scoped Commands menu for chat surfaces.
-// ABOUTME: Keeps menu lifecycle, disabled actions, and outside-click cleanup consistent.
+// ABOUTME: Anchors the menu to its button (non-modal popover, opening to the
+// ABOUTME: button's right), with outside-click cleanup and above/below flip.
+
+const ANCHOR_GAP_PX = 8;
 
 export function setupComposerCommandMenu({
   button,
@@ -7,12 +10,36 @@ export function setupComposerCommandMenu({
   list,
   getCommands,
   document: doc,
-  overlay = null,
   createIcon = null,
 }) {
   const close = () => {
     menu.classList.add("hidden");
-    overlay?.classList.add("hidden");
+  };
+
+  /**
+   * Non-modal popover anchored to the button: the menu's LEFT edge aligns with
+   * the button's left edge (so it opens to the right of the trigger), clamped
+   * into the viewport. Vertically it opens upward while there is room (the
+   * composer sits at the viewport bottom) and flips below when there is not.
+   */
+  const position = () => {
+    const view = doc.defaultView;
+    if (!view) return;
+    const rect = button.getBoundingClientRect();
+    const width = menu.offsetWidth;
+    const maxLeft = Math.max(ANCHOR_GAP_PX, view.innerWidth - width - ANCHOR_GAP_PX);
+    const left = Math.min(Math.max(ANCHOR_GAP_PX, rect.left), maxLeft);
+    menu.style.position = "fixed";
+    menu.style.right = "auto";
+    menu.style.left = `${left}px`;
+    const height = menu.offsetHeight;
+    if (rect.top - ANCHOR_GAP_PX - height >= ANCHOR_GAP_PX) {
+      menu.style.top = "auto";
+      menu.style.bottom = `${view.innerHeight - rect.top + ANCHOR_GAP_PX}px`;
+    } else {
+      menu.style.bottom = "auto";
+      menu.style.top = `${rect.bottom + ANCHOR_GAP_PX}px`;
+    }
   };
   const open = () => {
     list.replaceChildren();
@@ -56,7 +83,8 @@ export function setupComposerCommandMenu({
       list.appendChild(item);
     }
     menu.classList.remove("hidden");
-    overlay?.classList.remove("hidden");
+    // Measure only after the list is populated and visible.
+    position();
   };
   const onButtonClick = () => {
     if (button.disabled) return;
@@ -70,6 +98,7 @@ export function setupComposerCommandMenu({
   doc.addEventListener("click", onDocumentClick);
   return {
     close,
+    position,
     destroy: () => {
       button.removeEventListener("click", onButtonClick);
       doc.removeEventListener("click", onDocumentClick);

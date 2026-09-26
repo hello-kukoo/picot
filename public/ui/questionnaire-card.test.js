@@ -74,6 +74,49 @@ describe("QuestionnaireCard rendering", () => {
     expect(host.classList.contains("hidden")).toBe(true);
   });
 
+  it("a rebuilt card without a live turn anchors in the stream slot, not a modal", () => {
+    const streamSlot = document.createElement("div");
+    streamSlot.className = "questionnaire-stream-slot hidden";
+    document.body.appendChild(streamSlot);
+    const modalContainer = document.createElement("div");
+    modalContainer.id = "dialog-container";
+    document.body.appendChild(modalContainer);
+    const { card } = makeCard({
+      container: modalContainer,
+      resolveFallbackHost: () => streamSlot,
+    });
+
+    start(card, [{ id: "q1", prompt: "Pick one", options: ["a", "b"] }]);
+
+    // No live turn: the card anchors at the transcript tail as inline flow.
+    expect(modalContainer.querySelector(".questionnaire-inline")).toBeNull();
+    expect(streamSlot.querySelector(".questionnaire-card")).not.toBeNull();
+    expect(streamSlot.querySelector(".questionnaire-inline")?.getAttribute("role")).toBe("group");
+    expect(streamSlot.classList.contains("hidden")).toBe(false);
+  });
+
+  it("remountIfNeeded() re-anchors a card detached by a transcript re-render", () => {
+    const streamSlot = document.createElement("div");
+    document.body.appendChild(streamSlot);
+    const { card } = makeCard({
+      resolveHost: () => null,
+      resolveFallbackHost: () => {
+        document.body.appendChild(streamSlot); // re-append at the tail
+        return streamSlot;
+      },
+    });
+    start(card, [{ id: "q1", prompt: "Pick one", options: ["a", "b"] }]);
+    expect(streamSlot.querySelector(".questionnaire-card")).not.toBeNull();
+
+    // Transcript re-render wipes the stream: overlay left detached.
+    document.body.removeChild(streamSlot);
+    expect(card.overlay.isConnected).toBe(false);
+
+    card.remountIfNeeded();
+    expect(card.overlay.isConnected).toBe(true);
+    expect(streamSlot.querySelector(".questionnaire-card")).not.toBeNull();
+  });
+
   it("clear() re-hides the turn slot it was mounted in", () => {
     const fallback = document.createElement("div");
     const host = document.createElement("div");
@@ -224,6 +267,52 @@ describe("QuestionnaireCard request cursor", () => {
     start(card, [{ prompt: "Pick a layout", options: [{ label: "Compact" }] }]);
     expect(card.handleRequest({ id: "other", method: "input", title: "Unrelated" })).toBe(false);
     expect(card.pendingRequest).toBeNull();
+  });
+});
+
+describe("QuestionnaireCard lost-request recovery", () => {
+  it("submit with nothing held pings resubscribe, then answers the replayed frame", () => {
+    const resubscribe = vi.fn();
+    const { card, sent } = makeCard({ resubscribe });
+    start(card, [{ prompt: "Pick one", options: [{ label: "One" }, { label: "Two" }] }]);
+    card.submit();
+    // The walker's frame never arrived: submit must not be a silent dead end.
+    expect(resubscribe).toHaveBeenCalledTimes(1);
+    expect(sent).toEqual([]);
+    // The host replays its pending dialog; an already-submitted card drains it.
+    expect(
+      card.handleRequest({
+        id: "q-replay",
+        method: "select",
+        title: "Pick one",
+        options: ["1. One", "2. Two"],
+      }),
+    ).toBe(true);
+    expect(sent.at(-1)).toMatchObject({ type: "extension_ui_response", id: "q-replay" });
+    expect(card.isActive()).toBe(false);
+  });
+
+  it("arms one silent recovery when the frame is slow, and stays quiet once it is held", () => {
+    vi.useFakeTimers();
+    try {
+      const resubscribe = vi.fn();
+      const { card } = makeCard({ resubscribe });
+      start(card, [{ prompt: "Pick one", options: [{ label: "One" }] }]);
+      vi.advanceTimersByTime(1500);
+      expect(resubscribe).toHaveBeenCalledTimes(1);
+      // A held frame cancels recovery; repeats of the same id are swallowed.
+      expect(
+        card.handleRequest({ id: "q-1", method: "select", title: "Pick one", options: ["1. One"] }),
+      ).toBe(true);
+      vi.advanceTimersByTime(5000);
+      expect(resubscribe).toHaveBeenCalledTimes(1);
+      expect(
+        card.handleRequest({ id: "q-1", method: "select", title: "Pick one", options: ["1. One"] }),
+      ).toBe(true);
+      expect(card.pendingRequest?.id).toBe("q-1");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

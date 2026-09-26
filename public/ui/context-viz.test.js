@@ -49,6 +49,33 @@ function makeViz({
   };
 }
 
+describe("context popover anchoring", () => {
+  it("centres the popover on the donut and clamps it into the viewport", () => {
+    const { api } = makeViz();
+    const viz = document.getElementById("viz");
+    const donut = document.getElementById("usage");
+    Object.defineProperty(viz, "offsetWidth", { configurable: true, get: () => 320 });
+    Object.defineProperty(viz, "offsetHeight", { configurable: true, get: () => 200 });
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1000 });
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 768 });
+
+    // Donut centred at x=500 (26px wide).
+    let rect = { left: 487, right: 513, width: 26, top: 700, bottom: 726 };
+    donut.getBoundingClientRect = () => rect;
+    donut.click();
+    expect(viz.classList.contains("hidden")).toBe(false);
+    expect(viz.style.left).toBe("340px"); // 500 - 320/2
+    expect(viz.style.right).toBe("auto");
+
+    // Near the right edge the popover slides left instead of overflowing.
+    donut.click(); // close
+    rect = { left: 950, right: 976, width: 26, top: 700, bottom: 726 };
+    donut.click();
+    expect(viz.style.left).toBe("672px"); // 1000 - 320 - 8
+    api.invalidateUsage();
+  });
+});
+
 describe("context compact action", () => {
   it("keeps the popover open and disables Compact while the request is busy", () => {
     const { requestCompact, setState } = makeViz();
