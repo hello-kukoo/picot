@@ -28,6 +28,7 @@
     "workspace": "工作区",
     "copyPath": "复制路径",
     "copied": "已复制",
+    "copyFailed": "复制失败",
     "sessionHistory": "会话历史",
     "activePath": "当前分支",
     "branch": "分支",
@@ -100,6 +101,7 @@
     "diffOriginal": "原始版本",
     "diffModified": "修改后",
     "diffEmpty": "没有可显示的修改",
+    "comparisonHint": "对比基准：{kind}",
     "comparison": {
       "staged": "已暂存",
       "changes": "修改",
@@ -109,11 +111,8 @@
   },
   "usage": {
     "contextTokens": "上下文：{used}k / {limit}k 令牌",
-    "sessionCostTitle": "会话成本",
     "sessionUsageTitle": "会话令牌（输入 / 输出 / 缓存）",
-    "contextTitle": "上下文用量",
-    "costSub": "{amount}（订阅）",
-    "summary": "入 {in} · 出 {out} · 缓存 {cache}"
+    "contextTitle": "上下文用量"
   },
   "context": {
     "used": "已用 {pct}%",
@@ -256,7 +255,10 @@
       "conflictMessage": "{name} 的磁盘内容已更改。要重新加载还是覆盖磁盘版本？",
       "converted": {
         "remoteImageHidden": "已隐藏转换文档中的图片：远程或不支持的图片来源。"
-      }
+      },
+      "closeAll": "关闭全部标签页",
+      "hide": "隐藏面板",
+      "closeTab": "关闭标签页"
     },
     "unsaved": {
       "title": "未保存的更改",
@@ -658,15 +660,6 @@
     "removeDisabledCurrent": "无法移除当前工作区",
     "addFailed": "添加项目失败"
   },
-  "sessionInfo": {
-    "title": "会话信息",
-    "heading": "会话信息",
-    "file": "文件",
-    "inMemory": "内存中（尚未保存）",
-    "copyFile": "复制文件路径",
-    "copied": "已复制",
-    "copyFailed": "复制失败"
-  },
   "updater": {
     "update": "更新",
     "openInSettings": "在设置中打开更新",
@@ -1043,12 +1036,15 @@
     "preview": {
       "title": "文件预览",
       "theme": "预览主题",
-      "themeDescription": "跟随 Picot 主题，或为代码与 Markdown 预览强制浅色 / 深色。",
-      "themeSystem": "跟随 Picot 主题",
-      "themeLight": "浅色",
-      "themeDark": "深色",
+      "themeDescription": "代码编辑器主题：跟随 Picot，或选择具名浅色 / 深色主题。",
       "fontSize": "字体大小",
-      "fontSizeDescription": "代码编辑器与 Markdown 预览的文字大小。"
+      "fontSizeDescription": "代码编辑器与 Markdown 预览的文字大小。",
+      "themeFollow": "跟随 Picot",
+      "themeGroup": {
+        "follow": "Picot 色系",
+        "light": "浅色",
+        "dark": "深色"
+      }
     },
     "chat": {
       "title": "聊天",

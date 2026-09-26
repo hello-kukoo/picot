@@ -20,7 +20,6 @@ import {
   normalizeScrollbackLimit,
   normalizeSmoothScrollDuration,
   normalizeThemeMode,
-  PREVIEW_THEME_MODES,
   saveAppearanceCookie,
   TERMINAL_THEME_MODES,
 } from "./appearance-preferences.js";
@@ -42,6 +41,7 @@ import {
   PREFERENCE_KEYS,
   saveUserRenderPreference,
 } from "./preferences-client.js";
+import { renderPreviewThemeOptions } from "./preview-themes.js";
 import { QuickChatDialog } from "./quick-chat-dialog.js";
 import { setupExtensionsTabShell } from "./settings/extensions-tab-shell.js";
 import { setupMcpPage } from "./settings/mcp-page.js";
@@ -587,19 +587,11 @@ function buildLandingAppearanceSelectors() {
   for (const control of landingFontControls) renderLandingFontControl(control);
   const previewSelect = document.getElementById("settings-preview-theme-select");
   if (previewSelect) {
-    previewSelect.replaceChildren();
-    const labels = {
-      system: t("settings.preview.themeSystem"),
-      light: t("settings.preview.themeLight"),
-      dark: t("settings.preview.themeDark"),
-    };
-    for (const mode of PREVIEW_THEME_MODES) {
-      const option = document.createElement("option");
-      option.value = mode;
-      option.textContent = labels[mode] || mode;
-      option.selected = mode === appearance.previewTheme;
-      previewSelect.append(option);
-    }
+    renderPreviewThemeOptions({
+      select: previewSelect,
+      selected: appearance.previewTheme,
+      t,
+    });
   }
   const terminalSelect = document.getElementById("settings-terminal-theme-select");
   if (terminalSelect) {

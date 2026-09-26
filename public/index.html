@@ -68,11 +68,21 @@
         const root = document.documentElement;
         root.style.setProperty("--chat-font-size", `${CHAT_PX[level(saved?.chatFontSize)]}px`);
         root.style.setProperty("--preview-font-size", `${PREVIEW_PX[level(saved?.previewFontSize)]}px`);
-        const mode = saved?.previewTheme;
-        if (mode === "light" || mode === "dark") {
-          root.setAttribute("data-preview-theme", mode);
-        } else {
+        // Mirrors preview-themes.js: this bootstrap cannot import modules, so
+        // the legacy light/dark/system map and the dark-theme id list are
+        // duplicated here to keep the first paint free of a theme flash.
+        const LEGACY_THEME_IDS = { system: "follow", light: "github-light", dark: "one-dark" };
+        const DARK_EDITOR_THEMES = ["one-dark", "github-dark", "catppuccin-mocha", "gruvbox-dark"];
+        const themeId = LEGACY_THEME_IDS[saved?.previewTheme] || saved?.previewTheme || "follow";
+        if (themeId === "follow") {
           root.removeAttribute("data-preview-theme");
+          root.removeAttribute("data-preview-editor-theme");
+        } else {
+          root.setAttribute("data-preview-editor-theme", themeId);
+          root.setAttribute(
+            "data-preview-theme",
+            DARK_EDITOR_THEMES.includes(themeId) ? "dark" : "light",
+          );
         }
       })();
     </script>
@@ -86,7 +96,6 @@
     <link rel="stylesheet" href="ui/markdown-styling.css" />
     <link rel="stylesheet" href="ui/process-details.css" />
     <link rel="stylesheet" href="ui/image-lightbox.css" />
-    <link rel="stylesheet" href="session/session-info.css" />
     <link rel="stylesheet" href="info-panel.css" />
     <link rel="stylesheet" href="settings/settings-config.css" />
     <link rel="stylesheet" href="vendor/xterm.css" />
@@ -308,88 +317,6 @@
               data-i18n-title="nav.toggleSidebar"
               data-i18n-aria-label="nav.toggleSidebar"
             ></button>
-            <span class="session-info-anchor">
-              <button
-                type="button"
-                class="icon-btn session-info-toggle"
-                id="session-info-toggle"
-                title="Session info"
-                data-i18n-title="sessionInfo.title"
-                aria-label="Session info"
-                data-i18n-aria-label="sessionInfo.title"
-                aria-expanded="false"
-                aria-controls="session-info-panel"
-              >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  aria-hidden="true"
-                >
-                  <circle cx="12" cy="12" r="10" />
-                  <path d="M12 16v-4" />
-                  <path d="M12 8h.01" />
-                </svg>
-              </button>
-              <section
-                class="session-info-panel hidden"
-                id="session-info-panel"
-                aria-labelledby="session-info-heading"
-              >
-                <h2 id="session-info-heading" data-i18n="sessionInfo.heading">
-                  Session Info
-                </h2>
-                <dl class="session-info-list">
-                  <div class="session-info-row">
-                    <dt data-i18n="sessionInfo.file">File</dt>
-                    <dd>
-                      <span
-                        class="session-info-value"
-                        id="session-info-file"
-                      ></span>
-                      <button
-                        type="button"
-                        class="icon-btn session-info-copy"
-                        data-copy-session-field="file"
-                        title="Copy file path"
-                        data-i18n-title="sessionInfo.copyFile"
-                        aria-label="Copy file path"
-                        data-i18n-aria-label="sessionInfo.copyFile"
-                      >
-                        <svg
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          aria-hidden="true"
-                        >
-                          <rect
-                            width="14"
-                            height="14"
-                            x="8"
-                            y="8"
-                            rx="2"
-                            ry="2"
-                          />
-                          <path
-                            d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"
-                          />
-                        </svg>
-                      </button>
-                    </dd>
-                  </div>
-                </dl>
-              </section>
-            </span>
             <button
               class="icon-btn lan-qr-btn hidden"
               id="lan-qr-btn"
@@ -410,27 +337,6 @@
             </div>
           </div>
           <div class="header-right">
-            <div class="header-status-bar">
-              <span
-                class="pill session-usage"
-                id="session-usage"
-                title="Session tokens"
-                data-i18n-title="usage.sessionUsageTitle"
-              ></span>
-              <span
-                class="pill session-cost"
-                id="session-cost"
-                title="Session cost"
-                data-i18n-title="usage.sessionCostTitle"
-              ></span>
-              <span
-                class="pill token-usage"
-                id="token-usage"
-                title="Context usage"
-                data-i18n-title="usage.contextTitle"
-              ></span>
-            </div>
-
             <div class="context-viz hidden" id="context-viz">
               <div class="context-viz-title" data-i18n="misc.contextWindow">
                 Context Window
@@ -571,13 +477,8 @@
             >
               <span class="scroll-bottom-icon" aria-hidden="true"></span>
               <span class="scroll-bottom-badge hidden" id="scroll-bottom-badge"
-                ><span data-i18n="misc.new">New</span>
-                <span
-                  class="scroll-bottom-badge-icon"
-                  aria-hidden="true"
-                ></span>
-              </span>
-              <span class="scroll-bottom-icon" aria-hidden="true"></span>
+                ><span data-i18n="misc.new">New</span></span
+              >
             </button>
 
             <!-- Typing indicator (hidden, kept for JS reference) -->
@@ -643,6 +544,40 @@
                       />
                     </div>
                     <div class="composer-toolbar-right">
+                      <span
+                        class="composer-usage"
+                        id="session-usage"
+                        title="Session tokens (input / output / cache)"
+                        data-i18n-title="usage.sessionUsageTitle"
+                      ></span>
+                      <button
+                        type="button"
+                        class="context-donut"
+                        id="token-usage"
+                        title="Context usage"
+                        data-i18n-title="usage.contextTitle"
+                        data-i18n-aria-label="usage.contextTitle"
+                        tabindex="-1"
+                      >
+                        <svg
+                          viewBox="0 0 22 22"
+                          width="22"
+                          height="22"
+                          aria-hidden="true"
+                          focusable="false"
+                        >
+                          <circle class="context-donut-track" cx="11" cy="11" r="9"></circle>
+                          <circle
+                            class="context-donut-arc"
+                            id="context-donut-arc"
+                            cx="11"
+                            cy="11"
+                            r="9"
+                            transform="rotate(-90 11 11)"
+                          ></circle>
+                        </svg>
+                        <span class="context-donut-label" id="context-donut-label">0</span>
+                      </button>
                       <div class="model-dropdown" id="model-dropdown">
                         <button
                           type="button"
@@ -742,6 +677,16 @@
                 <button
                   type="button"
                   class="icon-btn"
+                  id="file-preview-close-all"
+                  title="Close all tabs"
+                  data-i18n-title="files.preview.closeAll"
+                  aria-label="Close all tabs"
+                  data-i18n-aria-label="files.preview.closeAll"
+                ></button>
+                <span class="file-preview-controls-divider" aria-hidden="true"></span>
+                <button
+                  type="button"
+                  class="icon-btn"
                   id="file-preview-toolbar-toggle"
                   title="Editor controls"
                   data-i18n-title="files.preview.showControls"
@@ -788,10 +733,10 @@
                   type="button"
                   class="icon-btn"
                   id="file-preview-close"
-                  title="Close panel"
-                  data-i18n-title="files.preview.close"
-                  aria-label="Close panel"
-                  data-i18n-aria-label="files.preview.close"
+                  title="Hide panel"
+                  data-i18n-title="files.preview.hide"
+                  aria-label="Hide panel"
+                  data-i18n-aria-label="files.preview.hide"
                 ></button>
               </div>
             </div>
@@ -1020,11 +965,22 @@
                 data-i18n-aria-label="files.close"
               ></button>
             </div>
-            <div
-              class="file-sidebar-path"
-              id="file-sidebar-path"
-              title=""
-            ></div>
+            <div class="file-sidebar-path-row" id="file-sidebar-path-row">
+              <div
+                class="file-sidebar-path"
+                id="file-sidebar-path"
+                title=""
+              ></div>
+              <button
+                type="button"
+                class="icon-btn file-sidebar-copy"
+                id="file-sidebar-copy"
+                title="Copy path"
+                aria-label="Copy path"
+                data-i18n-title="files.copyAbsolutePath"
+                data-i18n-aria-label="files.copyAbsolutePath"
+              ></button>
+            </div>
             <div
               class="info-panel hidden"
               id="info-panel"
@@ -1403,8 +1359,8 @@
                   <span
                     class="settings-label-sub"
                     data-i18n="settings.preview.themeDescription"
-                    >Follow the Picot theme, or force light or dark for code
-                    and markdown previews.</span
+                    >Code editor theme: follow Picot, or pick a named light or
+                    dark theme.</span
                   >
                 </span>
                 <select
@@ -2408,11 +2364,7 @@
       </div>
     </div>
 
-    <!-- Command Palette -->
-    <div
-      class="command-palette-overlay hidden"
-      id="command-palette-overlay"
-    ></div>
+    <!-- Command Palette (anchored popover, no modal overlay) -->
     <div class="command-palette hidden" id="command-palette">
       <div class="command-palette-header" data-i18n="input.commands">
         Commands

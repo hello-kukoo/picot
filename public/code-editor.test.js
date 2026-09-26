@@ -192,10 +192,17 @@ describe("createCodeEditor", () => {
 describe("syntax highlighting wiring", () => {
   const read = (rel) => readFileSync(join(process.cwd(), rel), "utf8");
 
-  test("code editor applies One Dark syntax highlighting", () => {
-    const src = read("public/code-editor.js");
-    expect(src).toContain("oneDarkHighlightStyle");
-    expect(src).toContain("syntaxHighlighting");
+  test("the One Dark theme reuses the package palette through the theme catalog", () => {
+    // The catalog owns every preview palette; the One Dark entry delegates to
+    // the package style instead of re-declaring its token colors.
+    const themes = read("public/preview-themes.js");
+    expect(themes).toContain("oneDarkHighlightStyle");
+    // The editor applies whatever palette the catalog resolves, and pins the
+    // CodeMirror dark facet so the base chrome follows the same theme.
+    const editor = read("public/code-editor.js");
+    expect(editor).toContain("syntaxHighlighting");
+    expect(editor).toContain("highlightStyleForPreviewTheme");
+    expect(editor).toContain("EditorView.darkTheme");
 
     // vendor entry must re-export it so the browser bundle includes it
     expect(read("public/codemirror-vendor-entry.js")).toContain("oneDarkHighlightStyle");

@@ -1,14 +1,12 @@
-// ABOUTME: Info right-side panel — fixed workspace actions plus scrollable history.
-// ABOUTME: Session rows visualize Pi's native tree and synchronize with chat anchors.
+// ABOUTME: Info right-side panel — session file path with a copy action plus a
+// ABOUTME: scrollable Pi session tree that synchronizes with chat anchors.
 
 /**
  * Info panel — the right-side panel from the 2026-08-21 design.
  *
  * Two independent sections:
- * 1. **Workspace** (fixed, never scrolls away): workspace path + the shared
- *    workspace-action rows (Copy path / Open in VS Code / Zed / Terminal),
- *    rendered from the ONE shared controller instance the header uses —
- *    never a second implementation.
+ * 1. **Session file** (fixed, never scrolls away): the active session's jsonl
+ *    path with a copy action.
  * 2. **Session history** (own vertical scroll): the session tree projected by
  *    `session-tree.js` from Pi's authoritative entries + leafId.
  *
@@ -24,11 +22,6 @@
 import { createIcon } from "./icons.js";
 import { buildSessionTree } from "./session-tree.js";
 import { displayLocalPath } from "./workspace/path-utils.js";
-import { populateAppLogo } from "./workspace-actions.js";
-
-// Workspace app rows, in design order. Rows whose app is not installed are
-// hidden (the shared controller decides what exists).
-const WORKSPACE_APP_ORDER = ["vscode", "zed", "terminal"];
 
 // Live appends keep the panel's cache current turn to turn, but entries can
 // be persisted without a message_end enrichment (compaction summaries,
@@ -37,31 +30,21 @@ export class InfoPanel {
   /**
    * @param {{
    *   panel: HTMLElement,
-   *   actions: { apps: Array, copyWorkspacePath: Function, openWorkspaceInApp: Function },
    *   t: (key: string, params?: object) => string,
    *   onNavigateLeaf: (entryId: string) => void,
    *   onSelectEntry: (entryId: string) => void,
    *   isStreaming: () => boolean,
    * }} options
    */
-  constructor({
-    panel,
-    actions,
-    t,
-    onNavigateLeaf,
-    onSelectEntry,
-    isStreaming,
-    ensureEntryMounted = null,
-  }) {
+  constructor({ panel, t, onNavigateLeaf, onSelectEntry, isStreaming, ensureEntryMounted = null }) {
     this.panel = panel;
-    this.actions = actions;
     this.t = t;
     this.onNavigateLeaf = onNavigateLeaf || (() => {});
     this.onSelectEntry = onSelectEntry || (() => {});
     this.isStreaming = isStreaming || (() => false);
     // P2 seam: reveals a gate-folded turn before anchor lookup (app.js).
     this.ensureEntryMounted = ensureEntryMounted;
-    this.workspacePath = "";
+    this.sessionFile = "";
     this.expandedBranches = new Set();
     this.tree = null;
     // Authoritative Pi entries + leafId cache. Full snapshots (pi's live
@@ -81,117 +64,73 @@ export class InfoPanel {
     p.setAttribute("aria-label", this.t("infoPanel.title"));
     p.replaceChildren();
 
-    this.workspaceSection = document.createElement("section");
-    this.workspaceSection.className = "info-panel-workspace";
+    this.sessionSection = document.createElement("section");
+    this.sessionSection.className = "info-panel-session";
 
     this.historySection = document.createElement("section");
     this.historySection.className = "info-panel-history";
     this.historySection.setAttribute("aria-labelledby", "info-panel-history-heading");
 
-    p.append(this.workspaceSection, this.historySection);
-    this._renderWorkspace();
+    p.append(this.sessionSection, this.historySection);
+    this._renderSessionFile();
     this._renderHistory();
   }
 
-  // ── Workspace ───────────────────────────────────────────────────────────
+  // ── Session file ────────────────────────────────────────────────────────
 
-  _renderWorkspace() {
+  _renderSessionFile() {
     const t = this.t;
-    const section = this.workspaceSection;
+    const section = this.sessionSection;
     section.replaceChildren();
 
-    section.setAttribute("aria-label", t("infoPanel.workspace"));
+    section.setAttribute("aria-label", t("infoPanel.title"));
     this.pathEl = document.createElement("div");
+    // Same surface as the file sidebar's path (font, colour, head ellipsis):
+    // one path style across panels.
     this.pathEl.className = "file-sidebar-path info-panel-path";
-    this.pathEl.textContent = displayLocalPath(this.workspacePath) || "—";
-    this.pathEl.title = this.workspacePath;
-    section.append(this.pathEl);
+    this.pathEl.id = "info-panel-session-file";
+    this.pathEl.textContent = displayLocalPath(this.sessionFile) || "—";
+    this.pathEl.title = this.sessionFile;
 
-    const nav = document.createElement("nav");
-    nav.className = "info-panel-actions";
-    nav.setAttribute("aria-label", t("infoPanel.workspace"));
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "icon-btn info-panel-copy";
+    copy.setAttribute("aria-label", t("infoPanel.copyPath"));
+    copy.title = t("infoPanel.copyPath");
+    copy.append(createIcon("copy", { size: 14 }));
+    copy.addEventListener("click", () => void this._copySessionFile(copy));
 
-    // Copy path — clipboard icon (mono action icon, per icon semantics).
-    const copyRow = document.createElement("a");
-    copyRow.href = "#";
-    copyRow.className = "info-panel-link";
-    copyRow.setAttribute("aria-label", t("infoPanel.copyPath"));
-    const copyIcon = document.createElement("span");
-    copyIcon.className = "info-panel-link-icon";
-    copyIcon.setAttribute("aria-hidden", "true");
-    copyIcon.append(createIcon("clipboard", { size: 14 }));
-    this.copyLabel = document.createElement("span");
-    this.copyLabel.textContent = t("infoPanel.copyPath");
-    copyRow.append(copyIcon, this.copyLabel);
-    copyRow.addEventListener("click", (event) => {
-      event.preventDefault();
-      void this._copyPath();
-    });
-    nav.append(copyRow);
-
-    // Open-in-app rows — from the shared controller's app list only.
-    this._appRows = new Map();
-    for (const appId of WORKSPACE_APP_ORDER) {
-      const row = document.createElement("a");
-      row.href = "#";
-      row.className = "info-panel-link info-panel-link-app hidden";
-      const logo = document.createElement("span");
-      logo.className = "info-panel-link-icon open-app-logo";
-      logo.setAttribute("aria-hidden", "true");
-      const label = document.createElement("span");
-      row.append(logo, label);
-      row.addEventListener("click", (event) => {
-        event.preventDefault();
-        const app = this.actions.apps.find((a) => a?.id === appId);
-        if (app) void this.actions.openWorkspaceInApp(app);
-      });
-      this._appRows.set(appId, { row, logo, label });
-      nav.append(row);
-    }
-    section.append(nav);
-    this._refreshAppRows();
+    section.append(this.pathEl, copy);
   }
 
-  _refreshAppRows() {
-    for (const [appId, { row, logo, label }] of this._appRows) {
-      const app = this.actions.apps.find((a) => a?.id === appId);
-      if (!app) {
-        row.classList.add("hidden");
-        continue;
-      }
-      row.classList.remove("hidden");
-      populateAppLogo(logo, app);
-      const name = this.t("nav.openInApp", { app: app.label });
-      label.textContent = name;
-      row.setAttribute("aria-label", name);
-      row.title = name;
+  async _copySessionFile(button) {
+    const text = this.sessionFile;
+    if (!text) return;
+    const defaultLabel = this.t("infoPanel.copyPath");
+    let label = defaultLabel;
+    try {
+      await navigator.clipboard.writeText(text);
+      label = this.t("infoPanel.copied");
+    } catch {
+      // No clipboard (jsdom, denied permission): say so instead of pretending
+      // the path was copied.
+      label = this.t("infoPanel.copyFailed");
     }
-  }
-
-  async _copyPath() {
-    if (!this.copyLabel) return;
-    const copied = await this.actions.copyWorkspacePath();
-    if (!copied) return;
-    this.copyLabel.textContent = this.t("infoPanel.copied");
+    button.title = label;
+    button.setAttribute("aria-label", label);
     clearTimeout(this._copiedTimer);
     this._copiedTimer = setTimeout(() => {
-      this.copyLabel.textContent = this.t("infoPanel.copyPath");
+      button.title = defaultLabel;
+      button.setAttribute("aria-label", defaultLabel);
     }, 1200);
   }
 
-  /** Update the workspace path (and re-resolve app rows from the controller). */
-  updateWorkspace(path) {
-    this.workspacePath = path || "";
-    if (this.pathEl) {
-      this.pathEl.textContent = displayLocalPath(this.workspacePath) || "—";
-      this.pathEl.title = this.workspacePath;
-    }
-    this._refreshAppRows();
-  }
-
-  /** The shared controller reloaded its app list — re-render rows. */
-  refreshApps() {
-    this._refreshAppRows();
+  /** Update the active session's jsonl path. */
+  updateSessionFile(path) {
+    this.sessionFile = path || "";
+    if (!this.pathEl) return;
+    this.pathEl.textContent = displayLocalPath(this.sessionFile) || "—";
+    this.pathEl.title = this.sessionFile;
   }
 
   // ── Session history ─────────────────────────────────────────────────────

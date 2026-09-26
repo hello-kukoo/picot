@@ -1,13 +1,13 @@
-// ABOUTME: Unit tests for the Info panel view (workspace actions + session tree).
+// ABOUTME: Unit tests for the Info panel view (session file row + session tree).
 import { describe, expect, test, vi } from "vitest";
 import { InfoPanel } from "./info-panel.js";
 
 const t = (key, params = {}) => {
   const dict = {
     "infoPanel.title": "Info",
-    "infoPanel.workspace": "Workspace",
     "infoPanel.copyPath": "Copy path",
     "infoPanel.copied": "Copied",
+    "infoPanel.copyFailed": "Copy failed",
     "infoPanel.sessionHistory": "Session history",
     "infoPanel.activePath": "Active path",
     "infoPanel.branch": "Branch",
@@ -21,7 +21,6 @@ const t = (key, params = {}) => {
     "infoPanel.statusError": "Error",
     "infoPanel.statusAborted": "Aborted",
     "infoPanel.imageMessage": "Image",
-    "nav.openInApp": "Open in {app}",
   };
   let out = dict[key] ?? key;
   for (const [name, value] of Object.entries(params)) {
@@ -44,90 +43,82 @@ function a(id, parentId, content) {
 
 function makePanel(overrides = {}) {
   const panel = document.createElement("aside");
-  const actions = {
-    apps: [
-      { id: "vscode", label: "VS Code" },
-      { id: "zed", label: "Zed" },
-      { id: "terminal", label: "Terminal" },
-    ],
-    copyWorkspacePath: vi.fn(async () => "/wsp/path"),
-    openWorkspaceInApp: vi.fn(async () => {}),
-  };
   const options = {
     panel,
-    actions,
     t,
     onNavigateLeaf: vi.fn(),
     isStreaming: () => false,
     ...overrides,
   };
   const info = new InfoPanel(options);
-  return { info, panel, actions };
+  return { info, panel };
 }
 
-describe("InfoPanel workspace section", () => {
-  test("renders copy row plus one row per installed design app", () => {
-    const { panel } = makePanel();
-    const rows = [...panel.querySelectorAll(".info-panel-link")];
-    expect(rows.map((r) => r.textContent.trim())).toEqual([
-      "Copy path",
-      "Open in VS Code",
-      "Open in Zed",
-      "Open in Terminal",
-    ]);
+function stubClipboard(writeText = async () => {}) {
+  const spy = vi.fn(writeText);
+  Object.defineProperty(globalThis.navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: spy },
   });
+  return spy;
+}
 
-  test("hides app rows that are not installed", () => {
+describe("InfoPanel session file section", () => {
+  test("shows the session file path with a copy button when no file is known yet", () => {
     const { panel } = makePanel();
-    const info = new InfoPanel({
-      panel: panel.cloneNode(false),
-      actions: {
-        apps: [{ id: "vscode", label: "VS Code" }],
-        copyWorkspacePath: async () => "",
-        openWorkspaceInApp: async () => {},
-      },
-      t,
-      onNavigateLeaf: () => {},
-      isStreaming: () => false,
-    });
-    const labels = [...info.panel.querySelectorAll(".info-panel-link:not(.hidden)")].map((r) =>
-      r.textContent.trim(),
-    );
-    expect(labels).toEqual(["Copy path", "Open in VS Code"]);
-  });
-
-  test("updateWorkspace updates the path text and title", () => {
-    const { info, panel } = makePanel();
-    info.updateWorkspace("/tmp/alpha/beta");
     const path = panel.querySelector(".info-panel-path");
-    expect(path.textContent).toBe("/tmp/alpha/beta");
-    expect(path.title).toBe("/tmp/alpha/beta");
+    expect(path).not.toBeNull();
+    expect(path.textContent).toBe("—");
+    // Path surface matches the file sidebar's row (font/colour/ellipsis).
+    expect(path.classList.contains("file-sidebar-path")).toBe(true);
+    const copy = panel.querySelector(".info-panel-copy");
+    expect(copy).not.toBeNull();
+    expect(copy.getAttribute("aria-label")).toBe("Copy path");
   });
 
-  test("copy row swaps to Copied and reverts", async () => {
-    vi.useFakeTimers();
-    try {
-      const { panel, actions } = makePanel();
-      panel.querySelector(".info-panel-link").click();
-      // The click handler awaits the clipboard write; flush microtasks.
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(actions.copyWorkspacePath).toHaveBeenCalled();
-      expect(panel.querySelector(".info-panel-link").textContent.trim()).toBe("Copied");
-      vi.advanceTimersByTime(1300);
-      expect(panel.querySelector(".info-panel-link").textContent.trim()).toBe("Copy path");
-    } finally {
-      vi.useRealTimers();
-    }
+  test("updateSessionFile updates the path text and title", () => {
+    const { info, panel } = makePanel();
+    info.updateSessionFile("/sessions/2026-09-25T10-00-00-000Z_abc.jsonl");
+    const path = panel.querySelector(".info-panel-path");
+    expect(path.textContent).toBe("/sessions/2026-09-25T10-00-00-000Z_abc.jsonl");
+    expect(path.title).toBe("/sessions/2026-09-25T10-00-00-000Z_abc.jsonl");
   });
 
-  test("app rows launch through the shared controller", () => {
-    const { panel, actions } = makePanel();
-    const zedRow = [...panel.querySelectorAll(".info-panel-link-app")].find((r) =>
-      r.textContent.includes("Zed"),
-    );
-    zedRow.click();
-    expect(actions.openWorkspaceInApp).toHaveBeenCalledWith({ id: "zed", label: "Zed" });
+  test("copy writes the full session file path and swaps the label", async () => {
+    const writeText = stubClipboard();
+    const { info, panel } = makePanel();
+    info.updateSessionFile("/sessions/abc.jsonl");
+
+    panel.querySelector(".info-panel-copy").click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(writeText).toHaveBeenCalledWith("/sessions/abc.jsonl");
+    const copy = panel.querySelector(".info-panel-copy");
+    expect(copy.getAttribute("aria-label")).toBe("Copied");
+    expect(copy.title).toBe("Copied");
+  });
+
+  test("a refused clipboard write reports the failure instead of claiming a copy", async () => {
+    stubClipboard(async () => {
+      throw new Error("denied");
+    });
+    const { info, panel } = makePanel();
+    info.updateSessionFile("/sessions/abc.jsonl");
+
+    panel.querySelector(".info-panel-copy").click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(panel.querySelector(".info-panel-copy").getAttribute("aria-label")).toBe("Copy failed");
+  });
+
+  test("no copy without a session file", async () => {
+    const writeText = stubClipboard();
+    const { panel } = makePanel();
+    panel.querySelector(".info-panel-copy").click();
+    await Promise.resolve();
+    expect(writeText).not.toHaveBeenCalled();
   });
 });
 

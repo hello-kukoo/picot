@@ -25,6 +25,9 @@ beforeEach(async () => {
           files: {
             preview: {
               close: "Close",
+              closeTab: "Close tab",
+              closeAll: "Close all tabs",
+              hide: "Hide panel",
               conflict: "File modified externally",
               copyFailed: "Copy failed",
               loadError: "Failed to load file",
@@ -115,11 +118,16 @@ beforeEach(async () => {
   goToLineInput.id = "file-preview-go-to-line-input";
   goToLineInput.className = "hidden";
   document.body.appendChild(goToLineInput);
+  // Mirrors index.html: each checkbox is wrapped by a label that carries the
+  // visible caption, so hiding the input alone would leave the text behind.
   for (const id of ["file-preview-wrap", "file-preview-autosave"]) {
+    const label = document.createElement("label");
+    label.className = "file-preview-toolbar-check";
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.id = id;
-    document.body.appendChild(checkbox);
+    label.appendChild(checkbox);
+    document.body.appendChild(label);
   }
 });
 
@@ -255,6 +263,89 @@ describe("FilePreviewPanel", () => {
     await p.openFile("/test/workspace/photo.png");
     const img = content.querySelector(".file-image-img");
     expect(img?.getAttribute("src")).toBe("data:image/png;base64,+/8=");
+    p.destroy();
+  });
+
+  test("a Side Chat tab hides every file-scoped panel control", async () => {
+    const pathBar = document.createElement("div");
+    pathBar.id = "file-preview-path";
+    document.body.appendChild(pathBar);
+    const p = createPanel();
+    await p.openFile("/test/workspace/README.md");
+    const toggle = document.getElementById("file-preview-toolbar-toggle");
+    const toolbar = document.getElementById("file-preview-toolbar");
+    expect(toggle.classList.contains("hidden")).toBe(false);
+
+    p.registerTransientTab({
+      id: "sc-toolbar",
+      title: "Side Chat",
+      contentElement: document.createElement("div"),
+      onActivate: () => {},
+      onDeactivate: () => {},
+    });
+    p.activateContent({ kind: "transient", id: "sc-toolbar" });
+
+    // The file tab is no longer on screen: nothing may describe it.
+    expect(toggle.classList.contains("hidden")).toBe(true);
+    expect(pathBar.classList.contains("hidden")).toBe(true);
+    expect(toolbar.classList.contains("hidden")).toBe(true);
+    for (const id of [
+      "file-preview-mode-preview",
+      "file-preview-save",
+      "file-preview-reload",
+      "file-preview-search",
+      "file-preview-copy",
+      "file-preview-autosave",
+    ]) {
+      const el = document.getElementById(id);
+      // A checkbox's visible box is its caption label, so that is what hides.
+      const visible = el.closest(".file-preview-toolbar-check") ?? el;
+      expect(visible.classList.contains("hidden")).toBe(true);
+    }
+
+    // Returning to the file view restores them.
+    p.activateContent({ kind: "file", id: p.state.getTabs()[0].id });
+    await Promise.resolve();
+    expect(toggle.classList.contains("hidden")).toBe(false);
+    p.destroy();
+  });
+
+  test("a diff tab does not leak the hidden file tab's status", async () => {
+    const status = document.createElement("span");
+    status.id = "file-preview-status";
+    document.body.appendChild(status);
+    const p = createPanel();
+    await p.openFile("/test/workspace/main.js");
+    expect(status.textContent).not.toBe("");
+
+    p.openDiff({
+      comparison: "staged",
+      pathBytesBase64: "YQ==",
+      displayPath: "a.js",
+      rawPatch: "@@ -1 +1 @@\n-old\n+new",
+    });
+
+    expect(status.textContent).toBe("");
+    expect(
+      document.getElementById("file-preview-toolbar-toggle").classList.contains("hidden"),
+    ).toBe(true);
+    p.destroy();
+  });
+
+  test("hides the editor settings toggle while a browser tab is active", async () => {
+    const p = createPanel();
+    await p.openBrowserTab("http://127.0.0.1:41001/", {
+      file: "/test/workspace/a.html",
+      fileName: "a.html",
+    });
+    const toggle = document.getElementById("file-preview-toolbar-toggle");
+    expect(toggle.classList.contains("hidden")).toBe(true);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    // An html file opened as source keeps the toggle. (A different path: the
+    // browser tab already owns a.html and openFile would select that tab.)
+    await p.openFile("/test/workspace/b.html", { fileName: "b.html" });
+    expect(toggle.classList.contains("hidden")).toBe(false);
     p.destroy();
   });
 
@@ -905,11 +996,90 @@ describe("FilePreviewPanel", () => {
     p.destroy();
   });
 
+  test("caps its width at the injected budget so the chat column keeps its minimum", () => {
+    // mainContainer is stubbed at 800px, so 0.7 of the row would be 560px.
+    const p = createPanel({ maxWidthPx: () => 300 });
+    p._applyPanelWidth(800);
+    expect(p.panel.style.width).toBe("300px");
+    expect(p.panel.style.flexBasis).toBe("300px");
+
+    // A budget tighter than the ratio cap wins; a looser one does not.
+    const loose = createPanel({ maxWidthPx: () => 700 });
+    loose._applyPanelWidth(800);
+    expect(loose.panel.style.width).toBe("560px");
+
+    // End key honours the same cap rather than the raw 0.7 ratio.
+    const budgeted = createPanel({ maxWidthPx: () => 280 });
+    resizer.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    expect(budgeted.panel.style.width).toBe("280px");
+
+    p.destroy();
+    loose.destroy();
+    budgeted.destroy();
+  });
+
   test("tab bar renders close buttons", async () => {
     const p = createPanel();
     await p.openFile("/test/workspace/main.js");
     const closeBtn = tabBar.querySelector(".file-preview-tab-close");
     expect(closeBtn).not.toBeNull();
+    p.destroy();
+  });
+
+  test("close-all closes file and diff tabs, then hides the panel", async () => {
+    const p = createPanel();
+    await p.openFile("/test/workspace/main.js");
+    p.openDiff({
+      comparison: "staged",
+      pathBytesBase64: "YQ==",
+      displayPath: "a.js",
+      rawPatch: "@@ -1 +1 @@\n-old\n+new",
+    });
+    expect(p.state.getTabs().length).toBe(1);
+    expect(p.diffTabs.size).toBe(1);
+
+    const closed = await p.closeAllTabs();
+
+    expect(closed).toBe(true);
+    expect(p.state.getTabs().length).toBe(0);
+    expect(p.diffTabs.size).toBe(0);
+    expect(p.panelOpen).toBe(false);
+    expect(tabBar.querySelectorAll(".file-preview-tab").length).toBe(0);
+    p.destroy();
+  });
+
+  test("close-all keeps a Side Chat tab and leaves the panel open on it", async () => {
+    const p = createPanel();
+    await p.openFile("/test/workspace/main.js");
+    p.registerTransientTab({
+      id: "sc1",
+      title: "Side Chat",
+      contentElement: document.createElement("div"),
+      onActivate: () => {},
+      onDeactivate: () => {},
+    });
+
+    await p.closeAllTabs();
+
+    expect(p.state.getTabs().length).toBe(0);
+    expect(p.transientTabs.has("sc1")).toBe(true);
+    expect(p.panelOpen).toBe(true);
+    expect(p.activeContent).toEqual({ kind: "transient", id: "sc1" });
+    p.destroy();
+  });
+
+  test("close-all aborts on a cancelled dirty confirmation and closes nothing", async () => {
+    const confirmDirty = vi.fn(async () => "cancel");
+    const p = createPanel({ confirmDirty });
+    await p.openFile("/test/workspace/main.js");
+    p.currentRenderer.getEditor().setValue("changed\n");
+
+    const closed = await p.closeAllTabs();
+
+    expect(closed).toBe(false);
+    expect(confirmDirty).toHaveBeenCalledOnce();
+    expect(p.state.getTabs().length).toBe(1);
+    expect(p.panelOpen).toBe(true);
     p.destroy();
   });
 
@@ -1340,6 +1510,59 @@ describe("FilePreviewPanel diff tabs", () => {
     expect(p.activeContent).toEqual({ kind: "diff", id });
     // Diff tabs must never enter FileTabState/localStorage.
     expect(p.state.getTabs().length).toBe(0);
+    p.destroy();
+  });
+
+  test("hides the Auto-save caption, not just its checkbox, while a diff is active", () => {
+    const p = createPanel();
+    p.openDiff({
+      comparison: "staged",
+      pathBytesBase64: "YQ==",
+      displayPath: "a.js",
+      rawPatch: "@@ -1 +1 @@\n-old\n+new",
+    });
+
+    // A read-only diff has nothing to save: the whole caption must go, and the
+    // Wrap control beside it must survive.
+    const autoSaveLabel = p.controls.autoSave.closest(".file-preview-toolbar-check");
+    expect(autoSaveLabel.classList.contains("hidden")).toBe(true);
+    const wrapLabel = p.controls.wrap.closest(".file-preview-toolbar-check");
+    expect(wrapLabel.classList.contains("hidden")).toBe(false);
+    p.destroy();
+  });
+
+  test("hides the go-to-line control while a diff is active", () => {
+    const p = createPanel();
+    p.openDiff({
+      comparison: "staged",
+      pathBytesBase64: "YQ==",
+      displayPath: "a.js",
+      rawPatch: "@@ -1 +1 @@\n-old\n+new",
+    });
+
+    // The editor-scoped visibility rule used to run after the wholesale
+    // diff/transient hide and undo it, leaving a dead disabled button in the
+    // diff toolbar (right before the Wrap control).
+    expect(p.controls.goToLine.classList.contains("hidden")).toBe(true);
+    expect(p.controls.goToLineInput.classList.contains("hidden")).toBe(true);
+    p.destroy();
+  });
+
+  test("renders a type glyph on the diff tab so the hover close X replaces it", () => {
+    const p = createPanel();
+    p.openDiff({
+      comparison: "staged",
+      pathBytesBase64: "YQ==",
+      displayPath: "a.js",
+      rawPatch: "@@ -1 +1 @@\n-old\n+new",
+    });
+
+    const tab = tabBar.querySelector(".file-preview-tab.diff-tab");
+    const glyph = tab.querySelector(".file-preview-tab-icon");
+    expect(glyph).not.toBeNull();
+    // A real SVG, not an empty slot: the close button is absolutely positioned
+    // over this box, so a bare slot reads as an X with nothing behind it.
+    expect(glyph.querySelector("svg")).not.toBeNull();
     p.destroy();
   });
 

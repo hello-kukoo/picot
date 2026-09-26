@@ -10,6 +10,7 @@ import { createIcon } from "./icons.js";
 import { processImageFile, processImagePayload } from "./image-attachments.js";
 import { filterModelsByCatalogVisibility } from "./models/selection.js";
 import { createHostFileMentionSearch, setupAtFileMention } from "./ui/at-file-mention.js";
+import { guardComposerArrowInsertion } from "./ui/composer-caret-guard.js";
 import { DialogHandler } from "./ui/dialogs.js";
 import { MessageRenderer } from "./ui/message-renderer.js";
 import { SafetyGuardDialog } from "./ui/safety-guard-dialog.js";
@@ -151,8 +152,6 @@ export class EphemeralChatView {
     toolbar.appendChild(toolbarRight);
     this._composer.appendChild(toolbar);
 
-    this._commandOverlay = doc.createElement("div");
-    this._commandOverlay.className = "command-palette-overlay hidden";
     this._commandMenu = doc.createElement("div");
     this._commandMenu.className = "command-palette hidden";
     this._commandHeader = doc.createElement("div");
@@ -161,7 +160,7 @@ export class EphemeralChatView {
     this._commandList = doc.createElement("div");
     this._commandList.className = "command-list";
     this._commandMenu.append(this._commandHeader, this._commandList);
-    this._root.append(this._commandOverlay, this._commandMenu, this._composer);
+    this._root.append(this._commandMenu, this._composer);
 
     // Shared render helpers, each scoped to this view's containers.
     this.messageRenderer = new MessageRenderer(this._messagesEl);
@@ -182,6 +181,7 @@ export class EphemeralChatView {
     });
 
     this._destroyVoice = setupVoiceInput({ micBtn: this._micBtn, messageInput: this._textarea });
+    this._detachCaretGuard = guardComposerArrowInsertion(this._textarea);
 
     this._pasteOffload = setupComposerPasteOffload({
       textarea: this._textarea,
@@ -226,7 +226,6 @@ export class EphemeralChatView {
       list: this._commandList,
       getCommands: () => this._sideCommands(),
       document: this._doc,
-      overlay: this._commandOverlay,
       createIcon,
     });
 
@@ -320,6 +319,7 @@ export class EphemeralChatView {
     this.dialogHandler?.destroy();
     this.safetyGuardDialog?.destroy();
     this._destroyVoice?.();
+    this._detachCaretGuard?.();
     this._pasteOffload?.destroy();
     this._imageAttachments?.destroy();
     this._root.remove();

@@ -28,6 +28,7 @@
     "workspace": "ワークスペース",
     "copyPath": "パスをコピー",
     "copied": "コピーしました",
+    "copyFailed": "コピーに失敗しました",
     "sessionHistory": "セッション履歴",
     "activePath": "アクティブな分岐",
     "branch": "分岐",
@@ -63,6 +64,7 @@
     "pushBusy": "別の Git 操作が実行中です。しばらくしてから再試行してください。",
     "pushSetUpstream": "アップストリームを {remote}/{branch} に設定しました。",
     "pushWorkspaceTransition": "ワークスペースを切り替え中です。しばらくしてから再試行してください。",
+    "comparisonHint": "比較基準：{kind}",
     "comparison": {
       "changes": "変更",
       "commit": "コミット",
@@ -109,11 +111,8 @@
   },
   "usage": {
     "contextTokens": "コンテキスト：{used}k / {limit}k トークン",
-    "sessionCostTitle": "セッションコスト",
     "contextTitle": "コンテキスト使用量",
-    "costSub": "{amount}（サブスク）",
-    "sessionUsageTitle": "セッショントークン（入力 / 出力 / キャッシュ）",
-    "summary": "入力 {in} · 出力 {out} · キャッシュ {cache}"
+    "sessionUsageTitle": "セッショントークン（入力 / 出力 / キャッシュ）"
   },
   "context": {
     "used": "使用 {pct}%",
@@ -256,7 +255,10 @@
       "htmlLive": "HTML ライブプレビュー",
       "converted": {
         "remoteImageHidden": "変換ドキュメント内の画像を非表示にしました：リモートまたは未対応の画像ソースです。"
-      }
+      },
+      "closeAll": "すべてのタブを閉じる",
+      "hide": "パネルを非表示",
+      "closeTab": "タブを閉じる"
     },
     "unsaved": {
       "title": "未保存の変更",
@@ -658,15 +660,6 @@
     "removeDisabledCurrent": "現在のワークスペースは削除できません",
     "addFailed": "プロジェクトを追加できませんでした"
   },
-  "sessionInfo": {
-    "title": "セッション情報",
-    "heading": "セッション情報",
-    "file": "ファイル",
-    "inMemory": "メモリ内（未保存）",
-    "copyFile": "ファイルパスをコピー",
-    "copied": "コピーしました",
-    "copyFailed": "コピーに失敗しました"
-  },
   "updater": {
     "update": "更新",
     "openInSettings": "設定でアップデートを開く",
@@ -1043,12 +1036,15 @@
     "preview": {
       "title": "ファイルプレビュー",
       "theme": "プレビューテーマ",
-      "themeDescription": "Picot テーマに従うか、コードと Markdown プレビューをライト / ダークに固定します。",
-      "themeSystem": "Picot テーマに従う",
-      "themeLight": "ライト",
-      "themeDark": "ダーク",
+      "themeDescription": "コードエディタのテーマ：Picot に従うか、名前付きのライト / ダークテーマを選びます。",
       "fontSize": "フォントサイズ",
-      "fontSizeDescription": "コードエディタと Markdown プレビューの文字サイズ。"
+      "fontSizeDescription": "コードエディタと Markdown プレビューの文字サイズ。",
+      "themeFollow": "Picot に従う",
+      "themeGroup": {
+        "follow": "Picot 配色",
+        "light": "ライト",
+        "dark": "ダーク"
+      }
     },
     "chat": {
       "title": "チャット",

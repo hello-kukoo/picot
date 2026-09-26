@@ -28,6 +28,7 @@
     "workspace": "Espacio de trabajo",
     "copyPath": "Copiar ruta",
     "copied": "Copiado",
+    "copyFailed": "Error al copiar",
     "sessionHistory": "Historial de sesión",
     "activePath": "Rama activa",
     "branch": "Rama",
@@ -63,6 +64,7 @@
     "pushBusy": "El repositorio está ocupado con otra operación de Git. Inténtalo de nuevo en un momento.",
     "pushSetUpstream": "Ahora sigue {remote}/{branch}.",
     "pushWorkspaceTransition": "El espacio de trabajo está cambiando. Inténtalo de nuevo en un momento.",
+    "comparisonHint": "Base de comparación: {kind}",
     "comparison": {
       "changes": "Cambios",
       "commit": "Commit",
@@ -109,11 +111,8 @@
   },
   "usage": {
     "contextTokens": "Contexto: {used}k / {limit}k tokens",
-    "sessionCostTitle": "Costo de sesión",
     "contextTitle": "Uso del contexto",
-    "costSub": "{amount} (suscripción)",
-    "sessionUsageTitle": "Tokens de sesión (entrada / salida / caché)",
-    "summary": "Entrada {in} · Salida {out} · Caché {cache}"
+    "sessionUsageTitle": "Tokens de sesión (entrada / salida / caché)"
   },
   "context": {
     "used": "Usado {pct}%",
@@ -256,7 +255,10 @@
       "htmlLive": "Vista previa de HTML",
       "converted": {
         "remoteImageHidden": "Imagen eliminada del documento convertido: origen de imagen remoto o no compatible."
-      }
+      },
+      "closeAll": "Cerrar todas las pestañas",
+      "hide": "Ocultar panel",
+      "closeTab": "Cerrar pestaña"
     },
     "unsaved": {
       "title": "Cambios sin guardar",
@@ -658,15 +660,6 @@
     "removeDisabledCurrent": "No se puede quitar el espacio de trabajo actual",
     "addFailed": "No se pudo añadir el proyecto"
   },
-  "sessionInfo": {
-    "title": "Información de sesión",
-    "heading": "Información de sesión",
-    "file": "Archivo",
-    "inMemory": "En memoria (aún sin guardar)",
-    "copyFile": "Copiar ruta del archivo",
-    "copied": "Copiado",
-    "copyFailed": "Error al copiar"
-  },
   "updater": {
     "update": "Actualizar",
     "openInSettings": "Abrir actualizaciones en ajustes",
@@ -1043,12 +1036,15 @@
     "preview": {
       "title": "Vista previa de archivos",
       "theme": "Tema de vista previa",
-      "themeDescription": "Sigue el tema de Picot o fuerza el modo claro u oscuro en las vistas previas de código y Markdown.",
-      "themeSystem": "Según el tema de Picot",
-      "themeLight": "Claro",
-      "themeDark": "Oscuro",
+      "themeDescription": "Tema del editor de código: sigue Picot o elige un tema claro u oscuro con nombre.",
       "fontSize": "Tamaño de fuente",
-      "fontSizeDescription": "Tamaño del texto en editores de código y vistas previas de Markdown."
+      "fontSizeDescription": "Tamaño del texto en editores de código y vistas previas de Markdown.",
+      "themeFollow": "Seguir Picot",
+      "themeGroup": {
+        "follow": "Paleta de Picot",
+        "light": "Claro",
+        "dark": "Oscuro"
+      }
     },
     "chat": {
       "title": "Chat",

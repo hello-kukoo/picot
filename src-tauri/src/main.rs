@@ -93,6 +93,7 @@ use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, TitleBarStyle, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_window_state::{StateFlags, WindowExt};
 use temp_resources::{canonical_temp_root, cleanup_quick_chat_dir};
 use terminal_manager::TerminalManager;
 use terminal_registry::TerminalRegistry;
@@ -598,6 +599,16 @@ fn open_external_core(url: &str) -> Result<(), String> {
 
 // ─── Window helpers ───────────────────────────────────────────────────────────
 
+/// What the window-state plugin remembers across launches: the inner size and
+/// whether the window was maximized/fullscreen. Position is deliberately left
+/// out — a saved position can land off-screen once monitors change, and only
+/// the size was asked for. Maximized windows keep their pre-maximize size in
+/// the saved state (the plugin skips SIZE while maximized), so restoring a
+/// maximized window still has a sane size to fall back to.
+fn window_state_flags() -> StateFlags {
+    StateFlags::SIZE | StateFlags::MAXIMIZED | StateFlags::FULLSCREEN
+}
+
 fn open_native_window(
     app: &AppHandle,
     label: &str,
@@ -621,7 +632,10 @@ fn open_native_window(
         .map_err(|error| error.to_string())?
         .initialization_script(init_script)
         .on_navigation(move |url| owner_registry.authorize_navigation(&nav_owner, url))
-        .on_new_window(|_url, _features| tauri::webview::NewWindowResponse::Deny);
+        .on_new_window(|_url, _features| tauri::webview::NewWindowResponse::Deny)
+        // Built hidden so the saved geometry is applied before the first
+        // paint: restoring a visible window shows a resize jump.
+        .visible(false);
 
     #[cfg(target_os = "macos")]
     let builder = builder
@@ -630,7 +644,9 @@ fn open_native_window(
         .hidden_title(true);
     #[cfg(not(target_os = "macos"))]
     let builder = builder.decorations(true);
-    builder.build().map_err(|error| error.to_string())?;
+    let window = builder.build().map_err(|error| error.to_string())?;
+    let _ = window.restore_state(window_state_flags());
+    let _ = window.show();
     Ok(())
 }
 
@@ -4561,6 +4577,13 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Window geometry is tracked on resize and saved on close/app exit, then
+        // restored at window creation (see open_native_window).
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(window_state_flags())
+                .build(),
+        )
         .plugin(tauri_plugin_process::init())
         .plugin(
             tauri_plugin_log::Builder::new()

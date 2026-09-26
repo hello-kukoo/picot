@@ -23,12 +23,12 @@ import {
   normalizeSmoothScrollDuration,
   normalizeThemeMode,
   PREVIEW_FONT_SIZE_PX,
-  PREVIEW_THEME_MODES,
   resolvePreviewTheme,
   saveAppearanceCookie,
   TERMINAL_FONT_SIZE_PX,
   TERMINAL_THEME_MODES,
 } from "./appearance-preferences.js";
+import { PREVIEW_THEME_IDS } from "./preview-themes.js";
 
 const COOKIE_KEY = "picot-appearance";
 
@@ -73,8 +73,7 @@ test("level lists and defaults match the approved contract", () => {
     xlarge: 26,
   });
   expect(DEFAULT_FONT_SIZE_LEVEL).toBe("normal");
-  expect(DEFAULT_PREVIEW_THEME_MODE).toBe("system");
-  expect(PREVIEW_THEME_MODES).toEqual(["system", "light", "dark"]);
+  expect(DEFAULT_PREVIEW_THEME_MODE).toBe("follow");
   expect(DEFAULT_TERMINAL_THEME_MODE).toBe("dark");
   expect(TERMINAL_THEME_MODES).toEqual(["system", "light", "dark"]);
   expect(DEFAULT_SCROLLBACK_LIMIT).toBe(1000);
@@ -106,18 +105,22 @@ test("nearestFontLevel maps legacy px values to the closest level", () => {
   expect(nearestFontLevel("bad", TERMINAL_FONT_SIZE_PX)).toBe("normal");
 });
 
-test("normalizePreviewThemeMode falls back to system", () => {
-  for (const mode of PREVIEW_THEME_MODES) {
-    expect(normalizePreviewThemeMode(mode)).toBe(mode);
+test("normalizePreviewThemeMode keeps catalog ids, migrates legacy modes, falls back to follow", () => {
+  for (const id of PREVIEW_THEME_IDS) {
+    expect(normalizePreviewThemeMode(id)).toBe(id);
   }
-  expect(normalizePreviewThemeMode("sepia")).toBe("system");
-  expect(normalizePreviewThemeMode(undefined)).toBe("system");
+  // Pre-2026-09 stored modes map onto the palette they used to render with.
+  expect(normalizePreviewThemeMode("system")).toBe("follow");
+  expect(normalizePreviewThemeMode("light")).toBe("github-light");
+  expect(normalizePreviewThemeMode("dark")).toBe("one-dark");
+  expect(normalizePreviewThemeMode("sepia")).toBe("follow");
+  expect(normalizePreviewThemeMode(undefined)).toBe("follow");
 });
 
-test("resolvePreviewTheme forces light/dark and follows the Picot theme on system", () => {
-  expect(resolvePreviewTheme("light", true)).toBe("light");
-  expect(resolvePreviewTheme("light", false)).toBe("light");
-  expect(resolvePreviewTheme("dark", false)).toBe("dark");
+test("resolvePreviewTheme pins named themes and follows the Picot theme on follow", () => {
+  expect(resolvePreviewTheme("github-light", true)).toBe("light");
+  expect(resolvePreviewTheme("one-light", true)).toBe("light");
+  expect(resolvePreviewTheme("one-dark", false)).toBe("dark");
   expect(resolvePreviewTheme("system", true)).toBe("dark");
   expect(resolvePreviewTheme("system", false)).toBe("light");
 });
@@ -127,7 +130,7 @@ test("appearance cookie round-trips and normalizes partial writes", () => {
   expect(loadAppearanceCookie()).toEqual({
     chatFontSize: "large",
     previewFontSize: "normal",
-    previewTheme: "system",
+    previewTheme: "follow",
     terminalFontSize: "xlarge",
     terminalThemeMode: "dark",
     terminalScrollbackLimit: 1000,
@@ -139,7 +142,7 @@ test("appearance cookie round-trips and normalizes partial writes", () => {
   expect(loadAppearanceCookie()).toEqual({
     chatFontSize: "large",
     previewFontSize: "small",
-    previewTheme: "light",
+    previewTheme: "github-light",
     terminalFontSize: "xlarge",
     terminalThemeMode: "dark",
     terminalScrollbackLimit: 1000,
@@ -153,7 +156,7 @@ test("corrupt or stale cookie values fall back to defaults", () => {
   expect(loadAppearanceCookie()).toEqual({
     chatFontSize: "normal",
     previewFontSize: "normal",
-    previewTheme: "system",
+    previewTheme: "follow",
     terminalFontSize: "normal",
     terminalThemeMode: "dark",
     terminalScrollbackLimit: 1000,
@@ -167,7 +170,7 @@ test("corrupt or stale cookie values fall back to defaults", () => {
   expect(loadAppearanceCookie()).toEqual({
     chatFontSize: "normal",
     previewFontSize: "normal",
-    previewTheme: "system",
+    previewTheme: "follow",
     terminalFontSize: "normal",
     terminalThemeMode: "dark",
     terminalScrollbackLimit: 1000,
@@ -314,6 +317,9 @@ test("applyAppearanceToDom sets font variables and the resolved preview theme", 
   expect(document.documentElement.style.getPropertyValue("--chat-font-size")).toBe("20px");
   expect(document.documentElement.style.getPropertyValue("--preview-font-size")).toBe("11px");
   expect(document.documentElement.getAttribute("data-preview-theme")).toBe("dark");
+  // The editor rides its own attribute so panel background and markdown
+  // preview can stay on the Picot palette (legacy "dark" -> one-dark).
+  expect(document.documentElement.getAttribute("data-preview-editor-theme")).toBe("one-dark");
 
   // System mode removes the attribute so the panel keeps the active Picot
   // theme's own palette instead of the canonical forced-mode one.
@@ -324,4 +330,26 @@ test("applyAppearanceToDom sets font variables and the resolved preview theme", 
     picotThemeIsDark: true,
   });
   expect(document.documentElement.getAttribute("data-preview-theme")).toBe(null);
+  expect(document.documentElement.getAttribute("data-preview-editor-theme")).toBe(null);
+});
+
+test("applyAppearanceToDom publishes the named editor theme id", () => {
+  applyAppearanceToDom({
+    chatFontSize: "normal",
+    previewFontSize: "normal",
+    previewTheme: "catppuccin-mocha",
+    picotThemeIsDark: false,
+  });
+  expect(document.documentElement.getAttribute("data-preview-editor-theme")).toBe(
+    "catppuccin-mocha",
+  );
+  // A named light theme still forces the panel's light palette.
+  applyAppearanceToDom({
+    chatFontSize: "normal",
+    previewFontSize: "normal",
+    previewTheme: "gruvbox-light",
+    picotThemeIsDark: true,
+  });
+  expect(document.documentElement.getAttribute("data-preview-theme")).toBe("light");
+  expect(document.documentElement.getAttribute("data-preview-editor-theme")).toBe("gruvbox-light");
 });

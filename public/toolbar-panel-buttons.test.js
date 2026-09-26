@@ -97,6 +97,29 @@ test("sidebar tabs expose icons and keep labels in accessible markup", () => {
   expect(styleCss).toContain(".file-sidebar-tab-label {\n  display: none;");
 });
 
+test("tab-scoped close-all leads the panel controls, divided from them", () => {
+  const controls = document.querySelector(".file-preview-panel-controls");
+  const order = Array.from(controls.children).map((el) => el.id || el.className);
+
+  // Tab action first, then a 1px scope divider, then the panel controls with
+  // the enlarge/hide size pair last.
+  expect(order[0]).toBe("file-preview-close-all");
+  expect(order[1]).toBe("file-preview-controls-divider");
+  expect(order[2]).toBe("file-preview-toolbar-toggle");
+  // The size pair (enlarge, replaced in place by collapse while enlarged) sits
+  // directly before the hide control at the end of the cluster.
+  expect(order.slice(-3)).toEqual([
+    "file-preview-enlarge",
+    "file-preview-collapse",
+    "file-preview-close",
+  ]);
+  expect(
+    document.querySelector(".file-preview-controls-divider")?.getAttribute("aria-hidden"),
+  ).toBe("true");
+  // The divider disappears with the button it follows (empty tab bar).
+  expect(styleCss).toContain("#file-preview-close-all.hidden + .file-preview-controls-divider");
+});
+
 test("declares File and Git header controls with the expected initial state", () => {
   expect(document.querySelector("#file-sidebar-refresh")).not.toBeNull();
   expect(document.querySelector("#file-sidebar-toggle-hidden")?.getAttribute("aria-pressed")).toBe(

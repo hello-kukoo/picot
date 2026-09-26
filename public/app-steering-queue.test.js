@@ -355,23 +355,29 @@ test("a rejected clear keeps the pills and leaves the composer untouched", async
   expect(document.getElementById("pi-queue").classList.contains("hidden")).toBe(false);
 });
 
-test("Escape clears the pi queue before aborting and restores the text", async () => {
+test("Escape aborts with the live turnId and leaves pi's queue alone", async () => {
+  // Pi-native (2026-09-25, supersedes Q3-A): Esc aborts ONLY. Queued
+  // steer/followUp stay at pi — it continues with them once the run
+  // terminates — so no clear_queue and no composer restore. The abort must
+  // carry the live turnId or the host gate silently drops it.
   await import("./app.js?steering-esc");
   const ws = wsInstances.at(-1);
   await settle();
   runtimeEvent(ws, { type: "agent_start", turnId: "t4" });
   await settle();
-  clearQueueData = { steering: ["hold on"], followUp: [] };
+  renderPiQueue(ws, ["hold on"], [], 1);
+  typeIntoComposer("my draft");
 
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   await settle(80);
 
-  const clearIndex = ws.sent.findIndex((frame) => frame.command?.type === "clear_queue");
-  // Every runtime command rides `{type:"runtime_request", command:{...}}`.
-  const abortIndex = ws.sent.findIndex((frame) => frame.command?.type === "abort");
-  expect(clearIndex).toBeGreaterThanOrEqual(0);
-  expect(abortIndex).toBeGreaterThan(clearIndex);
-  expect(document.getElementById("message-input").value).toContain("hold on");
+  // Exactly one command: the abort, bound to the live turn. No clear_queue.
+  expect(commandFrames(ws, "clear_queue")).toHaveLength(0);
+  const aborts = commandFrames(ws, "abort");
+  expect(aborts).toHaveLength(1);
+  expect(aborts[0].command.turnId).toBe("t4");
+  // The queued text and the draft stay exactly where they were.
+  expect(document.getElementById("message-input").value).toBe("my draft");
   // "run 真正终止" from the UI's side: back to idle (send visible, abort gone).
   expect(document.getElementById("abort-btn").classList.contains("hidden")).toBe(true);
   expect(document.getElementById("send-btn").classList.contains("hidden")).toBe(false);
@@ -415,45 +421,42 @@ test("clearing appends the restored text below an existing draft", async () => {
   expect(input.value).toBe("draft I typed\nqueued follow-up text");
 });
 
-test("Escape aborts even when clear_queue fails", async () => {
-  await import("./app.js?steering-esc-clear-fails");
+test("Escape aborts immediately when the turn id was never seen", async () => {
+  // No turnId-carrying event arrived (edge): the abort still goes out at once,
+  // bare — the host gate may reject it, but nothing queues up in front of it.
+  await import("./app.js?steering-esc-no-turn");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t8" });
+  // Streaming, but no event ever carried a turnId.
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
-  clearQueueFails = true;
-  // rpcCommand logs the rejection; assert the exact line so the run stays clean.
-  const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   await settle(80);
 
-  expect(errorSpy).toHaveBeenCalledWith(
-    "rpcCommand failed:",
-    "clear_queue",
-    "clear_queue rejected",
-  );
-  // Spec Q3-A: a failed clear must not hold the abort back.
-  expect(commandFrames(ws, "clear_queue")).toHaveLength(1);
-  expect(commandFrames(ws, "abort")).toHaveLength(1);
+  const aborts = commandFrames(ws, "abort");
+  expect(aborts).toHaveLength(1);
+  expect(aborts[0].command.turnId).toBeUndefined();
+  expect(commandFrames(ws, "clear_queue")).toHaveLength(0);
 });
 
-test("Escape aborts within the cap when clear_queue never answers", async () => {
+test("Escape aborts immediately — nothing is sent ahead of the stop", async () => {
+  // Pi-native (2026-09-25): the stop path sends only the abort, so no
+  // clear_queue round-trip (and no cap) can delay it.
   await import("./app.js?steering-esc-cap");
   const ws = wsInstances.at(-1);
   await settle();
   runtimeEvent(ws, { type: "agent_start", turnId: "t9" });
   await settle();
-  swallowClearQueue = true;
 
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-  await settle(1200);
+  await settle(80);
 
-  // The review correction recorded in the spec: an unresponsive pi must not
-  // delay the real stop behind wsRequest's 15s default.
-  expect(commandFrames(ws, "clear_queue")).toHaveLength(1);
-  expect(commandFrames(ws, "abort")).toHaveLength(1);
-}, 15000);
+  expect(commandFrames(ws, "clear_queue")).toHaveLength(0);
+  const aborts = commandFrames(ws, "abort");
+  expect(aborts).toHaveLength(1);
+  expect(aborts[0].command.turnId).toBe("t9");
+});
 
 test("Alt+Enter while streaming queues a follow_up, not a steer", async () => {
   await import("./app.js?steering-alt-enter");
@@ -760,7 +763,10 @@ test("the panel comes back when pi reports a new queue after a clear", async () 
   ]);
 });
 
-test("Esc during an in-flight steer keeps the restored text", async () => {
+test("Esc during an in-flight steer leaves the queue at pi and the composer empty", async () => {
+  // Pi-native (2026-09-25, supersedes Q3-A): Esc aborts only. The in-flight
+  // steer stays queued at pi (it runs once the aborted turn ends), and the
+  // composer keeps whatever the user typed next — nothing is restored into it.
   await import("./app.js?steering-esc-inflight");
   const ws = wsInstances.at(-1);
   await settle();
@@ -773,15 +779,17 @@ test("Esc during an in-flight steer keeps the restored text", async () => {
   await settle();
   expect(commandFrames(ws, "prompt")).toHaveLength(1);
 
-  // pi had queued it, so Esc's clear returns exactly that text.
-  clearQueueData = { steering: ["hold on please"], followUp: [] };
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   await settle(120);
-  const input = document.getElementById("message-input");
-  expect(input.value).toContain("hold on please");
+  // Esc touches nothing on the queue path: no clear_queue, no composer
+  // restore — the queued text lives at pi until the aborted run ends.
+  expect(commandFrames(ws, "clear_queue")).toHaveLength(0);
+  const aborts = commandFrames(ws, "abort");
+  expect(aborts).toHaveLength(1);
+  expect(aborts[0].command.turnId).toBe("t15");
 
-  // The steer's own acceptance lands after the clear: it must not now wipe the
-  // text that the clear just restored (Q3-A: 不丢字).
+  // The steer's own acceptance lands after the abort without injecting the
+  // queued text anywhere.
   ws.onmessage({
     data: JSON.stringify({
       type: "runtime_response",
@@ -790,7 +798,7 @@ test("Esc during an in-flight steer keeps the restored text", async () => {
     }),
   });
   await settle();
-  expect(input.value).toContain("hold on please");
+  expect(commandFrames(ws, "clear_queue")).toHaveLength(0);
 });
 
 test("clearing restores both buckets, in queue order, when the composer is empty", async () => {

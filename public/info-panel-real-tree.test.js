@@ -66,7 +66,7 @@ describe("InfoPanel history from a real read_session_tree payload", () => {
   test("flat real entries render as session history rows", () => {
     const { info, panel } = makePanel();
     // Exactly what refreshInfoTree hands over from a read_session_tree reply.
-    info.updateWorkspace("/Users/linyong/tmp/Viber/quick-folder");
+    info.updateSessionFile("/Users/linyong/tmp/Viber/quick-folder");
     info.updateTree({ entries: REAL_FLAT_ENTRIES, leafId: "75ecf0aa" });
 
     // The real chain's only message entry renders as a history row;

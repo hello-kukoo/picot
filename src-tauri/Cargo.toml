@@ -1,6 +1,6 @@
 [package]
 name = "picot"
-version = "0.4.5"
+version = "0.4.6"
 description = "Pi Agent Desktop - session manager for pi coding agent"
 authors = ["Pi Desktop"]
 edition = "2021"
@@ -26,6 +26,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-window-state = "2"
 tauri-plugin-process = "2"
 tauri-plugin-log = "2"
 serde = { version = "1", features = ["derive"] }

@@ -28,6 +28,7 @@
     "workspace": "Workspace",
     "copyPath": "Copy path",
     "copied": "Copied",
+    "copyFailed": "Copy failed",
     "sessionHistory": "Session history",
     "activePath": "Active path",
     "branch": "Branch",
@@ -100,6 +101,7 @@
     "diffOriginal": "Original",
     "diffModified": "Modified",
     "diffEmpty": "No changes to display",
+    "comparisonHint": "Baseline: {kind}",
     "comparison": {
       "staged": "Staged",
       "changes": "Changes",
@@ -109,11 +111,8 @@
   },
   "usage": {
     "contextTokens": "Context: {used}k / {limit}k tokens",
-    "sessionCostTitle": "Session cost",
     "sessionUsageTitle": "Session tokens (input / output / cache)",
-    "contextTitle": "Context usage",
-    "costSub": "{amount} (sub)",
-    "summary": "In {in} · Out {out} · Cache {cache}"
+    "contextTitle": "Context usage"
   },
   "context": {
     "used": "Used {pct}%",
@@ -256,7 +255,10 @@
       "conflictMessage": "{name} changed on disk. Reload it or overwrite the disk version?",
       "converted": {
         "remoteImageHidden": "Converted image removed: remote or unsupported image source."
-      }
+      },
+      "closeAll": "Close all tabs",
+      "hide": "Hide panel",
+      "closeTab": "Close tab"
     },
     "unsaved": {
       "title": "Unsaved changes",
@@ -658,15 +660,6 @@
     "removeDisabledCurrent": "Cannot remove the current workspace",
     "addFailed": "Could not add project"
   },
-  "sessionInfo": {
-    "title": "Session info",
-    "heading": "Session Info",
-    "file": "File",
-    "inMemory": "In memory (not saved yet)",
-    "copyFile": "Copy file path",
-    "copied": "Copied",
-    "copyFailed": "Copy failed"
-  },
   "updater": {
     "update": "Update",
     "openInSettings": "Open updates in settings",
@@ -1043,12 +1036,15 @@
     "preview": {
       "title": "File preview",
       "theme": "Preview theme",
-      "themeDescription": "Follow the Picot theme, or force light or dark for code and markdown previews.",
-      "themeSystem": "Follow Picot theme",
-      "themeLight": "Light",
-      "themeDark": "Dark",
+      "themeDescription": "Code editor theme: follow Picot, or pick a named light or dark theme.",
       "fontSize": "Font size",
-      "fontSizeDescription": "Text size for code editors and markdown previews."
+      "fontSizeDescription": "Text size for code editors and markdown previews.",
+      "themeFollow": "Follow Picot",
+      "themeGroup": {
+        "follow": "Picot palette",
+        "light": "Light",
+        "dark": "Dark"
+      }
     },
     "chat": {
       "title": "Chat",

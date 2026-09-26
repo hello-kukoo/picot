@@ -1,8 +1,14 @@
 // ABOUTME: Appearance preferences for the dedicated Appearance settings page:
-// ABOUTME: five-level font sizes (chat / preview / terminal), the preview
-// ABOUTME: theme mode, and every terminal display preference (theme mode,
+// ABOUTME: five-level font sizes (chat / preview / terminal), the named preview
+// ABOUTME: editor theme, and every terminal display preference (theme mode,
 // ABOUTME: scrollback, smooth scroll, WebGL). Cookie is the synchronous render
 // ABOUTME: cache; the DB mirror goes through PREFERENCE_KEYS like ui.theme.
+
+import {
+  FOLLOW_PICOT,
+  normalizePreviewThemeId,
+  resolvePreviewThemeKind,
+} from "./preview-themes.js";
 
 /**
  * Shared five-level font size scale. Per-surface px maps live in the
@@ -22,9 +28,8 @@ export const CODE_FONT_SIZE_PX = { small: 12, normal: 14, medium: 16, large: 18,
 export const PREVIEW_FONT_SIZE_PX = { small: 11, normal: 13, medium: 15, large: 17, xlarge: 19 };
 export const TERMINAL_FONT_SIZE_PX = { small: 12, normal: 15, medium: 18, large: 22, xlarge: 26 };
 
-/** Preview color scheme modes: follow the Picot theme, or force one. */
-export const PREVIEW_THEME_MODES = ["system", "light", "dark"];
-export const DEFAULT_PREVIEW_THEME_MODE = "system";
+/** Preview editor theme ids live in ./preview-themes.js (the catalog). */
+export const DEFAULT_PREVIEW_THEME_MODE = FOLLOW_PICOT;
 
 /** Terminal color scheme modes: follow the Picot theme, or force one. */
 export const TERMINAL_THEME_MODES = ["system", "light", "dark"];
@@ -59,8 +64,12 @@ export function nearestFontLevel(px, pxMap) {
 }
 
 /** Unknown/stale preview theme values fall back to system. */
+/**
+ * The stored preview theme preference: a catalog id, with pre-2026-09
+ * light/dark/system values migrated by the catalog's legacy map.
+ */
 export function normalizePreviewThemeMode(value) {
-  return PREVIEW_THEME_MODES.includes(value) ? value : DEFAULT_PREVIEW_THEME_MODE;
+  return normalizePreviewThemeId(value);
 }
 
 /** Unknown/stale terminal theme values fall back to dark. */
@@ -95,13 +104,11 @@ export function defaultWebglRenderer(
 }
 
 /**
- * Resolve the effective preview color scheme: "light"/"dark" force a side,
- * "system" follows the active Picot theme's dark flag.
+ * Resolve the effective preview color scheme: a named theme pins its own side,
+ * "follow" tracks the active Picot theme's dark flag.
  */
 export function resolvePreviewTheme(mode, picotThemeIsDark) {
-  if (mode === "light") return "light";
-  if (mode === "dark") return "dark";
-  return picotThemeIsDark ? "dark" : "light";
+  return resolvePreviewThemeKind(mode, picotThemeIsDark);
 }
 
 function readAppearanceCookieRaw() {
@@ -166,9 +173,9 @@ export function saveAppearanceCookie(patch) {
 
 /**
  * Mirror the rendered appearance onto the document: font-size custom
- * properties, plus the preview theme attribute CSS scopes its light/dark
- * overrides against. In "system" mode the attribute is REMOVED so the panel
- * keeps the active Picot theme's own palette; only forced modes set it.
+ * properties, the panel-level preview light/dark attribute, and the code
+ * editor's named theme id. For "follow" both attributes are REMOVED so the
+ * panel and its editor keep the active Picot theme's own palette.
  */
 export function applyAppearanceToDom({
   chatFontSize,
@@ -187,10 +194,14 @@ export function applyAppearanceToDom({
     `${PREVIEW_FONT_SIZE_PX[normalizeFontLevel(previewFontSize)]}px`,
   );
   const mode = normalizePreviewThemeMode(previewTheme);
-  if (mode === "system") {
+  if (mode === FOLLOW_PICOT) {
     root.removeAttribute("data-preview-theme");
+    root.removeAttribute("data-preview-editor-theme");
   } else {
     root.setAttribute("data-preview-theme", resolvePreviewTheme(mode, picotThemeIsDark));
+    // The editor's own chrome palette rides a separate attribute: panel
+    // background and markdown preview stay on the Picot palette above.
+    root.setAttribute("data-preview-editor-theme", mode);
   }
 }
 

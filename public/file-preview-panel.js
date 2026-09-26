@@ -58,8 +58,12 @@ export class FilePreviewPanel {
     storage,
     transport,
     workspaceRoot,
+    maxWidthPx,
   } = {}) {
     this.panel = panel;
+    // Injected budget (px) keeping the chat column at its own minimum; the
+    // ratio cap alone let the preview eat the conversation on a wide window.
+    this.maxWidthPx = typeof maxWidthPx === "function" ? maxWidthPx : null;
     this.resizer = resizer;
     this.tabBar = tabBar;
     this.content = content;
@@ -307,6 +311,45 @@ export class FilePreviewPanel {
       if (!settled) return false;
     }
     this._closePanel();
+    return true;
+  }
+
+  /**
+   * Close every file and diff tab after one shared dirty-changes confirmation.
+   * Side Chat (transient) tabs are live chat surfaces with their own close
+   * semantics, so they stay; when one remains the panel keeps showing it, and
+   * otherwise the panel hides itself.
+   */
+  async closeAllTabs() {
+    if (this.state.getTabs().length === 0 && this.diffTabs.size === 0) return false;
+    this._captureActiveRenderer();
+    const dirtyTabs = this.state.getTabs().filter((tab) => tab.dirty);
+    if (dirtyTabs.length > 0) {
+      const settled = await this._settleDirtyTabs(dirtyTabs, "panel");
+      if (!settled) return false;
+    }
+
+    if (this.activeContent?.kind === "file") this._destroyRenderer();
+    else this._deactivateCurrent();
+
+    for (const tab of this.state.getTabs()) {
+      if (tab.kind === "browser") this._teardownBrowserTab(tab);
+      this._clearAutoSave(tab.id);
+      this._abortTabLoad(tab.id);
+      this.loadTokens.delete(tab.id);
+      this.state.closeTab(tab.id);
+    }
+    this.diffTabs.clear();
+
+    const remainingTransient = Array.from(this.transientTabs.keys()).pop() || null;
+    if (remainingTransient) {
+      this.activateContent({ kind: "transient", id: remainingTransient });
+    } else {
+      this.activeContent = null;
+      this._closePanel();
+    }
+    this._renderTabBar();
+    this._renderToolbar();
     return true;
   }
 
@@ -678,9 +721,15 @@ export class FilePreviewPanel {
     return layoutWidth || combinedWidth || this.mainContainer?.offsetWidth || 800;
   }
 
+  _maxPanelWidth() {
+    const ratioMax = this._availableWidth() * 0.7;
+    const budget = this.maxWidthPx?.() ?? 0;
+    return budget > 0 ? Math.min(ratioMax, budget) : ratioMax;
+  }
+
   _applyPanelWidth(width) {
     const totalWidth = this._availableWidth();
-    const maxWidth = Math.max(1, totalWidth * 0.7);
+    const maxWidth = Math.max(1, this._maxPanelWidth());
     const minWidth = Math.min(MIN_PANEL_WIDTH, maxWidth);
     const clampedWidth = Math.max(minWidth, Math.min(maxWidth, width));
     this.panelRatio = clampedWidth / totalWidth;
@@ -713,6 +762,10 @@ export class FilePreviewPanel {
     // the tab element has no interactive descendants — Enter/Space activation
     // and keyboard close never conflict. Both controls live inside a shared
     // item wrapper that only groups them visually.
+    //
+    // The close button is overlaid on the type glyph (CSS) and swaps the glyph
+    // for an X on hover/focus: one affordance instead of a glyph plus a
+    // trailing X, and no second control competing with the tab for space.
     const item = document.createElement("div");
     item.className = "file-preview-tab-item";
 
@@ -771,8 +824,8 @@ export class FilePreviewPanel {
     const closeBtn = document.createElement("button");
     closeBtn.className = "file-preview-tab-close";
     closeBtn.type = "button";
-    closeBtn.title = t("files.preview.close");
-    closeBtn.setAttribute("aria-label", t("files.preview.close"));
+    closeBtn.title = t("files.preview.closeTab");
+    closeBtn.setAttribute("aria-label", t("files.preview.closeTab"));
     closeBtn.disabled = this._interactionLocked;
     appendCloseIcon(closeBtn);
     closeBtn.addEventListener("click", (event) => {
@@ -808,6 +861,8 @@ export class FilePreviewPanel {
         kind: "diff",
         id,
         label: entry.displayPath || "Diff",
+        icon: this._getDiffIcon(),
+        iconIsElement: true,
         isActive,
         onActivate: () => this.activateContent({ kind: "diff", id }),
         onClose: () => this.closeDiffTab(id),
@@ -837,6 +892,8 @@ export class FilePreviewPanel {
         id,
         label: entry.title || "",
         title: entry.fullTitle || entry.title || "",
+        icon: this._getTransientIcon(),
+        iconIsElement: true,
         statusBadge,
         isActive,
         onActivate: () => {
@@ -896,6 +953,12 @@ export class FilePreviewPanel {
       this.tabBar.appendChild(btn);
     }
     this._ensureRovingTabindex();
+    // Close-all only makes sense while a file or diff tab exists; Side Chat
+    // tabs are chat surfaces and stay out of its scope.
+    this.controls?.closeAll?.classList.toggle(
+      "hidden",
+      this.state.getTabs().length === 0 && this.diffTabs.size === 0,
+    );
   }
 
   _onTabKeydown(event) {
@@ -927,6 +990,30 @@ export class FilePreviewPanel {
     if (tabs.length === 0) return;
     if (tabs.some((tab) => tab.getAttribute("tabindex") === "0")) return;
     tabs[0].setAttribute("tabindex", "0");
+  }
+
+  /**
+   * The type glyph for a diff tab. Every tab needs one: the close button is
+   * overlaid on the icon slot, so a tab without a glyph shows a bare X on
+   * hover where its type icon should be.
+   */
+  _getDiffIcon() {
+    const icon = createIcon("git-compare", { size: 14 });
+    const span = document.createElement("span");
+    span.className = "file-preview-tab-icon";
+    span.setAttribute("aria-hidden", "true");
+    if (icon) span.appendChild(icon);
+    return span;
+  }
+
+  /** Side Chat / Quick Chat tabs: a chat glyph, for the same reason as diff. */
+  _getTransientIcon() {
+    const icon = createIcon("message-square", { size: 14 });
+    const span = document.createElement("span");
+    span.className = "file-preview-tab-icon";
+    span.setAttribute("aria-hidden", "true");
+    if (icon) span.appendChild(icon);
+    return span;
   }
 
   _getBrowserIcon() {
@@ -1545,6 +1632,7 @@ export class FilePreviewPanel {
       toolbarToggle: document.getElementById("file-preview-toolbar-toggle"),
       enlarge: document.getElementById("file-preview-enlarge"),
       collapse: document.getElementById("file-preview-collapse"),
+      closeAll: document.getElementById("file-preview-close-all"),
       close: document.getElementById("file-preview-close"),
       path: document.getElementById("file-preview-path"),
       preview: document.getElementById("file-preview-mode-preview"),
@@ -1573,7 +1661,10 @@ export class FilePreviewPanel {
       [this.controls.toolbarToggle, "sliders"],
       [this.controls.enlarge, "maximize"],
       [this.controls.collapse, "minimize"],
-      [this.controls.close, "x"],
+      // Terminal-panel parity: the panel-hide control is a minimize bar, so it
+      // can never be misread as "close all". The X belongs to close-all.
+      [this.controls.close, "minus"],
+      [this.controls.closeAll, "x"],
     ]) {
       setButtonIcon(control, icon, { size: 14 });
     }
@@ -1582,6 +1673,9 @@ export class FilePreviewPanel {
     this._listen(document.getElementById("file-preview-collapse"), "click", () => this.collapse());
     this._listen(document.getElementById("file-preview-close"), "click", () => {
       void this.closePanel();
+    });
+    this._listen(this.controls.closeAll, "click", () => {
+      void this.closeAllTabs();
     });
     this._listen(this.controls.toolbarToggle, "click", () => {
       this.toolbarOpen = !this.toolbarOpen;
@@ -1696,12 +1790,27 @@ export class FilePreviewPanel {
   _renderToolbar() {
     const controls = this.controls;
     if (!controls) return;
-    const isDiff = this.activeContent?.kind === "diff";
-    const tab = this.state.getActiveTab();
+    const activeKind = this.activeContent?.kind ?? null;
+    const isDiff = activeKind === "diff";
+    const isTransient = activeKind === "transient";
+    // Panel controls describe the content actually on screen. A Side Chat or
+    // diff tab replaces the file view, and getActiveTab() would then hand back
+    // the hidden last file tab — every file-scoped control (path, settings
+    // toggle, editor toolbar, save/reload/search, status) must ignore it.
+    // A null activeContent is a mid-transition or closed panel: keep the
+    // previous behavior there so the file path renders in one pass.
+    const tab = isDiff || isTransient ? null : this.state.getActiveTab();
     const contentType = tab ? classifyFilePath(tab.filePath).contentType : "";
     const isOfficePreview = tab?.renderAs === "markdown" && contentType !== "markdown";
+    // A browser tab renders a live page, not source: its settings toggle (the
+    // editor toolbar) has nothing to control, so it must not appear even
+    // though the underlying file classifies as html.
+    const isBrowserTab = tab?.kind === "browser";
     const settingsVisible =
-      !isDiff && ["markdown", "text", "html"].includes(contentType) && !isOfficePreview;
+      !isDiff &&
+      !isBrowserTab &&
+      ["markdown", "text", "html"].includes(contentType) &&
+      !isOfficePreview;
     controls.toolbarToggle?.classList.toggle("hidden", !settingsVisible);
     controls.toolbarToggle?.setAttribute(
       "aria-expanded",
@@ -1732,6 +1841,9 @@ export class FilePreviewPanel {
       !editorToolbarVisible || (!isDiff && !this.toolbarOpen),
     );
 
+    // Source-file controls belong to a file view; a diff or chat tab hides them
+    // wholesale instead of leaving them bound to an invisible tab.
+    const hideFileControls = isDiff || isTransient;
     for (const control of [
       controls.preview,
       controls.save,
@@ -1743,7 +1855,11 @@ export class FilePreviewPanel {
       controls.openDesktop,
       controls.autoSave,
     ]) {
-      control?.classList.toggle("hidden", isDiff);
+      // A checkbox lives inside its own label, and the label carries the
+      // caption: hiding the input alone leaves a visible "Auto-save" with no
+      // control behind it (read-only diffs and chat tabs have nothing to save).
+      const target = control?.closest?.(".file-preview-toolbar-check") ?? control;
+      target?.classList.toggle("hidden", hideFileControls);
     }
 
     if (controls.preview) {
@@ -1761,11 +1877,20 @@ export class FilePreviewPanel {
     if (controls.search) controls.search.disabled = !hasEditor;
     if (controls.goToLine) {
       controls.goToLine.disabled = !hasEditor;
-      controls.goToLine.classList.toggle("hidden", hasEditor && this.goToLineInputOpen);
+      // `hideFileControls` must win here: without it this editor-scoped rule
+      // resurrects the button a diff or chat tab just hid, leaving a dead
+      // disabled control in a toolbar that has no editor behind it.
+      controls.goToLine.classList.toggle(
+        "hidden",
+        hideFileControls || (hasEditor && this.goToLineInputOpen),
+      );
     }
     if (controls.goToLineInput) {
       controls.goToLineInput.disabled = !hasEditor;
-      controls.goToLineInput.classList.toggle("hidden", !hasEditor || !this.goToLineInputOpen);
+      controls.goToLineInput.classList.toggle(
+        "hidden",
+        hideFileControls || !hasEditor || !this.goToLineInputOpen,
+      );
     }
     if (controls.copy) controls.copy.disabled = !hasText;
     if (controls.openDesktop) {
@@ -1828,7 +1953,7 @@ export class FilePreviewPanel {
       if (event.key === "ArrowLeft") nextWidth += 16;
       else if (event.key === "ArrowRight") nextWidth -= 16;
       else if (event.key === "Home") nextWidth = MIN_PANEL_WIDTH;
-      else if (event.key === "End") nextWidth = this._availableWidth() * 0.7;
+      else if (event.key === "End") nextWidth = this._maxPanelWidth();
       else return;
       event.preventDefault();
       this._applyPanelWidth(nextWidth);
