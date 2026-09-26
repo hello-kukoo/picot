@@ -26,7 +26,7 @@ runtime 命令原样透传，此表是唯一闸门），Esc 的 clear 等待有 
 | --- | --- |
 | Q1-A | **Enter（流式中）= 真 steering**：`prompt + streamingBehavior:"steer"`；本地 `messageQueue`/`flushQueue`/「Queued」pill 整体删除。无乐观气泡、无 `lastSentMessage`——「Steer」pill 由 `queue_update` 呈现；投递走 C3 状态机（`streamingAtDispatch=true`，rejection 不动 streaming 态）。extension command 流式中走裸 prompt 立即执行（协议明文）。 |
 | Q2-A | **pi 队列「清空队列」按钮**：队列区头部显示（有消息时）；点击调 `clear_queue`，返回的 steering+followUp 文本**回填 composer**（空则置入、非空则换行追加，与 C3 恢复规则一致）。pill 保持只读（按条删协议不支持，不做假 ×）。 |
-| Q3-A | **Esc = clear_queue → 回填 → abort**：终止前先清 pi 队列（回填规则同上），run 真正终止、不丢字。clear 失败仍照常 abort（降级为 pi 的 continues 语义）。 |
+| Q3-A | **Esc = clear_queue → 回填 → abort**：终止前先清 pi 队列（回填规则同上），run 真正终止、不丢字。clear 失败仍照常 abort（降级为 pi 的 continues 语义）。**2026-09-25 废止（Dr. Lin）**：改为 **Pi 原生语义 —— Esc 只发 abort**。队列留在 pi，终止后自动继续发出（"abort continues queued messages"）；不清队列、不回填 composer。显式「清空队列」按钮仍走 clear_queue + 回填。 |
 
 ## 按钮可见性（Dr. Lin 提案项，无分叉直接落实）
 
@@ -69,10 +69,11 @@ runtime 命令原样透传，此表是唯一闸门），Esc 的 clear 等待有 
     同一轮再发纯文本裸 prompt → `success: false`，error 为
     「Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.」。
     这正是 Q1-A 让 extension command 走裸 prompt、其余走 steer/followUp 的依据。
-  · **abort 不清队列会继续排空**（Q3-A 为何必须先 clear）：运行中入队 steer 后**只发 `abort`、不发
-    `clear_queue`** → 3.2s `agent_end` 的**同一时刻**又起 `agent_start` 且 steering 清空 → 该轮最终文本为
-    `DONE` 加 `ABORT-DRAINED`，即被 abort 的排队消息照样执行了一遍。这是「abort continues queued
-    messages」的实证，也正是旧客户端 Esc 之后「停下又接着跑」的坑。
+  · **abort 不清队列会继续排空**：运行中入队 steer 后**只发 `abort`、不发 `clear_queue`** → 3.2s
+    `agent_end` 的**同一时刻**又起 `agent_start` 且 steering 清空 → 该轮最终文本为 `DONE` 加
+    `ABORT-DRAINED`，即被 abort 的排队消息照样执行了一遍。这是「abort continues queued messages」的
+    实证。**2026-09-25 起这正是期望行为**（Q3-A 废止）：Esc 只 abort，排队消息由 pi 终止当前 run 后
+    继续发出。
   · **clear_queue 两个桶一起清、各自返回**：先入队 steer 再入队 followUp（`queue_update` 分别显示两个桶）
     → `clear_queue` 响应 `data = {steering:["S-MARK-STEER"], followUp:["Reply with exactly: F-MARK-EXECUTED"]}`
     → 随后 `queue_update` 两桶皆空；被清的 followUp 文案从未出现在任何 assistant 文本中（确未执行）。
