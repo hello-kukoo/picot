@@ -16,8 +16,34 @@ impl ProcessTree {
         #[cfg(unix)]
         {
             let pid = child.id() as libc::pid_t;
+            // The child joins its own group in pre_exec while the parent
+            // probes here: two racers, one group. Racing setpgid from the
+            // parent too is the standard idiom — the losing call observes
+            // EACCES (child already exec'd, group already moved) or EPERM,
+            // and ESRCH means the child died outright, which terminate()
+            // handles through try_wait/ESRCH. Probing without the parent-side
+            // setpgid leaves a window where getpgid still sees the pre-group
+            // pid or -1 and misreports a fresh child as an identity violation.
+            unsafe {
+                if libc::setpgid(pid, pid) != 0 {
+                    match std::io::Error::last_os_error().raw_os_error() {
+                        Some(libc::EACCES) | Some(libc::EPERM) | Some(libc::ESRCH) => {}
+                        Some(code) => {
+                            return Err(format!(
+                                "Cannot establish Pi child process group: errno {code}"
+                            ));
+                        }
+                        None => {
+                            return Err(
+                                "Cannot establish Pi child process group: unknown errno".into()
+                            );
+                        }
+                    }
+                }
+            }
+            // A dead child probes as -1; that is not an identity violation.
             let group = unsafe { libc::getpgid(pid) };
-            if group != pid {
+            if group != pid && group != -1 {
                 return Err(format!(
                     "Pi child process group identity mismatch: {group} != {pid}"
                 ));
@@ -186,6 +212,25 @@ mod tests {
     use std::process::Command;
     use std::thread;
     use std::time::Duration;
+
+    #[test]
+    fn attach_tolerates_child_that_exits_before_the_parent_probe() {
+        // Regression: the pre_exec setpgid races the parent's attach probe.
+        // A child that dies first probes as -1 and used to be misreported as
+        // an identity mismatch; attach must only reject a live foreign group.
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("exit 0");
+        super::configure_child(&mut command);
+        let mut child = command.spawn().expect("spawn sh");
+        let tree = ProcessTree::attach(&mut child);
+        assert!(
+            tree.is_ok(),
+            "attach must not reject an exited child: {tree:?}"
+        );
+        let mut tree = tree.unwrap();
+        let _ = tree.terminate(&mut child);
+        let _ = child.wait();
+    }
 
     #[test]
     fn terminate_signals_process_group_after_direct_child_exits() {

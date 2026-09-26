@@ -6905,6 +6905,10 @@ function abortCurrentRun() {
 }
 
 function updateTokenUsage() {
+  // app.js and index.html have shipped desynced before (donut refs landed in
+  // adc78df, the markup only in b37e1dc): a missing element must degrade to a
+  // no-op instead of throwing inside the RPC event path.
+  if (!tokenUsageEl || !contextDonutArc || !contextDonutLabel) return;
   if (lastInputTokens <= 0) {
     tokenUsageEl.classList.remove("visible", "warning", "critical");
     contextVizController?.invalidateUsage();

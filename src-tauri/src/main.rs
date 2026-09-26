@@ -1231,15 +1231,28 @@ mod tests {
                 .unwrap_or(serde_json::Value::Null)
         };
         assert_eq!(streaming(), serde_json::json!(false), "idle at rest");
+        // The event pump applies frames on its own task; a single yield does
+        // not guarantee the coordinator state has flipped under parallel
+        // test load, so poll briefly for each transition before asserting.
         fake.write_frame(serde_json::json!({"type":"agent_start"}))
             .await
             .unwrap();
-        tokio::task::yield_now().await;
+        for _ in 0..400 {
+            if streaming() == serde_json::json!(true) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
         assert_eq!(streaming(), serde_json::json!(true), "working mid-turn");
         fake.write_frame(serde_json::json!({"type":"agent_end"}))
             .await
             .unwrap();
-        tokio::task::yield_now().await;
+        for _ in 0..400 {
+            if streaming() == serde_json::json!(false) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
         assert_eq!(streaming(), serde_json::json!(false), "idle after end");
     }
 
