@@ -299,8 +299,14 @@ body.landing-mode #landing {
   transition: background 0.15s var(--ease);
 }
 .sidebar-resizer:hover,
-.sidebar-resizer.dragging {
+.sidebar-resizer.dragging,
+.sidebar-resizer:focus-visible {
   background: var(--border);
+}
+
+.sidebar-resizer:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }
 /* Hide handle when the adjacent sidebar is collapsed. */
 .sidebar.collapsed + .sidebar-resizer,
@@ -1776,27 +1782,94 @@ body.landing-mode #landing {
     box-shadow var(--duration) var(--ease);
 }
 
-/* Session cost pill */
-.session-cost {
-  color: var(--header-pill-text, var(--text-dim));
+/* Session aggregate usage cluster in the composer (↑in ↓out ⚡cache). */
+.composer-usage {
   display: none;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-1);
+  color: var(--text-dim);
+  font-size: var(--font-size-xs);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  -webkit-app-region: no-drag;
 }
 
-.session-cost.visible {
+.composer-usage.visible {
+  display: flex;
+}
+
+.composer-usage-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0-5);
+}
+
+/* Context donut — opens the context popover on click. Arc dashoffset is
+   driven by JS; warning/critical recolor via currentColor. */
+.context-donut {
+  position: relative;
+  display: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.context-donut.visible {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.context-donut > svg {
   display: block;
 }
 
-/* Token usage pill */
-.token-usage {
-  color: var(--header-pill-text, var(--text-dim));
-  display: none;
+.context-donut-track {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 3;
+}
+
+.context-donut-arc {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linecap: round;
   transition:
-    color 0.3s var(--ease),
-    opacity 0.3s var(--ease);
-  cursor: pointer;
+    stroke-dashoffset 0.3s var(--ease),
+    color 0.3s var(--ease);
+}
+
+.context-donut-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* No token below 12px; the donut hole (~18px) physically caps the label. */
+  /* design-token-ignore: donut hole cannot fit --font-size-sm */
+  font-size: 7.5px;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
-  -webkit-app-region: no-drag;
+}
+
+.context-donut:hover {
+  color: var(--text-primary);
+}
+
+.context-donut.warning {
+  color: var(--warning);
+}
+
+.context-donut.critical {
+  color: var(--error);
+  animation: pulse 2s infinite;
 }
 
 .workspace-indicator {
@@ -1830,29 +1903,9 @@ body.landing-mode #landing {
   display: none;
 }
 
-.token-usage:hover {
-  border-color: var(--border-hover);
-  background: var(--bg-glass-hover);
-}
-
-.token-usage.visible {
-  display: block;
-}
-
-.token-usage.warning {
-  color: var(--warning);
-  border-color: rgba(251, 191, 36, 0.25);
-}
-
-.token-usage.critical {
-  color: var(--error);
-  border-color: rgba(248, 113, 113, 0.25);
-  animation: pulse 2s infinite;
-}
-
 /* Context window visualiser popover — portaled to <body> at runtime so
    it escapes the header's stacking context (z-index: 10). Position is
-   set via JS (fixed top + right) to track the token-usage pill. */
+   set via JS (fixed top + right/bottom) to track the token-usage donut. */
 .context-viz {
   position: fixed;
   width: 320px;
@@ -2631,8 +2684,10 @@ body.landing-mode #landing {
   padding: var(--space-2) var(--space-4);
   border: 0;
   border-radius: var(--radius-pill);
-  background: var(--accent);
-  color: var(--bg);
+  /* design-token-ignore: fixed brand blue like .sidebar-update-pill; the
+     action must not follow the theme accent, which is grey in some themes */
+  background: #0a84ff;
+  color: #fff;
   font: inherit;
   font-weight: 600;
   cursor: pointer;
@@ -4385,18 +4440,48 @@ body.landing-mode #landing {
   gap: var(--space-1-5);
 }
 
-.messages::-webkit-scrollbar {
+/* Pane scrollbars (transcript + right-panel lists): one 6px gutter whose thumb
+   is drawn only while the pane scrolls — `public/ui/scrollbar-auto-hide.js`
+   toggles `.is-scrolling`. The gutter never changes width, so the thumb fading
+   in cannot reflow the pane. `::-webkit-scrollbar` styling yields this classic
+   gutter rather than the platform's overlay bar; that is deliberate — it keeps
+   the bar flush against the pane edge and gives every panel one width. */
+.messages::-webkit-scrollbar,
+.file-list::-webkit-scrollbar,
+.git-subtab-pane::-webkit-scrollbar,
+.git-history-section::-webkit-scrollbar,
+.git-diff-columns.wrap-lines::-webkit-scrollbar,
+.git-diff-column::-webkit-scrollbar,
+.git-diff-fallback::-webkit-scrollbar {
   width: 6px;
 }
-.messages::-webkit-scrollbar-track {
+.messages::-webkit-scrollbar-track,
+.file-list::-webkit-scrollbar-track,
+.git-subtab-pane::-webkit-scrollbar-track,
+.git-history-section::-webkit-scrollbar-track,
+.git-diff-columns.wrap-lines::-webkit-scrollbar-track,
+.git-diff-column::-webkit-scrollbar-track,
+.git-diff-fallback::-webkit-scrollbar-track {
   background: transparent;
 }
-.messages::-webkit-scrollbar-thumb {
-  background: var(--border-hover);
+.messages::-webkit-scrollbar-thumb,
+.file-list::-webkit-scrollbar-thumb,
+.git-subtab-pane::-webkit-scrollbar-thumb,
+.git-history-section::-webkit-scrollbar-thumb,
+.git-diff-columns.wrap-lines::-webkit-scrollbar-thumb,
+.git-diff-column::-webkit-scrollbar-thumb,
+.git-diff-fallback::-webkit-scrollbar-thumb {
+  background: transparent;
   border-radius: var(--radius-xs);
 }
-.messages::-webkit-scrollbar-thumb:hover {
-  background: var(--border-bright);
+.messages.is-scrolling::-webkit-scrollbar-thumb,
+.file-list.is-scrolling::-webkit-scrollbar-thumb,
+.git-subtab-pane.is-scrolling::-webkit-scrollbar-thumb,
+.git-history-section.is-scrolling::-webkit-scrollbar-thumb,
+.git-diff-columns.wrap-lines.is-scrolling::-webkit-scrollbar-thumb,
+.git-diff-column.is-scrolling::-webkit-scrollbar-thumb,
+.git-diff-fallback.is-scrolling::-webkit-scrollbar-thumb {
+  background: var(--border-hover);
 }
 
 /* Welcome */
@@ -5761,6 +5846,49 @@ body.hide-thinking .thinking-block {
   display: flex;
   align-items: center;
   gap: var(--space-1);
+  min-width: 0;
+}
+
+/* Controls keep their hit size: the fit stepper hides them instead of the row
+   squashing them, and an unshrunk width keeps its fit measurement honest. */
+.composer-toolbar-left > *,
+.composer-toolbar-right > * {
+  flex-shrink: 0;
+}
+
+/* No overflow clip here on purpose: the model dropdown opens UPWARD from this
+   row (bottom: calc(100% + 6px)), and any clipping on the row cuts the menu
+   down to a sliver. The fit stepper (composer-fit.js) keeps controls inside the
+   card by hiding the least important ones, applied synchronously in its
+   ResizeObserver callback so nothing spills between frames. */
+
+.composer-fit--hide-usage .composer-usage {
+  display: none;
+}
+
+.composer-fit--hide-toolbox #command-btn {
+  display: none;
+}
+
+.composer-fit--hide-mic #mic-btn {
+  display: none;
+}
+
+/* Model selector shrinks to an ellipsised label before anything else is cut. */
+.composer-fit--shrink-model .composer-toolbar .model-dropdown-btn {
+  max-width: 116px;
+  overflow: hidden;
+}
+
+.composer-fit--shrink-model .model-dropdown-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-fit--hide-think-prefix .thinking-prefix {
+  display: none;
 }
 
 /* Toolbar variants of model/thinking pills — flatter to sit inside the card */
@@ -6296,35 +6424,20 @@ details.sg-section > summary {
    Command Palette
    ═══════════════════════════════════════════════════════ */
 
-.command-palette-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.25);
-  z-index: 1000;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-}
-
-.command-palette-overlay.hidden {
-  display: none;
-}
-
+/* Anchored non-modal popover: JS sets right + top/bottom next to the button. */
 .command-palette {
   position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
   background: var(--bg-frosted);
   backdrop-filter: blur(var(--blur-heavy)) saturate(1.6);
   -webkit-backdrop-filter: blur(var(--blur-heavy)) saturate(1.6);
   border: 1px solid var(--border-hover);
   border-radius: var(--radius-lg);
   width: 340px;
-  max-width: 90vw;
-  max-height: 400px;
+  max-width: min(90vw, calc(100vw - 24px));
+  max-height: min(400px, calc(100vh - 120px));
   overflow: hidden;
   box-shadow: var(--shadow-lg), var(--shadow-inset);
-  animation: sheetIn 0.2s var(--ease);
+  animation: dropdownIn 0.15s var(--ease);
   z-index: 1001;
   display: flex;
   flex-direction: column;
@@ -7113,6 +7226,13 @@ details.sg-section > summary {
   border-top: 1px solid var(--border);
   padding-top: var(--space-1);
 }
+
+/* The separator belongs between change groups, not between the info card and
+   the first group: there it reads as a stray bar under the card's lower edge. */
+.git-panel .git-panel-toolbar + section {
+  border-top: 0;
+  padding-top: 0;
+}
 .git-panel section > button,
 .git-entry {
   background: transparent;
@@ -7224,8 +7344,17 @@ details.sg-section > summary {
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: var(--font-size-md);
+  /* Follow the source editor: same face, same Appearance font size, and the
+     --editor-* chrome palette the CodeMirror view uses (defaults to the Picot
+     palette; a named preview theme overrides it on <html>). */
+  background: var(--editor-bg);
+  color: var(--editor-fg);
+  font-family: var(--editor-font-family);
+  font-size: var(
+    --preview-font-size,
+    13px
+  ); /* design-token-ignore: mirrors the editor's historical 13px default */
+  font-variant-ligatures: contextual;
   line-height: 1.6;
 }
 
@@ -7256,7 +7385,7 @@ details.sg-section > summary {
 .git-diff-column {
   min-width: 0;
   overflow: auto;
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--editor-panel-border);
 }
 .git-diff-column:last-child {
   border-right: 0;
@@ -7267,9 +7396,9 @@ details.sg-section > summary {
   z-index: 1;
   min-width: max-content;
   padding: var(--space-1) var(--space-2);
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-solid);
-  color: var(--text-secondary);
+  border-bottom: 1px solid var(--editor-panel-border);
+  background: var(--editor-bg);
+  color: var(--editor-gutter-fg);
   font-family: inherit;
   font-size: var(--font-size-sm);
   font-weight: 650;
@@ -7294,7 +7423,7 @@ details.sg-section > summary {
   display: inline-block;
   width: 3.5em;
   margin-right: var(--space-2);
-  color: var(--text-dim);
+  color: var(--editor-gutter-fg);
   font-size: var(--font-size-sm);
   user-select: none;
   text-align: right;
@@ -7308,7 +7437,8 @@ details.sg-section > summary {
   background: var(--git-removed-bg, rgba(220, 88, 88, 0.18));
 }
 .git-diff-cell.blank {
-  background: color-mix(in srgb, var(--bg-glass-strong) 76%, transparent);
+  /* Blank filler reads as an empty editor line, not a card. */
+  background: color-mix(in srgb, var(--editor-active-line) 60%, transparent);
 }
 .git-diff-empty {
   margin: auto;
@@ -7319,6 +7449,7 @@ details.sg-section > summary {
   min-height: 0;
   overflow: auto;
   padding: var(--space-2);
+  background: var(--editor-bg);
 }
 .git-diff-fallback-reason {
   margin: 0 0 var(--space-2);
@@ -7327,7 +7458,12 @@ details.sg-section > summary {
 }
 .git-diff-fallback pre {
   margin: 0;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  color: var(--editor-fg);
+  font-family: var(--editor-font-family);
+  font-size: var(
+    --preview-font-size,
+    13px
+  ); /* design-token-ignore: mirrors the editor's historical 13px default */
   white-space: pre;
 }
 
@@ -7536,7 +7672,11 @@ body.is-resizing-side-panel {
 }
 
 .file-sidebar.collapsed {
-  margin-right: calc(var(--panel-width) * -1);
+  /* Slide the whole sidebar out by its OWN width. `--panel-width` belongs to
+     `.app-side-panel` (a different component, never applied at runtime), so the
+     substitution failed and margin-right fell back to 0: the collapsed sidebar
+     kept reserving its width and left a blank strip beside the transcript. */
+  margin-right: calc(var(--file-sidebar-width) * -1);
   opacity: 0;
   pointer-events: none;
 }
@@ -7579,7 +7719,16 @@ body.is-resizing-side-panel {
   display: block;
 }
 
+.file-sidebar-path-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding-right: var(--space-2);
+}
+
 .file-sidebar-path {
+  flex: 1;
+  min-width: 0;
   padding: var(--space-1) var(--space-3);
   font-size: var(--font-size-sm);
   color: var(--text-dim);
@@ -7590,22 +7739,15 @@ body.is-resizing-side-panel {
   text-align: left;
 }
 
+.file-sidebar-copy {
+  flex: 0 0 auto;
+}
+
 .file-list {
   flex: 1;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: var(--space-1-5) var(--space-2);
-}
-
-.file-list::-webkit-scrollbar {
-  width: 10px;
-}
-
-.file-list::-webkit-scrollbar-thumb {
-  background: var(--text-dim);
-  border: 3px solid transparent;
-  border-radius: var(--radius-pill);
-  background-clip: padding-box;
 }
 
 .file-item {
@@ -8650,6 +8792,7 @@ body.file-preview-resizing {
 }
 
 .file-preview-tab-item {
+  position: relative;
   display: flex;
   align-items: center;
   -webkit-app-region: no-drag;
@@ -8717,32 +8860,51 @@ body.file-preview-resizing {
   font-size: var(--font-size-sm);
 }
 
+/* The close control sits on the tab's type glyph: hovering (or focusing) it
+   swaps the glyph for an X that closes that tab, so one affordance replaces
+   the old glyph + trailing X pair. The button stays hit-testable while its X
+   is invisible, and keeps its own focus stop for keyboard users. */
 .file-preview-tab-close {
+  position: absolute;
+  left: calc(var(--space-2) - 2px);
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 22px;
-  height: 22px;
-  margin-right: var(--space-1);
+  width: 24px;
+  height: 24px;
+  padding: 0;
   border: none;
   background: none;
   color: var(--text-dim);
   border-radius: var(--radius-xs);
   cursor: pointer;
-  padding: 0;
+}
+
+.file-preview-tab-close > svg {
   opacity: 0;
   transition: opacity 0.1s var(--ease);
 }
 
-.file-preview-tab-item:hover .file-preview-tab-close,
-.file-preview-tab.active + .file-preview-tab-close {
+.file-preview-tab-close:hover,
+.file-preview-tab-close:focus-visible {
+  background: var(--bg-glass-hover);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.file-preview-tab-close:hover > svg,
+.file-preview-tab-close:focus-visible > svg {
   opacity: 1;
 }
 
-.file-preview-tab-close:hover {
-  background: var(--bg-glass-hover);
-  color: var(--text-primary);
+/* Swap, not overlap: the revealed X replaces the type glyph underneath. */
+.file-preview-tab-item:has(.file-preview-tab-close:hover) .file-preview-tab-icon,
+.file-preview-tab-item:has(.file-preview-tab-close:focus-visible) .file-preview-tab-icon {
+  opacity: 0;
 }
 
 .file-preview-panel-controls {
@@ -8750,6 +8912,22 @@ body.file-preview-resizing {
   gap: var(--space-0-5);
   flex-shrink: 0;
   -webkit-app-region: no-drag;
+}
+
+/* Scope divider: the tab-scoped close-all action stays visually apart from the
+   panel controls that follow. It hides together with the button it follows,
+   so an empty tab bar leaves no stray rule. */
+.file-preview-controls-divider {
+  align-self: center;
+  flex: 0 0 1px;
+  width: 1px;
+  height: var(--space-4);
+  margin: 0 var(--space-0-5);
+  background: var(--border-hover);
+}
+
+#file-preview-close-all.hidden + .file-preview-controls-divider {
+  display: none;
 }
 
 /* Editor toolbar */
@@ -8945,13 +9123,165 @@ body.file-preview-resizing {
   color: #ff453a;
 }
 
-/* CodeMirror in preview */
+/* CodeMirror in preview.
+   Chrome comes from a variable layer: the defaults below resolve to the active
+   Picot palette, so "follow" looks exactly like the panel around it, while a
+   named editor theme overrides them through [data-preview-editor-theme] (the
+   attribute sits on <html>, so these defaults must live on :root too — an
+   element's own declaration would beat the inherited theme values).
+   CodeMirror's baseTheme mounts its own <style> after this file, which is why
+   the rules below stay at three-class specificity. */
+:root {
+  /* The editor's mono stack lives here so every code surface (CodeMirror and
+     the Git diff) renders in the same face. */
+  --editor-font-family: "Picot Mono Nerd", "SF Mono", "Menlo", "Monaco", "Courier New", monospace;
+  --editor-bg: var(--bg-solid);
+  --editor-fg: var(--text-primary);
+  --editor-gutter-bg: var(--bg-solid);
+  --editor-gutter-fg: var(--text-dim);
+  --editor-active-line: var(--bg-glass);
+  --editor-selection: color-mix(in srgb, var(--text-primary) 20%, transparent);
+  --editor-cursor: var(--text-primary);
+  --editor-panel-bg: var(--bg-solid);
+  --editor-panel-fg: var(--text-primary);
+  --editor-panel-border: var(--border);
+  --editor-input-bg: var(--bg-glass);
+  --editor-input-border: var(--border);
+  --editor-match: color-mix(in srgb, var(--accent) 32%, transparent);
+  --editor-match-active: color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+/* Named editor themes (palettes: Atom One, github-vscode-theme, Catppuccin,
+   morhetz/gruvbox). Token colors live in preview-themes.js; these are the
+   chrome values only. */
+[data-preview-editor-theme="one-light"] {
+  --editor-bg: #fafafa;
+  --editor-fg: #383a42;
+  --editor-gutter-bg: #fafafa;
+  --editor-gutter-fg: #a0a1a7;
+  --editor-active-line: #f0f0f1;
+  --editor-selection: #d0d1d3;
+  --editor-cursor: #526eff;
+  --editor-panel-bg: #fafafa;
+  --editor-panel-border: #e5e5e6;
+  --editor-input-bg: #ffffff;
+  --editor-input-border: #dbdbdc;
+  --editor-match: #ffe08a;
+  --editor-match-active: #ffb454;
+}
+[data-preview-editor-theme="one-dark"] {
+  --editor-bg: #282c34;
+  --editor-fg: #abb2bf;
+  --editor-gutter-bg: #282c34;
+  --editor-gutter-fg: #636d83;
+  --editor-active-line: #2c313c;
+  --editor-selection: #3e4451;
+  --editor-cursor: #528bff;
+  --editor-panel-bg: #21252b;
+  --editor-panel-border: #181a1f;
+  --editor-input-bg: #1b1f27;
+  --editor-input-border: #3e4451;
+  --editor-match: #e5c07b47;
+  --editor-match-active: #e5c07b8c;
+}
+[data-preview-editor-theme="github-light"] {
+  --editor-bg: #ffffff;
+  --editor-fg: #24292f;
+  --editor-gutter-bg: #ffffff;
+  --editor-gutter-fg: #8c959f;
+  --editor-active-line: #f6f8fa;
+  --editor-selection: #b6d6f6;
+  --editor-cursor: #0969da;
+  --editor-panel-bg: #f6f8fa;
+  --editor-panel-border: #d0d7de;
+  --editor-input-bg: #ffffff;
+  --editor-input-border: #d0d7de;
+  --editor-match: #ffdf5d;
+  --editor-match-active: #ffd33d;
+}
+[data-preview-editor-theme="github-dark"] {
+  --editor-bg: #0d1117;
+  --editor-fg: #c9d1d9;
+  --editor-gutter-bg: #0d1117;
+  --editor-gutter-fg: #8b949e;
+  --editor-active-line: #161b22;
+  --editor-selection: #1f6feb66;
+  --editor-cursor: #58a6ff;
+  --editor-panel-bg: #161b22;
+  --editor-panel-border: #30363d;
+  --editor-input-bg: #0d1117;
+  --editor-input-border: #30363d;
+  --editor-match: #bb800966;
+  --editor-match-active: #bb8009aa;
+}
+[data-preview-editor-theme="catppuccin-latte"] {
+  --editor-bg: #eff1f5;
+  --editor-fg: #4c4f69;
+  --editor-gutter-bg: #eff1f5;
+  --editor-gutter-fg: #9ca0b0;
+  --editor-active-line: #e6e9ef;
+  --editor-selection: #ccd0da;
+  --editor-cursor: #dc8a78;
+  --editor-panel-bg: #e6e9ef;
+  --editor-panel-border: #ccd0da;
+  --editor-input-bg: #ffffff;
+  --editor-input-border: #ccd0da;
+  --editor-match: #df8e1d59;
+  --editor-match-active: #df8e1d99;
+}
+[data-preview-editor-theme="catppuccin-mocha"] {
+  --editor-bg: #1e1e2e;
+  --editor-fg: #cdd6f4;
+  --editor-gutter-bg: #1e1e2e;
+  --editor-gutter-fg: #6c7086;
+  --editor-active-line: #181825;
+  --editor-selection: #313244;
+  --editor-cursor: #f5e0dc;
+  --editor-panel-bg: #181825;
+  --editor-panel-border: #313244;
+  --editor-input-bg: #313244;
+  --editor-input-border: #45475a;
+  --editor-match: #f9e2af59;
+  --editor-match-active: #f9e2af99;
+}
+[data-preview-editor-theme="gruvbox-light"] {
+  --editor-bg: #fbf1c7;
+  --editor-fg: #3c3836;
+  --editor-gutter-bg: #fbf1c7;
+  --editor-gutter-fg: #928374;
+  --editor-active-line: #ebdbb2;
+  --editor-selection: #d5c4a1;
+  --editor-cursor: #af3a03;
+  --editor-panel-bg: #ebdbb2;
+  --editor-panel-border: #d5c4a1;
+  --editor-input-bg: #fbf1c7;
+  --editor-input-border: #d5c4a1;
+  --editor-match: #fabd2f80;
+  --editor-match-active: #fe8019aa;
+}
+[data-preview-editor-theme="gruvbox-dark"] {
+  --editor-bg: #282828;
+  --editor-fg: #ebdbb2;
+  --editor-gutter-bg: #282828;
+  --editor-gutter-fg: #928374;
+  --editor-active-line: #3c3836;
+  --editor-selection: #504945;
+  --editor-cursor: #fe8019;
+  --editor-panel-bg: #1d2021;
+  --editor-panel-border: #3c3836;
+  --editor-input-bg: #32302f;
+  --editor-input-border: #504945;
+  --editor-match: #fabd2f59;
+  --editor-match-active: #fe8019aa;
+}
+
 .file-code-editor {
   height: 100%;
 }
 
 .file-code-editor .cm-editor {
   height: 100%;
+  background: var(--editor-bg);
   /* Historical 13px default; overridden by the Appearance preview font size. */
   font-size: var(
     --preview-font-size,
@@ -8959,36 +9289,66 @@ body.file-preview-resizing {
   ); /* design-token-ignore: historical literal from private fork */
 }
 
-/* CodeMirror's base chrome inherits from the page body and its baseTheme
-   injects black cursor styles AFTER style.css (module-load <style> mount),
-   so these rules run at three-class specificity to win the cascade, and pin
-   text, caret, and cursor to the panel-resolved tokens so forced dark/light
-   previews stay readable. */
 .file-code-editor .cm-editor .cm-content {
-  color: var(--text-primary);
-  caret-color: var(--text-primary);
+  color: var(--editor-fg);
+  caret-color: var(--editor-cursor);
 }
 
 .file-code-editor .cm-editor .cm-cursor,
 .file-code-editor .cm-editor .cm-dropCursor {
-  border-left-color: var(--text-primary);
+  border-left-color: var(--editor-cursor);
 }
 
 .file-code-editor .cm-activeLine {
-  background: var(--bg-glass);
+  background: var(--editor-active-line);
+}
+
+.file-code-editor .cm-editor .cm-selectionBackground,
+.file-code-editor .cm-editor.cm-focused .cm-selectionBackground,
+.file-code-editor .cm-content ::selection {
+  background: var(--editor-selection);
 }
 
 .file-code-editor .cm-lineNumbers {
   min-width: var(--file-preview-line-number-gutter);
 }
 .file-code-editor .cm-gutters {
-  background: var(--bg-solid);
-  border-right: 1px solid var(--border);
-  color: var(--text-dim);
+  background: var(--editor-gutter-bg);
+  border-right: 1px solid var(--editor-panel-border);
+  color: var(--editor-gutter-fg);
+}
+
+/* Find & replace panel: part of the editor chrome, so it follows the theme. */
+.file-code-editor .cm-panel.cm-search {
+  background: var(--editor-panel-bg);
+  border-top: 1px solid var(--editor-panel-border);
+  color: var(--editor-panel-fg);
+}
+.file-code-editor .cm-panel.cm-search label {
+  color: var(--editor-panel-fg);
+}
+.file-code-editor .cm-panel.cm-search .cm-textfield {
+  background: var(--editor-input-bg);
+  border: 1px solid var(--editor-input-border);
+  color: var(--editor-fg);
+}
+.file-code-editor .cm-panel.cm-search .cm-button {
+  background: var(--editor-input-bg);
+  border: 1px solid var(--editor-input-border);
+  color: var(--editor-fg);
+}
+.file-code-editor .cm-searchMatch {
+  background: var(--editor-match);
+}
+.file-code-editor .cm-searchMatch.cm-searchMatch-selected {
+  background: var(--editor-match-active);
+}
+.file-code-editor .cm-selectionMatch {
+  background: var(--editor-match);
 }
 
 .file-code-editor .cm-scroller {
-  font-family: "Picot Mono Nerd", "SF Mono", "Menlo", "Monaco", "Courier New", monospace;
+  font-family: var(--editor-font-family);
   font-variant-ligatures: contextual;
 }
 
@@ -9100,8 +9460,12 @@ body.file-preview-resizing {
     display: none !important;
   }
 
-  .file-preview-tab-close {
+  .file-preview-tab.active + .file-preview-tab-close > svg {
     opacity: 1;
+  }
+
+  .file-preview-tab-item:has(.file-preview-tab.active) .file-preview-tab-icon {
+    opacity: 0;
   }
 }
 
@@ -10766,26 +11130,6 @@ button.skills-group-status:disabled {
 .header-left .icon-btn:focus-visible {
   outline: 2px solid var(--accent, #0a84ff);
   outline-offset: 1px;
-}
-
-/* ─── Header status bar: session aggregate + context pills ─── */
-.header-status-bar {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-}
-.session-usage {
-  font-variant-numeric: tabular-nums;
-  color: var(--header-pill-text, var(--text-dim));
-}
-.session-usage:not(.visible) {
-  display: none;
-}
-@media (max-width: 1100px) {
-  /* Constrained width: hide the aggregate row before context/cost. */
-  .session-usage {
-    display: none;
-  }
 }
 
 /* Mobile LAN QR modal (restored; native pairing data) */

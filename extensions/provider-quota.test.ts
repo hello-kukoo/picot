@@ -7,6 +7,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
   consumeCodexResetCredit,
   createQuotaProbeCache,
+  inspectCodexResetCredits,
   LAST_GOOD_RETENTION_MS,
   originOfBaseUrl,
   parseDeepseekBalance,
@@ -204,6 +205,26 @@ describe("probe isolation", () => {
       true,
     );
     expect(report.failure).toBe("response_unusable");
+  });
+});
+
+describe("inspectCodexResetCredits", () => {
+  test("reads the ISO-string timestamps the vendor sends", async () => {
+    const result = await inspectCodexResetCredits({
+      accessToken: "t",
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            credits: [{ granted_at: "2026-09-04T01:03:00Z", expires_at: "2026-10-04T01:03:00Z" }],
+          }),
+        )) as unknown as typeof fetch,
+    });
+    expect(result?.credits).toEqual([
+      {
+        grantedAt: Date.parse("2026-09-04T01:03:00Z"),
+        expiresAt: Date.parse("2026-10-04T01:03:00Z"),
+      },
+    ]);
   });
 });
 

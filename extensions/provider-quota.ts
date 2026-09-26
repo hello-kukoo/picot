@@ -730,9 +730,12 @@ export async function inspectCodexResetCredits(input: {
     return {
       credits: credits.map((raw) => {
         const credit = asRecord(raw) ?? {};
+        // The vendor sends ISO date strings here (opencodex's
+        // safeResetCreditsDto checks typeof === "string"); epoch-only parsing
+        // lost both fields and the dialog showed "未知".
         return {
-          grantedAt: epochSecondsToMs(credit.granted_at),
-          expiresAt: epochSecondsToMs(credit.expires_at),
+          grantedAt: toEpochMsFromWire(credit.granted_at),
+          expiresAt: toEpochMsFromWire(credit.expires_at),
         };
       }),
     };
