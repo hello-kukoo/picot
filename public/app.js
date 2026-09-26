@@ -25,8 +25,6 @@ import {
   normalizeScrollbackLimit,
   normalizeSmoothScrollDuration,
   normalizeThemeMode,
-  PREVIEW_THEME_MODES,
-  resolvePreviewTheme,
   saveAppearanceCookie,
   TERMINAL_FONT_SIZE_PX,
   TERMINAL_THEME_MODES,
@@ -35,6 +33,7 @@ import { createBackgroundSessionFiles } from "./background-session-files.js";
 import { setEditorHighlightTheme } from "./code-editor.js";
 import { createCompactCoordinator } from "./compact-coordinator.js";
 import { setupComposerCommandMenu } from "./composer-command-menu.js";
+import { setupComposerFit } from "./composer-fit.js";
 import { planFollowUpSend, planSteeringSend } from "./composer-follow-up.js";
 import { setupComposerImageAttachments } from "./composer-image-attachments.js";
 import { setupComposerPasteOffload } from "./composer-paste-offload.js";
@@ -71,6 +70,7 @@ import {
   reconcileRenderPreferences,
   saveUserRenderPreference,
 } from "./preferences-client.js";
+import { renderPreviewThemeOptions } from "./preview-themes.js";
 import { QuickChatDialog } from "./quick-chat-dialog.js";
 import { resolvePreparedRuntimeTarget } from "./session/in-place-runtime-target.js";
 import {
@@ -86,7 +86,6 @@ import {
 } from "./session/routing.js";
 import { anchorHistoryToBottom } from "./session/scroll-anchor.js";
 import { createScrollOwner } from "./session/scroll-ownership.js";
-import { setupSessionInfo } from "./session/session-info.js";
 import { SessionUiStateStore } from "./session-ui-state.js";
 import { ConfigGateway, consumeConfigResponseFrame } from "./settings/config-gateway.js";
 import { createConfigReadiness } from "./settings/config-readiness.js";
@@ -154,9 +153,9 @@ import { findPendingQuestionnaire } from "./ui/pending-questionnaire.js";
 import { createPiQueuePark } from "./ui/pi-queue-park.js";
 import { summarizeProcessGroup } from "./ui/process-group.js";
 import { QuestionnaireCard } from "./ui/questionnaire-card.js";
-import { setupResizablePanel } from "./ui/resizable-panel.js";
 import { isRpivTodoCommandNotify, RpivTodoMirrorPanel } from "./ui/rpiv-todo-mirror.js";
 import { SafetyGuardDialog } from "./ui/safety-guard-dialog.js";
+import { setupScrollbarAutoHide } from "./ui/scrollbar-auto-hide.js";
 import { setupSessionSearchDialog } from "./ui/session-search-dialog.js";
 import { setupSkillSlashCommand } from "./ui/skill-slash-command.js";
 import { ToolCardRenderer } from "./ui/tool-card.js";
@@ -808,18 +807,6 @@ const sidebar = new SessionSidebar(
   },
 );
 
-// Header session-info popover: file path from the active session mirror.
-// Getter is lazy so late-arriving state (first session file, reconnect)
-// is reflected on every open.
-const sessionInfoToggle = document.getElementById("session-info-toggle");
-replaceButtonGlyph(sessionInfoToggle, "circle-info", { size: 16 });
-setupSessionInfo({
-  toggle: sessionInfoToggle,
-  panel: document.getElementById("session-info-panel"),
-  fileValue: document.getElementById("session-info-file"),
-  getFilePath: () => mirrorActiveSessionFile || sidebar.activeSessionFile || "",
-});
-
 // ── Super Agent wiring ──────────────────────────────────────────────────────
 // Compatibility surface for Super Agent add-on Web Components.
 window.__saNav = {
@@ -912,25 +899,20 @@ const sessionSearchResults = document.getElementById("session-search-results");
 setButtonIcon(sessionSearchClearBtn, "x", { size: 12 });
 const typingIndicator = document.getElementById("typing-indicator");
 
-const sessionCostEl = document.getElementById("session-cost");
 const sessionUsageEl = document.getElementById("session-usage");
 const tokenUsageEl = document.getElementById("token-usage");
 const contextDonutArc = document.getElementById("context-donut-arc");
 const contextDonutLabel = document.getElementById("context-donut-label");
-// Donut arc length for r=11 (matches the static SVG in index.html).
-const CONTEXT_DONUT_CIRCUMFERENCE = 2 * Math.PI * 11;
+// Donut arc length for r=9 (matches the static SVG in index.html).
+const CONTEXT_DONUT_CIRCUMFERENCE = 2 * Math.PI * 9;
 setButtonIcon(refreshSessionsBtn, "refresh-cw", { size: 16 });
 setButtonIcon(document.getElementById("quick-chat-btn"), "message-circle", { size: 16 });
 const scrollBottomBadge = document.getElementById("scroll-bottom-badge");
-for (const target of [
-  scrollBottomBadge?.querySelector(".scroll-bottom-badge-icon"),
-  document.querySelector("#scroll-bottom-btn .scroll-bottom-icon"),
-]) {
-  const icon = createIcon("arrow-down", {
-    size: target === scrollBottomBadge?.querySelector(".scroll-bottom-badge-icon") ? 10 : 16,
-  });
-  if (target && icon) target.replaceChildren(icon);
-}
+// One arrow, on the button itself: the badge is a plain "New" label.
+const scrollBottomIcon = document.querySelector("#scroll-bottom-btn .scroll-bottom-icon");
+const scrollBottomIconNode = createIcon("arrow-down", { size: 16 });
+if (scrollBottomIcon && scrollBottomIconNode)
+  scrollBottomIcon.replaceChildren(scrollBottomIconNode);
 const convNavEl = document.getElementById("conv-nav");
 const convNavTrack = document.getElementById("conv-nav-track");
 
@@ -965,6 +947,10 @@ setupMessagesInsets({
   header: headerEl,
   inputArea: inputAreaEl,
 });
+
+// Pane scrollbars draw their thumb only while scrolling (transcript, file
+// list, git panel); the capture listener covers panels built after this runs.
+setupScrollbarAutoHide();
 
 // Ambient extension widgets are mirrored into panels owned by their Pi runtime.
 const widgetMirrorRegistry = createWidgetMirrorRegistry({ container: inputAreaEl });
@@ -1188,6 +1174,8 @@ const fileSidebarClose = document.getElementById("file-sidebar-close");
 const fileSidebarNewFile = document.getElementById("file-sidebar-new-file");
 const fileSidebarNewFolder = document.getElementById("file-sidebar-new-folder");
 const fileSidebarRefresh = document.getElementById("file-sidebar-refresh");
+const fileSidebarPathRow = document.getElementById("file-sidebar-path-row");
+const fileSidebarCopy = document.getElementById("file-sidebar-copy");
 const fileSidebarToggleHidden = document.getElementById("file-sidebar-toggle-hidden");
 const infoPanelRefresh = document.getElementById("info-panel-refresh");
 const gitPanelRefresh = document.getElementById("git-panel-refresh");
@@ -1197,6 +1185,7 @@ for (const [button, iconName, size] of [
   [fileSidebarNewFile, "file-plus", 16],
   [fileSidebarNewFolder, "folder-plus", 16],
   [fileSidebarRefresh, "refresh-cw", 16],
+  [fileSidebarCopy, "copy", 16],
   [fileSidebarToggleHidden, "eye", 16],
   [infoPanelRefresh, "refresh-cw", 16],
   [gitPanelRefresh, "refresh-cw", 16],
@@ -1313,17 +1302,34 @@ const fileBrowser = new FileBrowser(fileList, fileSidebarPath, messageInput, {
 // i18n re-applies `data-i18n-title` on a locale change, which would overwrite
 // the disabled reason; re-assert it.
 onLocaleChange(() => syncFileBrowserMutability(fileBrowser.canMutate()));
-setupResizablePanel(fileSidebar, {
-  storageKey: "pi-studio-file-sidebar-width",
-  defaultWidth: 360,
-  minWidth: 280,
-  maxWidth: 560,
-});
 const sideChatButton = document.getElementById("side-chat-btn");
 const syncSideChatButton = ({ panelOpen, activeContent } = {}) => {
   const active = panelOpen === true && activeContent?.kind === "transient";
   sideChatButton?.setAttribute("aria-pressed", String(active));
 };
+const CHAT_MIN_FALLBACK_PX = 400;
+
+/** The chat column's floor, read from the CSS var that owns the number. */
+function chatMinPx() {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue("--chat-min");
+  const px = Number.parseFloat(raw);
+  return Number.isFinite(px) && px > 0 ? px : CHAT_MIN_FALLBACK_PX;
+}
+
+/**
+ * How wide one side panel may become without squeezing the chat column below
+ * `--chat-min`. Every panel's maximum is derived from this single authority, so
+ * no combination of preview + sidebars can starve the conversation.
+ */
+function sidePanelMaxWidth(excludeEl) {
+  const row = [sidebarEl, fileSidebar, document.getElementById("file-preview-panel")];
+  const used = row
+    .filter((el) => el && el !== excludeEl && !el.classList.contains("collapsed"))
+    .reduce((sum, el) => sum + el.offsetWidth, 0);
+  // 4px covers the row's two 2px resizer rails.
+  return Math.max(200, window.innerWidth - chatMinPx() - used - 4);
+}
+
 const filePreviewPanel = new FilePreviewPanel({
   panel: document.getElementById("file-preview-panel"),
   resizer: document.getElementById("file-preview-resizer"),
@@ -1331,6 +1337,7 @@ const filePreviewPanel = new FilePreviewPanel({
   content: document.getElementById("file-preview-content"),
   mainContainer: document.querySelector(".main"),
   transport,
+  maxWidthPx: () => sidePanelMaxWidth(document.getElementById("file-preview-panel")),
   onStateChange: syncSideChatButton,
   onOpenDesktop: (filePath) => {
     transport.openInApp(filePath).catch((error) => {
@@ -2008,7 +2015,7 @@ function setFileSidebarTab(tab) {
   fileSidebarGitTab.classList.toggle("active", showGit);
   fileSidebarGitTab.setAttribute("aria-selected", String(showGit));
   infoPanelEl.classList.toggle("hidden", !showInfo);
-  fileSidebarPath.classList.toggle("hidden", showInfo || showGit);
+  fileSidebarPathRow.classList.toggle("hidden", showInfo || showGit);
   fileList.classList.toggle("hidden", showInfo || showGit);
   gitPanelElement.classList.toggle("hidden", !showGit);
   fileSidebarNewFile.classList.toggle("hidden", showInfo || showGit);
@@ -2019,7 +2026,7 @@ function setFileSidebarTab(tab) {
   gitPanelRefresh.classList.toggle("hidden", !showGit);
   document.getElementById("file-sidebar-finder").classList.toggle("hidden", showInfo || showGit);
   if (showInfo) {
-    infoPanel.updateWorkspace(getCurrentWorkspacePath());
+    infoPanel.updateSessionFile(activeSessionFilePath());
     void refreshInfoTree();
     infoPanel.scrollToSelectedEntry();
   }
@@ -2148,10 +2155,22 @@ const workspaceActions = createWorkspaceActionsController({
   getWorkspacePath: getCurrentWorkspacePath,
   storageKey: "pi-studio-open-app",
   onSelectionChange: () => refreshHeaderOpenAppButton(),
-  onAppsLoaded: () => {
-    refreshHeaderOpenAppButton();
-    infoPanel?.refreshApps();
-  },
+  onAppsLoaded: () => refreshHeaderOpenAppButton(),
+});
+// The file sidebar's copy button rides the same controller as the header — one
+// implementation of "copy this workspace's path" across surfaces.
+let fileSidebarCopyTimer = null;
+fileSidebarCopy?.addEventListener("click", async () => {
+  const copied = await workspaceActions.copyWorkspacePath();
+  const label = copied ? t("files.copiedPath") : t("files.copyFailed");
+  fileSidebarCopy.title = label;
+  fileSidebarCopy.setAttribute("aria-label", label);
+  clearTimeout(fileSidebarCopyTimer);
+  fileSidebarCopyTimer = setTimeout(() => {
+    const reset = t("files.copyAbsolutePath");
+    fileSidebarCopy.title = reset;
+    fileSidebarCopy.setAttribute("aria-label", reset);
+  }, 1200);
 });
 const headerOpenApp = {
   el: document.getElementById("header-open-app"),
@@ -2397,7 +2416,6 @@ async function handleResumeBranch(entryId) {
 if (infoPanelEl) {
   infoPanel = new InfoPanel({
     panel: infoPanelEl,
-    actions: workspaceActions,
     t,
     onNavigateLeaf: (entryId) => void handleResumeBranch(entryId),
     onSelectEntry: (entryId) => selectInfoEntry(entryId),
@@ -2430,19 +2448,21 @@ if (fileSidebarIsOpen) {
 }
 
 // Resizable sidebars — drag handle on inner edge, persisted to localStorage.
+// maxWidth is a function: the cap moves with the window and with the sibling
+// panels, so the chat column keeps --chat-min no matter how the panels are set.
 createSidebarResizer({
   sidebarEl,
   side: "left",
   storageKey: "picot-sidebar-width",
   minWidth: 200,
-  maxWidth: 500,
+  maxWidth: () => Math.min(500, sidePanelMaxWidth(sidebarEl)),
 });
 createSidebarResizer({
   sidebarEl: fileSidebar,
   side: "right",
   storageKey: "picot-file-sidebar-width",
   minWidth: 200,
-  maxWidth: 500,
+  maxWidth: () => Math.min(500, sidePanelMaxWidth(fileSidebar)),
 });
 
 // ═══════════════════════════════════════
@@ -3608,7 +3628,7 @@ function handleMessageEnd(message, eventSessionFile = null, entryId = null) {
     currentStreamingThinking = "";
     currentStreamingStartedAt = null;
 
-    // Track current-context usage only. Session aggregate cost/tokens have a
+    // Track current-context usage only. Session aggregate tokens have a
     // single owner in headerStatusBar and are never derived from rendering.
     if (usage?.input) {
       lastInputTokens = usage.input + (usage.cacheRead || 0);
@@ -3624,7 +3644,6 @@ function handleMessageEnd(message, eventSessionFile = null, entryId = null) {
         output: usage?.output || 0,
         cacheRead: usage?.cacheRead || 0,
         cacheWrite: usage?.cacheWrite || 0,
-        cost: { total: usage?.cost?.total || 0 },
       },
       { sessionFile },
     );
@@ -4363,7 +4382,6 @@ abortBtn.addEventListener("click", () => {
 const commandBtn = document.getElementById("command-btn");
 setButtonIcon(commandBtn, "bot", { size: 16 });
 const commandPalette = document.getElementById("command-palette");
-const commandPaletteOverlay = document.getElementById("command-palette-overlay");
 const commandList = document.getElementById("command-list");
 
 const commands = [
@@ -4423,10 +4441,8 @@ const mainCommandMenu = setupComposerCommandMenu({
   list: commandList,
   getCommands: () => commands,
   document,
-  overlay: commandPaletteOverlay,
   createIcon,
 });
-commandPaletteOverlay.addEventListener("click", mainCommandMenu.close);
 
 // Split send button (2026-09-19 manual review): the caret beside Send is a
 // DIRECT delayed-send control — no dropdown, no floating widget. The click
@@ -4742,7 +4758,20 @@ function formatCompactThinkingLevelLabel(level) {
   return t("settings.thinkingCompact", { level: level || t("settings.off") });
 }
 function updateThinkingBtn() {
-  thinkingBtn.textContent = formatCompactThinkingLevelLabel(currentThinkingLevel);
+  // Split prefix from level so the tightest fit level can drop the prefix word
+  // ("思考"/"Think") in CSS while the level itself stays readable. The compact
+  // template must embed {level}; a locale that leads with the level simply
+  // yields an empty prefix and nothing to hide.
+  const level = currentThinkingLevel || t("settings.off");
+  const full = formatCompactThinkingLevelLabel(currentThinkingLevel);
+  const splitAt = full.indexOf(level);
+  const prefix = document.createElement("span");
+  prefix.className = "thinking-prefix";
+  prefix.textContent = splitAt > 0 ? full.slice(0, splitAt) : "";
+  const levelText = document.createElement("span");
+  levelText.className = "thinking-level";
+  levelText.textContent = level;
+  thinkingBtn.replaceChildren(prefix, levelText);
   thinkingBtn.title = t("settings.thinkingTitle");
   thinkingBtn.setAttribute(
     "aria-label",
@@ -5121,7 +5150,7 @@ document.addEventListener("keydown", (e) => {
       return;
     }
     if (!commandPalette.classList.contains("hidden")) {
-      closeCommandPalette();
+      mainCommandMenu.close();
       return;
     }
     if (!modelDropdownMenu.classList.contains("hidden")) {
@@ -5373,6 +5402,12 @@ function setComposerDraft(value) {
   messageInput.style.height = `${Math.min(messageInput.scrollHeight, 160)}px`;
 }
 
+/** The session file the Info panel reports: the active mirror first, then the
+ * sidebar's selected row (the pair the removed header popover read). */
+function activeSessionFilePath() {
+  return mirrorActiveSessionFile || sidebar.activeSessionFile || "";
+}
+
 function restoreSessionUiState(sessionFile) {
   const next = sessionFile || null;
   // Bump the guard token only when the bound session actually changes, so
@@ -5383,6 +5418,7 @@ function restoreSessionUiState(sessionFile) {
     activeUiSessionFile = next;
     uiSessionGeneration += 1;
     switchComposerIdentityState(previousIdentity);
+    infoPanel?.updateSessionFile(next || "");
   }
 }
 
@@ -5959,7 +5995,7 @@ function handleMirrorSync(data) {
   if (syncWorkspacePath) {
     foregroundWorkspacePath = syncWorkspacePath;
     updateWorkspaceIndicator(syncWorkspacePath);
-    infoPanel?.updateWorkspace(syncWorkspacePath);
+    infoPanel?.updateSessionFile(receivedSessionFile || "");
   }
   if (pendingWorkspace) {
     pendingFileBrowserWorkspace = null;
@@ -6879,7 +6915,7 @@ function updateTokenUsage() {
     const pct = Math.min(100, Math.round((lastInputTokens / contextWindowSize) * 100));
     contextDonutArc.style.strokeDasharray = String(CONTEXT_DONUT_CIRCUMFERENCE);
     contextDonutArc.style.strokeDashoffset = String(CONTEXT_DONUT_CIRCUMFERENCE * (1 - pct / 100));
-    contextDonutLabel.textContent = `${pct}%`;
+    contextDonutLabel.textContent = pct;
     tokenUsageEl.classList.add("visible");
     tokenUsageEl.classList.remove("warning", "critical");
     if (pct >= 80) {
@@ -7444,7 +7480,9 @@ function applyAppearanceDom() {
     previewTheme: previewThemeMode,
     picotThemeIsDark,
   });
-  setEditorHighlightTheme(resolvePreviewTheme(previewThemeMode, picotThemeIsDark));
+  // The editor takes the theme id itself: named themes pin their own chrome,
+  // "follow" resolves against the active Picot theme.
+  setEditorHighlightTheme(previewThemeMode, picotThemeIsDark);
 }
 
 // data-theme is written asynchronously inside View Transitions (and by the OS
@@ -7509,20 +7547,11 @@ function renderFontSizeControl(control) {
 
 function buildAppearanceSelectors() {
   for (const control of fontSizeControls) renderFontSizeControl(control);
-  if (!previewThemeSelect) return;
-  previewThemeSelect.replaceChildren();
-  const labels = {
-    system: t("settings.preview.themeSystem"),
-    light: t("settings.preview.themeLight"),
-    dark: t("settings.preview.themeDark"),
-  };
-  for (const mode of PREVIEW_THEME_MODES) {
-    const option = document.createElement("option");
-    option.value = mode;
-    option.textContent = labels[mode] || mode;
-    option.selected = mode === previewThemeMode;
-    previewThemeSelect.append(option);
-  }
+  renderPreviewThemeOptions({
+    select: previewThemeSelect,
+    selected: previewThemeMode,
+    t,
+  });
 }
 
 function buildTerminalThemeSelector() {
@@ -7931,15 +7960,14 @@ contextVizController = setupContextViz({
   getCompactState: () => compactCoordinator.state,
 });
 
-// Session-aggregate header row (IN/OUT/CACHE/cost) — separate from the
-// current-context lastUsage lifecycle so Compact can invalidate stale
-// context without fabricating usage.
+// Composer session-aggregate cluster (↑in ↓out ⚡cache) — separate from the
+// current-context lastUsage lifecycle so Compact can invalidate stale context
+// without fabricating usage. Session cost is not shown here: each turn's own
+// footer already reports it.
 const headerStatusBar = createHeaderStatusBar({
-  sessionCostEl,
   sessionUsageEl,
   tokenUsageEl,
   getContextWindowSize: () => contextWindowSize,
-  t,
 });
 
 /** Monotonic generation for invalidating stale stats responses on switches. */
@@ -7970,7 +7998,6 @@ async function hydrateHeaderSessionStats() {
     headerStatusBar?.hydrateSessionStats({
       sessionFile: data.data.sessionFile,
       tokens: data.data.tokens,
-      cost: data.data.cost,
     });
   } catch (error) {
     // Aggregate hydration is best-effort; the current-context path still works.
@@ -7983,6 +8010,15 @@ setupVoiceInput({
   messageInput,
 });
 setButtonIcon(document.getElementById("mic-btn"), "mic", { size: 16 });
+
+// Composer fit: hide the least important controls when the row genuinely stops
+// fitting, so nothing is ever pushed outside the card. Driven by measured
+// overflow, not a viewport breakpoint — the chat column also narrows when the
+// sidebars are dragged wider.
+setupComposerFit({
+  card: document.getElementById("composer-card"),
+  toolbar: document.querySelector(".composer-toolbar"),
+});
 
 // ═══════════════════════════════════════
 // Initialize
