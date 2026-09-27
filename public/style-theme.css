@@ -57,11 +57,12 @@
      this, so a wide preview or sidebar can never squeeze the conversation out. */
   --chat-min: 400px;
   --sidebar-width: 272px;
-  /* File tree sidebar first-open width. Its header row carries 3 tabs plus 6
-     action buttons (6 x 28px + gaps + 8px padding = 208px of chrome), which at
-     260px left the tabs ~52px — clipped to bare icons. 340px leaves ~132px,
-     enough for the active tab's icon + label. */
-  --file-sidebar-width: 340px;
+  /* File tree sidebar first-open width. The header row carries 3 tabs plus 6
+     action buttons: 208px of fixed chrome (6 x 28px + gaps + 8px padding).
+     The tab row then needs ~166px worst case (active tab icon + a CJK label
+     such as "ファイル", two 32px icon-only tabs, gaps). 380px leaves ~172px,
+     so the active label never folds. */
+  --file-sidebar-width: 380px;
   /* Motion */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
