@@ -10,9 +10,9 @@
 
 | 子目录 | 含义 | 文件数 |
 | --- | --- | --- |
-| [`implemented/`](implemented/) | 设计已批准 + 代码已落地 + 测试已通过 | 48 |
-| [`in-progress/`](in-progress/) | 设计已批准实施未完（部分代码已合入或 working tree 有进展） | 1 |
-| [`not-started/`](not-started/) | 设计草案或待评审，未实施 | 11 |
+| [`implemented/`](implemented/) | 设计已批准 + 代码已落地 + 测试已通过 | 55 |
+| [`in-progress/`](in-progress/) | 设计已批准实施未完（部分代码已合入或 working tree 有进展） | 2 |
+| [`not-started/`](not-started/) | 设计草案或待评审，未实施 | 8 |
 | [`audits/`](../../audits/) | 审计记录（非设计 spec，不引入实现） | 1 |
 | [`superseded/`](superseded/) | 已被更新的 spec 取代，保留作历史参考 | 4 |
 | [`process-evidence/`](process-evidence/) | Native Runtime 迁移过程的证据 / CP 评审 / 闭环记录（不是设计规格） | 24 |
@@ -24,6 +24,7 @@
 2. **代码/工作树为第二信号**——若 status 与实际代码不一致（如 spec 写"未实施"但代码已落地），以代码为准，并在备注列说明偏差。
 3. **spec 显式标注 SUPERSEDED/Superseded → superseded/**。
 4. **不是设计规格的过程文档**（CP 评审、smoke 证据、review remediation、checkpoint、evidence audit）一律放 `process-evidence/`。
+
 
 ## 完整状态表
 
@@ -60,7 +61,7 @@
 | ✅ implemented | [2026-09-16-cache-optimizer-extension-settings](implemented/2026-09-16-cache-optimizer-extension-settings-design.md) | cache_optimizer_config.rs + renderCacheOptimizerSettings |
 | ✅ implemented | [2026-09-16-chat-window-turn-ia-scroll-and-type-scale](implemented/2026-09-16-chat-window-turn-ia-scroll-and-type-scale-design.md) | turn 模型 + history 折叠，commit `cc1ab26` |
 | ✅ implemented | [2026-09-16-composer-interaction](implemented/2026-09-16-composer-interaction-design.md) | composer C1–C5，commit `090e5ad`/`adcbd32` |
-| ✅ implemented | [2026-09-16-extension-settings-rollout](implemented/2026-09-16-extension-settings-rollout-inventory.md) | 14 项扩展设置全部落地（advisor / fff / rpiv-todo / rpiv-ask-user-question / ponytail / vcc / goal / caveman / cache-optimizer / lens / plan-mode / safety-guard / web-access / datarx-safety-guard-pi） |
+| ✅ implemented | [2026-09-16-extension-settings-rollout-inventory](implemented/2026-09-16-extension-settings-rollout-inventory.md) | （待补备注） |
 | ✅ implemented | [2026-09-16-goal-extension-settings](implemented/2026-09-16-goal-extension-settings-design.md) | goal_config.rs + renderGoalSettings |
 | ✅ implemented | [2026-09-16-lens-extension-settings](implemented/2026-09-16-lens-extension-settings-design.md) | lens_config.rs + renderLensSettings |
 | ✅ implemented | [2026-09-16-plan-mode-extension-settings](implemented/2026-09-16-plan-mode-extension-settings-design.md) | plan-mode renderer（bridge 通道，model picker 需 in-process modelRegistry） |
@@ -70,29 +71,34 @@
 | ✅ implemented | [2026-09-16-safety-guard-extension-settings](implemented/2026-09-16-safety-guard-extension-settings-design.md) | renderSafetyGuardSettings（package-extension-settings.js:1571）+ bridge ops `safetyGuard.config.{get,set}`；09-21 fork 后被 [datarx-safety-guard-pi](implemented/2026-09-21-datarx-safety-guard-pi-design.md) 取代，renderer gate 重定向到 fork |
 | ✅ implemented | [2026-09-16-vcc-extension-settings](implemented/2026-09-16-vcc-extension-settings-design.md) | vcc_config.rs + renderVccSettings |
 | ✅ implemented | [2026-09-16-web-access-extension-settings](implemented/2026-09-16-web-access-extension-settings-design.md) | web-access host ops + renderWebAccessSettings |
-| ✅ implemented | [2026-09-18-cross-workspace-runtime-lifecycle-divergence](implemented/2026-09-18-cross-workspace-runtime-lifecycle-divergence.md) | 跨工作区订阅运行时事件流，旧代 runtime 留活（commit `edc3721`）；host_server.rs 双重实时校验 + find_existing_runtime_for_prepare+rebind 复用 |
+| ✅ implemented | [2026-09-17-anydoc-office-preview](implemented/2026-09-17-anydoc-office-preview-design.md) | anydoc_preview.rs + anydoc-preview-cleanup.test.js；MarkItDown 替代方案；commit `257a9f8` |
+| ✅ implemented | [2026-09-18-cross-workspace-runtime-lifecycle-divergence](implemented/2026-09-18-cross-workspace-runtime-lifecycle-divergence.md) | （待补备注） |
 | ✅ implemented | [2026-09-18-landing-bridge-runtime](implemented/2026-09-18-landing-bridge-runtime-design.md) | landing-config-runtime.js，working tree |
 | ✅ implemented | [2026-09-18-upstream-immediate-migration](implemented/2026-09-18-upstream-immediate-migration-design.md) | 5 项全落地：子进程清扫 `7710a78` + Git push `25efff1` + last-model 继承 `2d63dcf` + response time `744d99a` + model visibility opt-in `b63347a` |
 | ✅ implemented | [2026-09-19-file-mention-paths](implemented/2026-09-19-file-mention-paths-design.md) | spec §末尾自标"两步均已实施并通过验证"（2026-09-19）；public/ui/at-file-mention.js 470 行 + test 83 行 |
 | ✅ implemented | [2026-09-19-steering-and-queue-ux](implemented/2026-09-19-steering-and-queue-ux-design.md) | Enter=steer + Esc 1s，commit `adcbd32`/`a62a97a` |
 | ✅ implemented | [2026-09-19-turn-files-card](implemented/2026-09-19-turn-files-card-design.md) | public/ui/turn-files-card.js 168 行 + test 209 行；spec 标"待复核"指 spec 文本未定稿而非功能缺失 |
+| ✅ implemented | [2026-09-20-history-scroll-auto-load](implemented/2026-09-20-history-scroll-auto-load-design.md) | 滚动触发状态机 + history gate；Paseo 参照移植 |
+| ✅ implemented | [2026-09-20-session-resident-views](implemented/2026-09-20-session-resident-views-design.md) | 前端视图层（host session 常驻已实现）；tab LRU 保活模式 |
 | ✅ implemented | [2026-09-21-datarx-safety-guard-pi](implemented/2026-09-21-datarx-safety-guard-pi-design.md) | safety-guard-dialog.js，working tree（取代 09-16 safety-guard） |
+| ✅ implemented | [2026-09-22-browser-pane-annotation](implemented/2026-09-22-browser-pane-annotation-design.md) | browser-pane/ 目录（browser-tab-renderer.js + browser-annotations.js）；09-25 修订注释卡为注入 pane |
+| ✅ implemented | [2026-09-22-provider-quota-display](implemented/2026-09-22-provider-quota-display-design.md) | cost/provider-quota-panel.js + cost/quota-locale.js |
+| ✅ implemented | [2026-09-23-embedded-pi-path-toggle](implemented/2026-09-23-embedded-pi-path-toggle-design.md) | Settings → 通用 PATH 开关；spec 自标"已实现（2026-09-23）" |
+| ✅ implemented | [2026-09-26-local-follow-up-queue](implemented/2026-09-26-local-follow-up-queue-design.md) | public/ui/follow-up-queue.js（125 行）；commit `039bd49`；follow-up 队列本地化 + abort 改确认 |
 | 🚧 in-progress | [2026-09-18-subagent-display](in-progress/2026-09-18-subagent-display-design.md) | 设计定案；widget + tool card 未实现 |
-| 📋 not-started | [2026-09-03-picot-external-terminal](not-started/2026-09-03-picot-external-terminal-design.md) | Path 2 拍板后暂停 |
-| 📋 not-started | [2026-09-17-anydoc-office-preview](not-started/2026-09-17-anydoc-office-preview-design.md) | 设计已批准，替换 MarkItDown；实施未启动 |
+| 🚧 in-progress | [2026-09-27-clinical-research-agent-team](in-progress/2026-09-27-clinical-research-agent-team-design.md) | 试用版；六份本机岗位指令与 Paseo profile 已创建，真实团队尚未验证 |
 | 📋 not-started | [2026-09-18-acp-external-agent-delegation](not-started/2026-09-18-acp-external-agent-delegation-design.md) | 设计草案，待 Dr. Lin 拍板 |
-| 📋 not-started | [2026-09-20-history-scroll-auto-load](not-started/2026-09-20-history-scroll-auto-load-design.md) | 参照 Paseo 滚动触发状态机 + gate；Draft 待 Dr. Lin 评审 |
 | 📋 not-started | [2026-09-20-persistent-daemon-relay](not-started/2026-09-20-persistent-daemon-relay-design.md) | 持久 daemon + relay 接入；Draft 待拍板（daemon 形态 + 公司服务器部署清单待定） |
-| 📋 not-started | [2026-09-20-session-resident-views](not-started/2026-09-20-session-resident-views-design.md) | 收窄为前端视图层（host 常驻已实现）；Draft 待 Dr. Lin 评审 |
 | 📋 not-started | [2026-09-20-session-scan-bounded-io](not-started/2026-09-20-session-scan-bounded-io-design.md) | head/tail 双窗口扫描；Draft 待 Dr. Lin 评审 |
-| 📋 not-started | [2026-09-22-browser-pane-annotation](not-started/2026-09-22-browser-pane-annotation-design.md) | 浏览器 pane + 元素标注双场景；Draft 待拍板（三个待定项） |
-| 📋 not-started | [2026-09-22-provider-quota-display](not-started/2026-09-22-provider-quota-display-design.md) | 用量页提供方配额 + Codex 重置额度；提案待评审 |
-| 📋 not-started | [2026-09-22-line-review-workflow](not-started/2026-09-22-line-review-workflow-design.md) | JSONL 行级评论、reviewer/fixer 单向权限与自动单次复审；Draft 待评审 |
-| 📋 not-started | [2026-09-22-environment-toolchain](not-started/2026-09-22-environment-toolchain-design.md) | 环境检查与无会话 AI 工具安装/更新；Draft 待评审 |
+| 📋 not-started | [2026-09-22-environment-toolchain](not-started/2026-09-22-environment-toolchain-design.md) | Settings 「环境」页；Draft 待 Dr. Lin 评审 |
+| 📋 not-started | [2026-09-22-line-review-workflow](not-started/2026-09-22-line-review-workflow-design.md) | 行级 Code Review 工作流；Draft 待 Dr. Lin 评审 |
+| 📋 not-started | [2026-09-23-files-tree-and-paseo-icons](not-started/2026-09-23-files-tree-and-paseo-icons-design.md) | Files 面板树形导航 + Paseo 图标；Approved 2026-09-23，待实施 |
+| 📋 not-started | [2026-09-23-paseo-pi-only-fork-relay-mobile](not-started/2026-09-23-paseo-pi-only-fork-relay-mobile-design.md) | Paseo Pi-only fork + 公司 relay + 移动端架构；阶段一裁剪已实测落地，整体待实施 |
+| 📋 not-started | [2026-09-27-pi-subagent-extension](not-started/2026-09-27-pi-subagent-extension-design.md) | Picot 本地 Pi 子代理扩展；Draft 待验证与评审，仅设计，未实现 |
 | ⛔ superseded | [2026-07-25-at-file-mention](superseded/2026-07-25-at-file-mention-design.md) | 由 [2026-09-19-file-mention-paths](implemented/2026-09-19-file-mention-paths-design.md) 扩展并部分取代 |
 | ⛔ superseded | [2026-07-27-claude-skills-discovery](superseded/2026-07-27-claude-skills-discovery-design.md) | 由 [2026-08-07-composer-skill-discovery-and-execution-fixes](superseded/2026-08-07-composer-skill-discovery-and-execution-fixes.md) 取代 |
-| ⛔ superseded | [2026-08-07-composer-skill-discovery-and-execution-fixes.md](superseded/2026-08-07-composer-skill-discovery-and-execution-fixes.md) | （已被新 spec 取代） |
-
+| ⛔ superseded | [2026-08-07-composer-skill-discovery-and-execution-fixes](superseded/2026-08-07-composer-skill-discovery-and-execution-fixes.md) | （已被新 spec 取代） |
+| ⛔ superseded | [2026-09-03-picot-external-terminal](superseded/2026-09-03-picot-external-terminal-design.md) | Path 2 拍板后暂停（tty7/liney 调研后认为非 WebView 嵌组件）；整体不再推进 |
 
 ## 相关参考
 
