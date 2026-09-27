@@ -27,7 +27,38 @@ class FakeWebSocket extends EventTarget {
     }, 0);
   }
 
-  send() {}
+  send(raw) {
+    const envelope = JSON.parse(raw);
+    // The turn-files card awaits git_turn_stats before mounting; answer it so
+    // a scripted turn settles without waiting on a transport timeout.
+    if (envelope.type === "host_request" && envelope.operation === "git_turn_stats") {
+      const paths = envelope.args?.paths ?? [];
+      setTimeout(() => {
+        this.onmessage?.({
+          data: JSON.stringify({
+            type: "host_response",
+            requestId: envelope.requestId,
+            ok: true,
+            response: {
+              files: paths.map((path) => ({ path, additions: 1, deletions: 0, status: "M" })),
+            },
+          }),
+        });
+      }, 0);
+      return;
+    }
+    if (envelope.type === "runtime_request" && envelope.command?.type === "abort") {
+      setTimeout(() => {
+        this.onmessage?.({
+          data: JSON.stringify({
+            type: "runtime_response",
+            requestId: envelope.requestId,
+            response: { type: "response", command: "abort", success: true },
+          }),
+        });
+      }, 0);
+    }
+  }
 
   close() {
     this.readyState = FakeWebSocket.CLOSED;
@@ -235,4 +266,67 @@ test("abort mid-turn closes the live turn — settled without duration, rail fol
   // Aborted runs never completed: no duration is claimed.
   expect(status.textContent).not.toContain("Worked for");
   expect(section.querySelector(".turn-rail").classList.contains("expanded")).toBe(false);
+});
+
+test("a live turn's write tool settles a turn-files card under the answer", async () => {
+  await import("./app.js?turn-live-files-card");
+
+  const ws = wsInstances.at(-1);
+  let sequence = 0;
+  const target = { workspaceId: "w1", sessionId: "s1", instanceId: "primary" };
+  const send = (event, extra = {}) =>
+    ws.onmessage({
+      data: JSON.stringify({
+        type: "runtime_event",
+        protocolVersion: 2,
+        sequence: ++sequence,
+        target,
+        event,
+        ...extra,
+      }),
+    });
+
+  const assistantMessage = (text) => ({ role: "assistant", content: [{ type: "text", text }] });
+
+  send({ type: "agent_start", turnId: "turn-files" });
+  send({ type: "message_start", message: { role: "assistant", content: [] } });
+  send({
+    type: "message_update",
+    message: assistantMessage("editing"),
+    assistantMessageEvent: { type: "text_delta", delta: "editing" },
+  });
+  send({ type: "message_end", message: assistantMessage("editing"), entryId: "f1" });
+  send({
+    type: "tool_execution_start",
+    toolCallId: "w1",
+    toolName: "edit",
+    args: { path: "public/style.css", old_string: "a", new_string: "b" },
+  });
+  send({
+    type: "tool_execution_end",
+    toolCallId: "w1",
+    result: { content: [{ type: "text", text: "ok" }] },
+    isError: false,
+  });
+  // Frames arrive over the wire, never in the same tick as their handler's
+  // microtasks: let the write record land before the run continues.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  send({ type: "message_start", message: { role: "assistant", content: [] } });
+  send({
+    type: "message_update",
+    message: assistantMessage("Done"),
+    assistantMessageEvent: { type: "text_delta", delta: "Done" },
+  });
+  send({ type: "message_end", message: assistantMessage("Done"), entryId: "f2" });
+  send({ type: "agent_end" });
+
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  const messages = document.getElementById("messages");
+  const card = messages.querySelector(".turn-files-card");
+  console.warn(
+    `[files-card] present=${Boolean(card)} rows=${messages.querySelectorAll(".turn-files-row").length}`,
+  );
+  expect(card).not.toBeNull();
+  expect(card.textContent).toContain("style.css");
 });

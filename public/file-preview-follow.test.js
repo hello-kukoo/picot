@@ -153,3 +153,33 @@ describe("createFilePreviewFollow", () => {
     expect(applied).toEqual([]);
   });
 });
+
+test("records the write even when the panel reveal rejects", async () => {
+  // The turn's files card settles on agent_end; the write must be recorded
+  // BEFORE the panel reveal. A slow or failing reveal (tab open, native pane
+  // attach) must not delay or drop the record, or the card silently misses
+  // the file.
+  const applied = [];
+  const follow = createFilePreviewFollow({
+    panel: {
+      revealWrite: async () => {
+        throw new Error("pane attach failed");
+      },
+    },
+    getWorkspacePath: async () => "/ws",
+    onWriteApplied: (raw, previewPath) => applied.push([raw, previewPath]),
+  });
+  follow.onToolStart({ toolCallId: "w9", toolName: "edit", args: { path: "a.css" } });
+  // The caller swallows reveal failures (`.catch(() => {})` in app.js); the
+  // record must already have landed before that promise rejects.
+  await follow
+    .onToolEnd({
+      toolCallId: "w9",
+      toolName: "edit",
+      args: { path: "a.css" },
+      result: { content: [] },
+      isError: false,
+    })
+    .catch(() => null);
+  expect(applied).toEqual([["a.css", "/ws/a.css"]]);
+});

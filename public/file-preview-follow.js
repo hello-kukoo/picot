@@ -86,12 +86,12 @@ export function createFilePreviewFollow({ panel, getWorkspacePath, onWriteApplie
       const raw = pathFromToolArgs(event.args) || remembered;
       const previewPath = await resolvePreviewPath(raw);
       if (!previewPath) return null;
-      const tab = panel ? await panel.revealWrite(previewPath) : null;
-      // Notify after the write is known to be inside the workspace, whether or
-      // not a preview panel is attached (e.g. the file browser refreshes from
-      // the same signal).
+      // Record the write as soon as it is known to be inside the workspace —
+      // BEFORE the panel reveal. The reveal can be slow (tab open, native pane
+      // attach), and the turn's files card settles on agent_end: a write that
+      // only lands after that drain silently loses its card.
       if (typeof onWriteApplied === "function") onWriteApplied(raw, previewPath);
-      return tab;
+      return panel ? panel.revealWrite(previewPath) : null;
     },
 
     async openPath(rawPath) {
