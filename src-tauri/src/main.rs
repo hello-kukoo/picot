@@ -93,7 +93,7 @@ use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, TitleBarStyle, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
-use tauri_plugin_window_state::{StateFlags, WindowExt};
+use tauri_plugin_window_state::StateFlags;
 use temp_resources::{canonical_temp_root, cleanup_quick_chat_dir};
 use terminal_manager::TerminalManager;
 use terminal_registry::TerminalRegistry;
@@ -612,6 +612,28 @@ fn window_state_flags() -> StateFlags {
     StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED | StateFlags::FULLSCREEN
 }
 
+/// Clamp a restored physical window size to the monitor's usable work area.
+fn clamp_window_size(width: u32, height: u32, work_width: u32, work_height: u32) -> (u32, u32) {
+    (width.min(work_width.max(1)), height.min(work_height.max(1)))
+}
+
+fn clamp_window_geometry(
+    position: tauri::PhysicalPosition<i32>,
+    size: tauri::PhysicalSize<u32>,
+    area: tauri::PhysicalRect<i32, u32>,
+) -> (i32, i32, u32, u32) {
+    let (width, height) =
+        clamp_window_size(size.width, size.height, area.size.width, area.size.height);
+    let max_x = i64::from(area.position.x) + i64::from(area.size.width - width);
+    let max_y = i64::from(area.position.y) + i64::from(area.size.height - height);
+    (
+        i64::from(position.x).clamp(i64::from(area.position.x), max_x) as i32,
+        i64::from(position.y).clamp(i64::from(area.position.y), max_y) as i32,
+        width,
+        height,
+    )
+}
+
 fn open_native_window(
     app: &AppHandle,
     label: &str,
@@ -648,8 +670,64 @@ fn open_native_window(
     #[cfg(not(target_os = "macos"))]
     let builder = builder.decorations(true);
     let window = builder.build().map_err(|error| error.to_string())?;
-    let _ = window.restore_state(window_state_flags());
-    let _ = window.show();
+    // `window-state` queued its restore from the window-created hook during
+    // build(). Queue geometry validation after that restore and keep the window
+    // hidden until both have completed, avoiding a visible resize/repaint flash.
+    let window_for_ready = window.clone();
+    window
+        .run_on_main_thread(move || {
+            let window = window_for_ready;
+            if !window.is_maximized().unwrap_or(false) && !window.is_fullscreen().unwrap_or(false) {
+                if let (Ok(size), Ok(monitors), Ok(position)) = (
+                    window.inner_size(),
+                    window.available_monitors(),
+                    window.outer_position(),
+                ) {
+                    let window_right = i64::from(position.x) + i64::from(size.width);
+                    let window_bottom = i64::from(position.y) + i64::from(size.height);
+                    let monitor = monitors
+                        .iter()
+                        .filter_map(|monitor| {
+                            let area = monitor.work_area();
+                            let left = i64::from(area.position.x);
+                            let top = i64::from(area.position.y);
+                            let right = left + i64::from(area.size.width);
+                            let bottom = top + i64::from(area.size.height);
+                            let overlap_width =
+                                window_right.min(right) - i64::from(position.x).max(left);
+                            let overlap_height =
+                                window_bottom.min(bottom) - i64::from(position.y).max(top);
+                            // `then` (lazy), not `then_some` (eager): a window
+                            // off every monitor yields negative overlaps, and
+                            // eagerly casting those to u64 wraps to huge values
+                            // whose product overflows and panics in debug.
+                            (overlap_width > 0 && overlap_height > 0).then(|| {
+                                (monitor, (overlap_width as u64) * (overlap_height as u64))
+                            })
+                        })
+                        .max_by_key(|(_, overlap)| *overlap)
+                        .map(|(monitor, _)| monitor)
+                        .or_else(|| {
+                            monitors.iter().max_by_key(|monitor| {
+                                u64::from(monitor.work_area().size.width)
+                                    * u64::from(monitor.work_area().size.height)
+                            })
+                        });
+                    if let Some(monitor) = monitor {
+                        let (x, y, width, height) =
+                            clamp_window_geometry(position, size, *monitor.work_area());
+                        if width != size.width || height != size.height {
+                            let _ = window.set_size(tauri::PhysicalSize::new(width, height));
+                        }
+                        if x != position.x || y != position.y {
+                            let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+                        }
+                    }
+                }
+            }
+            let _ = window.show();
+        })
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -876,9 +954,10 @@ fn find_static_dir(app: &tauri::App) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        cancel_should_stop_target, filter_session_delete_paths, find_existing_runtime_for_prepare,
-        image_mime_from_path, new_session_menu_enabled, persisted_session_id_for_workspace,
-        quick_chat_snapshot, resolve_static_dir, runtime_instance_summaries, runtime_started_event,
+        cancel_should_stop_target, clamp_window_geometry, filter_session_delete_paths,
+        find_existing_runtime_for_prepare, image_mime_from_path, new_session_menu_enabled,
+        persisted_session_id_for_workspace, quick_chat_snapshot, resolve_static_dir,
+        runtime_instance_summaries, runtime_started_event,
         should_stop_owner_runtimes_on_transition, side_chat_startup_rpc_commands,
         skill_scope_context, target_for_owner_in_workspace, touch_registered_workspace,
         workspace_snapshot_for,
@@ -892,6 +971,43 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static TOUCH_TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn restored_window_geometry_is_clamped_to_monitor_work_area() {
+        assert_eq!(
+            clamp_window_geometry(
+                tauri::PhysicalPosition::new(0, 68),
+                tauri::PhysicalSize::new(2874, 1672),
+                tauri::PhysicalRect {
+                    position: tauri::PhysicalPosition::new(0, 0),
+                    size: tauri::PhysicalSize::new(2560, 1400),
+                },
+            ),
+            (0, 0, 2560, 1400)
+        );
+        assert_eq!(
+            clamp_window_geometry(
+                tauri::PhysicalPosition::new(100, 100),
+                tauri::PhysicalSize::new(1400, 900),
+                tauri::PhysicalRect {
+                    position: tauri::PhysicalPosition::new(0, 0),
+                    size: tauri::PhysicalSize::new(2560, 1400),
+                },
+            ),
+            (100, 100, 1400, 900)
+        );
+        assert_eq!(
+            clamp_window_geometry(
+                tauri::PhysicalPosition::new(2400, 1300),
+                tauri::PhysicalSize::new(2874, 900),
+                tauri::PhysicalRect {
+                    position: tauri::PhysicalPosition::new(0, 0),
+                    size: tauri::PhysicalSize::new(2560, 1400),
+                },
+            ),
+            (0, 500, 2560, 900)
+        );
+    }
 
     fn shared_test_metadata(label: &str) -> (SharedMetadataStore, PathBuf) {
         // Sequence + pid keeps parallel tests from sharing one database file.
