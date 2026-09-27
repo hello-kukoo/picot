@@ -26,7 +26,6 @@ const locale = {
   creditUnknown: "Expiry unknown",
   resetsInMinutes: "resets in {n}m",
   resetsAt: "resets {when}",
-  used: "{n}% used",
   resetDialogScope: "OpenAI Codex plan",
   dialogRedeem: "Use 1 credit",
   creditIndexed: "Credit #{n}",

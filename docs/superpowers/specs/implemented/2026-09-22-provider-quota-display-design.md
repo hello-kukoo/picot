@@ -130,7 +130,7 @@ CREATE TABLE IF NOT EXISTS reset_credit_operations (
    进度条色档（2026-09-27 修订）：<75% 绿、75–90% 橙（含 90）、>90% 红。
    窗口行为两行式（2026-09-27 修订）：首行 label + 百分比徽标（与 bar 同色系淡底/深字圆角标签）+ 右侧重置时间；次行全宽 bar（全宽即天然左对齐）。重置时间分档：≤60 分钟「{n} 分钟后重置」、<24h 同日「{n} 小时后重置」、跨午夜「明天 HH:MM 重置」、更远「M月D日 HH:MM 重置」。余额行为单行（label + 金额，无 bar）。
    codex 卡标题：显示名 + 账户类型徽标（绿底绿字，无边框；取 WHAM 响应根字段 `plan_type`，缺失时回退解码 access token JWT 的 `chatgpt_plan_type` claim，opencodex 同款）+ 重置额度 chip（橘底橘字，紧跟账户类型）。
-   加载行为（2026-09-27 修订）：首次/刷新/每次进入「使用量」页先渲染骨架卡（动画条）再异步探测（并行）；`loadReports` 串行化（飞行中的调用合并）；探测失败且无旧数据时保留错误提示条而非隐藏。
+   加载行为（2026-09-27 修订）：首次/刷新/每次进入「使用量」页先渲染骨架卡（动画条）再异步探测（`provider_quota_report` 内各 provider 探测为 `Promise.all` 并行；进入 Usage 页由 `selectSettingsTab` 重触发非 force 加载，5 分钟缓存命中时即时出卡；`loadReports` 串行化，飞行中的调用合并）；`loadReports` 串行化（飞行中的调用合并）；探测失败且无旧数据时保留错误提示条而非隐藏。
 3. openai-codex 卡额外显示「重置额度 N 个」；点击 → 确认对话框（列 credits 明细 granted_at/expires_at）→ 确认后走 open→consume→settle 流程，结果 toast（成功/无可重置/无额度/结果未知）。
 4. `ambiguous` 结果 toast 如实提示「可能已生效，重试安全（沿用同一请求 id）」；不做 inspect 计数对比（见上「恢复策略」2026-09-23 修订）。
 5. 空态：无可探测 provider 时整块隐藏（不显示「暂无数据」占位）。2026-09-27 修订：隐藏仅指「成功探测且零个已配置 provider」；**请求失败**（超时/传输错误）保留区块——标题 + 刷新按钮 +「暂时不可用」提示条，可手动重试。启动时那次探测失败后整段隐藏曾把页面变成无法自愈的白板。

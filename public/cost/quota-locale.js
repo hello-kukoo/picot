@@ -1,5 +1,8 @@
 // ABOUTME: Locale bundle for the provider quota panel — one key set, four
 // ABOUTME: languages, sourced from the shared i18n table (cost.quota.*).
+// The bundle IS the contract: every key the panel consumes must be wired
+// here. A key that exists only in the JSON files is invisible to the panel —
+// quota-locale.test.js asserts exactly that against the real en.json.
 import { t } from "../i18n.js";
 
 export function quotaLocaleBundle() {
@@ -24,7 +27,6 @@ export function quotaLocaleBundle() {
     // the cards on screen without the section head (no Refresh button).
     resetsInHours: t("cost.quota.resetsInHours"),
     resetsTomorrow: t("cost.quota.resetsTomorrow"),
-    used: t("cost.quota.used"),
     resetDialogTitle: t("cost.quota.resetDialogTitle"),
     resetDialogScope: t("cost.quota.resetDialogScope"),
     dialogRedeem: t("cost.quota.dialogRedeem"),
