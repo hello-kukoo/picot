@@ -16,6 +16,7 @@ const locale = {
   minutesAgo: "{n}m ago",
   hoursAgo: "{n}h ago",
   resetsInHours: "resets in {n}h",
+  resetsTomorrow: "resets tomorrow at {time}",
   resetsInDays: "resets in {n}d",
   resetCredits: "Reset quota ({n} left)",
   resetDialogTitle: "Reset quota",
@@ -489,9 +490,12 @@ test("bar tone bands switch at 75% and 90%", async () => {
   const panel = createProviderQuotaPanel(seams, { locale });
   await panel.loadReports();
   const toneByLabel = {};
+  const badgeByLabel = {};
   for (const row of container.querySelectorAll(".quota-row")) {
     const label = row.querySelector(".quota-row-label")?.textContent;
     toneByLabel[label] = row.querySelector(".quota-bar-fill")?.className.split(" ").pop();
+    const badge = row.querySelector(".quota-pct-badge");
+    badgeByLabel[label] = badge ? `${badge.textContent}/${badge.className.split(" ").pop()}` : null;
   }
   expect(toneByLabel).toEqual({
     w74: "is-ok",
@@ -499,6 +503,73 @@ test("bar tone bands switch at 75% and 90%", async () => {
     w90: "is-warning",
     w91: "is-critical",
   });
+  // The badge rides the bar's tone family and shows the bare percent.
+  expect(badgeByLabel).toEqual({
+    w74: "74%/is-ok",
+    w75: "75%/is-warning",
+    w90: "90%/is-warning",
+    w91: "91%/is-critical",
+  });
+});
+
+test("reset stamps pick the minute/hours/tomorrow/absolute band", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(2026, 8, 27, 10, 0, 0)); // 2026-09-27 10:00 local
+  const at = (h, m) => new Date(2026, 8, 27, h, m).getTime();
+  const resetAt = {
+    minutes: at(10, 40),
+    hours: at(15, 0), // same day, 5h away
+    tomorrow: at(23, 30) + 3 * 3600_000, // crosses midnight
+    absolute: at(10, 0) + 3 * 86_400_000, // 3 days out
+  };
+  vi.useRealTimers();
+  const seams = makeSeams({
+    reports: [
+      {
+        provider: "ollama-cloud",
+        source: "ollama-cloud:usage",
+        quota: {
+          customWindows: [
+            { label: "m", percent: 1, resetAt: resetAt.minutes },
+            { label: "h", percent: 2, resetAt: resetAt.hours },
+            { label: "t", percent: 3, resetAt: resetAt.tomorrow },
+            { label: "a", percent: 4, resetAt: resetAt.absolute },
+          ],
+          updatedAt: Date.now(),
+        },
+      },
+    ],
+  });
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(2026, 8, 27, 10, 0, 0));
+  const panel = createProviderQuotaPanel(seams, { locale });
+  await panel.loadReports();
+  const stamp = (label) =>
+    [...container.querySelectorAll(".quota-row")]
+      .find((r) => r.querySelector(".quota-row-label")?.textContent === label)
+      ?.querySelector(".quota-row-reset")?.textContent;
+  expect(stamp("m")).toBe("resets in 40m");
+  expect(stamp("h")).toBe("resets in 5h");
+  expect(stamp("t")).toBe("resets tomorrow at 02:30");
+  expect(stamp("a")).toBe("resets 9月30日 10:00");
+  vi.useRealTimers();
+});
+
+test("balance rows are a single line with the amount, no bar", async () => {
+  const seams = makeSeams({
+    reports: [
+      {
+        provider: "deepseek",
+        source: "deepseek:balance",
+        quota: { customWindows: [{ label: "CNY 10.50", percent: 0 }], updatedAt: Date.now() },
+      },
+    ],
+  });
+  const panel = createProviderQuotaPanel(seams, { locale });
+  await panel.loadReports();
+  const balance = container.querySelector(".quota-row.is-balance");
+  expect(balance?.querySelector(".quota-bar")).toBeNull();
+  expect(balance?.querySelector(".quota-row-top")?.textContent).toContain("CNY 10.50");
 });
 
 test("codex reset chip sits directly after the plan chip", async () => {

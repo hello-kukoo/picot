@@ -1292,6 +1292,7 @@
       "minutesAgo": "{n}分前",
       "hoursAgo": "{n}時間前",
       "resetsInMinutes": "{n} 分後にリセット",
+      "resetsTomorrow": "明日 {time} にリセット",
       "resetsInHours": "{n}時間後にリセット",
       "resetsInDays": "{n}日後にリセット",
       "resetCredits": "リセット（残り {n} 回）",

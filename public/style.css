@@ -2565,18 +2565,29 @@ body.landing-mode #landing {
   cursor: pointer;
 }
 
+/* Two-line rows (2026-09-27): label + badge + reset on line 1, a full-width
+   bar on line 2 — the full width is what left-aligns every bar in the card. */
 .quota-rows {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-3);
+  font-variant-numeric: tabular-nums;
 }
 
 .quota-row {
-  display: grid;
-  grid-template-columns: max-content max-content minmax(48px, 1fr) max-content;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.quota-row-top {
+  display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-variant-numeric: tabular-nums;
+}
+
+.quota-row-reset {
+  margin-left: auto;
 }
 
 .quota-row-label {
@@ -2587,6 +2598,30 @@ body.landing-mode #landing {
 .quota-row-reset {
   color: var(--text-dim);
   font-size: var(--font-size-sm);
+}
+
+.quota-pct-badge {
+  padding: var(--space-0-5) var(--space-2);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+/* The badge rides the same tone family as the bar fill: light plate of the
+   tone token with the token itself as the number color. */
+.quota-pct-badge.is-ok {
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--success);
+}
+
+.quota-pct-badge.is-warning {
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
+}
+
+.quota-pct-badge.is-critical {
+  background: color-mix(in srgb, var(--error) 16%, transparent);
+  color: var(--error);
 }
 
 .quota-row-pct {

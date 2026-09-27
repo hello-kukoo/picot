@@ -75,18 +75,26 @@ function daysUntil(value) {
   return Math.ceil((ms - Date.now()) / 86_400_000);
 }
 
-/** Reset stamps read like opencodex's: an imminent reset counts minutes, an
- * absolute one is "<月日>, <时:分> 重置". Never "in 3 hours". */
+/** Reset stamp bands (2026-09-27 two-line redesign): ≤60min counts minutes,
+ * <24h counts hours on the same day or reads "明天 HH:MM 重置" across midnight,
+ * farther out is the absolute "M月D日 HH:MM 重置". */
 function formatResetStamp(resetAt, locale) {
   const ms = toEpochMs(resetAt);
   if (ms === null) return "";
   const minutes = Math.round((ms - Date.now()) / 60_000);
+  const hhmm = (at) =>
+    `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
   if (minutes <= 60) {
     return locale.resetsInMinutes.replace("{n}", String(Math.max(1, minutes)));
   }
   const at = new Date(ms);
-  const when = `${at.getMonth() + 1}月${at.getDate()}日, ${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
-  return locale.resetsAt.replace("{when}", when);
+  if (minutes < 1440) {
+    if (at.toDateString() === new Date().toDateString()) {
+      return locale.resetsInHours.replace("{n}", String(Math.round(minutes / 60)));
+    }
+    return locale.resetsTomorrow.replace("{time}", hhmm(at));
+  }
+  return locale.resetsAt.replace("{when}", `${at.getMonth() + 1}月${at.getDate()}日 ${hhmm(at)}`);
 }
 
 /** Usage tone thresholds: below 75% is healthy, 75–90% is warning, above
@@ -103,46 +111,54 @@ function toneFor(percent) {
   return "is-ok";
 }
 
+/** Percent rows are two lines (2026-09-27): line 1 = label + tone-tinted
+ * percent badge (left) and the reset stamp (right); line 2 = full-width bar —
+ * full width makes every bar start at the card's left edge by construction. */
 function windowRow({ label, percent, resetAt }, locale) {
   const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+  const tone = toneFor(clamped);
   const row = document.createElement("div");
   row.className = "quota-row";
+  const top = document.createElement("div");
+  top.className = "quota-row-top";
   const name = document.createElement("span");
   name.className = "quota-row-label";
   name.textContent = label;
+  const badge = document.createElement("span");
+  badge.className = `quota-pct-badge ${tone}`;
+  badge.textContent = `${clamped}%`;
   const stamp = document.createElement("span");
   stamp.className = "quota-row-reset";
   stamp.textContent = formatResetStamp(resetAt, locale);
+  top.append(name, badge, stamp);
   const bar = document.createElement("div");
   bar.className = "quota-bar";
   bar.setAttribute("role", "presentation");
   const fill = document.createElement("div");
-  fill.className = `quota-bar-fill ${toneFor(clamped)}`;
+  fill.className = `quota-bar-fill ${tone}`;
   fill.style.width = `${clamped}%`;
   bar.append(fill);
-  const pct = document.createElement("span");
-  pct.className = "quota-row-pct";
-  pct.textContent = locale.used.replace("{n}", String(clamped));
-  row.append(name, stamp, bar, pct);
+  row.append(top, bar);
   return row;
 }
 
 /** Balance providers (deepseek / moonshot) have no percentage: the amount takes
  * the percent slot and the bar stays empty, as opencodex does. */
+/** Balance rows have no percent or bar: one line, label left and the amount
+ * (the custom window's own label, e.g. "CNY 10.50") right. */
 function balanceRow(window, locale) {
   const row = document.createElement("div");
   row.className = "quota-row is-balance";
+  const top = document.createElement("div");
+  top.className = "quota-row-top";
   const name = document.createElement("span");
   name.className = "quota-row-label";
   name.textContent = locale.balance;
-  const stamp = document.createElement("span");
-  stamp.className = "quota-row-reset";
-  const bar = document.createElement("div");
-  bar.className = "quota-bar";
   const value = document.createElement("span");
   value.className = "quota-row-pct is-amount";
   value.textContent = String(window?.label ?? "");
-  row.append(name, stamp, bar, value);
+  top.append(name, value);
+  row.append(top);
   return row;
 }
 
@@ -434,18 +450,21 @@ export function createProviderQuotaPanel(seams, { locale }) {
     const rows = document.createElement("div");
     rows.className = "quota-rows";
     for (let index = 0; index < 2; index += 1) {
+      // Two-line shape matching the real rows: an empty top line and a
+      // shimmering full-width bar below it.
       const row = document.createElement("div");
       row.className = "quota-row";
+      const top = document.createElement("div");
+      top.className = "quota-row-top";
       const label = document.createElement("span");
       label.className = "quota-row-label quota-skeleton-label";
+      top.append(label);
       const bar = document.createElement("div");
       bar.className = "quota-bar";
       const fill = document.createElement("div");
       fill.className = "quota-bar-fill is-loading";
       bar.append(fill);
-      const pct = document.createElement("span");
-      pct.className = "quota-row-pct quota-skeleton-pct";
-      row.append(label, bar, pct);
+      row.append(top, bar);
       rows.append(row);
     }
     card.append(name, rows);
