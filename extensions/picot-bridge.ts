@@ -1,6 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { startOrphanWatchdog } from "./orphan-watchdog";
 import { handlePicotConfig } from "./picot-config";
 import projectTrust from "./project-trust";
+import { registerAutomaticSessionTitle } from "./session-title-auto";
 
 type ConfigRequest = {
   id?: string;
@@ -27,6 +29,8 @@ type NavigateArguments = {
 
 export default function picotBridge(pi: ExtensionAPI) {
   projectTrust(pi);
+  registerAutomaticSessionTitle(pi);
+  startOrphanWatchdog();
 
   pi.registerCommand("picot-capabilities", {
     description: "Describe the namespaced Picot bridge operations",

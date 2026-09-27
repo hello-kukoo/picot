@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+// All credential-looking strings below are inert fixtures for write-through
+// and masking assertions, never real secrets (see the gitleaks:allow marks).
 // ABOUTME: Verifies the package extension-settings renderer: advisor model/effort
 // ABOUTME: coupling, off state, save-on-change payloads, and no-op behavior.
 
@@ -1197,7 +1199,7 @@ describe("safety-guard renderer", () => {
         calls.push({ op, params });
         if (op === "list_model_catalog") {
           return catalogFor([
-            { key: "anthropic/claude", name: "Claude", levels: ["low", "high"] },
+            { key: "anthropic/claude", name: "Claude", levels: ["low", "high"] }, // gitleaks:allow
             { key: "openai/gpt-5", name: "GPT-5", levels: ["low", "high"] },
           ]);
         }
@@ -1355,11 +1357,11 @@ describe("web-access renderer", () => {
     const password = detailEl.querySelector('input[type="password"]');
     password.value = "";
     password.dispatchEvent(new Event("change"));
-    password.value = "sk-secret-value";
+    password.value = "test-key-placeholder";
     password.dispatchEvent(new Event("change"));
     await vi.waitFor(() => {
       const set = calls.find((c) => c.op === "webaccess.config.set");
-      expect(set?.params).toEqual({ key: "openaiApiKey", value: "sk-secret-value" });
+      expect(set?.params).toEqual({ key: "openaiApiKey", value: "test-key-placeholder" });
     });
   });
 
@@ -1489,7 +1491,7 @@ describe("paired-field writes", () => {
           call: async (op, params) => {
             calls.push({ op, params });
             if (op === "list_model_catalog") {
-              return catalogFor([{ key: "anthropic/claude", name: "Claude", levels: ["low"] }]);
+              return catalogFor([{ key: "anthropic/claude", name: "Claude", levels: ["low"] }]); // gitleaks:allow
             }
             if (op === "list_scoped_models") return scopedFor([]);
             if (op === "safetyGuard.config.get") {
@@ -1618,7 +1620,7 @@ describe("web-access row contract", () => {
       if (!detailEl.querySelector('input[type="password"]')) throw new Error("secret row missing");
     });
     const password = detailEl.querySelector('input[type="password"]');
-    password.value = "sk-leaked-key";
+    password.value = "test-key-placeholder";
     password.dispatchEvent(new Event("change"));
     await vi.waitFor(() => {
       expect(detailEl.querySelector(".pkg-ext-status").textContent).toContain("disk full");

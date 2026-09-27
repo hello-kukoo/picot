@@ -18,6 +18,7 @@ export const PREFERENCE_KEYS = Object.freeze({
   terminalWebglRenderer: "ui.terminalWebglRenderer",
   agentThinkingLevel: "agent.thinkingLevel",
   showThinking: "agent.showThinking",
+  taskNotifications: "notifications.taskCompletion",
 });
 
 /**

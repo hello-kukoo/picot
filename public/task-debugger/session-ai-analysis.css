@@ -1,0 +1,73 @@
+/* ABOUTME: Info-panel Session Info "AI analysis" block -- prompt control and
+   rendered model answer. Lives in the right rail, so the layout is a narrow
+   single column: heading, full-width action, then the answer card. */
+
+.session-ai {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.session-ai-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--accent-text);
+}
+
+.session-ai-heading svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.session-ai-hint {
+  display: inline-flex;
+  color: var(--text-secondary);
+  cursor: help;
+}
+
+.session-ai-hint:hover,
+.session-ai-hint:focus-visible {
+  color: var(--text-primary);
+}
+
+.session-ai-btn {
+  width: 100%;
+}
+
+.session-ai-body:empty {
+  display: none;
+}
+
+.session-ai-status {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
+.session-ai-error {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--error);
+}
+
+/* Visually a claim, not a fact: distinguished from the deterministic session
+   metadata above with an accent-tinted card. */
+.session-ai-card {
+  max-height: 320px;
+  padding: var(--space-3);
+  overflow-y: auto;
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--accent-subtle);
+}
+
+.session-ai-result {
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+}

@@ -36,12 +36,21 @@ export class InfoPanel {
    *   isStreaming: () => boolean,
    * }} options
    */
-  constructor({ panel, t, onNavigateLeaf, onSelectEntry, isStreaming, ensureEntryMounted = null }) {
+  constructor({
+    panel,
+    t,
+    onNavigateLeaf,
+    onSelectEntry,
+    isStreaming,
+    ensureEntryMounted = null,
+    taskAnalysis = null,
+  }) {
     this.panel = panel;
     this.t = t;
     this.onNavigateLeaf = onNavigateLeaf || (() => {});
     this.onSelectEntry = onSelectEntry || (() => {});
     this.isStreaming = isStreaming || (() => false);
+    this.taskAnalysis = taskAnalysis;
     // P2 seam: reveals a gate-folded turn before anchor lookup (app.js).
     this.ensureEntryMounted = ensureEntryMounted;
     this.sessionFile = "";
@@ -71,7 +80,11 @@ export class InfoPanel {
     this.historySection.className = "info-panel-history";
     this.historySection.setAttribute("aria-labelledby", "info-panel-history-heading");
 
-    p.append(this.sessionSection, this.historySection);
+    p.append(
+      this.sessionSection,
+      ...[this.taskAnalysis?.element].filter(Boolean),
+      this.historySection,
+    );
     this._renderSessionFile();
     this._renderHistory();
   }

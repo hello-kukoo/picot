@@ -127,6 +127,10 @@ import { SessionSidebar } from "./sidebar/index.js";
 import { setupSidebarSearchControl } from "./sidebar/search-control.js";
 import { WorkspaceFocusSidebar } from "./sidebar/workspace-focus-sidebar.js";
 import { createSidebarResizer } from "./sidebar-resizer.js";
+import { createSessionTaskAnalysis } from "./task-debugger/session-task-analysis.js";
+import { buildTurnsFromEntries } from "./task-debugger/turn-history.js";
+import { createTurnTraceRecorder } from "./task-debugger/turn-trace.js";
+import { createTaskNotifications } from "./task-notifications.js";
 import { TerminalClient } from "./terminal-client.js";
 import { loadTerminalFont, TERMINAL_FONT_FAMILY, TERMINAL_FONT_STACK } from "./terminal-font.js";
 import { formatTerminalStartError, TerminalPanel } from "./terminal-panel.js";
@@ -2027,6 +2031,7 @@ function setFileSidebarTab(tab) {
   document.getElementById("file-sidebar-finder").classList.toggle("hidden", showInfo || showGit);
   if (showInfo) {
     infoPanel.updateSessionFile(activeSessionFilePath());
+    taskAnalysis?.refresh();
     void refreshInfoTree();
     infoPanel.scrollToSelectedEntry();
   }
@@ -2413,7 +2418,60 @@ async function handleResumeBranch(entryId) {
   }
 }
 
+// Passive per-turn trace: reads runtime frames the app already receives, so
+// nothing is re-run and no model is asked anything. Spans are keyed per
+// runtime target; the analysis panel merges this live trace with turns
+// rebuilt from the saved session file (see loadHistoryTurnsForTarget).
+const turnTrace = createTurnTraceRecorder();
+
+/**
+ * Rebuild this session's earlier turns for the task debugger. Same two
+ * sources as the Info panel tree, for the same reason: pi owns the live
+ * entry list, and the saved file answers when the runtime cannot. A session
+ * that never persisted a file has no history turns - only live ones.
+ */
+async function loadHistoryTurnsForTaskDebugger() {
+  const target = wsClient.getRuntimeTarget();
+  const sessionId = target?.sessionId;
+  if (!target?.workspaceId || !sessionId) return [];
+  try {
+    const data = await wsRequest({ type: "get_entries" });
+    if (Array.isArray(data?.entries) && data.entries.length > 0) {
+      if (wsClient.getRuntimeTarget()?.sessionId !== sessionId) return [];
+      return buildTurnsFromEntries(data.entries, { target, leafId: data.leafId ?? null });
+    }
+    throw new Error("Runtime get_entries returned no entries");
+  } catch {
+    if (!mirrorActiveSessionFile) return [];
+  }
+  const response = await wsClient
+    .sendData("read_session_tree", { workspaceId: target.workspaceId, sessionId })
+    .catch(() => null);
+  if (wsClient.getRuntimeTarget()?.sessionId !== sessionId) return [];
+  return buildTurnsFromEntries(response?.tree?.entries ?? [], {
+    target,
+    leafId: response?.tree?.leafId ?? null,
+  });
+}
+
+// analyzeWithAi stays null: v3 has no throwaway-session spawn surface, and
+// the mechanical timing/failure report needs no model round-trip.
+// Task-completion OS notifications. The enabled flag is DB-backed
+// (Settings → General, preferences table); the sync cache avoids an async
+// round-trip per runtime frame.
+let taskNotificationsEnabled = true;
+const taskNotifications = createTaskNotifications(wsClient, () => taskNotificationsEnabled);
+
+const taskAnalysis = infoPanelEl
+  ? createSessionTaskAnalysis({
+      getTurns: () => turnTrace.getTurns(wsClient.getRuntimeTarget()),
+      loadHistoryTurns: loadHistoryTurnsForTaskDebugger,
+      t,
+    })
+  : null;
+
 if (infoPanelEl) {
+  // Created before the InfoPanel that mounts its section element.
   infoPanel = new InfoPanel({
     panel: infoPanelEl,
     t,
@@ -2422,6 +2480,7 @@ if (infoPanelEl) {
     isStreaming: () => state.isStreaming,
     // P2: a gate-folded turn reveals before the Info row locates its anchor.
     ensureEntryMounted: (entryId) => ensureEntryMounted(entryId),
+    taskAnalysis,
   });
 }
 
@@ -2763,6 +2822,23 @@ wsClient.addEventListener("runtimeError", (e) => {
   promptDelivery.rejectByRequestId(requestId, { code, message });
 });
 
+// A task-completion OS notification was clicked: route this window to the
+// finished session (cross-workspace switches ride handleSessionSelect's own
+// transition logic).
+wsClient.addEventListener("notificationActivated", (e) => {
+  const { sessionFile, cwd } = e.detail || {};
+  if (!sessionFile) return;
+  // Re-selecting the already-active session would bump restore tokens and
+  // can disturb a live turn; the click's only job is bringing it to view.
+  if (wsClient.getRuntimeTarget()?.sessionId === sessionFile) return;
+  if (wsClient.connectionState !== "open") return;
+  try {
+    void handleSessionSelect({ filePath: sessionFile, cwd: cwd || undefined });
+  } catch (error) {
+    console.error("[Notifications] failed to route to the finished session:", error);
+  }
+});
+
 wsClient.addEventListener("runtimeEvent", (e) => {
   const frame = e.detail;
   if (!frame?.event) return;
@@ -2770,6 +2846,10 @@ wsClient.addEventListener("runtimeEvent", (e) => {
   // the config gateway or chat rendering; config responses follow.
   if (oauthGateway.consumeFrame(frame)) return;
   if (consumeConfigResponseFrame(configGateway, frame)) return;
+  // Fired for foreground AND background runtimes: a task that finishes while
+  // its window is not focused is exactly the case an OS notification covers.
+  // Runs after the consume gates so OAuth/config envelopes never pair here.
+  taskNotifications.handleRuntimeFrame(frame);
   handleRPCEvent({
     ...frame.event,
     __target: frame.target,
@@ -2894,6 +2974,7 @@ function handleRPCEvent(event) {
   // While user previews a different session, suppress live rendering so
   // history view is not overwritten by another runtime's output.
   widgetMirrorRegistry.handleRuntimeChange(eventRuntimeId);
+  turnTrace.handleRuntimeFrame({ target: eventTarget || currentTarget, event });
 
   if (typeof event.__turnId === "string" && event.__turnId) {
     liveTurnId = event.__turnId;
@@ -2902,10 +2983,12 @@ function handleRPCEvent(event) {
   switch (event.type) {
     case "agent_start":
       handleAgentStart(event);
+      taskAnalysis?.setStreaming(true);
       break;
     case "agent_end":
       handleAgentEnd(event);
       liveTurnId = null;
+      taskAnalysis?.setStreaming(false);
       if (pendingNewSessionRefresh) {
         scheduleNewSessionSidebarRefresh(event);
       }
@@ -2913,6 +2996,7 @@ function handleRPCEvent(event) {
     case "agent_settled":
       handleAgentSettled();
       liveTurnId = null;
+      taskAnalysis?.setStreaming(false);
       break;
     case "message_start":
       handleMessageStart(event.message);
@@ -5416,6 +5500,7 @@ function restoreSessionUiState(sessionFile) {
   if (next !== activeUiSessionFile) {
     const previousIdentity = composerIdentity();
     activeUiSessionFile = next;
+    taskAnalysis?.resetHistory();
     uiSessionGeneration += 1;
     switchComposerIdentityState(previousIdentity);
     infoPanel?.updateSessionFile(next || "");
@@ -7667,6 +7752,7 @@ toggleTerminalWebgl?.addEventListener("click", handleTerminalWebglToggle);
 onLocaleChange(buildLanguageSelector);
 onLocaleChange(buildTerminalThemeSelector);
 onLocaleChange(buildAppearanceSelectors);
+onLocaleChange(() => taskAnalysis?.rerender());
 
 onLocaleChange(() => {
   updateThinkingBtn();
@@ -7830,6 +7916,32 @@ const settingsToggles = setupSettingsToggles({
     void preferencesClient.set(PREFERENCE_KEYS.agentThinkingLevel, level),
   persistShowThinking: (show) => void preferencesClient.set(PREFERENCE_KEYS.showThinking, show),
 });
+
+// Task notifications toggle (Settings → General → Agent): DB-backed like
+// show-thinking, but self-contained because no runtime RPC is involved —
+// the flag gates the frame-fed notification trigger directly.
+const taskNotificationsToggle = document.getElementById("toggle-task-notifications");
+if (taskNotificationsToggle) {
+  void preferencesClient
+    .get(PREFERENCE_KEYS.taskNotifications)
+    .then((value) => {
+      taskNotificationsEnabled = value !== false;
+      taskNotificationsToggle.classList.toggle("on", taskNotificationsEnabled);
+    })
+    .catch(() => {});
+  taskNotificationsToggle.addEventListener("click", async () => {
+    const next = !taskNotificationsEnabled;
+    taskNotificationsToggle.classList.toggle("on", next);
+    taskNotificationsEnabled = next;
+    try {
+      await preferencesClient.set(PREFERENCE_KEYS.taskNotifications, next);
+    } catch (error) {
+      console.error("[settings] task notifications preference save failed:", error);
+      taskNotificationsEnabled = !next;
+      taskNotificationsToggle.classList.toggle("on", !next);
+    }
+  });
+}
 
 const piPathToggle = setupPiPathToggle({
   transport,

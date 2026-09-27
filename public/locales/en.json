@@ -1210,7 +1210,12 @@
       "hintEverywhere": "Permanent, EVERYWHERE — skips future prompts",
       "hintRuleSession": "Operation types allowed this session",
       "hintRulePermanent": "Operation types always allowed here"
-    }
+    },
+    "taskNotifications": "Task completion notifications",
+    "taskNotificationsDescription": "Show an operating system notification when a task finishes.",
+    "taskCompleteTitle": "Task completed",
+    "taskCompleteMessage": "Your task has finished.",
+    "taskFailedTitle": "Task failed"
   },
   "cost": {
     "documentTitle": "Picot - Usage",
@@ -1419,5 +1424,74 @@
     "splitSend": {
       "caretTitle": "Delayed send"
     }
+  },
+  "taskDebugger": {
+    "title": "Task analysis",
+    "copyReport": "Copy report",
+    "copied": "Copied",
+    "copyFailed": "Copy failed",
+    "statusLabel": "Result",
+    "totalTime": "Total time",
+    "timeSplit": "Where the time went",
+    "findings": "Findings",
+    "slowest": "Slowest steps",
+    "failures": "Failures",
+    "turns": "Turns",
+    "toolCalls": "Tool calls",
+    "wasted": "Redundant time",
+    "cost": "Cost",
+    "noTurns": "Nothing to analyse in this session yet. Send a message and the task will be traced.",
+    "loadingHistory": "Reading the saved session log…",
+    "historyFailed": "The saved session log could not be read, so only tasks this window watched are shown.",
+    "historyNote": "Earlier tasks were rebuilt from the saved session log: their timings come from the stamps it recorded, and steps it does not record (such as compaction) are missing.",
+    "stepToolCalls": "Called: {tools}",
+    "stepNoOutput": "No visible reply (reasoning only).",
+    "neverFinished": "This step never reported that it finished.",
+    "unknownError": "Unknown error",
+    "status": {
+      "completed": "Completed",
+      "failed": "Failed",
+      "aborted": "Stopped",
+      "running": "Running",
+      "unknown": "Unfinished"
+    },
+    "severity": {
+      "critical": "Blocker",
+      "warning": "Warning",
+      "info": "Note"
+    },
+    "phase": {
+      "model": "Model",
+      "tool": "Tools",
+      "compaction": "Compaction",
+      "idle": "Idle / waiting"
+    },
+    "finding": {
+      "failedAt": "The task failed at {label} {detail}: {error}",
+      "aborted": "The task was stopped before it finished.",
+      "unknownEnd": "The task never reported an ending - the runtime connection was probably lost.",
+      "stuckStep": "Stuck at {label} {detail} for {duration}: it never reported that it finished ({count} such steps).",
+      "toolFailures": "{count} tool call(s) failed, starting with {label}: {error}",
+      "slowStep": "{label} {detail} was the bottleneck: {duration} ({share} of the task).",
+      "idleTime": "{duration} ({share}) went to waiting, not work - queueing, approvals or a slow connection.",
+      "duplicateCalls": "{label} ran {count} times with identical arguments ({detail}) - {wasted} of repeated work.",
+      "retryLoop": "{label} failed {count} times in a row on the same input ({detail}): {error}",
+      "repeatedTarget": "{detail} was re-read {count} times by {label} - {wasted} that a single read could have saved.",
+      "wastedTime": "{duration} ({share}) went to repeated steps that produced nothing new.",
+      "toolBound": "Tool execution dominated: {share} of the time across {count} calls.",
+      "modelBound": "Model time dominated: {share} of the time across {count} completions.",
+      "compaction": "Context compaction cost {duration} ({share}).",
+      "healthy": "Nothing stands out: {duration} across {count} tool call(s), no failures or repeated work."
+    }
+  },
+  "sessionInfo": {
+    "aiTitle": "AI analysis",
+    "aiRun": "Analyze with AI",
+    "aiRerun": "Re-analyze",
+    "aiAnalyzing": "Analyzing…",
+    "aiHint": "Ask the model to read this session's run log and call out risk points, blockers, and failures -- not just timing.",
+    "aiFailed": "Analysis failed.",
+    "aiNoTurns": "Nothing to analyse in this session yet. Send a message and try again.",
+    "aiBusy": "Available when the current task finishes"
   }
 }

@@ -92,6 +92,8 @@
     <link rel="stylesheet" href="ui/rpiv-todo-mirror.css" />
     <link rel="stylesheet" href="ui/rpiv-todo-mirror-v3.css" />
     <link rel="stylesheet" href="ui/questionnaire-card.css" />
+    <link rel="stylesheet" href="task-debugger/session-task-analysis.css" />
+    <link rel="stylesheet" href="task-debugger/session-ai-analysis.css" />
     <link rel="stylesheet" href="ui/session-search-dialog.css" />
     <link rel="stylesheet" href="ui/markdown-styling.css" />
     <link rel="stylesheet" href="ui/process-details.css" />
@@ -1996,6 +1998,22 @@
                   class="settings-toggle"
                   id="toggle-auto-compact"
                 ></button>
+              </div>
+              <div class="settings-row" id="setting-task-notifications">
+                <span class="settings-label settings-label-stack">
+                  <span
+                    class="settings-label-main"
+                    data-i18n="settings.taskNotifications"
+                    >Task notifications</span
+                  >
+                  <span
+                    class="settings-label-sub"
+                    data-i18n="settings.taskNotificationsDescription"
+                    >Show an operating system notification when a task
+                    finishes.</span
+                  >
+                </span>
+                <button class="settings-toggle" id="toggle-task-notifications"></button>
               </div>
               <div class="settings-row" id="setting-thinking">
                 <span class="settings-label settings-label-stack">

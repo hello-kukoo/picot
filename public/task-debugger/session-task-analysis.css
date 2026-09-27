@@ -1,0 +1,409 @@
+/* ABOUTME: Info-panel task analysis — a compact trigger row in the rail
+   (title + total elapsed time) that opens the full report as a dialog.
+   The report has too many stacked sections (phase bar, findings, steps,
+   timeline) to read as an inline block in a rail this narrow. */
+
+.session-analysis {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ── Compact trigger (always visible in the rail) ───────────────────────── */
+
+.session-analysis-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-1-5);
+  padding: var(--space-3) var(--space-4);
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-align: left;
+}
+
+.session-analysis-toggle:hover {
+  color: var(--accent-text);
+}
+
+.session-analysis-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+}
+
+.session-analysis-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-analysis-time {
+  flex: 0 0 auto;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.session-analysis-caret {
+  display: flex;
+  width: 12px;
+  flex: 0 0 12px;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+
+/* ── Dialog ──────────────────────────────────────────────────────────────── */
+
+.session-analysis-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.session-analysis-overlay.hidden {
+  display: none;
+}
+
+.session-analysis-content {
+  position: fixed;
+  top: 8vh;
+  left: 50%;
+  z-index: 1001;
+  display: flex;
+  width: min(560px, calc(100vw - var(--space-12)));
+  max-height: min(820px, 84vh);
+  flex-direction: column;
+  overflow: hidden;
+  transform: translateX(-50%);
+  background: var(--bg-frosted);
+  backdrop-filter: blur(var(--blur-heavy)) saturate(1.5);
+  -webkit-backdrop-filter: blur(var(--blur-heavy)) saturate(1.5);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg), var(--shadow-inset);
+}
+
+.session-analysis-content.hidden {
+  display: none;
+}
+
+.session-analysis-dialog-head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-1-5);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.session-analysis-dialog-title {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.session-analysis-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-4);
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+
+.session-analysis-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.session-analysis-heading {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.session-analysis-empty {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
+/* Provenance footnote: rebuilt-from-log spans are thinner than watched ones. */
+.session-analysis-note {
+  margin: 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
+/* ── Summary ───────────────────────────────────────────────────────────── */
+
+.session-analysis-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.session-analysis-headline {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--font-size-lg);
+}
+
+.session-analysis-status {
+  padding: var(--space-0-5) var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--bg-glass-strong);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.session-analysis-status--failed {
+  background: color-mix(in srgb, var(--error) 18%, transparent);
+  color: var(--error);
+}
+
+.session-analysis-status--aborted,
+.session-analysis-status--unknown,
+.session-analysis-status--running {
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  color: var(--warning);
+}
+
+.session-analysis-status--completed {
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--success);
+}
+
+.session-analysis-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+}
+
+/* Each stat is one grid cell so the label always stacks directly above its
+   own value. */
+.session-analysis-stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.session-analysis-stat-label {
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-analysis-stat-value {
+  font-size: var(--font-size-md);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Phase bar ─────────────────────────────────────────────────────────── */
+
+.session-analysis-bar {
+  display: flex;
+  overflow: hidden;
+  height: var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--bg-glass);
+}
+
+.session-analysis-bar-segment {
+  flex-basis: 0;
+  min-width: 2px;
+}
+
+.session-analysis-bar-empty {
+  flex: 1;
+  background: var(--bg-glass);
+}
+
+.session-analysis-bar-segment--model {
+  background: var(--thinking-accent-text);
+}
+
+.session-analysis-bar-segment--tool {
+  background: var(--tool-accent-text);
+}
+
+.session-analysis-bar-segment--compaction {
+  background: var(--warning);
+}
+
+.session-analysis-bar-segment--idle {
+  background: var(--text-ghost);
+}
+
+.session-analysis-legend {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--font-size-sm);
+}
+
+.session-analysis-legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+.session-analysis-legend-item::before {
+  content: "";
+  flex: 0 0 auto;
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--text-ghost);
+}
+
+.session-analysis-legend-item--model::before {
+  background: var(--thinking-accent-text);
+}
+
+.session-analysis-legend-item--tool::before {
+  background: var(--tool-accent-text);
+}
+
+.session-analysis-legend-item--compaction::before {
+  background: var(--warning);
+}
+
+.session-analysis-legend-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-analysis-legend-value {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Findings ──────────────────────────────────────────────────────────── */
+
+.session-analysis-findings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-analysis-finding {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-glass);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+.session-analysis-finding-severity {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.session-analysis-finding--critical .session-analysis-finding-severity {
+  color: var(--error);
+}
+
+.session-analysis-finding--warning .session-analysis-finding-severity {
+  color: var(--warning);
+}
+
+.session-analysis-finding-text {
+  min-width: 0;
+}
+
+/* ── Steps ─────────────────────────────────────────────────────────────── */
+
+.session-analysis-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-analysis-step {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-glass);
+  font-size: var(--font-size-sm);
+}
+
+.session-analysis-step--error,
+.session-analysis-step--unfinished {
+  border-color: color-mix(in srgb, var(--error) 40%, var(--border));
+}
+
+.session-analysis-step-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.session-analysis-step-label {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-analysis-step-duration {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.session-analysis-step-detail {
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-analysis-step-error {
+  color: var(--error);
+  overflow-wrap: anywhere;
+}

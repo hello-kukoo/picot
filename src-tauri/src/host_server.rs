@@ -3048,6 +3048,70 @@ async fn dispatch(
                         "tree": tree,
                     }))
                 }
+                Some("show_task_notification") => {
+                    let title = frame
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Task finished")
+                        .to_string();
+                    let body = frame
+                        .get("body")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let session_id = frame
+                        .get("sessionId")
+                        .and_then(Value::as_str)
+                        .ok_or(("invalid_session", "sessionId is required".into()))?
+                        .to_string();
+                    // macOS attributes UN notifications to a bundle identifier.
+                    // The host server never sees the Tauri config, so this
+                    // mirrors tauri.conf.json's identifier.
+                    #[cfg(target_os = "macos")]
+                    let _ = notify_rust::set_application("com.palandata.picot");
+                    let notification = notify_rust::Notification::new()
+                        .summary(&title)
+                        .body(&body)
+                        .show()
+                        .map_err(|error| {
+                            (
+                                "notification_failed",
+                                format!("Cannot show task notification: {error}"),
+                            )
+                        })?;
+                    let session_file = state
+                        .data
+                        .session_file_path(workspace_id, &session_id)
+                        .map(|path| path.to_string_lossy().into_owned());
+                    let cwd = state
+                        .data
+                        .workspace_root(workspace_id)
+                        .ok()
+                        .map(|path| path.to_string_lossy().into_owned());
+                    let host_events = state.host_events.clone();
+                    let ws_id = workspace_id.to_string();
+                    // wait_for_action blocks until the user clicks; one thread
+                    // per notification is fine at task-completion volume.
+                    std::thread::spawn(move || {
+                        notification.wait_for_action(move |action| {
+                            if action == "__closed" {
+                                return;
+                            }
+                            host_events.broadcast_native_event(json!({
+                                "type": "notification_activated",
+                                "workspaceId": ws_id,
+                                "sessionId": session_id,
+                                "sessionFile": session_file,
+                                "cwd": cwd,
+                            }));
+                        });
+                    });
+                    Ok(json!({
+                        "type": "data_response",
+                        "requestId": request_id,
+                        "operation": "show_task_notification",
+                    }))
+                }
                 Some("list_files") => {
                     let workspace_id = frame
                         .get("workspaceId")

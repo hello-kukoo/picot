@@ -740,6 +740,16 @@ export class WebSocketClient extends EventTarget {
       this.dispatchEvent(new CustomEvent("registryChanged", { detail: message }));
       return;
     }
+    if (message.type === "registry_changed") {
+      this.dispatchEvent(new CustomEvent("registryChanged", { detail: message }));
+      return;
+    }
+
+    // A task-completion OS notification was clicked: route the UI to it.
+    if (message.type === "notification_activated") {
+      this.dispatchEvent(new CustomEvent("notificationActivated", { detail: message }));
+      return;
+    }
 
     if (message.type === "git_status" || message.type === "git_diff") {
       this.dispatchEvent(

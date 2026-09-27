@@ -1210,7 +1210,12 @@
       "hintEverywhere": "Permanente, en TODAS PARTES — omite avisos futuros",
       "hintRuleSession": "Tipos de operación permitidos en esta sesión",
       "hintRulePermanent": "Tipos de operación siempre permitidos aquí"
-    }
+    },
+    "taskNotifications": "Notificaciones de tareas completadas",
+    "taskNotificationsDescription": "Muestra una notificación del sistema operativo cuando finaliza una tarea.",
+    "taskCompleteTitle": "Tarea completada",
+    "taskCompleteMessage": "Tu tarea ha finalizado.",
+    "taskFailedTitle": "La tarea falló"
   },
   "cost": {
     "documentTitle": "Picot - Uso",
@@ -1419,5 +1424,74 @@
     "splitSend": {
       "caretTitle": "Envío diferido"
     }
+  },
+  "taskDebugger": {
+    "title": "Análisis de la tarea",
+    "copyReport": "Copiar informe",
+    "copied": "Copiado",
+    "copyFailed": "No se pudo copiar",
+    "statusLabel": "Resultado",
+    "totalTime": "Tiempo total",
+    "timeSplit": "En qué se fue el tiempo",
+    "findings": "Hallazgos",
+    "slowest": "Pasos más lentos",
+    "failures": "Fallos",
+    "turns": "Turnos",
+    "toolCalls": "Llamadas a herramientas",
+    "wasted": "Tiempo redundante",
+    "cost": "Coste",
+    "noTurns": "Todavía no hay nada que analizar en esta sesión. Envía un mensaje y la tarea quedará registrada.",
+    "loadingHistory": "Leyendo el registro guardado de la sesión…",
+    "historyFailed": "No se pudo leer el registro guardado de la sesión; solo se muestran las tareas que esta ventana observó.",
+    "historyNote": "Las tareas anteriores se reconstruyeron a partir del registro guardado: sus tiempos provienen de las marcas que registró y los pasos que no guarda (como la compactación) no aparecen.",
+    "stepToolCalls": "Llamó a: {tools}",
+    "stepNoOutput": "Sin respuesta visible (solo razonamiento).",
+    "neverFinished": "Este paso nunca informó de que había terminado.",
+    "unknownError": "Error desconocido",
+    "status": {
+      "completed": "Completada",
+      "failed": "Fallida",
+      "aborted": "Detenida",
+      "running": "En curso",
+      "unknown": "Sin terminar"
+    },
+    "severity": {
+      "critical": "Bloqueante",
+      "warning": "Aviso",
+      "info": "Nota"
+    },
+    "phase": {
+      "model": "Modelo",
+      "tool": "Herramientas",
+      "compaction": "Compactación",
+      "idle": "Espera"
+    },
+    "finding": {
+      "failedAt": "La tarea falló en {label} {detail}: {error}",
+      "aborted": "La tarea se detuvo antes de terminar.",
+      "unknownEnd": "La tarea nunca informó de su final: probablemente se perdió la conexión con el runtime.",
+      "stuckStep": "Atascada en {label} {detail} durante {duration}: nunca informó de que había terminado ({count} pasos así).",
+      "toolFailures": "Fallaron {count} llamadas a herramientas, empezando por {label}: {error}",
+      "slowStep": "{label} {detail} fue el cuello de botella: {duration} ({share} de la tarea).",
+      "idleTime": "{duration} ({share}) se fue en esperar, no en trabajar: colas, aprobaciones o una conexión lenta.",
+      "duplicateCalls": "{label} se ejecutó {count} veces con los mismos argumentos ({detail}): {wasted} de trabajo repetido.",
+      "retryLoop": "{label} falló {count} veces seguidas con la misma entrada ({detail}): {error}",
+      "repeatedTarget": "{detail} se releyó {count} veces con {label}: {wasted} que una sola lectura habría ahorrado.",
+      "wastedTime": "{duration} ({share}) se fue en pasos repetidos que no aportaron nada nuevo.",
+      "toolBound": "Dominó la ejecución de herramientas: {share} del tiempo en {count} llamadas.",
+      "modelBound": "Dominó el tiempo de modelo: {share} del tiempo en {count} respuestas.",
+      "compaction": "La compactación del contexto costó {duration} ({share}).",
+      "healthy": "Nada destacable: {duration} y {count} llamadas a herramientas, sin fallos ni trabajo repetido."
+    }
+  },
+  "sessionInfo": {
+    "aiTitle": "Análisis con IA",
+    "aiRun": "Analizar con IA",
+    "aiRerun": "Volver a analizar",
+    "aiAnalyzing": "Analizando…",
+    "aiHint": "Pide al modelo que lea el registro de esta sesión y señale riesgos, bloqueos y fallos, no solo los tiempos.",
+    "aiFailed": "El análisis falló.",
+    "aiNoTurns": "Aún no hay nada que analizar en esta sesión. Envía un mensaje e inténtalo de nuevo.",
+    "aiBusy": "Disponible cuando termine la tarea actual"
   }
 }
