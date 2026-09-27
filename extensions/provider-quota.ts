@@ -30,6 +30,9 @@ export type QuotaReport = {
     monthlyResetAt?: number;
     customWindows?: QuotaWindow[];
     resetCredits?: number;
+    /** Codex plan label (free / plus / pro / …) from the WHAM response's
+     * plan_type or the access-token claim (opencodex semantics). */
+    planType?: string;
     updatedAt: number;
   };
   failure?: QuotaFailureCode;
@@ -111,11 +114,45 @@ function epochSecondsToMs(value: unknown): number | undefined {
   return seconds > 1e12 ? seconds : seconds * 1000;
 }
 
+/** Preserve a plan label only when it is a usable string (opencodex codexPlanValue). */
+function planValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  const part = token.split(".")[1];
+  if (!part) return null;
+  try {
+    const base64 = part.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    return asRecord(JSON.parse(atob(padded)));
+  } catch {
+    return null;
+  }
+}
+
+/** opencodex extractChatgptPlanType: the JWT `chatgpt_plan_type` claim, at
+ * the top level or under the auth namespace — the fallback when the WHAM
+ * response omits plan_type (it may lag a plan change, but it is local). */
+function planFromAccessToken(token: string | undefined): string | undefined {
+  if (!token) return undefined;
+  const payload = decodeJwtPayload(token);
+  if (!payload) return undefined;
+  const direct = planValue(payload.chatgpt_plan_type);
+  if (direct) return direct;
+  const ns = asRecord(payload["https://api.openai.com/auth"]);
+  return planValue(ns?.chatgpt_plan_type);
+}
+
 /** opencodex WHAM window mapping, copied verbatim in semantics. */
-export function parseWhamUsage(json: unknown): Partial<NonNullable<QuotaReport["quota"]>> {
+export function parseWhamUsage(
+  json: unknown,
+  instance?: ProviderInstance,
+): Partial<NonNullable<QuotaReport["quota"]>> {
   const root = asRecord(json);
+  const planType = planValue(root?.plan_type) ?? planFromAccessToken(instance?.accessToken);
   const rateLimit = asRecord(root?.rate_limit);
-  if (!rateLimit) return {};
+  if (!rateLimit) return planType ? { planType } : {};
   type Window = { percent?: number; resetAt?: number };
   const readWindow = (raw: unknown): Window | null => {
     const window = asRecord(raw);
@@ -158,6 +195,7 @@ export function parseWhamUsage(json: unknown): Partial<NonNullable<QuotaReport["
     monthlyPercent: byRole.monthly?.percent,
     monthlyResetAt: byRole.monthly?.resetAt,
     ...(resetCredits !== undefined ? { resetCredits } : {}),
+    ...(planType ? { planType } : {}),
   };
 }
 

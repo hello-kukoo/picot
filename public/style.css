@@ -2490,6 +2490,13 @@ body.landing-mode #landing {
   margin-bottom: var(--space-2);
 }
 
+.quota-card-title-left {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
 .quota-reset-chip {
   display: inline-flex;
   align-items: center;
@@ -2507,6 +2514,16 @@ body.landing-mode #landing {
 
 .quota-reset-chip:hover {
   background: var(--bg-glass-hover);
+}
+
+.quota-plan-chip {
+  padding: var(--space-0-5) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text-dim);
+  font-size: var(--font-size-sm);
+  text-transform: capitalize;
+  white-space: nowrap;
 }
 
 .quota-reset-chip svg {

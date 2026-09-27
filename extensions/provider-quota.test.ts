@@ -71,6 +71,48 @@ describe("parseWhamUsage", () => {
     expect(parsed.fiveHourResetAt).toBe(1790000100 * 1000);
   });
 
+  test("reads the codex plan label from plan_type, then the access-token claim", () => {
+    const jwtWith = (payload: Record<string, unknown>): string => {
+      const b64 = btoa(JSON.stringify(payload))
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+      return `header.${b64}.sig`;
+    };
+    const json = {
+      rate_limit: { primary_window: { used_percent: 4, limit_window_seconds: 18000 } },
+    };
+    // WHAM plan_type wins.
+    expect(parseWhamUsage({ ...json, plan_type: "pro" })?.planType).toBe("pro");
+    // Missing on the wire → JWT top-level claim.
+    expect(
+      parseWhamUsage(json, {
+        providerId: "openai-codex",
+        baseUrl: "",
+        accessToken: jwtWith({ chatgpt_plan_type: "plus" }),
+      })?.planType,
+    ).toBe("plus");
+    // JWT claim nested under the auth namespace.
+    expect(
+      parseWhamUsage(json, {
+        providerId: "openai-codex",
+        baseUrl: "",
+        accessToken: jwtWith({ "https://api.openai.com/auth": { chatgpt_plan_type: "team" } }),
+      })?.planType,
+    ).toBe("team");
+    // A blank plan_type is not a plan — the token claim answers instead.
+    expect(
+      parseWhamUsage(
+        { ...json, plan_type: "  " },
+        {
+          providerId: "openai-codex",
+          baseUrl: "",
+          accessToken: jwtWith({ chatgpt_plan_type: "free" }),
+        },
+      )?.planType,
+    ).toBe("free");
+  });
+
   test("skips short burst windows and maps a >=28-day primary as monthly", () => {
     const json = {
       rate_limit: {

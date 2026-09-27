@@ -494,7 +494,19 @@ export function createProviderQuotaPanel(seams, { locale }) {
       const name = document.createElement("span");
       name.className = "quota-card-name";
       name.textContent = providerDisplayName(report.provider);
-      head.append(name);
+      // Codex carries an account plan label (free / plus / pro / …) — a badge
+      // next to the name, like opencodex's green badge on the account card.
+      const titleLeft = document.createElement("span");
+      titleLeft.className = "quota-card-title-left";
+      titleLeft.append(name);
+      const planType = report.quota?.planType;
+      if (typeof planType === "string" && planType.trim()) {
+        const planChip = document.createElement("span");
+        planChip.className = "quota-plan-chip";
+        planChip.textContent = planType;
+        titleLeft.append(planChip);
+      }
+      head.append(titleLeft);
       if (report.provider === "openai-codex") {
         const chip = renderResetChip(report);
         if (chip) head.append(chip);

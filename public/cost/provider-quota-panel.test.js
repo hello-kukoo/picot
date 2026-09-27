@@ -129,6 +129,7 @@ test("renders one card per report with window bars and hides when empty", async 
           weeklyPercent: 40,
           monthlyPercent: 10,
           resetCredits: 2,
+          planType: "pro",
           updatedAt: Date.now(),
         },
       },
@@ -149,6 +150,8 @@ test("renders one card per report with window bars and hides when empty", async 
   const chip = container.querySelector(".quota-reset-chip");
   expect(chip?.textContent).toContain("2");
   expect(chip?.querySelector("svg")).not.toBeNull();
+  expect(chip?.querySelector("svg")).not.toBeNull();
+  expect(container.querySelector(".quota-plan-chip")?.textContent).toBe("pro");
 });
 
 test("hides the whole section when no provider reports", async () => {
