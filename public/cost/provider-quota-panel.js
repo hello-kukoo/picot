@@ -89,7 +89,8 @@ function formatResetStamp(resetAt, locale) {
   return locale.resetsAt.replace("{when}", when);
 }
 
-/** Usage tone: low usage is healthy, then warning, then critical. */
+/** Usage tone thresholds: below 75% is healthy, 75–90% is warning, above
+ * 90% is critical (spec update 2026-09-27; opencodex's old 80/95 bands). */
 /** A custom window whose label is a currency amount is a balance, not a
  * percentage window (deepseek / moonshot shape). */
 function isBalanceLabel(label) {
@@ -97,8 +98,8 @@ function isBalanceLabel(label) {
 }
 
 function toneFor(percent) {
-  if (percent >= 95) return "is-critical";
-  if (percent >= 80) return "is-warning";
+  if (percent > 90) return "is-critical";
+  if (percent >= 75) return "is-warning";
   return "is-ok";
 }
 
@@ -499,6 +500,8 @@ export function createProviderQuotaPanel(seams, { locale }) {
       const titleLeft = document.createElement("span");
       titleLeft.className = "quota-card-title-left";
       titleLeft.append(name);
+      // Codex title chips: plan badge first, then the reset-credit chip right
+      // after it (both left-aligned with the name, spec 2026-09-27).
       const planType = report.quota?.planType;
       if (typeof planType === "string" && planType.trim()) {
         const planChip = document.createElement("span");
@@ -506,11 +509,11 @@ export function createProviderQuotaPanel(seams, { locale }) {
         planChip.textContent = planType;
         titleLeft.append(planChip);
       }
-      head.append(titleLeft);
       if (report.provider === "openai-codex") {
         const chip = renderResetChip(report);
-        if (chip) head.append(chip);
+        if (chip) titleLeft.append(chip);
       }
+      head.append(titleLeft);
       card.append(head);
       if (report.failure === "needs_login") {
         const note = document.createElement("div");

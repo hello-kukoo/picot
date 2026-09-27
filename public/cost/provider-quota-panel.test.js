@@ -467,3 +467,53 @@ test("a load started while another is in flight joins it instead of racing", asy
   expect(container.querySelectorAll(".quota-card.is-skeleton")).toHaveLength(0);
   expect(container.querySelector(".quota-card-name")?.textContent).toBe("Z.ai");
 });
+
+test("bar tone bands switch at 75% and 90%", async () => {
+  const seams = makeSeams({
+    reports: [
+      {
+        provider: "ollama-cloud",
+        source: "ollama-cloud:usage",
+        quota: {
+          customWindows: [
+            { label: "w74", percent: 74 },
+            { label: "w75", percent: 75 },
+            { label: "w90", percent: 90 },
+            { label: "w91", percent: 91 },
+          ],
+          updatedAt: Date.now(),
+        },
+      },
+    ],
+  });
+  const panel = createProviderQuotaPanel(seams, { locale });
+  await panel.loadReports();
+  const toneByLabel = {};
+  for (const row of container.querySelectorAll(".quota-row")) {
+    const label = row.querySelector(".quota-row-label")?.textContent;
+    toneByLabel[label] = row.querySelector(".quota-bar-fill")?.className.split(" ").pop();
+  }
+  expect(toneByLabel).toEqual({
+    w74: "is-ok",
+    w75: "is-warning",
+    w90: "is-warning",
+    w91: "is-critical",
+  });
+});
+
+test("codex reset chip sits directly after the plan chip", async () => {
+  const seams = makeSeams({
+    reports: [
+      {
+        provider: "openai-codex",
+        source: "openai-codex:wham",
+        quota: { fiveHourPercent: 10, planType: "pro", resetCredits: 2, updatedAt: Date.now() },
+      },
+    ],
+  });
+  const panel = createProviderQuotaPanel(seams, { locale });
+  await panel.loadReports();
+  const left = container.querySelector(".quota-card-title-left");
+  const children = [...left.children].map((el) => el.className);
+  expect(children).toEqual(["quota-card-name", "quota-plan-chip", "quota-reset-chip"]);
+});

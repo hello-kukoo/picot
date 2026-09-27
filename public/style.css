@@ -2502,10 +2502,11 @@ body.landing-mode #landing {
   align-items: center;
   gap: var(--space-0-5);
   padding: var(--space-0-5) var(--space-2);
-  border: 1px solid var(--border-hover);
+  border: none;
   border-radius: var(--radius-pill);
-  background: var(--bg-glass);
-  color: var(--text-primary);
+  /* Light orange plate with deep-orange icon and label (spec 2026-09-27). */
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
   font: inherit;
   font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
@@ -2513,14 +2514,17 @@ body.landing-mode #landing {
 }
 
 .quota-reset-chip:hover {
-  background: var(--bg-glass-hover);
+  background: color-mix(in srgb, var(--warning) 26%, transparent);
 }
 
 .quota-plan-chip {
   padding: var(--space-0-5) var(--space-2);
-  border: 1px solid var(--border);
+  border: none;
   border-radius: var(--radius-pill);
-  color: var(--text-dim);
+  /* Light green plate with a deep-green label (spec 2026-09-27): tint the
+     theme's own success token so the pair tracks every theme. */
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--success);
   font-size: var(--font-size-sm);
   text-transform: capitalize;
   white-space: nowrap;
