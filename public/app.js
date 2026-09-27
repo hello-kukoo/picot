@@ -8111,7 +8111,10 @@ if (taskNotificationsToggle) {
     })
     .catch(() => {});
   taskNotificationsToggle.addEventListener("click", async () => {
-    const next = !taskNotificationsEnabled;
+    // Derive the next state from the element itself: the visual toggle is the
+    // single source of truth, so a variable/visual desync can never make a
+    // click flip state invisibly (looked like "the button does nothing").
+    const next = !taskNotificationsToggle.classList.contains("on");
     taskNotificationsToggle.classList.toggle("on", next);
     taskNotificationsEnabled = next;
     try {
