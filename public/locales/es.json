@@ -137,7 +137,10 @@
     "steering": "Dirigir",
     "followUp": "Seguimiento",
     "clearQueue": "Vaciar cola",
-    "unconfirmedSend": "Envío sin confirmar — clic para restaurar"
+    "unconfirmedSend": "Envío sin confirmar — clic para restaurar",
+    "edit": "Editar",
+    "delete": "Eliminar",
+    "sendNow": "Enviar ahora"
   },
   "input": {
     "typeMessage": "Mensaje… Escribe / para comandos, @ para archivos",
@@ -478,6 +481,7 @@
     "newSessionCancelled": "La nueva sesión fue cancelada",
     "mobileBrokerRequired": "Iniciar un nuevo chat en otro proyecto requiere el broker de escritorio. Vuelve a abrir el código QR móvil.",
     "abortedByUser": "Cancelado por el usuario",
+    "abortFailed": "Error al abortar: {detail}",
     "invalidJson": "JSON inválido: {detail}",
     "modelsMustBeObject": "models.json debe ser un objeto JSON.",
     "providersMustBeObject": "'providers' debe ser un objeto.",

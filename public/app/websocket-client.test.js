@@ -524,6 +524,27 @@ describe("WebSocketClient broker routing", () => {
     await expect(result).resolves.toEqual({ version: "0.84.2" });
   });
 
+  test("sendRuntime raw:true resolves the full envelope, not data", async () => {
+    // abort's verdict lives at the top level (`success`, no `data` payload):
+    // the default unwrap would erase it.
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
+    client.ws = {
+      readyState: 1,
+      send: (raw) => {
+        const envelope = JSON.parse(raw);
+        queueMicrotask(() =>
+          client.handleMessage({
+            type: "runtime_response",
+            requestId: envelope.requestId,
+            response: { type: "response", command: "abort", success: true },
+          }),
+        );
+      },
+    };
+    const reply = await client.sendRuntime({ type: "abort" }, { raw: true, timeoutMs: 1000 });
+    expect(reply).toEqual({ type: "response", command: "abort", success: true });
+  });
+
   test("forwards runtime_started owner events to refresh subscriptions", () => {
     const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
     const events = [];

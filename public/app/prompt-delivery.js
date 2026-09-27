@@ -80,6 +80,10 @@ export function createPromptDelivery({
       // follow-up (or a send racing a run) must never unlock the streaming
       // UI on rejection — that run is not this record's to end.
       streamingAtDispatch: Boolean(payload.streamingAtDispatch),
+      // Feature payload the dispatch owner needs back on settle (e.g. the
+      // follow-up queue item to re-queue on rejection). PromptDelivery never
+      // interprets it.
+      meta: payload.meta ?? null,
       state: "awaiting",
       pulledBack: false,
       timer: null,

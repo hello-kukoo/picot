@@ -471,7 +471,7 @@ export class WebSocketClient extends EventTarget {
       "instanceId" in targetOrOptions;
     const target = hasExplicitTarget ? targetOrOptions : this._wireTarget();
     const requestOptions = hasExplicitTarget ? options : (targetOrOptions ?? {});
-    const { timeoutMs, idempotencyKey } = requestOptions;
+    const { timeoutMs, idempotencyKey, raw = false } = requestOptions;
     return this._sendRequest(
       (requestId) => ({
         type: "runtime_request",
@@ -485,8 +485,10 @@ export class WebSocketClient extends EventTarget {
         label: `Runtime command "${command?.type || "unknown"}"`,
         timeoutMs,
         // Pi replies `{ success, data }`; the pending map already hands us that
-        // object, so unwrap only the inner payload.
-        unwrap: (reply) => reply?.data ?? null,
+        // object, so unwrap only the inner payload. `raw` keeps the envelope
+        // for commands whose verdict lives at the top level (abort: success
+        // with no data payload).
+        ...(raw ? {} : { unwrap: (reply) => reply?.data ?? null }),
         rejectOnFailure: true,
       },
     );

@@ -137,7 +137,10 @@
     "steering": "誘導",
     "followUp": "フォローアップ",
     "clearQueue": "キューを削除",
-    "unconfirmedSend": "送信未確認 — クリックで復元"
+    "unconfirmedSend": "送信未確認 — クリックで復元",
+    "edit": "編集",
+    "delete": "削除",
+    "sendNow": "先に送信"
   },
   "input": {
     "typeMessage": "メッセージ… / でコマンド、@ でファイルを入力",
@@ -478,6 +481,7 @@
     "newSessionCancelled": "新しいセッションがキャンセルされました",
     "mobileBrokerRequired": "別のプロジェクトで新しいチャットを開始するにはデスクトップブローカーが必要です。モバイルQRコードを再度開いてください。",
     "abortedByUser": "ユーザーによって中止されました",
+    "abortFailed": "中止に失敗しました：{detail}",
     "invalidJson": "無効なJSON：{detail}",
     "modelsMustBeObject": "models.jsonはJSONオブジェクトである必要があります。",
     "providersMustBeObject": "'providers'はオブジェクトである必要があります。",

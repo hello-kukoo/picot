@@ -1,6 +1,7 @@
 /**
  * Resolve what an Option/Alt+Enter (or split-menu) send should do.
- * - streaming + queueable → "follow_up" (pi queues it for the next run stop)
+ * - streaming + queueable → "follow_up" (Picot's local queue holds it for
+ *   the next run stop — 2026-09-26 spec; pi's bucket is no longer written)
  * - idle → "direct" (user intent is delivery; a bare keypress has no
  *   disabled state to show, so it degrades instead of blocking)
  * - extension command → "direct" (rpc.md: extension commands execute

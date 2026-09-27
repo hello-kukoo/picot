@@ -40,6 +40,7 @@ let clearQueueFails = false;
 let commandRegistry = [];
 let swallowClearQueue = false;
 let promptFails = false;
+let abortFails = false;
 let deferPromptResponse = false;
 let deferredPromptId = null;
 let runtimeInstancesData = [];
@@ -112,6 +113,25 @@ class FakeWebSocket extends EventTarget {
         });
         return;
       }
+      if (command.type === "abort" && abortFails) {
+        // The host gate's rejection shape (missing/stale turnId): pi never
+        // aborted anything.
+        this.reply({
+          type: "runtime_response",
+          requestId: envelope.requestId,
+          response: { success: false, error: "Invalid runtime command: abort requires turnId" },
+        });
+        return;
+      }
+      if (command.type === "abort") {
+        // pi replies once the session is idle: success carries the stop.
+        this.reply({
+          type: "runtime_response",
+          requestId: envelope.requestId,
+          response: { type: "response", command: "abort", success: true },
+        });
+        return;
+      }
       const data =
         command.type === "get_commands"
           ? { commands: commandRegistry }
@@ -138,6 +158,7 @@ beforeEach(async () => {
   commandRegistry = [];
   swallowClearQueue = false;
   promptFails = false;
+  abortFails = false;
   deferPromptResponse = false;
   deferredPromptId = null;
   runtimeInstancesData = [];
@@ -469,13 +490,154 @@ test("Alt+Enter while streaming queues a follow_up, not a steer", async () => {
   pressAltEnter();
   await settle();
 
-  const followUps = commandFrames(ws, "follow_up");
-  expect(followUps).toHaveLength(1);
-  expect(followUps[0].command.message).toBe("summarize when done");
-  expect(followUps[0].command.streamingBehavior).toBeUndefined();
-  // C5: the queued message surfaces via queue_update, never as a local bubble.
+  expect(commandFrames(ws, "follow_up")).toHaveLength(0);
   expect(commandFrames(ws, "prompt")).toHaveLength(0);
-  expect(document.querySelectorAll("#messages .message.user")).toHaveLength(0);
+  // The composer clears and the item renders in the local queue area.
+  expect(document.getElementById("message-input").value).toBe("");
+  const row = document.querySelector("#queued-messages .followup-msg");
+  expect(row).not.toBeNull();
+  expect(row.textContent).toContain("summarize when done");
+  // Persisted for a same-window reload (the anonymous key: no snapshot yet).
+  expect(globalThis.localStorage.getItem("pi-studio:followup-queue:")).toContain(
+    "summarize when done",
+  );
+});
+
+test("a queued item can be edited back into the composer and deleted", async () => {
+  await import("./app.js?followup-edit-delete");
+  const ws = wsInstances.at(-1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start", turnId: "t21" });
+  await settle();
+  typeIntoComposer("first item");
+  pressAltEnter();
+  await settle();
+  typeIntoComposer("second item");
+  pressAltEnter();
+  await settle();
+  const rows = () => [...document.querySelectorAll("#queued-messages .followup-msg")];
+  expect(rows()).toHaveLength(2);
+
+  // Delete the second item: one row left, nothing ever sent.
+  rows()[1].querySelector('[aria-label="Delete"]').click();
+  await settle();
+  expect(rows()).toHaveLength(1);
+  expect(rows()[0].textContent).toContain("first item");
+  expect(commandFrames(ws, "prompt")).toHaveLength(0);
+
+  // Edit pulls the remaining item back into the composer and out of the queue.
+  rows()[0].querySelector('[aria-label="Edit"]').click();
+  await settle();
+  expect(document.getElementById("message-input").value).toBe("first item");
+  expect(rows()).toHaveLength(0);
+});
+
+test("send-now during a run goes out as a steer without aborting", async () => {
+  await import("./app.js?followup-send-now");
+  const ws = wsInstances.at(-1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start", turnId: "t22" });
+  await settle();
+  typeIntoComposer("jump the queue");
+  pressAltEnter();
+  await settle();
+
+  document
+    .querySelector("#queued-messages .followup-msg")
+    .querySelector('[aria-label="Send now"]')
+    .click();
+  await settle();
+
+  const steers = commandFrames(ws, "prompt").filter(
+    (frame) => frame.command.streamingBehavior === "steer",
+  );
+  expect(steers).toHaveLength(1);
+  expect(steers[0].command.message).toBe("jump the queue");
+  expect(commandFrames(ws, "abort")).toHaveLength(0);
+  expect(document.querySelectorAll("#queued-messages .followup-msg")).toHaveLength(0);
+});
+
+test("a rejected send-now returns the item to the head of the queue", async () => {
+  // D6 (2026-09-26): a rejected drain/send-now re-queues at the head — the
+  // item's text belongs to the queue, not the composer.
+  await import("./app.js?followup-requeue");
+  const ws = wsInstances.at(-1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start", turnId: "t24" });
+  await settle();
+  typeIntoComposer("will bounce");
+  pressAltEnter();
+  await settle();
+  typeIntoComposer("stays queued");
+  pressAltEnter();
+  await settle();
+
+  promptFails = true;
+  document
+    .querySelectorAll("#queued-messages .followup-msg")[0]
+    .querySelector('[aria-label="Send now"]')
+    .click();
+  await settle();
+
+  const rows = [...document.querySelectorAll("#queued-messages .followup-msg")];
+  expect(rows).toHaveLength(2);
+  // The rejected item is back at the head, ahead of the item that never left.
+  expect(rows[0].textContent).toContain("will bounce");
+  expect(rows[1].textContent).toContain("stays queued");
+  // No composer dump: the draft stays exactly as it was.
+  expect(document.getElementById("message-input").value).toBe("");
+});
+
+test("a rejected abort keeps the streaming UI honest instead of unlocking", async () => {
+  // 2026-09-26 fix: the optimistic unlock painted a blue composer over a run
+  // pi never stopped (host gate drops an abort without a live turnId).
+  await import("./app.js?abort-rejected");
+  const ws = wsInstances.at(-1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start", turnId: "t25" });
+  await settle();
+
+  abortFails = true;
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await settle(120);
+
+  const aborts = commandFrames(ws, "abort");
+  expect(aborts).toHaveLength(1);
+  expect(aborts[0].command.turnId).toBe("t25");
+  // The stop was NOT confirmed: the run's UI must stay locked.
+  expect(document.getElementById("abort-btn").classList.contains("hidden")).toBe(false);
+  expect(document.getElementById("send-btn").classList.contains("hidden")).toBe(true);
+});
+
+test("agent_settled drains the queue head as a plain prompt, one at a time", async () => {
+  await import("./app.js?followup-drain");
+  const ws = wsInstances.at(-1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start", turnId: "t23" });
+  await settle();
+  typeIntoComposer("first follow-up");
+  pressAltEnter();
+  await settle();
+  typeIntoComposer("second follow-up");
+  pressAltEnter();
+  await settle();
+  expect(commandFrames(ws, "prompt")).toHaveLength(0);
+
+  // The run ends: end + settled release exactly one item as a new prompt.
+  runtimeEvent(ws, { type: "agent_end", messages: [] }, 2);
+  runtimeEvent(ws, { type: "agent_settled" }, 3);
+  await settle();
+
+  const prompts = commandFrames(ws, "prompt").filter(
+    (frame) => frame.command.streamingBehavior === undefined,
+  );
+  expect(prompts).toHaveLength(1);
+  expect(prompts[0].command.message).toBe("first follow-up");
+  // The second item waits for its own turn's settled.
+  expect(document.querySelectorAll("#queued-messages .followup-msg")).toHaveLength(1);
+  expect(document.querySelector("#queued-messages .followup-msg").textContent).toContain(
+    "second follow-up",
+  );
 });
 
 test("a rejected steer keeps the run's streaming state", async () => {
@@ -1001,4 +1163,83 @@ test("the delayed-send caret exists only while a run is active", async () => {
   runtimeEvent(ws, { type: "agent_end" }, 2);
   await settle();
   expect(caret.classList.contains("hidden")).toBe(true);
+});
+
+test("a pulled-back item is not re-queued when its rejection lands late", async () => {
+  // B1 (review): pullBack restored the text to the composer; a late
+  // rejection must not also re-queue the item — the text would exist twice.
+  vi.useFakeTimers();
+  try {
+    await import("./app.js?followup-pulledback");
+    const ws = wsInstances.at(-1);
+    await vi.advanceTimersByTimeAsync(0);
+    runtimeEvent(ws, { type: "agent_start", turnId: "t26" });
+    await vi.advanceTimersByTimeAsync(0);
+    typeIntoComposer("take me back");
+    pressAltEnter();
+    await vi.advanceTimersByTimeAsync(0);
+
+    deferPromptResponse = true;
+    document
+      .querySelector("#queued-messages .followup-msg")
+      .querySelector('[aria-label="Send now"]')
+      .click();
+    await vi.advanceTimersByTimeAsync(0);
+    // No reply for 8s: the unconfirmed pill appears.
+    await vi.advanceTimersByTimeAsync(8100);
+    const pill = document.querySelector("#queued-messages .unconfirmed-msg");
+    expect(pill).not.toBeNull();
+
+    pill.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(document.getElementById("message-input").value).toContain("take me back");
+
+    ws.onmessage({
+      data: JSON.stringify({
+        type: "runtime_response",
+        requestId: deferredPromptId,
+        response: { success: false, error: "late rejection" },
+      }),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(document.querySelectorAll("#queued-messages .followup-msg")).toHaveLength(0);
+    expect(document.getElementById("message-input").value).toContain("take me back");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("editing an item after a rejected send-now does not duplicate its images", async () => {
+  // B2 (review): the rejection already restored the item's images to the
+  // previews; the edit path must append only what is genuinely missing.
+  await import("./app.js?followup-edit-images");
+  const ws = wsInstances.at(-1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start", turnId: "t27" });
+  await settle();
+  pasteImage();
+  await settle();
+  expect(pendingPreviews()).toHaveLength(1);
+
+  typeIntoComposer("with an image");
+  pressAltEnter();
+  await settle();
+  expect(pendingPreviews()).toHaveLength(0); // consumed by the queue item
+
+  promptFails = true;
+  document
+    .querySelector("#queued-messages .followup-msg")
+    .querySelector('[aria-label="Send now"]')
+    .click();
+  await settle();
+  // Rejection restored the image to the previews exactly once.
+  expect(pendingPreviews()).toHaveLength(1);
+
+  document
+    .querySelector("#queued-messages .followup-msg")
+    .querySelector('[aria-label="Edit"]')
+    .click();
+  await settle();
+  expect(pendingPreviews()).toHaveLength(1);
 });

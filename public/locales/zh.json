@@ -137,7 +137,10 @@
     "steering": "转向",
     "followUp": "后续",
     "clearQueue": "清空队列",
-    "unconfirmedSend": "发送未确认 — 点击取回"
+    "unconfirmedSend": "发送未确认 — 点击取回",
+    "edit": "编辑",
+    "delete": "删除",
+    "sendNow": "提前发送"
   },
   "input": {
     "typeMessage": "消息…输入 / 使用命令，输入 @ 查找文件",
@@ -480,6 +483,7 @@
     "newSessionCancelled": "新会话已取消",
     "mobileBrokerRequired": "在另一个项目中发起新聊天需要桌面端代理。请重新打开移动端二维码。",
     "abortedByUser": "已被用户终止",
+    "abortFailed": "终止失败：{detail}",
     "invalidJson": "无效的 JSON：{detail}",
     "modelsMustBeObject": "models.json 必须是 JSON 对象。",
     "providersMustBeObject": "'providers' 必须是对象。",

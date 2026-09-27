@@ -4385,6 +4385,31 @@ body.landing-mode #landing {
   letter-spacing: 0.5px;
   flex-shrink: 0;
 }
+/* Per-item actions on a queued follow-up (edit / delete / send now) */
+.queued-msg-actions {
+  display: flex;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.queued-msg-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.queued-msg-action:hover {
+  color: var(--text);
+  background: var(--bg-glass);
+}
 
 /* pi queue header: the clear-all affordance (clear_queue RPC, Q2-A) */
 .pi-queue-header {
@@ -7063,6 +7088,11 @@ details.sg-section > summary {
 }
 .file-sidebar-tab-label {
   display: none;
+  /* A squeezed tab must clip its label, never fold it onto a second line. */
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .file-sidebar-tab.active .file-sidebar-tab-label {
   display: inline;

@@ -148,6 +148,7 @@ import { createTriggerRouter } from "./ui/composer-triggers.js";
 import { repaintContextViz, setupContextViz } from "./ui/context-viz.js";
 import { createConversationNav } from "./ui/conversation-nav.js";
 import { DialogHandler } from "./ui/dialogs.js";
+import { createFollowUpQueue } from "./ui/follow-up-queue.js";
 import { createHeaderStatusBar } from "./ui/header-status-bar.js";
 import { disconnectGateAutoReveal, observeGateAutoReveal } from "./ui/history-gate-auto-reveal.js";
 import { initImageLightbox } from "./ui/image-lightbox.js";
@@ -2300,7 +2301,6 @@ async function refreshInfoTree() {
     // An empty result is not a tree (fresh spawn, wrong-instance routing):
     // fall through to the file instead of wiping the panel.
     if (Array.isArray(data?.entries) && data.entries.length > 0) {
-      console.info("[InfoPanel] tree source: runtime", { entries: data.entries.length });
       sessionDebug.tree = {
         source: "runtime",
         entries: data.entries.length,
@@ -2320,7 +2320,6 @@ async function refreshInfoTree() {
       if (seq !== infoTreeSeq) return;
       const entries = response?.tree?.entries;
       if (Array.isArray(entries) && entries.length > 0) {
-        console.info("[InfoPanel] tree source: session-file", { entries: entries.length });
         sessionDebug.tree = {
           source: "session-file",
           entries: entries.length,
@@ -2899,11 +2898,6 @@ wsClient.addEventListener("runtimeSnapshot", (e) => {
   // First foreground snapshot proves the current runtime target is live:
   // release its deferred configuration reads and fail-fast stale waiters.
   configReadiness.noteForegroundSnapshot();
-  console.info("[SESSION-LOAD] snapshot received", {
-    target: frame.target?.sessionId ?? null,
-    sessionFile: pi.sessionFile ?? null,
-    entries: Array.isArray(snapshotState.messages) ? snapshotState.messages.length : 0,
-  });
   handleMirrorSync({
     ...pi,
     workspaceId: frame.target?.workspaceId,
@@ -3411,12 +3405,19 @@ function handleAgentSettled() {
   // whichever path runs first renders the card and the second sees an empty
   // list and returns: the two paths are idempotent by construction.
   void appendTurnFilesCard();
+  // agent_settled is the authoritative "run fully done" signal (no retry,
+  // compaction retry, or queued continuation remains): the local follow-up
+  // queue drains here — never on the optimistic idle that abort applies.
+  maybeDrainFollowUpQueue();
 }
 
 function handleAgentStart(event = null) {
   state.setStreaming(true);
   showTypingIndicator(true);
   openLiveTurn(event);
+  // A dispatched follow-up's run began: the drain guard releases so the next
+  // settled signal may drain the following item.
+  followUpDrainInFlight = false;
   // A fresh run is under way — clear any prior error latch so a normal turn
   // isn't treated as "stuck on a failed model" by the model switcher.
   lastTurnErrored = false;
@@ -4076,6 +4077,37 @@ const promptDelivery = createPromptDelivery({
     messageRenderer.renderError(
       t("errors.messageNotDelivered", { detail: reason?.message || reason?.code || "" }),
     );
+    // A dispatched follow-up item returns to the HEAD of its queue (D6,
+    // 2026-09-26 spec): its text belongs to the queue, not the composer, and
+    // in-order retry must not jump behind items that never left.
+    // Pulled back first? The user already holds the text in the composer —
+    // re-queueing would duplicate it in both places.
+    if (record.meta?.followUpQueue && record.pulledBack) {
+      followUpDrainInFlight = false;
+      renderQueuedMessages();
+      return;
+    }
+    const requeued = record.meta?.followUpQueue;
+    if (requeued) {
+      followUpQueue.unshift(requeued.key, requeued.item);
+      // Images went with the item; put them back in the previews, but only
+      // when this identity still owns the composer — a switched session
+      // keeps them on the queued item instead of leaking into another
+      // session's composer.
+      if (
+        Array.isArray(requeued.item.images) &&
+        requeued.item.images.length > 0 &&
+        record.sessionIdentity === composerIdentity()
+      ) {
+        mainImageAttachments.replacePendingImages([
+          ...mainImageAttachments.getPendingImages(),
+          ...requeued.item.images,
+        ]);
+      }
+      followUpDrainInFlight = false;
+      renderQueuedMessages();
+      return;
+    }
     if (record.pulledBack) return; // text already back in the composer
     if (record.sessionIdentity && record.sessionIdentity !== composerIdentity()) {
       // The visible composer now belongs to another session: never touch its
@@ -4096,6 +4128,10 @@ const promptDelivery = createPromptDelivery({
       // Newer draft wins position; the failed text is appended after it.
       messageInput.value = `${current}\n${record.text}`;
     }
+    // A rejected drain-dispatch never sees agent_start, which is what
+    // releases the drain guard — release it here or the queue stalls until
+    // the next unrelated run.
+    followUpDrainInFlight = false;
     renderQueuedMessages();
   },
   onUnconfirmed: () => {
@@ -4165,6 +4201,9 @@ function switchComposerIdentityState(previousIdentity) {
   // its place: pi re-emits queue_update only on mutation, so the park (not pi)
   // restores a queue that is still live in the runtime we are returning to.
   renderPiQueue(piQueuePark.get(activeUiSessionFile));
+  // The local follow-up queue is keyed by session file: repaint it for the
+  // incoming identity at the same seam.
+  renderQueuedMessages();
 
   const nextIdentity = composerIdentity();
   mainImageAttachments.replacePendingImages(attachmentStash.get(nextIdentity) || []);
@@ -4342,41 +4381,159 @@ async function sendFollowUp() {
     return;
   }
 
-  const cmd = { type: "follow_up", message };
+  // Streaming: the follow-up parks in Picot's own queue (2026-09-26 spec) —
+  // pi's follow_up bucket has no per-item protocol (clear_queue is all-or-
+  // nothing), so the queue this UI edits and drains lives client-side. No
+  // wire frame, no C3 record: the item is local until drained or sent now.
   const imageSources = [...mainImageAttachments.getPendingImages()];
-  if (imageSources.length > 0) {
-    cmd.images = imageSources.map(attachmentCommandImage);
+  followUpQueue.append(sessionKeyForDialogs(), { text: message, images: imageSources });
+  if (imageSources.length > 0) mainImageAttachments.replacePendingImages([]);
+  messageInput.value = "";
+  messageInput.style.height = "auto";
+  messageInput.dispatchEvent(new Event("input", { bubbles: true }));
+  renderQueuedMessages();
+}
+
+/**
+ * Send one queued follow-up outside the composer. Idle sends take the direct
+ * prompt path (optimistic bubble included); a run in progress gets the item as
+ * a steer — "send now" never aborts the current task (spec D4). Rejection is
+ * C3's: the item's text returns to the composer, it is not re-queued.
+ */
+function dispatchFollowUpItem(item, queueKey = sessionKeyForDialogs() ?? "") {
+  const images = Array.isArray(item.images) ? item.images : [];
+  const cmd = { type: "prompt", message: item.text };
+  if (images.length > 0) cmd.images = images.map(attachmentCommandImage);
+  if (state.isStreaming) cmd.streamingBehavior = "steer";
+  if (!state.isStreaming) {
+    markPendingNewSessionRefresh();
+    // Same claim-into-turn contract as sendMessage: the bubble waits for
+    // agent_start to fold into the open turn's user row.
+    pendingUserEl = renderNavigableUserMessage({
+      content: item.text,
+      images: cmd.images,
+      timestamp: Date.now(),
+    });
+    pendingUserKey = runtimeKeyOf(wsClient.getRuntimeTarget());
+    pendingPromptPreview = item.text;
   }
-  // No optimistic user bubble and no lastSentMessage accounting: the queued
-  // message surfaces via queue_update → renderPiQueue (queue.followUp label).
-  // Delivery follows the C3 record: acceptance releases the composer.
   promptDelivery.dispatch(cmd, {
-    kind: "follow_up",
-    text: message,
-    textAtSend: messageInput.value,
+    kind: state.isStreaming ? "steer" : "prompt",
+    text: item.text,
+    textAtSend: "",
     images: cmd.images || [],
-    imageSources,
+    imageSources: images,
     sessionIdentity: composerIdentity(),
     streamingAtDispatch: state.isStreaming,
+    // The rejection path re-queues the item (D6, 2026-09-26 spec) instead of
+    // dumping its text into the composer.
+    meta: { followUpQueue: { key: queueKey, item } },
   });
+}
+
+/** Drain one queued follow-up once the run is authoritatively done. */
+function maybeDrainFollowUpQueue() {
+  if (followUpDrainInFlight || state.isStreaming) return;
+  // A delivery still in flight owns the send slot; the item keeps its place
+  // and the next settled signal retries the drain.
+  if (promptDelivery.hasAwaiting(composerIdentity())) return;
+  // No known session file yet (pre-snapshot): an anonymous bucket still
+  // holds the items so they render and drain instead of vanishing.
+  const key = sessionKeyForDialogs() ?? "";
+  const next = followUpQueue.shift(key);
+  if (!next) return;
+  followUpDrainInFlight = true;
+  dispatchFollowUpItem(next);
+  renderQueuedMessages();
 }
 
 // The park mirrors pi's live queue for a session whose runtime is backgrounded;
 // see ARCHITECTURE on runtimes surviving session switches.
 const piQueuePark = createPiQueuePark();
 
+// Follow-ups queue Picot-side (2026-09-26 spec): pi's queue protocol is
+// all-or-nothing, so per-item edit/delete needs a client-owned truth keyed by
+// session file. Enter-while-streaming still goes to pi as a steer directly.
+const followUpQueue = createFollowUpQueue();
+// One drain in flight at a time: mirror-sync and the disk render both funnel
+// into the same idle check, and a second shift before agent_start would send
+// two prompts racing each other.
+let followUpDrainInFlight = false;
+
 const queuedMessagesEl = document.getElementById("queued-messages");
 
+function followUpQueueRow(item) {
+  const row = document.createElement("div");
+  row.className = "queued-msg followup-msg";
+  const label = document.createElement("span");
+  label.className = "queued-msg-label";
+  label.textContent = t("queue.followUp");
+  const text = document.createElement("span");
+  text.className = "queued-msg-text";
+  text.textContent = item.text;
+  row.append(label, text);
+  const actions = document.createElement("span");
+  actions.className = "queued-msg-actions";
+  const action = (iconName, labelKey, handler) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "queued-msg-action";
+    button.setAttribute("aria-label", t(labelKey));
+    button.title = t(labelKey);
+    const icon = createIcon(iconName, { size: 12 });
+    if (icon) button.appendChild(icon);
+    button.addEventListener("click", handler);
+    actions.appendChild(button);
+  };
+  action("pencil", "queue.edit", () => {
+    followUpQueue.remove(sessionKeyForDialogs(), item.id);
+    // Restore convention shared with clear_queue's refill: empty composer
+    // takes the text as-is, a draft keeps its position and the item appends.
+    if (!messageInput.value.trim()) messageInput.value = item.text;
+    else if (!messageInput.value.includes(item.text))
+      messageInput.value = `${messageInput.value}\n${item.text}`;
+    if (item.images?.length) {
+      // A rejected dispatch may have restored these same objects to the
+      // previews already; append only what is genuinely missing.
+      const pending = mainImageAttachments.getPendingImages();
+      const missing = item.images.filter((img) => !pending.includes(img));
+      if (missing.length) {
+        mainImageAttachments.replacePendingImages([...pending, ...missing]);
+      }
+    }
+    messageInput.dispatchEvent(new Event("input", { bubbles: true }));
+    renderQueuedMessages();
+    messageInput.focus();
+  });
+  action("trash-2", "queue.delete", () => {
+    followUpQueue.remove(sessionKeyForDialogs(), item.id);
+    renderQueuedMessages();
+  });
+  action("arrow-up", "queue.sendNow", () => {
+    // One correlated send at a time (same contract as Enter): a delivery
+    // still awaiting Pi's reply owns the composer's send slot.
+    if (promptDelivery.hasAwaiting(composerIdentity())) return;
+    followUpQueue.remove(sessionKeyForDialogs(), item.id);
+    dispatchFollowUpItem(item);
+    renderQueuedMessages();
+  });
+  row.appendChild(actions);
+  return row;
+}
+
 function renderQueuedMessages() {
-  // The local client-side queue is gone (2026-09-19 steering spec): this
-  // area renders only C3's unconfirmed-delivery pills now.
+  // This area renders two sources: Picot's own follow-up queue (editable,
+  // per-item) and C3's unconfirmed-delivery pills (click to pull back).
   queuedMessagesEl.replaceChildren();
+  const queueKey = sessionKeyForDialogs() ?? "";
+  const queuedItems = followUpQueue.items(queueKey);
   const unconfirmedRecords = promptDelivery.unconfirmed();
-  if (unconfirmedRecords.length === 0) {
+  if (unconfirmedRecords.length === 0 && queuedItems.length === 0) {
     queuedMessagesEl.classList.add("hidden");
     return;
   }
   queuedMessagesEl.classList.remove("hidden");
+  for (const item of queuedItems) queuedMessagesEl.appendChild(followUpQueueRow(item));
   for (const record of unconfirmedRecords) {
     const item = document.createElement("div");
     item.className = "queued-msg unconfirmed-msg";
@@ -5137,17 +5294,12 @@ function openModelDropdown() {
           // first so the new model applies to the next prompt immediately. A
           // healthy stream is left untouched — we only interrupt retry/error runs.
           if (isAutoRetrying || lastTurnErrored) {
-            sendAbortCommand();
+            // Route through the confirmed stop: an optimistic unlock over a
+            // dropped abort strands a blue composer on a run pi never
+            // stopped (the 2026-09-26 fix's very bug class).
+            await abortCurrentRun();
             isAutoRetrying = false;
             lastTurnErrored = false;
-            showTypingIndicator(false);
-            if (state.isStreaming) {
-              state.setStreaming(false);
-              currentStreamingElement = null;
-              currentStreamingText = "";
-              currentStreamingThinking = "";
-              updateUI();
-            }
           }
           const result = await selectModel({
             model: m,
@@ -6019,11 +6171,11 @@ function handleMirrorSync(data) {
     pendingSessionMatches ||
     (!currentTarget && Boolean(receivedSessionFile));
   if (appliedForegroundSession && receivedSessionFile) {
-    console.info("[SESSION-LOAD] snapshot applied to foreground", {
-      sessionFile: receivedSessionFile,
-      entries: data.entries?.length || 0,
-    });
     mirrorActiveSessionFile = receivedSessionFile;
+    // Follow-ups queued before the first snapshot sit in the anonymous
+    // bucket; adopt them into the session's bucket or they would never
+    // render or drain (they are the oldest, so they go in front).
+    followUpQueue.migrate("", receivedSessionFile);
     // The provisional "new chat" row is keyed by the runtime session id,
     // which never equals the scanned JSONL path. Rebind it to the real file
     // now so the next sidebar refresh converges the placeholder into the
@@ -6229,9 +6381,6 @@ function handleMirrorSync(data) {
   const diskMatches = diskHistory && diskHistory.sessionId === authoritativeSessionId;
   const useDisk = Boolean(diskMatches) && diskHistory.messages.length > 0;
   if (useDisk) {
-    console.info("[SESSION-LOAD] hydrate message source: disk-fallback", {
-      entries: diskHistory.messages.length,
-    });
     sessionDebug.hydrate = {
       source: "disk-fallback",
       snapshot: snapshotEntries.length,
@@ -6243,9 +6392,6 @@ function handleMirrorSync(data) {
       searchQuery: sidebar.searchQuery,
     });
   } else if (snapshotEntries.length > 0) {
-    console.info("[SESSION-LOAD] hydrate message source: snapshot", {
-      entries: snapshotEntries.length,
-    });
     sessionDebug.hydrate = {
       source: "snapshot",
       snapshot: snapshotEntries.length,
@@ -6277,6 +6423,9 @@ function handleMirrorSync(data) {
   maybeOpenAdoptedLiveTurn();
   // The parked questionnaire (if any) belongs to exactly this session/runtime.
   restoreParkedQuestionnaire(receivedSessionFile, snapshotRuntimeId);
+  // An authoritative idle snapshot also releases the local follow-up queue
+  // (spec D5): a session that came back finished drains its pending items.
+  if (!state.isStreaming) maybeDrainFollowUpQueue();
   // Hydrate the aggregate from the authoritative server totals now that
   // history replay is done. Repeated mirror syncs replace (never accumulate).
   void hydrateHeaderSessionStats();
@@ -6360,9 +6509,6 @@ async function fetchDiskHistory(target) {
       };
       return;
     }
-    console.info("[SESSION-LOAD] hydrate message source: disk", {
-      entries: messages.length,
-    });
     renderTranscriptEntries(diskHistoryEntries(messages));
   } catch (error) {
     // Best-effort: brand-new sessions have no file; the snapshot serves.
@@ -6971,25 +7117,41 @@ async function clearPiQueueAndRestore() {
   return cleared;
 }
 
-/** Abort the live run. Must carry the live turn's pi id: the host's abort
- * gate rejects a bare abort ("abort requires turnId") and the drop is silent. */
-function sendAbortCommand() {
-  const command = { type: "abort" };
-  if (liveTurnId) command.turnId = liveTurnId;
-  return wsClient.send(command);
-}
-
-function abortCurrentRun() {
+async function abortCurrentRun() {
   // Pi-native (2026-09-25, supersedes the composer spec's Q3-A): abort ONLY.
   // Queued steer/followUp stay at pi — it continues with them once the run
   // terminates ("abort continues queued messages") — so no clear_queue and no
   // composer restore on the stop path.
-  sendAbortCommand();
+  //
+  // The stop must be CONFIRMED before the UI unlocks (2026-09-26 fix): the
+  // host gate rejects an abort without a live turnId and pi can reject a
+  // stale one, and an optimistic unlock over a dropped abort leaves a blue
+  // composer on a run that never stopped — exactly the state that stranded
+  // queued messages. A pi abort replies only once the session is idle, so
+  // agent_end/agent_settled usually unlock first; this path is the fallback.
+  const command = { type: "abort" };
+  if (liveTurnId) command.turnId = liveTurnId;
+  let response = null;
+  let failure = null;
+  try {
+    // raw: pi's abort reply carries `success` at the top level with no
+    // `data` payload — the default unwrap would erase the verdict.
+    response = await wsClient.sendRuntime(command, { timeoutMs: 30000, raw: true });
+  } catch (error) {
+    failure = error;
+    response = null;
+  }
+  // stale_turn (a turn that is no longer active) carries no `success`: pi
+  // aborted nothing, so it is a failure for this stop, not a silent pass.
+  if (response?.success !== true) {
+    const detail = failure?.message || response?.error || (command.turnId ? "" : "no live turnId");
+    messageRenderer.renderError(t("errors.abortFailed", { detail }));
+    updateUI();
+    return;
+  }
   messageRenderer.renderError(t("errors.abortedByUser"));
   showTypingIndicator(false);
 
-  // In some abort paths, backend agent_end can be delayed or missing.
-  // Optimistically unlock input so users can continue immediately.
   if (state.isStreaming) {
     state.setStreaming(false);
     currentStreamingElement = null;
