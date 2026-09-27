@@ -1640,14 +1640,6 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
     let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
     let writer = tokio::spawn(async move {
         while let Some(message) = outgoing_rx.recv().await {
-            // Large-frame trace: snapshot-scale frames (2MB+) are the ones
-            // whose loss shows up as a silent frontend timeout, so record
-            // that the writer actually handed them to the socket.
-            if let Message::Text(text) = &message {
-                if text.len() > 2 * 1024 * 1024 {
-                    log::info!("[ws-writer] sent large frame: {}B", text.len());
-                }
-            }
             if socket_sink.send(message).await.is_err() {
                 break;
             }
