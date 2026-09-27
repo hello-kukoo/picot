@@ -1320,6 +1320,7 @@
       "today": "today",
       "balance": "Balance",
       "creditGranted": "Granted {time}",
+      "creditDateFmt": "{m}/{d}/{y} {hh}:{mm} {ap}",
       "creditExpires": "Expires {time}",
       "creditUnknown": "Expiry unknown",
       "dialogConfirm": "Reset now",

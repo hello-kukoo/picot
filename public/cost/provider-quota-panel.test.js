@@ -21,8 +21,9 @@ const locale = {
   resetCredits: "Reset quota ({n} left)",
   resetDialogTitle: "Reset quota",
   resetDialogBody: "This spends one reset credit and cannot be undone.",
-  creditGranted: "Granted {time}",
-  creditExpires: "Expires {time}",
+  creditGranted: "获得 {time}",
+  creditDateFmt: "{y}年{m}月{d}日 {hh}:{mm} {ap}",
+  creditExpires: "{time} 过期",
   creditUnknown: "Expiry unknown",
   resetsInMinutes: "resets in {n}m",
   resetsAt: "resets {when}",
@@ -34,7 +35,7 @@ const locale = {
   balance: "Balance",
   resetCreditsAvailable: "You have {count} available reset credits.",
   creditNext: "Up next",
-  creditDaysLeft: " ({days} days left)",
+  creditDaysLeft: "（剩余 {days} 天）",
   creditExpired: "(expired)",
   creditNone: "No reset credits available",
   creditEarnHint: "Reset credits are granted by the plan.",
@@ -277,10 +278,10 @@ test("reset lists credits oldest-first and highlights the next one", async () =>
   expect(rows[0].classList.contains("is-next")).toBe(true);
   expect(rows[0].textContent).toContain("Up next");
   expect(rows[0].querySelector(".quota-credit-chip")?.textContent).toBe("NEXT");
-  expect(rows[0].textContent).toContain("Granted");
+  expect(rows[0].textContent).toContain("获得");
   expect(rows[0].textContent).toContain(oldestGranted);
-  expect(rows[0].textContent).toContain("Expires");
-  expect(rows[0].textContent).toContain("days left");
+  expect(rows[0].textContent).toContain("过期");
+  expect(rows[0].textContent).toContain("剩余");
   expect(rows[1].textContent).toContain("Credit #2");
   expect(document.querySelector(".quota-dialog-note")?.textContent).toContain("earliest");
   expect(seams.dataTransport.resetCreditOpen).not.toHaveBeenCalled();
@@ -289,6 +290,33 @@ test("reset lists credits oldest-first and highlights the next one", async () =>
   await advance();
   expect(document.querySelector(".file-preview-dialog-overlay")).toBeNull();
   expect(seams.dataTransport.resetCreditOpen).not.toHaveBeenCalled();
+});
+
+test("credit expiry renders the locale template date, zh order", async () => {
+  vi.useFakeTimers();
+  const now = new Date(2026, 8, 27, 15, 0, 0); // 2026-09-27 15:00 local
+  vi.setSystemTime(now);
+  // Expires 2026-10-05 06:41 local → 8 days out, zh template shape.
+  const expiresAt = new Date(2026, 9, 5, 6, 41).getTime();
+  const seams = makeSeams({
+    reports: [
+      {
+        provider: "openai-codex",
+        source: "openai-codex:wham",
+        quota: { fiveHourPercent: 10, resetCredits: 1, updatedAt: Date.now() },
+      },
+    ],
+    inspectData: { credits: [{ grantedAt: 1_760_000_000_000, expiresAt }] },
+  });
+  const panel = createProviderQuotaPanel(seams, { locale });
+  await panel.loadReports();
+  container.querySelector(".quota-reset-chip").click();
+  // Fake timers freeze advance()'s setTimeout; the dialog open path is pure
+  // microtasks (async gateway mock + synchronous DOM build), so flush those.
+  for (let i = 0; i < 5; i += 1) await new Promise((resolve) => queueMicrotask(resolve));
+  const expires = [...document.querySelectorAll(".quota-credit-meta span")][1];
+  expect(expires?.textContent).toBe("2026年10月5日 06:41 AM 过期（剩余 8 天）");
+  vi.useRealTimers();
 });
 
 test("escaping the reset dialog never touches the ledger", async () => {

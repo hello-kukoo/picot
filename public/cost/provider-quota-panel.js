@@ -49,16 +49,27 @@ function formatDateOnly(value) {
   return ms === null ? "" : new Date(ms).toLocaleDateString();
 }
 
-function formatDateTime(value) {
+/** Builds the credit datetime from the locale's own template
+ * (creditDateFmt), so zh reads "2026年10月5日 06:41 AM" instead of the
+ * WebView-default "October 5, 2026 at 06:41 AM". Placeholder sets are
+ * identical across locales (locale-parity test enforces it). */
+function formatDateTime(value, locale) {
   const ms = toEpochMs(value);
   if (ms === null) return "";
-  return new Date(ms).toLocaleString([], {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const at = new Date(ms);
+  const hours = at.getHours();
+  const fields = {
+    y: at.getFullYear(),
+    m: at.getMonth() + 1,
+    d: at.getDate(),
+    hh: String(hours % 12 || 12).padStart(2, "0"),
+    mm: String(at.getMinutes()).padStart(2, "0"),
+    ap: hours < 12 ? "AM" : "PM",
+  };
+  return (locale.creditDateFmt ?? "{y}-{m}-{d} {hh}:{mm}").replace(
+    /\{(y|m|d|hh|mm|ap)\}/g,
+    (_, field) => String(fields[field] ?? ""),
+  );
 }
 
 /** Upstream spends the earliest-granted credit first (FIFO), so the list is
@@ -333,7 +344,7 @@ export function createProviderQuotaPanel(seams, { locale }) {
         );
         const expires = document.createElement("span");
         const days = daysUntil(credit?.expiresAt);
-        const expiresAt = formatDateTime(credit?.expiresAt);
+        const expiresAt = formatDateTime(credit?.expiresAt, locale);
         if (days === null) {
           expires.textContent = locale.creditUnknown;
         } else if (days <= 0) {

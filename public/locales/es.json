@@ -1320,6 +1320,7 @@
       "today": "hoy",
       "balance": "Saldo",
       "creditGranted": "Obtenido {time}",
+      "creditDateFmt": "{d}/{m}/{y} {hh}:{mm} {ap}",
       "creditExpires": "Caduca {time}",
       "creditUnknown": "Caducidad desconocida",
       "dialogConfirm": "Restablecer",

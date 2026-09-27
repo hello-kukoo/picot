@@ -1320,6 +1320,7 @@
       "today": "今日",
       "balance": "残高",
       "creditGranted": "付与 {time}",
+      "creditDateFmt": "{y}年{m}月{d}日 {hh}:{mm} {ap}",
       "creditExpires": "失効 {time}",
       "creditUnknown": "失効日時不明",
       "dialogConfirm": "リセット実行",

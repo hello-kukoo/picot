@@ -2684,7 +2684,7 @@ body.landing-mode #landing {
 
 /* Reset dialog (screenshot: ticket title, credit sub-cards, one action). */
 .quota-reset-dialog {
-  width: min(520px, 92vw);
+  width: min(620px, 92vw);
 }
 
 .quota-dialog-title {
@@ -2752,13 +2752,21 @@ body.landing-mode #landing {
 }
 
 .quota-credit-meta {
+  /* Granted and expiry stack on two lines (2026-09-27): one long line
+     squeezed both dates into wrapping at dialog widths users actually run. */
   display: flex;
-  justify-content: space-between;
-  gap: var(--space-2);
+  flex-direction: column;
+  gap: var(--space-1);
   margin-top: var(--space-1);
   color: var(--text-secondary);
   font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
+}
+
+/* A date must never break mid-text (2026年10月5日 06:41 AM …): if the two
+   spans cannot share the line, the whole span moves down instead. */
+.quota-credit-meta span {
+  white-space: nowrap;
 }
 
 .quota-dialog-note {

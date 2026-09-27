@@ -30,6 +30,7 @@ export function quotaLocaleBundle() {
     resetDialogTitle: t("cost.quota.resetDialogTitle"),
     resetDialogScope: t("cost.quota.resetDialogScope"),
     dialogRedeem: t("cost.quota.dialogRedeem"),
+    creditDateFmt: t("cost.quota.creditDateFmt"),
     creditIndexed: t("cost.quota.creditIndexed"),
     balance: t("cost.quota.balance"),
     resetCreditsAvailable: t("cost.quota.resetCreditsAvailable"),
