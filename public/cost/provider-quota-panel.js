@@ -154,8 +154,10 @@ export function createProviderQuotaPanel(seams, { locale }) {
   let reportsById = new Map();
   let loading = false;
   let hasLoaded = false;
+  let loadError = false;
+  let inFlight = null;
 
-  async function loadReports(force = false) {
+  async function runLoad(force = false) {
     loading = true;
     const previousReports = reportsById;
     reportsById = new Map();
@@ -164,18 +166,32 @@ export function createProviderQuotaPanel(seams, { locale }) {
       // The gateway resolves with the handler payload `{ ok, data }`, not the
       // handler's own data object — the reports live one level down.
       const payload = await seams.gateway.call("provider_quota_report", { force });
-      reportsById.clear();
+      reportsById = new Map();
       for (const report of payload?.data?.reports ?? []) {
         reportsById.set(report.provider, report);
       }
       hasLoaded = true;
+      loadError = false;
     } catch {
       reportsById = previousReports;
+      loadError = true;
     } finally {
       hasLoaded = true;
       loading = false;
       render();
     }
+  }
+
+  function loadReports(force = false) {
+    // Serializes loads: a second call while one is in flight (settings entry
+    // during the boot-time load, or a refresh click) joins the first instead
+    // of snapshotting an empty map as "previous reports" — the poison case
+    // that could blank the section on a later failure.
+    if (inFlight) return inFlight;
+    inFlight = runLoad(force).finally(() => {
+      inFlight = null;
+    });
+    return inFlight;
   }
 
   async function consumeResetCredit() {
@@ -441,18 +457,32 @@ export function createProviderQuotaPanel(seams, { locale }) {
     const reports = [...reportsById.values()].filter(
       (report) => report.failure !== "not_configured",
     );
-    // Empty state hides the whole section once the first request settles.
     const hasContent = reports.length > 0;
-    container.classList.toggle("hidden", !hasContent && !loading && hasLoaded);
-    if (!hasContent && hasLoaded && !loading) {
+    // A successful probe that found no configured providers hides the whole
+    // section (spec: no placeholder). A FAILED request must not hide it:
+    // the head (with its Refresh) and a failure note stay on screen — hiding
+    // them is how the page became a dead white board that could not recover.
+    const hideSection = !hasContent && !loading && hasLoaded && !loadError;
+    container.classList.toggle("hidden", hideSection);
+    if (hideSection) {
       container.replaceChildren();
       return;
     }
     container.replaceChildren();
     const head = buildHead(loading);
 
-    if (loading) {
+    // Data on its way (or the first load not even started yet): skeletons —
+    // the section must never render blank while reports are pending.
+    if (loading || !hasLoaded) {
       container.append(head, ...Object.keys(DISPLAY_NAMES).map(renderSkeletonCard));
+      return;
+    }
+
+    if (!hasContent) {
+      const note = document.createElement("div");
+      note.className = "quota-failure";
+      note.textContent = locale.unavailable;
+      container.append(head, note);
       return;
     }
 

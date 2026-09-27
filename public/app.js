@@ -7247,6 +7247,11 @@ function selectSettingsTab(tabKey = "general") {
   }
   if (targetTabKey === "usage") {
     void document.getElementById("settings-cost-dashboard")?.ensureLoaded();
+    // The quota panel loads once at boot; re-request on every entry so a
+    // failed boot-time probe (runtime not yet ready) does not leave the
+    // default quota view blank until the next sub-tab click. Non-force
+    // serves the 5-minute cache instantly when warm.
+    void settingsQuotaPanel?.loadReports();
   }
 }
 

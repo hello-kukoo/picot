@@ -406,3 +406,61 @@ test("refresh shows skeletons immediately and restores previous reports on failu
   expect(container.querySelectorAll(".quota-card.is-skeleton")).toHaveLength(0);
   expect(container.querySelector(".quota-card-name")?.textContent).toBe("OpenAI Codex");
 });
+
+test("a failed first load keeps the section visible with a failure note", async () => {
+  const seams = makeSeams({ reports: [] });
+  seams.gateway.call = vi.fn((op) =>
+    op === "provider_quota_report"
+      ? Promise.reject(new Error("runtime not ready"))
+      : Promise.resolve({ ok: true, data: { credits: [] } }),
+  );
+  const panel = createProviderQuotaPanel(seams, { locale });
+  await panel.loadReports();
+  // Hiding the section here was the dead white board: the Refresh button
+  // vanished with it, so the page could never recover without a restart.
+  expect(container.classList.contains("hidden")).toBe(false);
+  expect(container.querySelector(".quota-failure")?.textContent).toBe("Temporarily unavailable");
+  expect(container.querySelector(".quota-refresh-btn")).not.toBeNull();
+  expect(container.querySelectorAll(".quota-card.is-skeleton")).toHaveLength(0);
+});
+
+test("a load started while another is in flight joins it instead of racing", async () => {
+  const seams = makeSeams({
+    reports: [
+      {
+        provider: "zai",
+        source: "zai:quota-limit",
+        quota: { weeklyPercent: 7, updatedAt: Date.now() },
+      },
+    ],
+  });
+  let release = () => {};
+  seams.gateway.call = vi.fn((op) =>
+    op === "provider_quota_report"
+      ? new Promise((resolve) => {
+          release = () =>
+            resolve({
+              ok: true,
+              data: {
+                reports: [
+                  {
+                    provider: "zai",
+                    source: "zai:quota-limit",
+                    quota: { weeklyPercent: 7, updatedAt: Date.now() },
+                  },
+                ],
+              },
+            });
+        })
+      : Promise.resolve({ ok: true, data: { credits: [] } }),
+  );
+  const panel = createProviderQuotaPanel(seams, { locale });
+  const first = panel.loadReports();
+  const second = panel.loadReports(true);
+  expect(seams.gateway.call).toHaveBeenCalledTimes(1);
+
+  release();
+  await Promise.all([first, second]);
+  expect(container.querySelectorAll(".quota-card.is-skeleton")).toHaveLength(0);
+  expect(container.querySelector(".quota-card-name")?.textContent).toBe("Z.ai");
+});

@@ -439,6 +439,9 @@ function selectLandingSettingsTab(tabKey) {
     // Same lazy-load contract as the workspace shell: the dashboard fetches
     // only when its tab is first opened.
     void document.getElementById("settings-cost-dashboard")?.ensureLoaded?.();
+    // Re-request quota on every entry (boot-time probe may have failed while
+    // the runtime was still coming up; loadReports joins an in-flight call).
+    void landingQuotaPanel?.loadReports();
   }
   if (target === "skills") {
     void skillsPage.activate();
