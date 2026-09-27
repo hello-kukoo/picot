@@ -12,6 +12,7 @@ export { python } from "@codemirror/lang-python";
 export { rust } from "@codemirror/lang-rust";
 export { yaml } from "@codemirror/lang-yaml";
 export {
+  ensureSyntaxTree,
   forceParsing,
   HighlightStyle,
   indentUnit,

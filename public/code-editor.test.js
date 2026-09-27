@@ -206,6 +206,8 @@ describe("syntax highlighting wiring", () => {
 
     // vendor entry must re-export it so the browser bundle includes it
     expect(read("public/codemirror-vendor-entry.js")).toContain("oneDarkHighlightStyle");
+    expect(read("public/codemirror-vendor-entry.js")).toContain("ensureSyntaxTree");
+    expect(read("public/codemirror-vendor-entry.js")).toContain("highlightTree");
     // import map must route the package to the same-origin vendor bundle
     expect(read("public/index.html")).toContain('"@codemirror/theme-one-dark"');
   });
