@@ -18,6 +18,12 @@ export function quotaLocaleBundle() {
     resetCredits: t("cost.quota.resetCredits"),
     resetsInMinutes: t("cost.quota.resetsInMinutes"),
     resetsAt: t("cost.quota.resetsAt"),
+    // Consumed by formatResetStamp's banded stamps (2026-09-27). They were
+    // added to the locale files but not wired here, and the panel threw on
+    // locale.resetsInHours.replace — killing render() mid-loop, which left
+    // the cards on screen without the section head (no Refresh button).
+    resetsInHours: t("cost.quota.resetsInHours"),
+    resetsTomorrow: t("cost.quota.resetsTomorrow"),
     used: t("cost.quota.used"),
     resetDialogTitle: t("cost.quota.resetDialogTitle"),
     resetDialogScope: t("cost.quota.resetDialogScope"),
