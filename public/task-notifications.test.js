@@ -61,10 +61,32 @@ describe("task notifications", () => {
 
   it("uses localized titles", () => {
     const { notifications, sendData } = harness({
-      t: (key) => `⟪${key}⟫`,
+      t: (key) => `[[${key}]]`,
     });
     notifications.handleRuntimeFrame(frame("agent_start"));
     notifications.handleRuntimeFrame(frame("agent_settled"));
-    expect(sendData.mock.calls[0][1].title).toBe("⟪settings.taskCompleteTitle⟫");
+    expect(sendData.mock.calls[0][1].title).toBe("[[settings.taskCompleteTitle]]");
+  });
+
+  it("calls sendData as a transport method so its `this` stays bound", async () => {
+    // Regression: destructuring sendData off the transport detached it, and
+    // the real wsClient.sendData threw "undefined is not an object
+    // (evaluating 'this._sendRequest')" on every task completion.
+    const warnings = [];
+    const transport = {
+      _sendRequest() {
+        return Promise.resolve({ ok: true });
+      },
+      sendData(operation, params) {
+        return this._sendRequest(operation, params);
+      },
+    };
+    const notifications = createTaskNotifications(transport, () => true, {
+      logger: { warn: (message) => warnings.push(message) },
+    });
+    notifications.handleRuntimeFrame(frame("agent_start"));
+    notifications.handleRuntimeFrame(frame("agent_settled"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(warnings).toEqual([]);
   });
 });

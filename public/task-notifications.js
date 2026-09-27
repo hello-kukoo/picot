@@ -19,29 +19,30 @@ function targetKey(target = {}) {
 }
 
 /**
- * @param {{
- *   sendData: (operation: string, params: object) => Promise<unknown>,
- * }} transport host data-plane transport (wsClient)
+ * @param {{ sendData: (operation: string, params: object) => Promise<unknown> }} transport
+ * host data-plane transport (wsClient). Kept as an object — destructuring the
+ * method would detach it from its `this` (sendData reads this._sendRequest).
  * @param {() => boolean} isEnabled reads the DB-backed setting (cached by the
  *   caller; the toggle updates the cache on change)
  * @param {(key: string, params?: object) => string} t locale lookup
  */
 export function createTaskNotifications(
-  { sendData } = {},
+  transport = {},
   isEnabled = () => DEFAULT_ENABLED,
   { logger = console, t = translate } = {},
 ) {
   const runningTargets = new Set();
-
   async function showCompletion(target, error = null) {
-    if (!sendData) return;
+    // Method call on the transport object — a detached (destructured) sendData
+    // loses its `this` (it reads this._sendRequest) and throws a TypeError.
+    if (typeof transport.sendData !== "function") return;
     const described = describeTarget(target);
     if (!described.workspaceId || !described.sessionId) {
       logger.warn("[Notifications] completion skipped: incomplete target", described);
       return;
     }
     try {
-      await sendData("show_task_notification", {
+      await transport.sendData("show_task_notification", {
         title: t(error ? "settings.taskFailedTitle" : "settings.taskCompleteTitle"),
         body: error || t("settings.taskCompleteMessage"),
         workspaceId: described.workspaceId,
