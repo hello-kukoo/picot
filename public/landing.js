@@ -991,6 +991,32 @@ landingShowThinkingToggle?.addEventListener("click", () => {
     apply: () => {},
   });
 });
+landingShowThinkingToggle?.addEventListener("click", () => {
+  const next = !landingShowThinkingToggle.classList.contains("on");
+  landingShowThinkingToggle.classList.toggle("on", next);
+  void saveUserRenderPreference({
+    client: preferencesClient,
+    key: PREFERENCE_KEYS.showThinking,
+    value: next,
+    apply: () => {},
+  });
+});
+
+// Task notifications: the same DB-backed preference the app entry gates its
+// runtime-frame trigger on. Landing has no frames, so the toggle only edits
+// the stored value; the markup's default-on matches the enabled-by-default
+// flag, so no initial read is needed (same contract as show-thinking).
+const landingTaskNotificationsToggle = document.getElementById("toggle-task-notifications");
+landingTaskNotificationsToggle?.addEventListener("click", () => {
+  const next = !landingTaskNotificationsToggle.classList.contains("on");
+  landingTaskNotificationsToggle.classList.toggle("on", next);
+  void saveUserRenderPreference({
+    client: preferencesClient,
+    key: PREFERENCE_KEYS.taskNotifications,
+    value: next,
+    apply: () => {},
+  });
+});
 
 // MCP nav reveal from installed packages — host data only, so the check
 // never spawns the config runtime (mcpPage.refreshAvailability would).
