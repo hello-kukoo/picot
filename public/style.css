@@ -2475,11 +2475,18 @@ body.landing-mode #landing {
   background: var(--bg-glass);
 }
 
+/* No bottom margin: the name sits inside the title's centered flex, and an
+   asymmetric margin made it ride higher than the plan/reset chips beside it.
+   The title row's own margin provides the spacing below. */
 .quota-card-name {
-  margin-bottom: var(--space-2);
   color: var(--text-primary);
   font-size: var(--font-size-md);
   font-weight: 600;
+}
+
+.quota-card.is-skeleton .quota-card-name {
+  /* Skeleton cards have no title row; keep the name's gap above the bars. */
+  margin-bottom: var(--space-2);
 }
 
 .quota-card-title {
