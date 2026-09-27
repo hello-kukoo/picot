@@ -1298,6 +1298,7 @@
       "hoursAgo": "{n} 小时前",
       "resetsInMinutes": "{n} 分钟后重置",
       "resetsTomorrow": "明天 {time} 重置",
+      "resetDateFmt": "{m}月{d}日 {hh}:{mm}",
       "resetsInHours": "{n} 小时后重置",
       "resetsInDays": "{n} 天后重置",
       "resetCredits": "重置额度（剩 {n} 个）",

@@ -27,6 +27,9 @@ export function quotaLocaleBundle() {
     // the cards on screen without the section head (no Refresh button).
     resetsInHours: t("cost.quota.resetsInHours"),
     resetsTomorrow: t("cost.quota.resetsTomorrow"),
+    // The far reset band's {when} value: month/day + HH:MM built from the
+    // locale's own template, never a hardcoded 月/日 literal.
+    resetDateFmt: t("cost.quota.resetDateFmt"),
     resetDialogTitle: t("cost.quota.resetDialogTitle"),
     resetDialogScope: t("cost.quota.resetDialogScope"),
     dialogRedeem: t("cost.quota.dialogRedeem"),

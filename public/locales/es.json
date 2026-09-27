@@ -1298,6 +1298,7 @@
       "hoursAgo": "hace {n}h",
       "resetsInMinutes": "se restablece en {n} min",
       "resetsTomorrow": "se restablece mañana a las {time}",
+      "resetDateFmt": "{d}/{m} {hh}:{mm}",
       "resetsInHours": "se restablece en {n}h",
       "resetsInDays": "se restablece en {n}d",
       "resetCredits": "Restablecer cuota (quedan {n})",

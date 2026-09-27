@@ -17,6 +17,7 @@ const locale = {
   hoursAgo: "{n}h ago",
   resetsInHours: "resets in {n}h",
   resetsTomorrow: "resets tomorrow at {time}",
+  resetDateFmt: "{m}月{d}日 {hh}:{mm}",
   resetsInDays: "resets in {n}d",
   resetCredits: "Reset quota ({n} left)",
   resetDialogTitle: "Reset quota",

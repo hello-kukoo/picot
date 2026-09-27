@@ -1298,6 +1298,7 @@
       "hoursAgo": "{n}h ago",
       "resetsInMinutes": "resets in {n}m",
       "resetsTomorrow": "resets tomorrow at {time}",
+      "resetDateFmt": "{m}/{d} {hh}:{mm}",
       "resetsInHours": "resets in {n}h",
       "resetsInDays": "resets in {n}d",
       "resetCredits": "Reset quota ({n} left)",

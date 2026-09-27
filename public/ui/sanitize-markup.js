@@ -3,6 +3,7 @@
 // injected into the DOM must pass through here first.
 
 const BLOCKED_TAGS = new Set([
+  "BASE",
   "SCRIPT",
   "STYLE",
   "IFRAME",
@@ -28,7 +29,7 @@ export function sanitizeMarkup(root) {
         name.startsWith("on") ||
         name === "srcdoc" ||
         name === "formaction" ||
-        (name === "href" && !/^(https?:|mailto:|#)/i.test(value)) ||
+        ((name === "href" || name === "xlink:href") && !/^(https?:|mailto:|#)/i.test(value)) ||
         (name === "src" && !/^(https?:\/\/|data:image\/(?:png|jpe?g|gif|webp);)/i.test(value)) ||
         (name === "style" && /url\s*\(/i.test(value))
       ) {

@@ -35,7 +35,7 @@ use std::convert::Infallible;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{oneshot, Semaphore};
 use tower::ServiceBuilder;
@@ -173,6 +173,24 @@ pub struct HostServer {
     origin: String,
     shutdown: Option<oneshot::Sender<()>>,
     state: Arc<HostState>,
+}
+
+/// macOS attributes UN notifications to a bundle identifier. The host server
+/// never sees the Tauri config, so main.rs publishes the running build's own
+/// identifier here (`picot`, `picot.dev`, `picot.internal`); unset callers
+/// (tests, hostless runs) fall back to the production identifier.
+static NOTIFICATION_BUNDLE_ID: OnceLock<String> = OnceLock::new();
+
+/// Publish the running build's bundle identifier for OS notifications.
+pub fn set_notification_bundle_identifier(identifier: impl Into<String>) {
+    let _ = NOTIFICATION_BUNDLE_ID.set(identifier.into());
+}
+
+fn notification_bundle_identifier() -> &'static str {
+    NOTIFICATION_BUNDLE_ID
+        .get()
+        .map(String::as_str)
+        .unwrap_or("com.palandata.picot")
 }
 
 impl HostServer {
@@ -3060,7 +3078,7 @@ async fn dispatch(
                     // The host server never sees the Tauri config, so this
                     // mirrors tauri.conf.json's identifier.
                     #[cfg(target_os = "macos")]
-                    let _ = notify_rust::set_application("com.palandata.picot");
+                    let _ = notify_rust::set_application(notification_bundle_identifier());
                     let notification = notify_rust::Notification::new()
                         .summary(&title)
                         .body(&body)
@@ -3989,6 +4007,15 @@ fn now_seconds() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use super::notification_bundle_identifier;
+
+    #[test]
+    fn notification_bundle_identifier_defaults_to_the_production_bundle() {
+        // Reads only: the OnceLock is process-global and a set here would
+        // leak into every other test in this binary.
+        assert_eq!(notification_bundle_identifier(), "com.palandata.picot");
+    }
+
     use super::{
         bind_is_loopback, dialog_response_allowed, outbound_message, outbound_payload_kind,
         read_bounded_utf8, HostServer,

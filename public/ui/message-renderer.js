@@ -8,6 +8,7 @@ import { onLocaleChange, t } from "../i18n.js";
 import { createIcon, setButtonIcon } from "../icons.js";
 import { createScrollOwner } from "../session/scroll-ownership.js";
 import { renderMarkdown, renderStreamingMarkdown, renderUserMarkdown } from "./markdown.js";
+import { sanitizeMarkup } from "./sanitize-markup.js";
 
 const USER_MESSAGE_COLLAPSE_CHAR_THRESHOLD = 400;
 const USER_MESSAGE_COLLAPSE_NEWLINE_THRESHOLD = 8;
@@ -706,47 +707,13 @@ export class MessageRenderer {
 
   _appendMarkup(parent, markup) {
     const parsed = new DOMParser().parseFromString(String(markup || ""), "text/html");
-    this._sanitizeMarkup(parsed.body);
+    sanitizeMarkup(parsed.body);
     parent.append(...Array.from(parsed.body.childNodes));
   }
 
   _replaceMarkup(parent, markup) {
     parent.replaceChildren();
     this._appendMarkup(parent, markup);
-  }
-
-  _sanitizeMarkup(root) {
-    const blockedTags = new Set([
-      "SCRIPT",
-      "STYLE",
-      "IFRAME",
-      "OBJECT",
-      "EMBED",
-      "FOREIGNOBJECT",
-      "ANIMATE",
-      "SET",
-      "USE",
-    ]);
-    root.querySelectorAll("*").forEach((element) => {
-      if (blockedTags.has(element.tagName)) {
-        element.remove();
-        return;
-      }
-      for (const attribute of Array.from(element.attributes)) {
-        const name = attribute.name.toLowerCase();
-        const value = attribute.value.trim();
-        if (
-          name.startsWith("on") ||
-          name === "srcdoc" ||
-          name === "formaction" ||
-          (name === "href" && !/^(https?:|mailto:|#)/i.test(value)) ||
-          (name === "src" && !/^(https?:\/\/|data:image\/(?:png|jpe?g|gif|webp);)/i.test(value)) ||
-          (name === "style" && /url\s*\(/i.test(value))
-        ) {
-          element.removeAttribute(attribute.name);
-        }
-      }
-    });
   }
 
   _setupCodeCopyButtons(root) {

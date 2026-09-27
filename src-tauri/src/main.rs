@@ -2004,6 +2004,10 @@ fn setup_native_runtime(app: &mut tauri::App, static_dir: PathBuf) -> Result<(),
         remote_auth,
         Arc::clone(&shared_metadata),
     ))?;
+    // OS notifications attribute to the running build's own bundle identifier
+    // (picot / picot.dev / picot.internal) — the host server cannot see the
+    // Tauri config, so publish it once here.
+    host_server::set_notification_bundle_identifier(app.config().identifier.clone());
     // No host.runtime_started() here: that is the OAuth generation bump tied to
     // a runtime existing, and the landing has none.
     host.set_terminal_manager(terminal_manager.clone());

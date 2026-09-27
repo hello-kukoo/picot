@@ -105,7 +105,16 @@ function formatResetStamp(resetAt, locale) {
     }
     return locale.resetsTomorrow.replace("{time}", hhmm(at));
   }
-  return locale.resetsAt.replace("{when}", `${at.getMonth() + 1}月${at.getDate()}日 ${hhmm(at)}`);
+  const when = (locale.resetDateFmt ?? "{m}/{d} {hh}:{mm}").replace(
+    /\{(m|d|hh|mm)\}/g,
+    (_, field) =>
+      String(
+        { m: at.getMonth() + 1, d: at.getDate(), hh: hhmm(at).slice(0, 2), mm: hhmm(at).slice(3) }[
+          field
+        ] ?? "",
+      ),
+  );
+  return locale.resetsAt.replace("{when}", when);
 }
 
 /** Usage tone thresholds: below 75% is healthy, 75–90% is warning, above
