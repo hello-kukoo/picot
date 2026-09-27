@@ -11,6 +11,7 @@ setMessages({
   git: {
     diffOriginal: "Original",
     diffModified: "Modified",
+    unifiedDiff: "Unified diff",
     diffEmpty: "No changes to display",
     fallback: { binary: "Binary file", rename: "Renamed only", copy: "Copied only" },
     comparison: { staged: "Staged", changes: "Changes", commit: "Commit", untracked: "Untracked" },
@@ -21,7 +22,7 @@ setMessages({
 describe("git diff renderer", () => {
   it("renders patch lines with fixed gutters as text", () => {
     const container = document.createElement("div");
-    const renderer = createGitDiffRenderer({ patch: "@@ -1 +1 @@\n-old\n+new" });
+    const renderer = createGitDiffRenderer({ patch: "@@ -1 +1 @@\n-old\n+new", unified: false });
     renderer.mount(container);
     expect(container.querySelectorAll(".git-diff-cell")).toHaveLength(2);
     expect(container.querySelectorAll(".git-diff-column")).toHaveLength(2);
@@ -36,6 +37,7 @@ describe("git diff renderer", () => {
       displayPath: "src/git-panel.js",
       comparison: "changes",
       rawPatch: "@@ -1 +1 @@\n-old\n+new",
+      unified: false,
     }).mount(container);
 
     expect(container.querySelector(".git-diff-toolbar")?.textContent).toContain("src/git-panel.js");
@@ -43,9 +45,47 @@ describe("git diff renderer", () => {
     expect(container.querySelector(".git-diff-column-header")?.textContent).toBe("Original");
   });
 
+  it("renders unified rows with hunk, line numbers and syntax-highlighted text", () => {
+    const container = document.createElement("div");
+    createGitDiffRenderer({
+      displayPath: "sample.js",
+      patch: "@@ -1,2 +1,2 @@\n const answer = 1;\n-const oldValue = 2;\n+const newValue = 3;",
+    }).mount(container);
+    expect(container.querySelector(".git-diff-hunk")?.textContent).toBe("@@ -1,2 +1,2 @@");
+    const lines = [...container.querySelectorAll(".git-diff-unified-line")];
+    expect(lines.map((line) => line.dataset.kind)).toEqual(["unchanged", "removed", "added"]);
+    expect(lines.map((line) => line.querySelector(".git-diff-line-number")?.textContent)).toEqual([
+      "1",
+      "2",
+      "2",
+    ]);
+    expect(container.querySelector(".git-diff-source span")).not.toBeNull();
+  });
+
+  it("renders unified diff rows by line with +/- markers by default", () => {
+    const container = document.createElement("div");
+    createGitDiffRenderer({ patch: "@@ -1,2 +1,2 @@\n same\n-old\n+new" }).mount(container);
+    const lines = [...container.querySelectorAll(".git-diff-unified-line")];
+    expect(lines.map((line) => line.dataset.kind)).toEqual(["unchanged", "removed", "added"]);
+    expect(lines.map((line) => line.querySelector(".git-diff-sign")?.textContent)).toEqual([
+      " ",
+      "-",
+      "+",
+    ]);
+    expect(container.querySelectorAll(".git-diff-column")).toHaveLength(0);
+    expect(container.querySelector(".git-diff-hunk")?.textContent).toBe("@@ -1,2 +1,2 @@");
+  });
+
+  it("keeps side-by-side layout selectable", () => {
+    const container = document.createElement("div");
+    createGitDiffRenderer({ patch: "@@ -1 +1 @@\n-old\n+new", unified: false }).mount(container);
+    expect(container.querySelectorAll(".git-diff-column")).toHaveLength(2);
+    expect(container.querySelectorAll(".git-diff-unified-line")).toHaveLength(0);
+  });
+
   it("keeps a safe fallback when the broker descriptor has no display path", () => {
     const container = document.createElement("div");
-    createGitDiffRenderer({ patch: "@@ -1 +1 @@\n-old\n+new" }).mount(container);
+    createGitDiffRenderer({ patch: "@@ -1 +1 @@\n-old\n+new", unified: false }).mount(container);
     expect(container.querySelector(".git-diff-path")?.textContent).toBe("Diff");
   });
 
@@ -57,14 +97,16 @@ describe("git diff renderer", () => {
 
   it("aligns consecutive replacement blocks with blank cells", () => {
     const container = document.createElement("div");
-    createGitDiffRenderer({ patch: "@@ -1,2 +1,1 @@\n-a\n-b\n+c" }).mount(container);
+    createGitDiffRenderer({ patch: "@@ -1,2 +1,1 @@\n-a\n-b\n+c", unified: false }).mount(
+      container,
+    );
     expect(container.querySelectorAll(".git-diff-cell")).toHaveLength(4);
     expect(container.querySelectorAll(".blank")).toHaveLength(1);
   });
 
   it("renders a broker raw patch side by side when it is not a fallback", () => {
     const container = document.createElement("div");
-    createGitDiffRenderer({ rawPatch: "@@ -1 +1 @@\n-old\n+new" }).mount(container);
+    createGitDiffRenderer({ rawPatch: "@@ -1 +1 @@\n-old\n+new", unified: false }).mount(container);
     expect(container.querySelectorAll(".git-diff-column")).toHaveLength(2);
     expect(container.querySelector("pre")).toBeNull();
   });
@@ -92,6 +134,7 @@ describe("git diff renderer", () => {
     const container = document.createElement("div");
     createGitDiffRenderer({
       patch: "@@ -1,2 +1,2 @@\n-a very long original line\n-b\n+a very long updated line\n+c",
+      unified: false,
       wrapLines: true,
     }).mount(container);
 
@@ -146,7 +189,11 @@ describe("git diff renderer", () => {
 
   it("keeps the two independent columns when line wrapping is disabled", () => {
     const container = document.createElement("div");
-    createGitDiffRenderer({ patch: "@@ -1 +1 @@\n-old\n+new", wrapLines: false }).mount(container);
+    createGitDiffRenderer({
+      patch: "@@ -1 +1 @@\n-old\n+new",
+      unified: false,
+      wrapLines: false,
+    }).mount(container);
     expect(container.querySelectorAll(".git-diff-row")).toHaveLength(0);
     expect(container.querySelectorAll(".git-diff-column")).toHaveLength(2);
   });

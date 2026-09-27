@@ -62,6 +62,12 @@ export function setEditorHighlightTheme(id, picotThemeIsDark = true) {
       effects: compartment.reconfigure(editorThemeExtensions(editorThemeId, editorPicotIsDark)),
     });
   }
+  globalThis.window?.dispatchEvent(new Event("picot-preview-editor-theme-change"));
+}
+
+/** The palette currently applied to preview editors, reused by static diff highlighting. */
+export function currentEditorHighlightStyle() {
+  return highlightStyleForPreviewTheme(editorThemeId, editorPicotIsDark);
 }
 
 const SEARCH_PHRASES = {

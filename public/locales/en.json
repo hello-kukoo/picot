@@ -107,7 +107,8 @@
       "changes": "Changes",
       "commit": "Commit",
       "untracked": "Untracked"
-    }
+    },
+    "unifiedDiff": "Unified diff"
   },
   "usage": {
     "contextTokens": "Context: {used}k / {limit}k tokens",

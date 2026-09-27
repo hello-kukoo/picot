@@ -107,7 +107,8 @@
     "truncated": "他に {count} 件の変更が表示されていません",
     "unstage": "ステージ解除",
     "untracked": "未追跡",
-    "writeUnavailable": "Git書き込み権限がありません"
+    "writeUnavailable": "Git書き込み権限がありません",
+    "unifiedDiff": "統合差分"
   },
   "usage": {
     "contextTokens": "コンテキスト：{used}k / {limit}k トークン",

@@ -48,4 +48,4 @@ export {
   ViewPlugin,
   WidgetType,
 } from "@codemirror/view";
-export { tags } from "@lezer/highlight";
+export { highlightTree, tags } from "@lezer/highlight";

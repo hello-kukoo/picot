@@ -107,7 +107,8 @@
       "changes": "修改",
       "commit": "提交",
       "untracked": "未跟踪"
-    }
+    },
+    "unifiedDiff": "逐行对比"
   },
   "usage": {
     "contextTokens": "上下文：{used}k / {limit}k 令牌",

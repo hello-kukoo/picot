@@ -107,7 +107,8 @@
     "truncated": "{count} cambios más no mostrados",
     "unstage": "Quitar de preparados",
     "untracked": "Sin seguimiento",
-    "writeUnavailable": "Autorización de escritura de Git no disponible"
+    "writeUnavailable": "Autorización de escritura de Git no disponible",
+    "unifiedDiff": "Diff unificado"
   },
   "usage": {
     "contextTokens": "Contexto: {used}k / {limit}k tokens",

@@ -20,6 +20,7 @@ beforeEach(async () => {
             comparison: { staged: "Staged", changes: "Changes", untracked: "Untracked" },
             diffOriginal: "Original",
             diffModified: "Modified",
+            unifiedDiff: "Unified diff",
             diffEmpty: "No changes to display",
           },
           files: {
@@ -120,12 +121,15 @@ beforeEach(async () => {
   document.body.appendChild(goToLineInput);
   // Mirrors index.html: each checkbox is wrapped by a label that carries the
   // visible caption, so hiding the input alone would leave the text behind.
-  for (const id of ["file-preview-wrap", "file-preview-autosave"]) {
+  for (const id of ["file-preview-wrap", "file-preview-autosave", "file-preview-diff-unified"]) {
     const label = document.createElement("label");
     label.className = "file-preview-toolbar-check";
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.id = id;
+    checkbox.checked = id === "file-preview-diff-unified";
+    label.id = id === "file-preview-diff-unified" ? "file-preview-diff-unified-label" : "";
+    label.classList.toggle("hidden", id === "file-preview-diff-unified");
     label.appendChild(checkbox);
     document.body.appendChild(label);
   }
@@ -1513,6 +1517,32 @@ describe("FilePreviewPanel diff tabs", () => {
     p.destroy();
   });
 
+  test("diff toolbar defaults to unified and toggles layout without reopening the diff", () => {
+    const p = createPanel();
+    p.openDiff({ comparison: "staged", displayPath: "a.js", rawPatch: "@@ -1 +1 @@\n-old\n+new" });
+    const toggle = p.controls.diffUnified;
+    expect(toggle.checked).toBe(true);
+    expect(content.querySelector(".git-diff-unified")).not.toBeNull();
+    expect(p.controls.diffUnifiedLabel.classList.contains("hidden")).toBe(false);
+
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(p.diffUnified).toBe(false);
+    expect(p.diffTabs.get("git-diff").unified).toBe(false);
+    expect(content.querySelector(".git-diff-columns")).not.toBeNull();
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(content.querySelector(".git-diff-unified")).not.toBeNull();
+    p.destroy();
+  });
+
+  test("hides the unified checkbox outside diff tabs", async () => {
+    const p = createPanel();
+    expect(p.controls.diffUnifiedLabel.classList.contains("hidden")).toBe(true);
+    p.destroy();
+  });
+
   test("hides the Auto-save caption, not just its checkbox, while a diff is active", () => {
     const p = createPanel();
     p.openDiff({
@@ -1591,6 +1621,7 @@ describe("FilePreviewPanel diff tabs", () => {
     p.openDiff({
       comparison: "staged",
       displayPath: "a.js",
+      unified: false,
       rawPatch: "@@ -1 +1 @@\n-old\n+new",
     });
 

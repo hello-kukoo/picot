@@ -103,6 +103,7 @@ export class FilePreviewPanel {
     this.autoSaveTimers = new Map();
     this.autoSaveEnabled = true;
     this.wrapLines = false;
+    this.diffUnified = true;
     this.panelOpen = false;
     this.enlarged = false;
     this.panelRatio = DEFAULT_PANEL_RATIO;
@@ -409,11 +410,13 @@ export class FilePreviewPanel {
 
   openDiff(descriptor) {
     const id = "git-diff";
-    this.diffTabs.set(id, { ...descriptor, id });
+    const diffDescriptor = { ...descriptor, unified: descriptor.unified ?? this.diffUnified, id };
+    this.diffUnified = diffDescriptor.unified;
+    this.diffTabs.set(id, diffDescriptor);
     this._deactivateCurrent();
     this.activeContent = { kind: "diff", id };
     this._destroyRenderer();
-    this.currentRenderer = createGitDiffRenderer({ ...descriptor, wrapLines: this.wrapLines });
+    this.currentRenderer = createGitDiffRenderer({ ...diffDescriptor, wrapLines: this.wrapLines });
     this.currentRenderer.mount(this.content);
     this._openPanel();
     this._renderTabBar();
@@ -1645,6 +1648,8 @@ export class FilePreviewPanel {
       openDesktop: document.getElementById("file-preview-open"),
       openBrowser: document.getElementById("file-preview-open-browser"),
       wrap: document.getElementById("file-preview-wrap"),
+      diffUnified: document.getElementById("file-preview-diff-unified"),
+      diffUnifiedLabel: document.getElementById("file-preview-diff-unified-label"),
       autoSave: document.getElementById("file-preview-autosave"),
       status: document.getElementById("file-preview-status"),
     };
@@ -1720,6 +1725,13 @@ export class FilePreviewPanel {
     this._listen(this.controls.openBrowser, "click", () => {
       const tab = this.state.getActiveTab();
       if (tab) void this._openOfficeInBrowserTab(tab);
+    });
+    this._listen(this.controls.diffUnified, "change", (event) => {
+      this.diffUnified = Boolean(event.target.checked);
+      const descriptor = this.diffTabs.get(this.activeContent?.id);
+      if (descriptor) descriptor.unified = this.diffUnified;
+      this.currentRenderer?.update?.({ unified: this.diffUnified });
+      this._renderToolbar();
     });
     this._listen(this.controls.wrap, "change", (event) => {
       this.wrapLines = Boolean(event.target.checked);
@@ -1816,7 +1828,12 @@ export class FilePreviewPanel {
       "aria-expanded",
       String(settingsVisible && this.toolbarOpen),
     );
-    if (isDiff) this.currentRenderer?.update?.({ wrapLines: this.wrapLines });
+    if (isDiff) {
+      const descriptor = this.diffTabs.get(this.activeContent?.id);
+      if (descriptor) this.diffUnified = descriptor.unified !== false;
+      this.currentRenderer?.update?.({ unified: this.diffUnified, wrapLines: this.wrapLines });
+    }
+    controls.diffUnifiedLabel?.classList.toggle("hidden", !isDiff);
     const editable = this._isEditable(tab);
     const relativePath = tab ? relativeLocalPath(tab.filePath, this.workspaceRoot) : null;
     if (controls.path) {
@@ -1903,6 +1920,7 @@ export class FilePreviewPanel {
       controls.openDesktop.setAttribute("aria-label", label);
     }
     if (controls.wrap) controls.wrap.checked = this.wrapLines;
+    if (controls.diffUnified) controls.diffUnified.checked = this.diffUnified;
     if (controls.autoSave) controls.autoSave.checked = this.autoSaveEnabled;
     if (controls.status) {
       controls.status.textContent = this._toolbarStatus(tab, editable);
