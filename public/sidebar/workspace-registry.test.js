@@ -728,6 +728,136 @@ describe("registry cache invalidation wiring", () => {
     expect(document.querySelector('.session-item[data-file-path="native-session-new"]')).toBeNull();
   });
 
+  test("mirror rebind drops the stale placeholder once the file is scanned", async () => {
+    // The provisional row is keyed by the runtime session id; the scanned row
+    // is keyed by the absolute JSONL path. Those identities never compare
+    // equal, so a manual refresh after the first round-trip re-inserts the
+    // placeholder next to the persisted row until another session is
+    // selected. Rebinding the provisional row to the mirror-learned file
+    // path must converge both rows into one on the next refresh.
+    const persistedFile = "/sessions/20260827_101500_auto-titled.jsonl";
+    let scanned = [];
+    const { sidebar } = await makeSidebar({
+      rows: REGISTRY_ROWS,
+      fetchRoutes: {
+        instances: [],
+        workspaceSessions: (url) =>
+          url.searchParams.get("path") === "/work/alpha" ? { sessions: scanned } : { sessions: [] },
+      },
+    });
+    await sidebar.loadSessions();
+    const alpha = sidebar.projects.find((project) => project.workspaceId === "ws:uuid-1");
+    await sidebar.setWorkspaceExpanded(alpha, true);
+    await settleFetches();
+
+    sidebar.setProvisionalSession({ workspaceId: "uuid-1", sessionId: "native-session-new" });
+    expect(
+      document.querySelector('.session-item[data-file-path="native-session-new"]'),
+    ).not.toBeNull();
+
+    // First round-trip persists the JSONL; the mirror learns the real path.
+    scanned = [{ filePath: persistedFile, name: "Auto title" }];
+    sidebar.rebindProvisionalSession(persistedFile);
+
+    // Manual refresh (toolbar button) observes the persisted file.
+    await sidebar.refresh({ workspacePath: "/work/alpha" });
+    await settleFetches();
+
+    expect(sidebar.provisionalSession).toBeNull();
+    expect(document.querySelector('.session-item[data-file-path="native-session-new"]')).toBeNull();
+    expect(
+      document.querySelector(`.session-item[data-file-path="${persistedFile}"]`),
+    ).not.toBeNull();
+    // Drain this instance's one-shot warmup timer (800ms) so its countOnly
+    // fetch cannot leak into later tests' call counts.
+    await new Promise((resolve) => setTimeout(resolve, 850));
+  });
+
+  test("rebind before the scan keeps exactly one placeholder keyed by the file", async () => {
+    // Mirror sync can beat the scan bucket (stale cache): the placeholder
+    // must survive the rebind re-keyed to the real file, not duplicate, and
+    // converge on the refresh that finally scans it.
+    const persistedFile = "/sessions/20260827_101500_auto-titled.jsonl";
+    let scanned = [];
+    const { sidebar } = await makeSidebar({
+      rows: REGISTRY_ROWS,
+      fetchRoutes: {
+        instances: [],
+        workspaceSessions: (url) =>
+          url.searchParams.get("path") === "/work/alpha" ? { sessions: scanned } : { sessions: [] },
+      },
+    });
+    await sidebar.loadSessions();
+    const alpha = sidebar.projects.find((project) => project.workspaceId === "ws:uuid-1");
+    await sidebar.setWorkspaceExpanded(alpha, true);
+    await settleFetches();
+
+    sidebar.setProvisionalSession({ workspaceId: "uuid-1", sessionId: "native-session-new" });
+    sidebar.rebindProvisionalSession(persistedFile);
+
+    expect(sidebar.provisionalSession).toMatchObject({
+      filePath: persistedFile,
+      provisional: true,
+    });
+    expect(
+      document.querySelector(`.session-item[data-file-path="${persistedFile}"]`),
+    ).not.toBeNull();
+    expect(document.querySelector('.session-item[data-file-path="native-session-new"]')).toBeNull();
+
+    scanned = [{ filePath: persistedFile, name: "Auto title" }];
+    await sidebar.refresh({ workspacePath: "/work/alpha" });
+    await settleFetches();
+
+    expect(sidebar.provisionalSession).toBeNull();
+    expect(
+      document.querySelectorAll(`.session-item[data-file-path="${persistedFile}"]`),
+    ).toHaveLength(1);
+    // Drain this instance's one-shot warmup timer (800ms) so its countOnly
+    // fetch cannot leak into later tests' call counts.
+    await new Promise((resolve) => setTimeout(resolve, 850));
+  });
+
+  test("rebind after a refresh removes the placeholder row, not just the state", async () => {
+    // Auto-refresh resolves the match after its own sidebar.refresh() ran,
+    // i.e. the placeholder was already re-inserted next to the persisted
+    // row by the identity-mismatched apply. Clearing the state alone keeps
+    // that row rendering; the rebind must drop it from the list.
+    const persistedFile = "/sessions/20260827_101500_auto-titled.jsonl";
+    const scanned = [{ filePath: persistedFile, name: "Auto title" }];
+    const { sidebar } = await makeSidebar({
+      rows: REGISTRY_ROWS,
+      fetchRoutes: {
+        instances: [],
+        workspaceSessions: (url) =>
+          url.searchParams.get("path") === "/work/alpha" ? { sessions: scanned } : { sessions: [] },
+      },
+    });
+    await sidebar.loadSessions();
+    const alpha = sidebar.projects.find((project) => project.workspaceId === "ws:uuid-1");
+    await sidebar.setWorkspaceExpanded(alpha, true);
+    await settleFetches();
+
+    sidebar.setProvisionalSession({ workspaceId: "uuid-1", sessionId: "native-session-new" });
+    await sidebar.refresh({ workspacePath: "/work/alpha" });
+    await settleFetches();
+    // The refresh rebuilt the projects array; re-resolve the alpha row.
+    const reloaded = sidebar.projects.find((project) => project.workspaceId === "ws:uuid-1");
+    // The refresh re-inserted the placeholder beside the persisted row.
+    expect(reloaded.sessions.filter((session) => session.provisional)).toHaveLength(1);
+    expect(reloaded.sessions.some((session) => session.filePath === persistedFile)).toBe(true);
+
+    sidebar.rebindProvisionalSession(persistedFile);
+
+    expect(sidebar.provisionalSession).toBeNull();
+    expect(reloaded.sessions.every((session) => !session.provisional)).toBe(true);
+    expect(
+      document.querySelectorAll(`.session-item[data-file-path="${persistedFile}"]`),
+    ).toHaveLength(1);
+    // Drain this instance's one-shot warmup timer (800ms) so its countOnly
+    // fetch cannot leak into later tests' call counts.
+    await new Promise((resolve) => setTimeout(resolve, 850));
+  });
+
   test("coalesced refresh preserves in-flight session-list generation", async () => {
     const { sidebar } = await makeRegistrySidebar();
     await sidebar.loadSessions();

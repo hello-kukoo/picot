@@ -3204,7 +3204,11 @@ async function refreshSidebarForNewSession(event = null, attempt = 0) {
         sidebar.setStreaming(liveFile, false);
         sidebar.setStreaming(found.filePath, true);
       }
-      sidebar.provisionalSession = null;
+      // Rebind, not just null the state: the placeholder object was already
+      // re-inserted into project.sessions by the refresh above and would
+      // otherwise keep rendering next to the persisted row until the next
+      // full list rebuild.
+      sidebar.rebindProvisionalSession(found.filePath);
       sidebar.setActive(found.filePath);
       restoreSessionUiState(found.filePath);
       resolveAndApplyFocus();
@@ -5348,6 +5352,11 @@ refreshSessionsBtn.addEventListener("click", () => {
   }
   // Static glyph policy: refresh never spins. A pending refresh disables the
   // button and flips aria-busy so assistive tech announces the busy state.
+  // Rebind any provisional row to the mirror-known file first: the toolbar
+  // refresh path itself cannot map a runtime id to a scanned file.
+  if (mirrorActiveSessionFile && sidebar.provisionalSession) {
+    sidebar.rebindProvisionalSession(mirrorActiveSessionFile);
+  }
   refreshSessionsBtn.disabled = true;
   refreshSessionsBtn.setAttribute("aria-busy", "true");
   sidebar
@@ -6015,6 +6024,11 @@ function handleMirrorSync(data) {
       entries: data.entries?.length || 0,
     });
     mirrorActiveSessionFile = receivedSessionFile;
+    // The provisional "new chat" row is keyed by the runtime session id,
+    // which never equals the scanned JSONL path. Rebind it to the real file
+    // now so the next sidebar refresh converges the placeholder into the
+    // persisted row instead of showing both.
+    sidebar.rebindProvisionalSession(receivedSessionFile);
     sidebar.setActive(receivedSessionFile);
     restoreSessionUiState(receivedSessionFile);
     resolveAndApplyFocus();

@@ -702,7 +702,27 @@ export class SessionSidebar {
   }
 
   /** Drop the provisional row and its pending state: the unpersisted
-   * session was abandoned by selecting another session. */
+    this.provisionalSession = null;
+  /** Rebind the provisional row to the runtime's persisted JSONL path.
+   * The route session id and the scanned row never compare equal (runtime
+   * id vs absolute file path), so without this every later refresh
+   * re-inserts the placeholder next to the persisted row. Call once the
+   * mirror learns the real file; if the scanned list already has it, the
+   * placeholder converges away on the spot. */
+  rebindProvisionalSession(filePath) {
+    const pending = this.provisionalSession;
+    if (!pending || typeof filePath !== "string" || !filePath || pending.filePath === filePath) {
+      return;
+    }
+    for (const project of this.projects) {
+      if (!Array.isArray(project?.sessions)) continue;
+      project.sessions = project.sessions.filter((session) => session !== pending);
+    }
+    pending.filePath = filePath;
+    this.applyProvisionalSession();
+    this.render();
+  }
+
   retireProvisionalSession() {
     const pending = this.provisionalSession;
     if (!pending) return;
