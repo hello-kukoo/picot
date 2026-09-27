@@ -599,14 +599,17 @@ fn open_external_core(url: &str) -> Result<(), String> {
 
 // ─── Window helpers ───────────────────────────────────────────────────────────
 
-/// What the window-state plugin remembers across launches: the inner size and
-/// whether the window was maximized/fullscreen. Position is deliberately left
-/// out — a saved position can land off-screen once monitors change, and only
-/// the size was asked for. Maximized windows keep their pre-maximize size in
-/// the saved state (the plugin skips SIZE while maximized), so restoring a
-/// maximized window still has a sane size to fall back to.
+/// What the window-state plugin remembers across launches: the inner size, the
+/// outer position, and whether the window was maximized/fullscreen.
+///
+/// Position is safe to restore because the plugin applies it only when the saved
+/// rectangle still intersects an attached monitor — a window last closed on a
+/// display that is gone keeps the OS placement instead of opening off-screen.
+/// While maximized/minimized the plugin skips both SIZE and POSITION, so the
+/// saved state keeps the pre-maximize geometry and a restored maximized window
+/// has a sane size and position to fall back to.
 fn window_state_flags() -> StateFlags {
-    StateFlags::SIZE | StateFlags::MAXIMIZED | StateFlags::FULLSCREEN
+    StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED | StateFlags::FULLSCREEN
 }
 
 fn open_native_window(
