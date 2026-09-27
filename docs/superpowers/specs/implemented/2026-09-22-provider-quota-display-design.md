@@ -127,9 +127,12 @@ CREATE TABLE IF NOT EXISTS reset_credit_operations (
 
 1. 配额是「使用量」页内的独立子页签（「使用量」/「配额」两个 tab，2026-09-23 修订：原设计为 `renderShell` 追加 `<section id="usage-provider-quota">` 于 usage-models 之后，实装改为 Settings 主 DOM 的 `#settings-provider-quota`——配额不是成本统计的一格）；区块标题「提供方配额」+ 整体刷新按钮。
 2. 每个有报告的 provider 一张卡：显示名（id→显示名映射表，未知 id 原样显示）+ 窗口条列表（percent 进度条 + label + 相对重置时间）+ 数据更新时间。
+   进度条色档（2026-09-27 修订）：<75% 绿、75–90% 橙（含 90）、>90% 红。
+   codex 卡标题：显示名 + 账户类型徽标（绿底绿字，无边框；取 WHAM 响应根字段 `plan_type`，缺失时回退解码 access token JWT 的 `chatgpt_plan_type` claim，opencodex 同款）+ 重置额度 chip（橘底橘字，紧跟账户类型）。
+   加载行为（2026-09-27 修订）：首次/刷新/每次进入「使用量」页先渲染骨架卡（动画条）再异步探测（并行）；`loadReports` 串行化（飞行中的调用合并）；探测失败且无旧数据时保留错误提示条而非隐藏。
 3. openai-codex 卡额外显示「重置额度 N 个」；点击 → 确认对话框（列 credits 明细 granted_at/expires_at）→ 确认后走 open→consume→settle 流程，结果 toast（成功/无可重置/无额度/结果未知）。
 4. `ambiguous` 结果 toast 如实提示「可能已生效，重试安全（沿用同一请求 id）」；不做 inspect 计数对比（见上「恢复策略」2026-09-23 修订）。
-5. 空态：无可探测 provider 时整块隐藏（不显示「暂无数据」占位）。
+5. 空态：无可探测 provider 时整块隐藏（不显示「暂无数据」占位）。2026-09-27 修订：隐藏仅指「成功探测且零个已配置 provider」；**请求失败**（超时/传输错误）保留区块——标题 + 刷新按钮 +「暂时不可用」提示条，可手动重试。启动时那次探测失败后整段隐藏曾把页面变成无法自愈的白板。
 6. landing：用量页 landing 本就可见，本区块随 ConfigGateway 可用性正常工作；ConfigGateway 不可用（无任何 pi）时区块隐藏。
 
 ## 错误状态

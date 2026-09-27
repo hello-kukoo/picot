@@ -119,6 +119,9 @@ function planValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+/** Reads a claim without verifying the signature: the plan label is
+ * display-only and the token comes from our own OAuth ledger, so a spoofed
+ * claim can at worst mislabel the badge (opencodex takes the same posture). */
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
   const part = token.split(".")[1];
   if (!part) return null;

@@ -175,6 +175,8 @@ export function createProviderQuotaPanel(seams, { locale }) {
       loadError = false;
     } catch {
       reportsById = previousReports;
+      // loadError only shapes the empty-state view; with restored cards the
+      // cards stay on screen and the flag waits for the next render.
       loadError = true;
     } finally {
       hasLoaded = true;
