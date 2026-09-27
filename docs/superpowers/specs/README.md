@@ -12,9 +12,9 @@
 | --- | --- | --- |
 | [`implemented/`](implemented/) | 设计已批准 + 代码已落地 + 测试已通过 | 56 |
 | [`in-progress/`](in-progress/) | 设计已批准实施未完（部分代码已合入或 working tree 有进展） | 2 |
-| [`not-started/`](not-started/) | 设计草案或待评审，未实施 | 7 |
+| [`not-started/`](not-started/) | 设计草案或待评审，未实施 | 6 |
 | [`audits/`](../../audits/) | 审计记录（非设计 spec，不引入实现） | 1 |
-| [`superseded/`](superseded/) | 已被更新的 spec 取代，保留作历史参考 | 4 |
+| [`superseded/`](superseded/) | 已被更新的 spec 取代，保留作历史参考 | 5 |
 | [`process-evidence/`](process-evidence/) | Native Runtime 迁移过程的证据 / CP 评审 / 闭环记录（不是设计规格） | 24 |
 | [`prototypes/`](prototypes/) | 视觉原型（HTML），仅评审用，不进生产 | 3 |
 
@@ -89,7 +89,6 @@
 | 🚧 in-progress | [2026-09-27-clinical-research-agent-team](in-progress/2026-09-27-clinical-research-agent-team-design.md) | 试用版；六份岗位指令 + Paseo profile 已建，真实团队未验证 |
 | 📋 not-started | [2026-09-18-acp-external-agent-delegation](not-started/2026-09-18-acp-external-agent-delegation-design.md) | 设计草案，Dr. Lin 2026-09：暂时不做 |
 | 📋 not-started | [2026-09-20-persistent-daemon-relay](not-started/2026-09-20-persistent-daemon-relay-design.md) | 持久 daemon + relay 接入；Draft 待拍板 |
-| 📋 not-started | [2026-09-20-session-scan-bounded-io](not-started/2026-09-20-session-scan-bounded-io-design.md) | head/tail 双窗口扫描；曾实施（`4c73f52`）但 revert（`e4079f` 64 KiB window 截断 ~150 KB system/context）；回上游线性扫描 |
 | 📋 not-started | [2026-09-22-environment-toolchain](not-started/2026-09-22-environment-toolchain-design.md) | Settings 「环境」页；Draft 待评审 |
 | 📋 not-started | [2026-09-22-line-review-workflow](not-started/2026-09-22-line-review-workflow-design.md) | 行级 Code Review 工作流；Draft 待评审 |
 | 📋 not-started | [2026-09-23-paseo-pi-only-fork-relay-mobile](not-started/2026-09-23-paseo-pi-only-fork-relay-mobile-design.md) | Paseo Pi-only fork + relay + 移动端；阶段一裁剪已实测 |
@@ -98,6 +97,7 @@
 | ⛔ superseded | [2026-07-27-claude-skills-discovery](superseded/2026-07-27-claude-skills-discovery-design.md) | 由 [2026-08-07-composer-skill-discovery-and-execution-fixes](superseded/2026-08-07-composer-skill-discovery-and-execution-fixes.md) 取代 |
 | ⛔ superseded | [2026-08-07-composer-skill-discovery-and-execution-fixes](superseded/2026-08-07-composer-skill-discovery-and-execution-fixes.md) | §3.9 设计点 1-2 由 Pi 0.84.2 原生 expandPromptTemplates 取代（08-25） |
 | ⛔ superseded | [2026-09-03-picot-external-terminal](superseded/2026-09-03-picot-external-terminal-design.md) | Path 2 拍板后暂停；tty7/liney 调研后认为非 WebView 嵌组件 |
+| ⛔ superseded | [2026-09-20-session-scan-bounded-io](superseded/2026-09-20-session-scan-bounded-io-design.md) | 实施后 revert（`e4079fb`）：64 KiB head window 截断在 ~150 KB system/context；256 KiB tail 命中 name 0%（实测最深 5.7 MB）。bounded scan 不能服务 Pi session_info 语义，保留作分析存档 |
 
 ## 相关参考
 
