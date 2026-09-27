@@ -1394,12 +1394,13 @@ export async function handlePicotConfig(
         const baseUrlById = new Map(
           candidates.providers.map((entry) => [entry.providerId, entry.baseUrl]),
         );
-        const reports = [];
-        for (const { providerId, spec } of picked) {
-          const baseUrl = baseUrlById.get(providerId) ?? modelsJsonProviders[providerId]?.baseUrl;
-          const instance = await resolveQuotaInstance(providerId, baseUrl, modelsJsonProviders);
-          reports.push(await quotaProbeCache.report(providerId, spec, instance, force));
-        }
+        const reports = await Promise.all(
+          picked.map(async ({ providerId, spec }) => {
+            const baseUrl = baseUrlById.get(providerId) ?? modelsJsonProviders[providerId]?.baseUrl;
+            const instance = await resolveQuotaInstance(providerId, baseUrl, modelsJsonProviders);
+            return quotaProbeCache.report(providerId, spec, instance, force);
+          }),
+        );
         return { ok: true, data: { reports } };
       }
 

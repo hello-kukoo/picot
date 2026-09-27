@@ -365,6 +365,8 @@ test("shows the head while the first probe is in flight, hides when settled empt
 
   // In flight: the page must not look blank (this is what "配额 page is empty"
   // looked like — the first probe takes seconds).
+  expect(container.querySelectorAll(".quota-card.is-skeleton").length).toBeGreaterThan(0);
+  expect(container.querySelector(".quota-bar-fill.is-loading")).not.toBeNull();
   expect(container.classList.contains("hidden")).toBe(false);
   expect(container.querySelector(".quota-refresh-btn")?.textContent).toBe("Refreshing…");
 
@@ -373,4 +375,34 @@ test("shows the head while the first probe is in flight, hides when settled empt
   // Settled empty still hides the whole section (spec: no placeholder).
   expect(container.classList.contains("hidden")).toBe(true);
   expect(container.querySelector(".quota-section-head")).toBeNull();
+});
+
+test("refresh shows skeletons immediately and restores previous reports on failure", async () => {
+  const reports = [
+    {
+      provider: "openai-codex",
+      source: "openai-codex:wham",
+      quota: { fiveHourPercent: 32, updatedAt: Date.now() },
+    },
+  ];
+  const seams = makeSeams({ reports });
+  const panel = createProviderQuotaPanel(seams, { locale });
+  await panel.loadReports();
+  expect(container.querySelector(".quota-card-name")?.textContent).toBe("OpenAI Codex");
+
+  let rejectRefresh;
+  seams.gateway.call.mockImplementationOnce(
+    () =>
+      new Promise((_, reject) => {
+        rejectRefresh = reject;
+      }),
+  );
+  const pending = panel.loadReports(true);
+  expect(container.querySelectorAll(".quota-card.is-skeleton").length).toBeGreaterThan(0);
+  expect(container.querySelectorAll(".quota-card:not(.is-skeleton)")).toHaveLength(0);
+
+  rejectRefresh(new Error("refresh unavailable"));
+  await pending;
+  expect(container.querySelectorAll(".quota-card.is-skeleton")).toHaveLength(0);
+  expect(container.querySelector(".quota-card-name")?.textContent).toBe("OpenAI Codex");
 });

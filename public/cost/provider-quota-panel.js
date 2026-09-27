@@ -151,11 +151,14 @@ function balanceRow(window, locale) {
  * host-side reset_credit_open / reset_credit_settle ledger ops.
  */
 export function createProviderQuotaPanel(seams, { locale }) {
-  const reportsById = new Map();
+  let reportsById = new Map();
   let loading = false;
+  let hasLoaded = false;
 
   async function loadReports(force = false) {
     loading = true;
+    const previousReports = reportsById;
+    reportsById = new Map();
     render();
     try {
       // The gateway resolves with the handler payload `{ ok, data }`, not the
@@ -165,9 +168,11 @@ export function createProviderQuotaPanel(seams, { locale }) {
       for (const report of payload?.data?.reports ?? []) {
         reportsById.set(report.provider, report);
       }
+      hasLoaded = true;
     } catch {
-      // The section simply renders what it has; errors keep prior rows.
+      reportsById = previousReports;
     } finally {
+      hasLoaded = true;
       loading = false;
       render();
     }
@@ -400,6 +405,34 @@ export function createProviderQuotaPanel(seams, { locale }) {
     return head;
   }
 
+  function renderSkeletonCard(provider) {
+    const card = document.createElement("div");
+    card.className = "quota-card is-skeleton";
+    card.setAttribute("aria-hidden", "true");
+    const name = document.createElement("div");
+    name.className = "quota-card-name";
+    name.textContent = providerDisplayName(provider);
+    const rows = document.createElement("div");
+    rows.className = "quota-rows";
+    for (let index = 0; index < 2; index += 1) {
+      const row = document.createElement("div");
+      row.className = "quota-row";
+      const label = document.createElement("span");
+      label.className = "quota-row-label quota-skeleton-label";
+      const bar = document.createElement("div");
+      bar.className = "quota-bar";
+      const fill = document.createElement("div");
+      fill.className = "quota-bar-fill is-loading";
+      bar.append(fill);
+      const pct = document.createElement("span");
+      pct.className = "quota-row-pct quota-skeleton-pct";
+      row.append(label, bar, pct);
+      rows.append(row);
+    }
+    card.append(name, rows);
+    return card;
+  }
+
   function render() {
     const container = seams.container();
     if (!container) return;
@@ -408,19 +441,20 @@ export function createProviderQuotaPanel(seams, { locale }) {
     const reports = [...reportsById.values()].filter(
       (report) => report.failure !== "not_configured",
     );
-    // Empty state hides the whole section (spec: no placeholder).
+    // Empty state hides the whole section once the first request settles.
     const hasContent = reports.length > 0;
-    // A settled empty state still hides the whole section (spec: no
-    // placeholder), but the first probe takes seconds — hiding the section
-    // while it is in flight is what made the page look blank.
-    container.classList.toggle("hidden", !hasContent && !loading);
-    if (!hasContent) {
+    container.classList.toggle("hidden", !hasContent && !loading && hasLoaded);
+    if (!hasContent && hasLoaded && !loading) {
       container.replaceChildren();
-      if (loading) container.append(buildHead(loading));
       return;
     }
     container.replaceChildren();
     const head = buildHead(loading);
+
+    if (loading) {
+      container.append(head, ...Object.keys(DISPLAY_NAMES).map(renderSkeletonCard));
+      return;
+    }
 
     for (const report of reports) {
       const card = document.createElement("div");

@@ -2582,6 +2582,31 @@ body.landing-mode #landing {
   transition: width var(--duration) var(--ease);
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  .quota-bar-fill.is-loading {
+    width: 38%;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    background-size: 200% 100%;
+    animation: quota-bar-loading 1.2s ease-in-out infinite;
+  }
+
+  @keyframes quota-bar-loading {
+    from {
+      background-position: 100% 0;
+    }
+    to {
+      background-position: -100% 0;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quota-bar-fill.is-loading {
+    width: 38%;
+    background: var(--accent);
+  }
+}
+
 .quota-bar-fill.is-ok {
   background: var(--success, var(--accent));
 }
