@@ -44,6 +44,21 @@ function clamp(value, min, max) {
   return value;
 }
 
+/**
+ * The main left sidebar's resize contract: one width key and bounds shared by
+ * the landing page and the workspace page, so a sidebar widened on either
+ * stays that width on both.
+ */
+export function createMainSidebarResizer(sidebarEl, { maxWidth = 500 } = {}) {
+  return createSidebarResizer({
+    sidebarEl,
+    side: "left",
+    storageKey: "picot-sidebar-width",
+    minWidth: 200,
+    maxWidth,
+  });
+}
+
 export function createSidebarResizer({
   sidebarEl,
   side,

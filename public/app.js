@@ -126,7 +126,7 @@ import {
 import { SessionSidebar } from "./sidebar/index.js";
 import { setupSidebarSearchControl } from "./sidebar/search-control.js";
 import { WorkspaceFocusSidebar } from "./sidebar/workspace-focus-sidebar.js";
-import { createSidebarResizer } from "./sidebar-resizer.js";
+import { createMainSidebarResizer, createSidebarResizer } from "./sidebar-resizer.js";
 import { createSessionTaskAnalysis } from "./task-debugger/session-task-analysis.js";
 import { buildTurnsFromEntries } from "./task-debugger/turn-history.js";
 import { createTurnTraceRecorder } from "./task-debugger/turn-trace.js";
@@ -2508,11 +2508,7 @@ if (fileSidebarIsOpen) {
 // Resizable sidebars — drag handle on inner edge, persisted to localStorage.
 // maxWidth is a function: the cap moves with the window and with the sibling
 // panels, so the chat column keeps --chat-min no matter how the panels are set.
-createSidebarResizer({
-  sidebarEl,
-  side: "left",
-  storageKey: "picot-sidebar-width",
-  minWidth: 200,
+createMainSidebarResizer(sidebarEl, {
   maxWidth: () => Math.min(500, sidePanelMaxWidth(sidebarEl)),
 });
 createSidebarResizer({

@@ -65,7 +65,7 @@ import { renderThinkingEffort } from "./settings/toggles.js";
 import { setupUsageTabs } from "./settings/usage-tabs.js";
 import { FOCUS_WORKSPACE_PARAM } from "./sidebar/focus-state.js";
 import { SessionSidebar } from "./sidebar/index.js";
-import { createSidebarResizer } from "./sidebar-resizer.js";
+import { createMainSidebarResizer } from "./sidebar-resizer.js";
 import { applyTheme, getCurrentTheme, themes } from "./themes.js";
 import { WindowCloseCoordinator } from "./window-close-coordinator.js";
 import {
@@ -274,13 +274,7 @@ const sidebar = new SessionSidebar(
 // Same resize contract as the main app: the landing sidebar shares the
 // persisted width key, so a sidebar widened to read full session names stays
 // that width after entering a workspace.
-createSidebarResizer({
-  sidebarEl: document.getElementById("sidebar"),
-  side: "left",
-  storageKey: "picot-sidebar-width",
-  minWidth: 200,
-  maxWidth: 500,
-});
+createMainSidebarResizer(document.getElementById("sidebar"));
 
 // ── Chrome wiring ────────────────────────────────────────────────────────────
 
