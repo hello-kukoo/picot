@@ -5,7 +5,7 @@ import { onLocaleChange, t } from "../i18n.js";
 
 /**
  * @typedef {{name:string, entry:Object, sourceFile:string, editable:boolean, ownDisabled:boolean, effectiveDisabled:boolean}} McpListEntry
- * @typedef {{installed: boolean, groups: Record<string, McpListEntry[]>, groupErrors: Record<string, string|undefined>}} McpListData
+ * @typedef {{installed: boolean, legacyMigration?: {available: boolean}, groups: Record<string, McpListEntry[]>, groupErrors: Record<string, string|undefined>}} McpListData
  */
 
 export function setupMcpPage({ masterEl, detailEl, tabs, navItem, configGateway }) {
@@ -48,6 +48,18 @@ export function setupMcpPage({ masterEl, detailEl, tabs, navItem, configGateway 
   }
 
   async function activate() {
+    await load();
+  }
+
+  /** The pre-3.0 mcp.json copy runs only after the user clicks the banner's
+   * migrate action; the list op detects but never writes. */
+  async function migrateLegacy() {
+    const result = await call("mcp_migrate_legacy_config");
+    setStatus(
+      result.ok && result.data?.migrated
+        ? t("settings.mcp.saved")
+        : String(result.data?.error ?? result.error ?? t("settings.mcp.migrationFailed")),
+    );
     await load();
   }
 
@@ -114,6 +126,25 @@ export function setupMcpPage({ masterEl, detailEl, tabs, navItem, configGateway 
     masterEl.replaceChildren();
     if (!data) return;
     const entries = groupEntries();
+
+    if (data.legacyMigration?.available) {
+      const notice = document.createElement("div");
+      notice.className = "mcp-legacy-notice";
+      const text = document.createElement("span");
+      text.textContent = t("settings.mcp.legacyNotice");
+      const action = document.createElement("button");
+      action.type = "button";
+      action.className = "mcp-legacy-migrate";
+      action.textContent = t("settings.mcp.legacyMigrate");
+      // Disable on first click: the op is fast, but a double-fire would run
+      // twice; the re-render after load() replaces this button anyway.
+      action.addEventListener("click", () => {
+        action.disabled = true;
+        void migrateLegacy();
+      });
+      notice.append(text, action);
+      masterEl.appendChild(notice);
+    }
 
     const head = document.createElement("div");
     head.className = "mcp-master-head";

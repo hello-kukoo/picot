@@ -793,7 +793,10 @@
       "noProject": "No project MCP servers. Open a workspace, or add one.",
       "sourceLabel": "Source",
       "sectionsAriaLabel": "MCP layers",
-      "addMcp": "+ Add MCP"
+      "addMcp": "+ Add MCP",
+      "legacyNotice": "A pre-3.0 adapter config (mcp.json) was found. Migrate it to mcp-adapter.json?",
+      "legacyMigrate": "Migrate",
+      "migrationFailed": "Migration failed."
     },
     "usage": "Usage",
     "quota": "Quota",

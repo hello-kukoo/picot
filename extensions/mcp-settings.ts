@@ -129,7 +129,9 @@ function readMcpLayer(filePath: string): McpLayerRead {
 function writeMcpLayer(filePath: string, doc: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.tmp`);
-  fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, "utf8");
+  // 0600 on create: MCP configs can carry env secrets, and the rename keeps
+  // the temp file's permissions (same contract as advisor.json).
+  fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   fs.renameSync(tmp, filePath);
 }
 
@@ -149,29 +151,53 @@ function legacyPiGlobalPath(agentDir: string): string {
 }
 
 /**
- * One-time migration: the adapter stopped reading `<agent dir>/mcp.json` in
- * 3.0, so a pre-3.0 config would otherwise be orphaned (Picot's embedded Pi has
- * no built-in MCP support, so nothing else reads it either). Copies the file
- * into mcp-adapter.json when — and only when — the target does not exist, and
- * leaves the source in place. Returns an error to surface when the source
- * exists but cannot be parsed; never overwrites a target.
+ * Detection for the settings page: a pre-3.0 `<agent dir>/mcp.json` exists
+ * that the adapter no longer reads. Read-only — the copy itself runs only
+ * through the explicit `mcp_migrate_legacy_config` op after the user confirms.
  */
-function migrateLegacyPiGlobalConfig(agentDir: string): string | undefined {
+function legacyMigrationStatus(
+  agentDir: string,
+  installed: boolean,
+): { available: boolean; error?: string } {
   const target = piGlobalPath(agentDir);
-  if (fs.existsSync(target)) return undefined;
+  if (fs.existsSync(target)) return { available: false };
   const source = legacyPiGlobalPath(agentDir);
   const legacy = readMcpLayer(source);
   if (!legacy.doc) {
-    if (!legacy.error) return undefined; // No legacy file: nothing to migrate.
-    return `${source} could not be migrated to ${target}: ${legacy.error}`;
+    if (!legacy.error || !installed) return { available: false };
+    return {
+      available: false,
+      error: `${source} could not be migrated to ${target}: ${legacy.error}`,
+    };
   }
-  if (Object.keys(serversOf(legacy)).length === 0) return undefined; // Empty config: nothing to carry over.
+  return { available: installed && Object.keys(serversOf(legacy)).length > 0 };
+}
+
+/**
+ * The user-confirmed copy: pre-3.0 `<agent dir>/mcp.json` → `mcp-adapter.json`.
+ * Runs only when the adapter is installed, the target is absent, and the
+ * source parses with at least one server; the source file always stays.
+ */
+export function migrateLegacyPiGlobalConfig(agentDir: string): {
+  migrated: boolean;
+  error?: string;
+} {
+  const status = legacyMigrationStatus(agentDir, isAdapterInstalled(agentDir));
+  if (status.error) return { migrated: false, error: status.error };
+  if (!status.available) return { migrated: false };
+  const legacy = readMcpLayer(legacyPiGlobalPath(agentDir));
+  // The availability check above just parsed this file; a failure here means
+  // it changed between the two reads, and refusing is the safe answer.
+  if (!legacy.doc) return { migrated: false, error: "legacy config changed while migrating" };
   try {
-    writeMcpLayer(target, legacy.doc);
+    writeMcpLayer(piGlobalPath(agentDir), legacy.doc);
   } catch (error) {
-    return `${source} could not be migrated to ${target}: ${error instanceof Error ? error.message : String(error)}`;
+    return {
+      migrated: false,
+      error: `${legacyPiGlobalPath(agentDir)} could not be migrated to ${piGlobalPath(agentDir)}: ${error instanceof Error ? error.message : String(error)}`,
+    };
   }
-  return undefined;
+  return { migrated: true };
 }
 
 function sharedProjectPath(cwd: string): string {
@@ -268,6 +294,7 @@ export function listMcpServers(
   cwd: string,
 ): {
   installed: boolean;
+  legacyMigration: { available: boolean };
   groups: { sharedGlobal: McpListEntry[]; piGlobal: McpListEntry[]; project: McpListEntry[] };
   groupErrors: { sharedGlobal?: string; piGlobal?: string; project?: string };
 } {
@@ -278,7 +305,7 @@ export function listMcpServers(
   // The page exists only to manage the adapter, so a missing adapter means no
   // migration: never create adapter config for a package the user does not run.
   const installed = isAdapterInstalled(agentDir);
-  const migrationError = installed ? migrateLegacyPiGlobalConfig(agentDir) : undefined;
+  const legacy = legacyMigrationStatus(agentDir, installed);
   const piLayer = { filePath: piGlobalPath(agentDir), layer: readMcpLayer(piGlobalPath(agentDir)) };
   const projectLayers =
     cwd && cwd !== homeDir()
@@ -299,6 +326,7 @@ export function listMcpServers(
 
   return {
     installed,
+    legacyMigration: { available: legacy.available },
     groups: {
       sharedGlobal: toListEntries(sharedMerged, effective, () => false),
       piGlobal: toListEntries(piMerged, effective, () => true),
@@ -310,7 +338,7 @@ export function listMcpServers(
     },
     groupErrors: {
       sharedGlobal: sharedLayers.map((l) => l.layer.error).find(Boolean),
-      piGlobal: piLayer.layer.error ?? migrationError,
+      piGlobal: piLayer.layer.error ?? legacy.error,
       project: projectLayers.map((l) => l.layer.error).find(Boolean),
     },
   };

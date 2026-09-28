@@ -43,7 +43,13 @@ import {
   webAccessConfigGet,
   webAccessConfigSet,
 } from "./extension-settings";
-import { deleteMcpServer, listMcpServers, saveMcpServer, toggleMcpServer } from "./mcp-settings";
+import {
+  deleteMcpServer,
+  listMcpServers,
+  migrateLegacyPiGlobalConfig,
+  saveMcpServer,
+  toggleMcpServer,
+} from "./mcp-settings";
 import {
   createOAuthLoginOperationManager,
   type OAuthOperationEvent,
@@ -1595,6 +1601,11 @@ export async function handlePicotConfig(
 
       case "mcp_toggle_server":
         return { ok: true, data: toggleMcpServer(params, PI_AGENT_ROOT, mcpCwd(ctx)) };
+
+      // User-confirmed legacy mcp.json → mcp-adapter.json copy (the list op
+      // only detects; it never writes).
+      case "mcp_migrate_legacy_config":
+        return { ok: true, data: migrateLegacyPiGlobalConfig(PI_AGENT_ROOT) };
 
       case "advisor.config.get":
         return { ok: true, data: await advisorConfigGet(requireRegistry()) };

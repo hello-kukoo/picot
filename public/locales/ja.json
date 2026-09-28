@@ -793,7 +793,10 @@
       "noProject": "プロジェクトの MCP サーバーはありません。ワークスペースを開くか、追加してください。",
       "sourceLabel": "ソース",
       "sectionsAriaLabel": "MCP レイヤー",
-      "addMcp": "+ MCPを追加"
+      "addMcp": "+ MCPを追加",
+      "legacyNotice": "旧バージョンのアダプター設定（mcp.json）が見つかりました。mcp-adapter.json へ移行しますか？",
+      "legacyMigrate": "移行",
+      "migrationFailed": "移行に失敗しました。"
     },
     "usage": "使用量",
     "quota": "クォータ",

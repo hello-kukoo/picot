@@ -24,6 +24,9 @@ setMessages({
       enable: "Enable",
       disable: "Disable",
       saved: "Saved.",
+      legacyNotice: "legacy mcp.json found",
+      legacyMigrate: "Migrate",
+      migrationFailed: "Migration failed.",
       form: {
         name: "Name",
         type: "Type",
@@ -288,6 +291,40 @@ describe("mcp-page", () => {
     const addActions = add2.detailEl.querySelector(".mcp-form-actions");
     expect(addActions.textContent).toContain("Save");
     expect(addActions.textContent).not.toContain("Delete");
+  });
+
+  it("legacy banner: shown when available, migrate op copies then reloads", async () => {
+    const withLegacy = {
+      ok: true,
+      data: { ...LIST.data, legacyMigration: { available: true } },
+    };
+    const afterMigrate = {
+      ok: true,
+      data: { ...LIST.data, legacyMigration: { available: false } },
+    };
+    const call = vi
+      .fn()
+      .mockResolvedValueOnce(withLegacy) // activate() load
+      .mockResolvedValueOnce({ ok: true, data: { migrated: true } }) // migrate op
+      .mockResolvedValueOnce(afterMigrate); // reload after migrate
+    const { page, masterEl } = mount({ call });
+
+    await page.activate();
+    const banner = masterEl.querySelector(".mcp-legacy-notice");
+    expect(banner).not.toBeNull();
+    expect(banner.textContent).toContain("legacy mcp.json found");
+
+    const migrateBtn = banner.querySelector(".mcp-legacy-migrate");
+    migrateBtn.click();
+    expect(migrateBtn.disabled).toBe(true); // no double-fire
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(call.mock.calls.map((c) => c[0])).toEqual([
+      "mcp_list_servers",
+      "mcp_migrate_legacy_config",
+      "mcp_list_servers",
+    ]);
+    expect(masterEl.querySelector(".mcp-legacy-notice")).toBeNull();
   });
 
   it("gateway rejection surfaces as an error status instead of an unhandled rejection", async () => {

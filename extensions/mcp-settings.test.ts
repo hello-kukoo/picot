@@ -3,13 +3,22 @@
 // ABOUTME: Exercises the MCP settings bridge ops over pi-mcp-adapter's layered config files.
 // ABOUTME: Uses isolated temp dirs so tests never touch a developer's real mcp config layers.
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   deleteMcpServer,
   listMcpServers,
+  migrateLegacyPiGlobalConfig,
   saveMcpServer,
   stripJsonComments,
   toggleMcpServer,
@@ -168,7 +177,7 @@ describe("listMcpServers", () => {
   });
 });
 
-describe("legacy global config migration", () => {
+describe("legacy global config migration (explicit, user-confirmed)", () => {
   const legacyGlobal = (agentDir: string) => join(agentDir, "mcp.json");
 
   beforeEach(() => {
@@ -176,7 +185,7 @@ describe("legacy global config migration", () => {
     writeJson(join(agentDir, "settings.json"), { packages: ["npm:pi-mcp-adapter"] });
   });
 
-  it("copies a legacy global mcp.json into mcp-adapter.json once, keeping the source", () => {
+  it("detects a migratable legacy config without writing anything", () => {
     writeFileSync(
       legacyGlobal(agentDir),
       `{
@@ -186,53 +195,86 @@ describe("legacy global config migration", () => {
     );
 
     const result = listMcpServers(agentDir, projectDir);
+    expect(result.legacyMigration).toEqual({ available: true });
+    expect(existsSync(piGlobal(agentDir))).toBe(false); // detection never writes
+    expect(result.groups.piGlobal.find((e) => e.name === "grep")).toBeUndefined();
+  });
+
+  it("copies on the explicit op, keeps the source, and lists the copied servers", () => {
+    writeJson(legacyGlobal(agentDir), { mcpServers: { grep: { url: "https://mcp.grep.app" } } });
+
+    const outcome = migrateLegacyPiGlobalConfig(agentDir);
+    expect(outcome).toEqual({ migrated: true });
     expect(readJson(piGlobal(agentDir)).mcpServers.grep).toEqual({ url: "https://mcp.grep.app" });
     expect(existsSync(legacyGlobal(agentDir))).toBe(true); // source left in place
+
+    const result = listMcpServers(agentDir, projectDir);
+    expect(result.legacyMigration).toEqual({ available: false }); // target now exists
     expect(result.groups.piGlobal.find((e) => e.name === "grep")?.sourceFile).toBe(
       piGlobal(agentDir),
     );
     expect(result.groups.piGlobal.find((e) => e.name === "grep")?.editable).toBe(true);
   });
 
-  it("preserves non-server keys and the mcp-servers key variant", () => {
-    writeJson(legacyGlobal(agentDir), {
-      imports: ["codex"],
-      "mcp-servers": { old: { command: "run old" } },
-    });
-    listMcpServers(agentDir, projectDir);
-    const doc = readJson(piGlobal(agentDir));
+  it("preserves non-server keys and the mcp-servers key variant, including comments", () => {
+    writeFileSync(
+      legacyGlobal(agentDir),
+      `{
+  "imports": ["codex"],
+  "mcp-servers": { "old": { "command": "run old" }, },
+}`,
+    );
+    expect(migrateLegacyPiGlobalConfig(agentDir)).toEqual({ migrated: true });
+    const doc = JSON.parse(readFileSync(piGlobal(agentDir), "utf8"));
     expect(doc.imports).toEqual(["codex"]);
     expect(doc["mcp-servers"].old).toEqual({ command: "run old" });
   });
 
-  it("does not touch the legacy file when mcp-adapter.json already exists", () => {
+  it("is a no-op when mcp-adapter.json already exists, and never touches the legacy file", () => {
     writeJson(piGlobal(agentDir), { mcpServers: { current: { command: "run current" } } });
     writeJson(legacyGlobal(agentDir), { mcpServers: { stale: { command: "run stale" } } });
 
-    const names = listMcpServers(agentDir, projectDir).groups.piGlobal.map((e) => e.name);
+    const result = listMcpServers(agentDir, projectDir);
+    expect(result.legacyMigration).toEqual({ available: false });
+    expect(migrateLegacyPiGlobalConfig(agentDir)).toEqual({ migrated: false });
+    const names = result.groups.piGlobal.map((e) => e.name);
     expect(names).toEqual(["current"]); // the old name is not read back
     expect(readJson(legacyGlobal(agentDir)).mcpServers.stale).toBeDefined(); // untouched
   });
 
-  it("refuses to migrate a malformed legacy file and reports why", () => {
+  it("reports a malformed legacy file without migrating it", () => {
     writeFileSync(legacyGlobal(agentDir), "{ not json");
     const result = listMcpServers(agentDir, projectDir);
     expect(existsSync(piGlobal(agentDir))).toBe(false);
     expect(result.groupErrors.piGlobal).toContain("mcp.json");
+    expect(result.legacyMigration).toEqual({ available: false });
+    expect(migrateLegacyPiGlobalConfig(agentDir).migrated).toBe(false);
   });
 
-  it("creates no file for an empty legacy config", () => {
+  it("offers nothing for an empty legacy config", () => {
     writeJson(legacyGlobal(agentDir), {});
-    listMcpServers(agentDir, projectDir);
+    expect(listMcpServers(agentDir, projectDir).legacyMigration).toEqual({ available: false });
     expect(existsSync(piGlobal(agentDir))).toBe(false);
   });
 
-  it("creates nothing when the adapter is not installed", () => {
+  it("does nothing when the adapter is not installed", () => {
     writeJson(join(agentDir, "settings.json"), { packages: ["npm:pi-lens"] });
     writeJson(legacyGlobal(agentDir), { mcpServers: { orphan: { command: "run orphan" } } });
     const result = listMcpServers(agentDir, projectDir);
     expect(result.installed).toBe(false);
+    expect(result.legacyMigration).toEqual({ available: false });
     expect(existsSync(piGlobal(agentDir))).toBe(false);
+    expect(migrateLegacyPiGlobalConfig(agentDir)).toEqual({ migrated: false });
+    expect(existsSync(piGlobal(agentDir))).toBe(false);
+  });
+
+  it("writes the migrated file owner-only (0600) on POSIX", () => {
+    writeJson(legacyGlobal(agentDir), { mcpServers: { secret: { command: "run" } } });
+    migrateLegacyPiGlobalConfig(agentDir);
+    if (process.platform !== "win32") {
+      const mode = statSync(piGlobal(agentDir)).mode & 0o777;
+      expect(mode).toBe(0o600);
+    }
   });
 });
 

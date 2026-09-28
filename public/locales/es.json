@@ -793,7 +793,10 @@
       "noProject": "Sin servidores MCP de proyecto. Abre un espacio de trabajo o añade uno.",
       "sourceLabel": "Origen",
       "sectionsAriaLabel": "Capas MCP",
-      "addMcp": "+ Añadir MCP"
+      "addMcp": "+ Añadir MCP",
+      "legacyNotice": "Se encontró una configuración de adaptador anterior (mcp.json). ¿Migrarla a mcp-adapter.json?",
+      "legacyMigrate": "Migrar",
+      "migrationFailed": "La migración falló."
     },
     "usage": "Uso",
     "quota": "Cuota",

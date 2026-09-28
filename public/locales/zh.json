@@ -793,7 +793,10 @@
       "noProject": "无项目级 MCP server。打开一个工作区，或添加一个。",
       "sourceLabel": "来源",
       "sectionsAriaLabel": "MCP 层",
-      "addMcp": "+ 添加MCP"
+      "addMcp": "+ 添加MCP",
+      "legacyNotice": "检测到旧版适配器配置（mcp.json）。要迁移到 mcp-adapter.json 吗？",
+      "legacyMigrate": "迁移",
+      "migrationFailed": "迁移失败。"
     },
     "usage": "使用量",
     "quota": "配额",
