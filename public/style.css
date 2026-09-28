@@ -2645,28 +2645,36 @@ body.landing-mode #landing {
   transition: width var(--duration) var(--ease);
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .quota-bar-fill.is-loading {
-    width: 38%;
-    background: linear-gradient(90deg, transparent, var(--accent), transparent);
-    background-size: 200% 100%;
-    animation: quota-bar-loading 1.2s ease-in-out infinite;
-  }
+/* Skeleton bars are an indeterminate progress indicator: a solid segment
+   travels across the track, the same "a probe is in flight" signal the Refresh
+   button's label gives. Transform-only on purpose — a skeleton page draws ~22
+   of these at once, and the previous gradient sweep repainted every one of
+   them on every frame. */
+.quota-bar-fill.is-loading {
+  width: 40%;
+  animation: quota-bar-progress 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
 
-  @keyframes quota-bar-loading {
-    from {
-      background-position: 100% 0;
-    }
-    to {
-      background-position: -100% 0;
-    }
+/* -100% → 250% of the segment's own width walks it from just off the left edge
+   to just past the right one; the track's own overflow clips both ends. */
+@keyframes quota-bar-progress {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
   }
 }
 
+/* Deliberate exception to prefers-reduced-motion: an indeterminate progress
+   indicator is the conventional one (macOS's own NSProgressIndicator keeps
+   barber-poling under Reduce Motion, and the spinners elsewhere in this sheet
+   animate unconditionally too). Reduce only slows the travel down; the
+   accessible busy state is the section's aria-busy plus the button's label,
+   never the motion. */
 @media (prefers-reduced-motion: reduce) {
   .quota-bar-fill.is-loading {
-    width: 38%;
-    background: var(--accent);
+    animation-duration: 3.2s;
   }
 }
 
@@ -2820,6 +2828,23 @@ body.landing-mode #landing {
   font: inherit;
   cursor: pointer;
   transition: background var(--duration) var(--ease);
+}
+
+.quota-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* Same indeterminate-activity exception as the skeleton bar above. */
+.quota-refresh-btn svg.is-spinning {
+  animation: spin 0.9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quota-refresh-btn svg.is-spinning {
+    animation-duration: 2s;
+  }
 }
 
 .quota-refresh-btn:hover,

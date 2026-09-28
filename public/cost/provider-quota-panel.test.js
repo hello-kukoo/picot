@@ -439,6 +439,42 @@ test("refresh shows skeletons immediately and restores previous reports on failu
   expect(container.querySelector(".quota-card-name")?.textContent).toBe("OpenAI Codex");
 });
 
+test("a load in flight spins the Refresh glyph, and stops once it settles", async () => {
+  const reports = [
+    {
+      provider: "opencode-go",
+      source: "opencode-go:usage",
+      quota: { weeklyPercent: 12, updatedAt: Date.now() },
+    },
+  ];
+  const seams = makeSeams({ reports });
+  let release = () => {};
+  seams.gateway.call = vi.fn((op) =>
+    op === "provider_quota_report"
+      ? new Promise((resolve) => {
+          release = () => resolve({ ok: true, data: { reports } });
+        })
+      : Promise.resolve({ ok: true, data: { credits: [] } }),
+  );
+  const panel = createProviderQuotaPanel(seams, { locale });
+  const pending = panel.loadReports(true);
+
+  // One busy signal, not two: the skeleton bar slides and the button's own
+  // glyph spins while the same probe is in flight.
+  expect(container.querySelector(".quota-bar-fill.is-loading")).not.toBeNull();
+  expect(container.querySelector(".quota-refresh-btn svg.is-spinning")).not.toBeNull();
+  expect(container.getAttribute("aria-busy")).toBe("true");
+
+  release();
+  await pending;
+  // The glyph stays (it is the button's icon) but the animation means
+  // "data is in flight" and nothing else.
+  const settled = container.querySelector(".quota-refresh-btn svg");
+  expect(settled).not.toBeNull();
+  expect(settled.classList.contains("is-spinning")).toBe(false);
+  expect(container.getAttribute("aria-busy")).toBe("false");
+});
+
 test("a failed first load keeps the section visible with a failure note", async () => {
   const seams = makeSeams({ reports: [] });
   seams.gateway.call = vi.fn((op) =>

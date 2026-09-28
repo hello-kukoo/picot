@@ -1,4 +1,4 @@
-import { createIcon } from "../icons.js";
+import { createIcon, replaceButtonGlyph } from "../icons.js";
 
 // ABOUTME: Settings → Usage "Provider Quota" section (spec 2026-09-22).
 // ABOUTME: Renders normalized quota reports; owns the codex reset-credit flow.
@@ -455,6 +455,10 @@ export function createProviderQuotaPanel(seams, { locale }) {
     refresh.className = "quota-refresh-btn";
     refresh.textContent = isLoading ? locale.refreshing : locale.refresh;
     refresh.disabled = isLoading;
+    // The glyph is decoration on a text button; it spins while the probe is in
+    // flight so the button and the skeleton bars carry one busy signal.
+    replaceButtonGlyph(refresh, "refresh-cw", { size: 14 });
+    if (isLoading) refresh.querySelector("svg")?.classList.add("is-spinning");
     refresh.addEventListener("click", () => void loadReports(true));
     head.append(title, refresh);
     return head;
@@ -506,6 +510,10 @@ export function createProviderQuotaPanel(seams, { locale }) {
     // them is how the page became a dead white board that could not recover.
     const hideSection = !hasContent && !loading && hasLoaded && !loadError;
     container.classList.toggle("hidden", hideSection);
+    // The motion says "in flight" visually; aria-busy says it to assistive
+    // tech, which matters because the skeleton bars deliberately keep
+    // animating under prefers-reduced-motion.
+    container.setAttribute("aria-busy", loading ? "true" : "false");
     if (hideSection) {
       container.replaceChildren();
       return;
