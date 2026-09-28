@@ -313,6 +313,21 @@ test("boot reveals the landing and hides the workspace chrome", async () => {
   expect(landing.getAttribute("aria-hidden")).toBe("false");
 });
 
+test("landing sidebar is resizable and restores the shared persisted width", async () => {
+  localStorage.setItem("picot-sidebar-width", "420");
+  await bootLanding();
+  const handle = document.querySelector(".sidebar-resizer");
+  expect(handle).not.toBeNull();
+  expect(handle.getAttribute("role")).toBe("separator");
+  expect(handle.previousElementSibling?.id).toBe("sidebar");
+  expect(handle.getAttribute("aria-valuemin")).toBe("200");
+  expect(handle.getAttribute("aria-valuemax")).toBe("500");
+  expect(handle.getAttribute("aria-valuenow")).toBe("420");
+  expect(document.getElementById("sidebar").style.getPropertyValue("--sidebar-width")).toBe(
+    "420px",
+  );
+});
+
 test("landing settings: all tabs functional; MCP reveal follows installed packages", async () => {
   installDom();
   document.body.insertAdjacentHTML(
