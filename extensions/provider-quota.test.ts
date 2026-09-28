@@ -10,6 +10,7 @@ import {
   inspectCodexResetCredits,
   LAST_GOOD_RETENTION_MS,
   originOfBaseUrl,
+  type ProviderInstance,
   parseDeepseekBalance,
   parseMinimaxRemains,
   parseMoonshotBalance,
@@ -179,17 +180,6 @@ test("parseDeepseekBalance renders balance labels without faking percents", () =
   ]);
 });
 
-test("parseMinimaxRemains computes a used percent with total, degrades to a label without", () => {
-  expect(
-    parseMinimaxRemains({ data: { remains_time: 7_200_000, total_time: 36_000_000 } }),
-  ).toEqual({
-    customWindows: [{ label: "5h", percent: 80 }],
-  });
-  expect(parseMinimaxRemains({ data: { remains_time: 7_200_000 } })).toEqual({
-    customWindows: [{ label: "剩余 2h", percent: 0 }],
-  });
-});
-
 test("parseMoonshotBalance formats all balances with the host currency", () => {
   expect(
     parseMoonshotBalance(
@@ -299,31 +289,75 @@ describe("parseWhamUsage", () => {
 });
 
 describe("parseMinimaxRemains", () => {
-  test("reads the model_remains rows the CN endpoint actually returns", () => {
+  test("publishes the general row's consumed 5-hour and weekly windows", () => {
     const parsed = parseMinimaxRemains({
+      base_resp: { status_code: 0 },
       model_remains: [
         {
           model_name: "general",
-          remains_time: 5909395,
-          end_time: 1790179200000,
-          current_interval_remaining_percent: 100,
-          weekly_end_time: 1790524800000,
-          current_weekly_remaining_percent: 40,
+          current_interval_remaining_percent: 62.5,
+          // Live wire: the vendor sends epoch milliseconds.
+          end_time: 1_790_578_800_000,
+          current_weekly_status: 1,
+          current_weekly_remaining_percent: 25,
+          weekly_end_time: 1_791_129_600_000,
         },
-        { model_name: "video", current_interval_remaining_percent: 0 },
+        {
+          model_name: "video",
+          current_interval_remaining_percent: 0,
+          current_weekly_status: 1,
+          current_weekly_remaining_percent: 0,
+        },
       ],
     });
-    expect(parsed.customWindows).toEqual([
-      { label: "5h", percent: 0, resetAt: 1790179200000 },
-      { label: "weekly", percent: 60, resetAt: 1790524800000 },
-    ]);
+    expect(parsed).toEqual({
+      fiveHourPercent: 38,
+      fiveHourResetAt: 1_790_578_800_000,
+      weeklyPercent: 75,
+      weeklyResetAt: 1_791_129_600_000,
+    });
   });
 
-  test("still reads the single-window shape the spec recorded", () => {
+  // Live CN Coding Plan: the 5-hour window is running (status 1) while the
+  // weekly flag reads 3 — the vendor's "no weekly cap this cycle", read as
+  // unlimited by the community-documented field semantics, not as a 100% row.
+  test("omits the weekly window unless the plan's own status flag is the active one", () => {
     const parsed = parseMinimaxRemains({
-      data: { remains_time: 1_800_000, total_time: 3_600_000 },
+      base_resp: { status_code: 0 },
+      model_remains: [
+        {
+          model_name: "general",
+          current_interval_remaining_percent: 44,
+          end_time: 1_790_578_800_000,
+          current_weekly_status: 3,
+          current_weekly_remaining_percent: 100,
+        },
+      ],
     });
-    expect(parsed.customWindows).toEqual([{ label: "5h", percent: 50 }]);
+    expect(parsed).toEqual({ fiveHourPercent: 56, fiveHourResetAt: 1_790_578_800_000 });
+  });
+
+  test("publishes nothing for a non-zero envelope or a missing general row", () => {
+    expect(
+      parseMinimaxRemains({
+        base_resp: { status_code: 1004 },
+        model_remains: [{ model_name: "general", current_interval_remaining_percent: 20 }],
+      }),
+    ).toEqual({});
+    expect(
+      parseMinimaxRemains({
+        base_resp: { status_code: 0 },
+        model_remains: [{ model_name: "video", current_interval_remaining_percent: 20 }],
+      }),
+    ).toEqual({});
+  });
+
+  test("clamps a percentage the vendor sends out of range", () => {
+    const parsed = parseMinimaxRemains({
+      base_resp: { status_code: 0 },
+      model_remains: [{ model_name: "general", current_interval_remaining_percent: -5 }],
+    });
+    expect(parsed.fiveHourPercent).toBe(100);
   });
 });
 
@@ -384,6 +418,32 @@ describe("providersOfInterest", () => {
       modelsJsonProviders: { "my-ollama": { baseUrl: "https://ollama.com/v1", apiKey: "k" } },
     });
     expect(picked.map((entry) => entry.providerId)).toEqual(["my-ollama"]);
+  });
+
+  test("matches both MiniMax regions and targets the region-matched Coding Plan endpoint", () => {
+    const [cn] = providersOfInterest({
+      providers: [{ providerId: "minimax-cn", baseUrl: "https://api.minimaxi.com/anthropic" }],
+    });
+    const [intl] = providersOfInterest({
+      providers: [{ providerId: "minimax", baseUrl: "https://api.minimax.io/anthropic" }],
+    });
+    // Probes receive the provider origin, not its versioned baseUrl.
+    const cnInstance: ProviderInstance = {
+      providerId: "minimax-cn",
+      baseUrl: originOfBaseUrl("https://api.minimaxi.com/anthropic"),
+      apiKey: "k",
+    };
+    const intlInstance: ProviderInstance = {
+      providerId: "minimax",
+      baseUrl: originOfBaseUrl("https://api.minimax.io/anthropic"),
+      apiKey: "k",
+    };
+    expect(cn.spec.buildRequest(cnInstance)?.url).toBe(
+      "https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains",
+    );
+    expect(intl.spec.buildRequest(intlInstance)?.url).toBe(
+      "https://api.minimax.io/v1/api/openplatform/coding_plan/remains",
+    );
   });
 });
 

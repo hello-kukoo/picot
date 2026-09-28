@@ -269,50 +269,38 @@ export function parseDeepseekBalance(json: unknown): Partial<NonNullable<QuotaRe
   return labels.length > 0 ? { customWindows: labels } : {};
 }
 
-/** MiniMax's token-plan endpoint answers with one row per model
- * (`model_remains[]`), each carrying an interval (5h) and a weekly window as
- * *remaining* percents — that is the live shape for api.minimaxi.com. The
- * single-window `data.remains_time` form the spec recorded is kept as a
- * fallback (the other canonical host may still serve it). */
+/** MiniMax's Coding Plan endpoint (`GET /v1/api/openplatform/coding_plan/remains`)
+ * answers with one row per model (`model_remains[]`), each holding an interval
+ * (5h) window and — for plans that have one — a weekly window, both as
+ * *remaining* percents. Only the `general` row is the Coding Plan quota;
+ * video/audio rows are separate plans and must never stand in for it. */
 export function parseMinimaxRemains(json: unknown): Partial<NonNullable<QuotaReport["quota"]>> {
   const root = asRecord(json);
+  // An invalid key answers HTTP 200 with `base_resp.status_code` 1004, so the
+  // envelope is the only signal that the payload is not a quota at all.
+  if (numberOr(asRecord(root?.base_resp)?.status_code) !== 0) return {};
   const rows = Array.isArray(root?.model_remains) ? (root.model_remains as unknown[]) : [];
-  if (rows.length > 0) {
-    const records = rows.map((row) => asRecord(row));
-    // "general" is the chat plan; video/audio rows are separate plans.
-    const row = records.find((entry) => entry?.model_name === "general") ?? records[0];
-    const windows: QuotaWindow[] = [];
-    const intervalRemaining = numberOr(row?.current_interval_remaining_percent);
-    if (intervalRemaining !== undefined) {
-      windows.push({
-        label: "5h",
-        percent: Math.max(0, Math.min(100, Math.round(100 - intervalRemaining))),
-        resetAt: numberOr(row?.end_time),
-      });
-    }
-    const weeklyRemaining = numberOr(row?.current_weekly_remaining_percent);
-    if (weeklyRemaining !== undefined) {
-      windows.push({
-        label: "weekly",
-        percent: Math.max(0, Math.min(100, Math.round(100 - weeklyRemaining))),
-        resetAt: numberOr(row?.weekly_end_time),
-      });
-    }
-    if (windows.length > 0) return { customWindows: windows };
-  }
-  const data = asRecord(root?.data);
-  const remainsMs = numberOr(data?.remains_time);
-  const totalMs = numberOr(data?.total_time);
-  if (totalMs !== undefined && remainsMs !== undefined && totalMs > 0) {
-    const percent = Math.round(((totalMs - remainsMs) / totalMs) * 100);
-    return { customWindows: [{ label: "5h", percent }] };
-  }
-  if (remainsMs !== undefined) {
-    return {
-      customWindows: [{ label: `剩余 ${Math.round(remainsMs / 3_600_000)}h`, percent: 0 }],
-    };
-  }
-  return {};
+  const general = rows.map((row) => asRecord(row)).find((row) => row?.model_name === "general");
+  if (!general) return {};
+  const consumed = (remaining: unknown): number | undefined => {
+    const value = numberOr(remaining);
+    return value === undefined ? undefined : Math.max(0, Math.min(100, Math.round(100 - value)));
+  };
+  const fiveHourPercent = consumed(general.current_interval_remaining_percent);
+  // The vendor gates the weekly window on its own flag: a plan without a
+  // weekly allowance still reports zeros, which would render a bogus 0% row.
+  const weeklyPercent =
+    general.current_weekly_status === 1
+      ? consumed(general.current_weekly_remaining_percent)
+      : undefined;
+  return {
+    ...(fiveHourPercent !== undefined
+      ? { fiveHourPercent, fiveHourResetAt: epochSecondsToMs(general.end_time) }
+      : {}),
+    ...(weeklyPercent !== undefined
+      ? { weeklyPercent, weeklyResetAt: epochSecondsToMs(general.weekly_end_time) }
+      : {}),
+  };
 }
 
 export function parseMoonshotBalance(
@@ -448,11 +436,11 @@ const SPECS: ProviderSpec[] = [
   },
   {
     source: "minimax:token-plan",
-    canonicalBaseUrls: ["https://www.minimax.io", "https://api.minimaxi.com"],
+    canonicalBaseUrls: ["https://api.minimax.io", "https://api.minimaxi.com"],
     buildRequest: ({ baseUrl, apiKey }) =>
       apiKey
         ? {
-            url: `${normalizeBaseUrl(baseUrl)}/v1/token_plan/remains`,
+            url: `${normalizeBaseUrl(baseUrl)}/v1/api/openplatform/coding_plan/remains`,
             init: { headers: { authorization: `Bearer ${apiKey}` } },
           }
         : null,
