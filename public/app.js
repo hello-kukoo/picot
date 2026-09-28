@@ -4405,6 +4405,9 @@ function dispatchFollowUpItem(item, queueKey = sessionKeyForDialogs() ?? "") {
   if (state.isStreaming) cmd.streamingBehavior = "steer";
   if (!state.isStreaming) {
     markPendingNewSessionRefresh();
+    // Match direct sends: the optimistic user bubble already represents Pi's
+    // upcoming message_start(user), so do not render its echo a second time.
+    lastSentMessage = item.text;
     // Same claim-into-turn contract as sendMessage: the bubble waits for
     // agent_start to fold into the open turn's user row.
     pendingUserEl = renderNavigableUserMessage({

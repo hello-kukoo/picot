@@ -640,6 +640,59 @@ test("agent_settled drains the queue head as a plain prompt, one at a time", asy
   );
 });
 
+test("abort drains only one local follow-up and keeps next pill until its own settle", async () => {
+  await import("./app.js?followup-abort-drain");
+  const ws = wsInstances.at(-1);
+  await settle();
+  runtimeEvent(ws, { type: "agent_start" });
+  await settle();
+  typeIntoComposer("first follow-up");
+  pressAltEnter();
+  await settle();
+  typeIntoComposer("second follow-up");
+  pressAltEnter();
+  await settle();
+  expect(document.querySelectorAll("#queued-messages .followup-msg")).toHaveLength(2);
+
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await settle();
+  runtimeEvent(ws, { type: "agent_end", messages: [] }, 2);
+  runtimeEvent(ws, { type: "agent_settled" }, 3);
+  await settle();
+  expect(commandFrames(ws, "prompt").map((frame) => frame.command.message)).toEqual([
+    "first follow-up",
+  ]);
+  expect(
+    [...document.querySelectorAll("#queued-messages .followup-msg")].map((row) => row.textContent),
+  ).toEqual([expect.stringContaining("second follow-up")]);
+  expect(
+    [...document.querySelectorAll("#messages .message.user")].filter((row) =>
+      row.textContent.includes("second follow-up"),
+    ),
+  ).toHaveLength(0);
+  runtimeEvent(
+    ws,
+    {
+      type: "agent_start",
+    },
+    4,
+  );
+  runtimeEvent(
+    ws,
+    {
+      type: "message_start",
+      message: { role: "user", content: [{ type: "text", text: "first follow-up" }] },
+    },
+    5,
+  );
+  await settle();
+  expect(
+    [...document.querySelectorAll("#messages .message.user")].filter((row) =>
+      row.textContent.includes("first follow-up"),
+    ),
+  ).toHaveLength(1);
+});
+
 test("a rejected steer keeps the run's streaming state", async () => {
   await import("./app.js?steering-steer-rejected");
   const ws = wsInstances.at(-1);
