@@ -299,7 +299,9 @@ impl RuntimeCoordinator {
         target: &RuntimeTarget,
         state: RuntimeState,
     ) -> Result<(), CoordinatorError> {
-        self.validate(target)?;
+        // State transitions arrive from wire-frame targets (no owner/generation
+        // on the wire); identity triple only, same as the turn lifecycle.
+        self.validate_identity(target)?;
         let record = self.instances.get_mut(&target.instance_id).unwrap();
         record.state = state;
         if matches!(
@@ -317,7 +319,12 @@ impl RuntimeCoordinator {
         turn_id: impl Into<String>,
         operation_id: impl Into<String>,
     ) -> Result<(), CoordinatorError> {
-        self.validate(target)?;
+        // Wire frames carry the wire target (owner None, generation 0 — see
+        // the deserialization test below), so after a workspace transition
+        // the strict validate would silently reject every turn binding and
+        // later aborts would find no active turn. Identity is enough here:
+        // same workspace+session+instance is unambiguously this runtime.
+        self.validate_identity(target)?;
         let turn_id = turn_id.into();
         if turn_id.is_empty() {
             return Err(CoordinatorError::InvalidCommand);
@@ -399,7 +406,7 @@ impl RuntimeCoordinator {
         target: &RuntimeTarget,
         turn_id: &str,
     ) -> Result<(), CoordinatorError> {
-        self.validate(target)?;
+        self.validate_identity(target)?;
         let record = self.instances.get_mut(&target.instance_id).unwrap();
         if record
             .active_turn
@@ -518,10 +525,26 @@ mod tests {
         let stale_metadata = target("instance-a");
         assert_eq!(stale_metadata.owner_id, None);
         assert_eq!(stale_metadata.workspace_generation, 0);
-        assert!(coordinator.bound_active_turn(&stale_metadata).is_ok());
+        // Turn lifecycle arrives on the wire target (stale metadata): the
+        // binding must succeed or later aborts find no active turn.
+        coordinator
+            .set_state(&stale_metadata, RuntimeState::Working)
+            .unwrap();
+        coordinator
+            .bind_turn(&stale_metadata, "turn-1", "operation-1")
+            .unwrap();
+        assert_eq!(
+            coordinator.bound_active_turn(&stale_metadata).unwrap(),
+            Some(("turn-1".to_string(), "operation-1".to_string()))
+        );
         assert!(coordinator
-            .active_turn_operation(&stale_metadata, "t1")
+            .active_turn_operation(&stale_metadata, "turn-1")
             .is_ok());
+        coordinator.end_turn(&stale_metadata, "turn-1").unwrap();
+        assert_eq!(
+            coordinator.bound_active_turn(&stale_metadata).unwrap(),
+            None
+        );
         // Strict validate keeps guarding the rest: metadata drift still
         // rejects there, and identity drift rejects everywhere.
         assert!(coordinator.validate(&stale_metadata).is_err());
