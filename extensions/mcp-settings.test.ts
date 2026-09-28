@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 // ABOUTME: Exercises the MCP settings bridge ops over pi-mcp-adapter's layered config files.
-// ABOUTME: Uses isolated temp dirs so tests never touch a developer's real mcp.json layers.
+// ABOUTME: Uses isolated temp dirs so tests never touch a developer's real mcp config layers.
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -48,9 +48,9 @@ function readJson(p: string) {
 
 const sharedGlobal = (home: string) => join(home, ".config", "mcp", "mcp.json");
 const agentsGlobal = (home: string) => join(home, ".agents", "mcp.json");
-const piGlobal = (agentDir: string) => join(agentDir, "mcp.json");
+const piGlobal = (agentDir: string) => join(agentDir, "mcp-adapter.json");
 const sharedProject = (projectDir: string) => join(projectDir, ".mcp.json");
-const piProject = (projectDir: string) => join(projectDir, ".pi", "mcp.json");
+const piProject = (projectDir: string) => join(projectDir, ".pi", "mcp-adapter.json");
 
 describe("listMcpServers", () => {
   it("merges shared-global layers later-wins with per-entry sourceFile", () => {
@@ -70,7 +70,7 @@ describe("listMcpServers", () => {
     expect(result.groups.piGlobal.find((e) => e.name === "context7")?.editable).toBe(true);
   });
 
-  it("project group merges .mcp.json (read-only) under .pi/mcp.json (editable)", () => {
+  it("project group merges .mcp.json (read-only) under .pi/mcp-adapter.json (editable)", () => {
     writeJson(sharedProject(projectDir), {
       mcpServers: { repoTool: { command: "run repo-tool" } },
     });
@@ -168,6 +168,74 @@ describe("listMcpServers", () => {
   });
 });
 
+describe("legacy global config migration", () => {
+  const legacyGlobal = (agentDir: string) => join(agentDir, "mcp.json");
+
+  beforeEach(() => {
+    // Migration is gated on the adapter being installed; every case here assumes it is.
+    writeJson(join(agentDir, "settings.json"), { packages: ["npm:pi-mcp-adapter"] });
+  });
+
+  it("copies a legacy global mcp.json into mcp-adapter.json once, keeping the source", () => {
+    writeFileSync(
+      legacyGlobal(agentDir),
+      `{
+  // hand-written comments must survive the copy
+  "mcpServers": { "grep": { "url": "https://mcp.grep.app" }, },
+}`,
+    );
+
+    const result = listMcpServers(agentDir, projectDir);
+    expect(readJson(piGlobal(agentDir)).mcpServers.grep).toEqual({ url: "https://mcp.grep.app" });
+    expect(existsSync(legacyGlobal(agentDir))).toBe(true); // source left in place
+    expect(result.groups.piGlobal.find((e) => e.name === "grep")?.sourceFile).toBe(
+      piGlobal(agentDir),
+    );
+    expect(result.groups.piGlobal.find((e) => e.name === "grep")?.editable).toBe(true);
+  });
+
+  it("preserves non-server keys and the mcp-servers key variant", () => {
+    writeJson(legacyGlobal(agentDir), {
+      imports: ["codex"],
+      "mcp-servers": { old: { command: "run old" } },
+    });
+    listMcpServers(agentDir, projectDir);
+    const doc = readJson(piGlobal(agentDir));
+    expect(doc.imports).toEqual(["codex"]);
+    expect(doc["mcp-servers"].old).toEqual({ command: "run old" });
+  });
+
+  it("does not touch the legacy file when mcp-adapter.json already exists", () => {
+    writeJson(piGlobal(agentDir), { mcpServers: { current: { command: "run current" } } });
+    writeJson(legacyGlobal(agentDir), { mcpServers: { stale: { command: "run stale" } } });
+
+    const names = listMcpServers(agentDir, projectDir).groups.piGlobal.map((e) => e.name);
+    expect(names).toEqual(["current"]); // the old name is not read back
+    expect(readJson(legacyGlobal(agentDir)).mcpServers.stale).toBeDefined(); // untouched
+  });
+
+  it("refuses to migrate a malformed legacy file and reports why", () => {
+    writeFileSync(legacyGlobal(agentDir), "{ not json");
+    const result = listMcpServers(agentDir, projectDir);
+    expect(existsSync(piGlobal(agentDir))).toBe(false);
+    expect(result.groupErrors.piGlobal).toContain("mcp.json");
+  });
+
+  it("creates no file for an empty legacy config", () => {
+    writeJson(legacyGlobal(agentDir), {});
+    listMcpServers(agentDir, projectDir);
+    expect(existsSync(piGlobal(agentDir))).toBe(false);
+  });
+
+  it("creates nothing when the adapter is not installed", () => {
+    writeJson(join(agentDir, "settings.json"), { packages: ["npm:pi-lens"] });
+    writeJson(legacyGlobal(agentDir), { mcpServers: { orphan: { command: "run orphan" } } });
+    const result = listMcpServers(agentDir, projectDir);
+    expect(result.installed).toBe(false);
+    expect(existsSync(piGlobal(agentDir))).toBe(false);
+  });
+});
+
 describe("stripJsonComments", () => {
   it("keeps // inside strings and strips real comments", () => {
     expect(stripJsonComments('{"a": "x // y", "b": 1 // real\n}')).toBe(
@@ -224,7 +292,7 @@ describe("saveMcpServer", () => {
     expect(doc.mcpServers).toBeUndefined(); // no dual-key pollution
   });
 
-  it("project scope writes only to .pi/mcp.json and rejects shared scope", () => {
+  it("project scope writes only to .pi/mcp-adapter.json and rejects shared scope", () => {
     saveMcpServer(
       { scope: "project", name: "p", entry: { command: "run p" } },
       agentDir,
@@ -235,6 +303,23 @@ describe("saveMcpServer", () => {
     expect(() =>
       saveMcpServer({ scope: "sharedGlobal", name: "x", entry: {} }, agentDir, ""),
     ).toThrow();
+  });
+
+  it("pi-owned writes target mcp-adapter.json, never the Pi-owned mcp.json", () => {
+    saveMcpServer({ scope: "piGlobal", name: "g", entry: { command: "run g" } }, agentDir, "");
+    expect(readJson(piGlobal(agentDir)).mcpServers.g).toEqual({ command: "run g" });
+    expect(existsSync(join(agentDir, "mcp.json"))).toBe(false);
+
+    saveMcpServer(
+      { scope: "project", name: "p", entry: { command: "run p" } },
+      agentDir,
+      projectDir,
+    );
+    expect(readJson(piProject(projectDir)).mcpServers.p).toEqual({ command: "run p" });
+    expect(existsSync(join(projectDir, ".pi", "mcp.json"))).toBe(false);
+
+    // Inventory reads the same files the adapter reads.
+    expect(listMcpServers(agentDir, projectDir).groups.piGlobal.map((e) => e.name)).toEqual(["g"]);
   });
 
   it("validates name and transport", () => {

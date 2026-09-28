@@ -1,5 +1,5 @@
 // ABOUTME: MCP server inventory and mutation ops over pi-mcp-adapter's layered config files.
-// ABOUTME: Reads four adapter sources (shared-global, pi-global, shared-project, pi-project); writes only pi-owned layers.
+// ABOUTME: Reads four adapter sources (shared-global, pi-global, shared-project, pi-project); writes only pi-owned mcp-adapter.json layers.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -12,7 +12,7 @@ export interface McpListEntry {
   entry: Record<string, unknown>;
   /** Absolute path of the file this entry was last defined in. */
   sourceFile: string;
-  /** True only for pi-owned sources: pi-global file and .pi/mcp.json. */
+  /** True only for pi-owned sources: the pi-global and pi-project mcp-adapter.json files. */
   editable: boolean;
   /** The entry's own `disabled` flag in its source file. */
   ownDisabled: boolean;
@@ -138,7 +138,40 @@ function sharedGlobalPaths(): string[] {
 }
 
 function piGlobalPath(agentDir: string): string {
+  // pi-mcp-adapter 3.x owns mcp-adapter.json; mcp.json now belongs to Pi's
+  // built-in MCP support and is ignored by the adapter (see its CHANGELOG 3.0.0).
+  return path.join(agentDir, "mcp-adapter.json");
+}
+
+/** Pre-3.0 adapter config location. Read-only migration source, never written. */
+function legacyPiGlobalPath(agentDir: string): string {
   return path.join(agentDir, "mcp.json");
+}
+
+/**
+ * One-time migration: the adapter stopped reading `<agent dir>/mcp.json` in
+ * 3.0, so a pre-3.0 config would otherwise be orphaned (Picot's embedded Pi has
+ * no built-in MCP support, so nothing else reads it either). Copies the file
+ * into mcp-adapter.json when — and only when — the target does not exist, and
+ * leaves the source in place. Returns an error to surface when the source
+ * exists but cannot be parsed; never overwrites a target.
+ */
+function migrateLegacyPiGlobalConfig(agentDir: string): string | undefined {
+  const target = piGlobalPath(agentDir);
+  if (fs.existsSync(target)) return undefined;
+  const source = legacyPiGlobalPath(agentDir);
+  const legacy = readMcpLayer(source);
+  if (!legacy.doc) {
+    if (!legacy.error) return undefined; // No legacy file: nothing to migrate.
+    return `${source} could not be migrated to ${target}: ${legacy.error}`;
+  }
+  if (Object.keys(serversOf(legacy)).length === 0) return undefined; // Empty config: nothing to carry over.
+  try {
+    writeMcpLayer(target, legacy.doc);
+  } catch (error) {
+    return `${source} could not be migrated to ${target}: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  return undefined;
 }
 
 function sharedProjectPath(cwd: string): string {
@@ -146,7 +179,7 @@ function sharedProjectPath(cwd: string): string {
 }
 
 function piProjectPath(cwd: string): string {
-  return path.join(cwd, ".pi", "mcp.json");
+  return path.join(cwd, ".pi", "mcp-adapter.json");
 }
 
 function serversOf(layer: McpLayerRead): Record<string, Record<string, unknown>> {
@@ -226,7 +259,7 @@ function toListEntries(
 
 /**
  * Inventory across the adapter's non-exclusive layer order:
- * shared-global (3 files) → pi-global → shared-project (.mcp.json) → pi-project (.pi/mcp.json).
+ * shared-global (3 files) → pi-global → shared-project (.mcp.json) → pi-project (.pi/mcp-adapter.json).
  * Same-name entries: later layers win; the project group shows the winning
  * entry only (a shadowed .mcp.json definition is not listed separately).
  */
@@ -242,6 +275,10 @@ export function listMcpServers(
     filePath,
     layer: readMcpLayer(filePath),
   }));
+  // The page exists only to manage the adapter, so a missing adapter means no
+  // migration: never create adapter config for a package the user does not run.
+  const installed = isAdapterInstalled(agentDir);
+  const migrationError = installed ? migrateLegacyPiGlobalConfig(agentDir) : undefined;
   const piLayer = { filePath: piGlobalPath(agentDir), layer: readMcpLayer(piGlobalPath(agentDir)) };
   const projectLayers =
     cwd && cwd !== homeDir()
@@ -261,7 +298,7 @@ export function listMcpServers(
   }
 
   return {
-    installed: isAdapterInstalled(agentDir),
+    installed,
     groups: {
       sharedGlobal: toListEntries(sharedMerged, effective, () => false),
       piGlobal: toListEntries(piMerged, effective, () => true),
@@ -273,7 +310,7 @@ export function listMcpServers(
     },
     groupErrors: {
       sharedGlobal: sharedLayers.map((l) => l.layer.error).find(Boolean),
-      piGlobal: piLayer.layer.error,
+      piGlobal: piLayer.layer.error ?? migrationError,
       project: projectLayers.map((l) => l.layer.error).find(Boolean),
     },
   };

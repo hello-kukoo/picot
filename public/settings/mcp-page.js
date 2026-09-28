@@ -1,4 +1,4 @@
-// ABOUTME: Settings → MCP page — three layer tabs, each a master/detail view over mcp.json layers.
+// ABOUTME: Settings → MCP page — three layer tabs, each a master/detail view over the adapter's MCP config layers.
 // ABOUTME: Pi-owned sources are editable; shared sources render read-only; disable toggles the pi-project layer.
 
 import { onLocaleChange, t } from "../i18n.js";

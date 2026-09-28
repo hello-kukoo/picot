@@ -21,9 +21,21 @@ only when the adapter extension is installed.
   1. `~/.config/mcp/mcp.json` (shared-global)
   2. `~/.agents/mcp.json` (shared)
   3. `~/.agents/mcp/mcp.json` (shared)
-  4. `<agent dir>/mcp.json` (pi-global)
+  4. `<agent dir>/mcp-adapter.json` (pi-global)
   5. `<cwd>/.mcp.json` (**shared-project** — team repo file)
-  6. `<cwd>/.pi/mcp.json` (pi-project, highest)
+  6. `<cwd>/.pi/mcp-adapter.json` (pi-project, highest)
+- pi-mcp-adapter 3.0 (2026-09-27) renamed its own config file to
+  `mcp-adapter.json`. Layer order and merge semantics are unchanged; only the
+  two pi-owned filenames moved. Picot reads and writes only the renamed files.
+- The old `<agent dir>/mcp.json` is migrated by the page itself, because
+  nothing else reads it: the adapter dropped it in 3.0, and Picot's embedded Pi
+  (0.85.1) has no built-in MCP support, so a pre-3.0 config would be silently
+  orphaned. On load, when the adapter is installed and
+  `<agent dir>/mcp-adapter.json` does **not** exist, a legacy `mcp.json` that
+  parses and holds at least one server is copied to the new name; the source
+  file is left untouched. A malformed legacy file is reported in the pi-global
+  group error and never overwritten or deleted. Global scope only — the
+  project-level legacy file is not migrated.
 - The adapter reads **both** `mcpServers` and the `mcp-servers` key variant
   and writes back under the file's original key (config.ts:1078–1079).
 - The adapter parses configs with **JSONC tolerance** — `//`/`/* */`
@@ -54,7 +66,7 @@ only when the adapter extension is installed.
 | Branch | Decision |
 | --- | --- |
 | Page shape (review) | Three tabs — shared-global / pi-global / project — each a master/detail. Tab strip and master/detail reuse the Extensions page classes (`.extensions-page-tab*`, `.pkg-manager-*`); no parallel design system. Add-server button (dashed, Models-page `.models-provider-add` pattern, label「+ 添加MCP」) sits at the bottom of the master list, only on the pi-global and project tabs. |
-| Layer visibility (P1-1) | The project group merges `.mcp.json` (low) with `.pi/mcp.json` (high), later-wins; each entry carries its `sourceFile`; editability is **per-entry** (pi-global file and `.pi/mcp.json` only). A same-name `.mcp.json` definition shadowed by `.pi/mcp.json` is not listed separately. |
+| Layer visibility (P1-1) | The project group merges `.mcp.json` (low) with `.pi/mcp-adapter.json` (high), later-wins; each entry carries its `sourceFile`; editability is **per-entry** (the pi-global `mcp-adapter.json` and `.pi/mcp-adapter.json` only). A same-name `.mcp.json` definition shadowed by `.pi/mcp-adapter.json` is not listed separately. |
 | Disable semantics (P1-2) | TUI-aligned toggle for any entry; the enable branch's lower-layer check includes shared-global + pi-global + **shared-project**. `expandImports` (host imports declared in pi-owned files) is not expanded — declared limitation, documented in code. |
 | Key/format fidelity (P2) | Read accepts `mcpServers` and `mcp-servers`, writes back under the original key (new files use `mcpServers`); JSONC tolerance on read (comments dropped on write-back, matching the adapter); writes use 2-space indent + trailing newline. |
 | Source display (review) | Every detail view shows the entry's `sourceFile`. File paths are the honest ceiling: "~/.claude origin" is unknowable post-adoption (no file-level provenance). |
@@ -74,7 +86,7 @@ only when the adapter extension is installed.
   `{ name, entry, sourceFile, editable, ownDisabled, effectiveDisabled }`.
   Malformed files surface as per-group errors; the list never crashes.
 - `mcp_save_server { scope: "piGlobal"|"project", name, entry }` — upsert
-  into the pi-owned layer only (project scope → `.pi/mcp.json`); name
+  into the pi-owned layer only (project scope → `.pi/mcp-adapter.json`); name
   `^[\w.-]+$`; transport validation with explicit invalid-type rejection
   (string/array command or url); unknown entry keys and unrelated document
   keys preserved; atomic write. Read-modify-write without a lock —

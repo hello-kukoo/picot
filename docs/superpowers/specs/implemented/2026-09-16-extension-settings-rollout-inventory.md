@@ -38,7 +38,7 @@ the **order**, the **transport split**, and records the **exclusions**.
 
 | Package | Reason |
 | --- | --- |
-| `npm:pi-mcp-adapter` | Layered `mcp.json` already covered by Settings → MCP page (`extensions/mcp-settings.ts`, landed `5548f03`). |
+| `npm:pi-mcp-adapter` | Layered adapter config (`mcp-adapter.json` since adapter 3.0) already covered by Settings → MCP page (`extensions/mcp-settings.ts`, landed `5548f03`). |
 | `npm:pi-playwright` | Skills-only package; no runtime config file, nothing to configure. |
 | `npm:pi-simplify` | Single `/simplify` command; no config surface in `src/`. |
 | `git:edxeth/pi-subagents` | Env plumbing only (`PI_ARTIFACT_PROJECT_ROOT`, `PI_SUBAGENT_PARENT_SESSION`, `PI_DENY_TOOLS`) — protocol internals, not user settings. |

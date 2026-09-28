@@ -65,7 +65,7 @@ const LIST = {
           name: "context7",
           // biome-ignore lint/suspicious/noTemplateCurlyInString: MCP ${VAR} placeholder data
           entry: { command: "npx", args: ["-y", "@upstash/context7-mcp"], env: { K: "${V}" } },
-          sourceFile: "/home/u/.pi/agent/mcp.json",
+          sourceFile: "/home/u/.pi/agent/mcp-adapter.json",
           editable: true,
           ownDisabled: false,
           effectiveDisabled: false,
@@ -73,7 +73,7 @@ const LIST = {
         {
           name: "chrome-devtools",
           entry: { command: ["npx", "-y", "chrome-devtools-mcp"], lifecycle: "lazy" },
-          sourceFile: "/home/u/.pi/agent/mcp.json",
+          sourceFile: "/home/u/.pi/agent/mcp-adapter.json",
           editable: true,
           ownDisabled: false,
           effectiveDisabled: false,
@@ -91,7 +91,7 @@ const LIST = {
         {
           name: "local",
           entry: { command: "run local" },
-          sourceFile: "/ws/repo/.pi/mcp.json",
+          sourceFile: "/ws/repo/.pi/mcp-adapter.json",
           editable: true,
           ownDisabled: false,
           effectiveDisabled: false,
@@ -240,16 +240,16 @@ describe("mcp-page", () => {
     expect(payload.entry.lifecycle).toBe("lazy"); // unknown keys preserved
   });
 
-  it("project tab: .mcp.json entry read-only, .pi/mcp.json entry editable", async () => {
+  it("project tab: .mcp.json entry read-only, .pi/mcp-adapter.json entry editable", async () => {
     const { page, masterEl, detailEl, tabs } = mount(makeGateway(LIST));
     await page.activate();
     clickTab(tabs, "project");
     clickRow(masterEl, "repoTool");
     expect(detailEl.textContent).toContain("read-only");
-    expect(detailEl.textContent).toContain(".mcp.json");
+    expect(detailEl.textContent).toContain("/ws/repo/.mcp.json");
     clickRow(masterEl, "local");
     expect(detailEl.querySelector(".mcp-form")).not.toBeNull();
-    expect(detailEl.textContent).toContain(".pi/mcp.json");
+    expect(detailEl.textContent).toContain("/ws/repo/.pi/mcp-adapter.json");
   });
 
   it("detail: exactly one switch at the top; clicking sends the toggle payload", async () => {
