@@ -2643,6 +2643,28 @@ body.landing-mode #landing {
   border-radius: inherit;
   background: var(--accent);
   transition: width var(--duration) var(--ease);
+  /* Every render rebuilds the cards wholesale (skeleton → data, refresh →
+     refresh), so the width transition above never has a painted start state
+     to animate from. Grow each fill from 0 to its inline width instead. */
+  animation: quota-fill-grow 0.45s var(--ease);
+}
+
+@keyframes quota-fill-grow {
+  from {
+    width: 0;
+  }
+}
+
+/* Same deliberate reduce-motion exception as the skeleton bar and the
+   spinner: the fill IS the progress indication, so it keeps growing under
+   Reduce Motion, only slower (the sheet's convention: ~2x slower). */
+@media (prefers-reduced-motion: reduce) {
+  .quota-bar-fill {
+    /* !important: the sheet-wide reduce-motion block below clamps every
+       animation to 0.01ms with !important — without matching importance this
+       exception (and the skeleton/spinner ones) never actually applied. */
+    animation-duration: 1s !important;
+  }
 }
 
 /* Skeleton bars are an indeterminate progress indicator: a solid segment
@@ -2674,7 +2696,7 @@ body.landing-mode #landing {
    never the motion. */
 @media (prefers-reduced-motion: reduce) {
   .quota-bar-fill.is-loading {
-    animation-duration: 3.2s;
+    animation-duration: 3.2s !important;
   }
 }
 
@@ -2843,7 +2865,7 @@ body.landing-mode #landing {
 
 @media (prefers-reduced-motion: reduce) {
   .quota-refresh-btn svg.is-spinning {
-    animation-duration: 2s;
+    animation-duration: 2s !important;
   }
 }
 
