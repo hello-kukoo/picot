@@ -189,6 +189,15 @@ export function migrateLegacyPiGlobalConfig(agentDir: string): {
   // The availability check above just parsed this file; a failure here means
   // it changed between the two reads, and refusing is the safe answer.
   if (!legacy.doc) return { migrated: false, error: "legacy config changed while migrating" };
+  // Same race on the target: the check saw it absent, but the adapter or the
+  // user may have created mcp-adapter.json since — a migration must never
+  // overwrite config that appeared after the user confirmed.
+  if (fs.existsSync(piGlobalPath(agentDir))) {
+    return {
+      migrated: false,
+      error: "mcp-adapter.json appeared during migration; not overwritten",
+    };
+  }
   try {
     writeMcpLayer(piGlobalPath(agentDir), legacy.doc);
   } catch (error) {

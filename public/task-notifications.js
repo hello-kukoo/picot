@@ -91,6 +91,9 @@ export function createTaskNotifications(
     // The last assistant reply is the best one-line summary of what finished
     // (paseo's contract); failures keep the error as the body instead.
     const preview = !error && key ? buildPreview(lastAssistantText.get(key)) : null;
+    // Consume the reply: the turn is over, and a runtime that never runs again
+    // must not keep its last (possibly long) reply pinned in this Map forever.
+    if (key) lastAssistantText.delete(key);
     try {
       await transport.sendData("show_task_notification", {
         title: t(error ? "settings.taskFailedTitle" : "settings.taskCompleteTitle"),

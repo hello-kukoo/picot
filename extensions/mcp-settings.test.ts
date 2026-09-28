@@ -216,6 +216,21 @@ describe("legacy global config migration (explicit, user-confirmed)", () => {
     expect(result.groups.piGlobal.find((e) => e.name === "grep")?.editable).toBe(true);
   });
 
+  it("refuses when the target appears between check and copy", () => {
+    writeJson(legacyGlobal(agentDir), { mcpServers: { grep: { url: "https://mcp.grep.app" } } });
+    // The race window: status sees the target absent, the copy must still
+    // refuse to overwrite one that appeared in between.
+    writeJson(piGlobal(agentDir), { mcpServers: { live: { url: "https://live.example" } } });
+    const raced = migrateLegacyPiGlobalConfig(agentDir);
+    expect(raced.migrated).toBe(false);
+    // Observable contract regardless of which check refused (status saw the
+    // target, or the pre-write guard caught it mid-flight): never overwrite.
+    // The config that appeared survives untouched.
+    expect(readJson(piGlobal(agentDir)).mcpServers.live).toEqual({
+      url: "https://live.example",
+    });
+  });
+
   it("preserves non-server keys and the mcp-servers key variant, including comments", () => {
     writeFileSync(
       legacyGlobal(agentDir),
