@@ -276,9 +276,12 @@ export function parseDeepseekBalance(json: unknown): Partial<NonNullable<QuotaRe
  * video/audio rows are separate plans and must never stand in for it. */
 export function parseMinimaxRemains(json: unknown): Partial<NonNullable<QuotaReport["quota"]>> {
   const root = asRecord(json);
-  // An invalid key answers HTTP 200 with `base_resp.status_code` 1004, so the
-  // envelope is the only signal that the payload is not a quota at all.
-  if (numberOr(asRecord(root?.base_resp)?.status_code) !== 0) return {};
+  // An invalid key answers HTTP 200 with `base_resp.status_code` 1004, so a
+  // present envelope with a non-zero code means the payload is not a quota.
+  // A missing envelope is not treated as failure: an endpoint variant without
+  // it must still parse (the rows themselves are validated below).
+  const envelope = asRecord(root?.base_resp);
+  if (envelope && numberOr(envelope.status_code) !== 0) return {};
   const rows = Array.isArray(root?.model_remains) ? (root.model_remains as unknown[]) : [];
   const general = rows.map((row) => asRecord(row)).find((row) => row?.model_name === "general");
   if (!general) return {};

@@ -352,6 +352,13 @@ describe("parseMinimaxRemains", () => {
     ).toEqual({});
   });
 
+  test("parses a payload without the base_resp envelope (unknown endpoint variant)", () => {
+    const parsed = parseMinimaxRemains({
+      model_remains: [{ model_name: "general", current_interval_remaining_percent: 62.5 }],
+    });
+    expect(parsed.fiveHourPercent).toBe(38);
+  });
+
   test("clamps a percentage the vendor sends out of range", () => {
     const parsed = parseMinimaxRemains({
       base_resp: { status_code: 0 },
