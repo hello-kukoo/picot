@@ -170,6 +170,13 @@ impl RuntimeCoordinator {
             .get(&target.instance_id)
             .ok_or(CoordinatorError::UnknownInstance)?;
         if record.target != *target {
+            // Field-level diff for the mismatch: which identity component
+            // drifted is the whole story of every IdentityMismatch report.
+            log::error!(
+                "[coordinator] identity mismatch: request={:?} registered={:?}",
+                target,
+                record.target
+            );
             return Err(CoordinatorError::IdentityMismatch);
         }
         Ok(())
@@ -326,6 +333,30 @@ impl RuntimeCoordinator {
         Ok(())
     }
 
+    /// Identity-only validation for the abort read path: a client target can
+    /// lag a workspace transition (owner binding, generation bump) while
+    /// still naming the exact same runtime (workspace + session + instance,
+    /// where instance equality is the map lookup). Abort acts on the bound
+    /// active turn of that exact instance, so stale routing bookkeeping on
+    /// the caller's copy must never block stopping a live run.
+    fn validate_identity(&self, target: &RuntimeTarget) -> Result<(), CoordinatorError> {
+        let record = self
+            .instances
+            .get(&target.instance_id)
+            .ok_or(CoordinatorError::UnknownInstance)?;
+        if record.target.workspace_id != target.workspace_id
+            || record.target.session_id != target.session_id
+        {
+            log::error!(
+                "[coordinator] identity mismatch: request={:?} registered={:?}",
+                target,
+                record.target
+            );
+            return Err(CoordinatorError::IdentityMismatch);
+        }
+        Ok(())
+    }
+
     /// The turn currently bound to a Working runtime: `(turn_id, operation_id)`.
     /// A stop click can land between `agent_end` (which resets the client's
     /// live-turn id) and the next `turn_start` (the frame that carries the new
@@ -335,7 +366,7 @@ impl RuntimeCoordinator {
         &self,
         target: &RuntimeTarget,
     ) -> Result<Option<(String, String)>, CoordinatorError> {
-        self.validate(target)?;
+        self.validate_identity(target)?;
         let record = self.instances.get(&target.instance_id).unwrap();
         if record.state != RuntimeState::Working {
             return Ok(None);
@@ -351,7 +382,7 @@ impl RuntimeCoordinator {
         target: &RuntimeTarget,
         turn_id: &str,
     ) -> Result<Option<String>, CoordinatorError> {
-        self.validate(target)?;
+        self.validate_identity(target)?;
         let record = self.instances.get(&target.instance_id).unwrap();
         if record.state != RuntimeState::Working {
             return Ok(None);
@@ -468,6 +499,39 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.workspace_generation, 0);
         assert!(parsed.owner_id.is_none());
+    }
+
+    #[test]
+    fn abort_read_path_tolerates_stale_transition_metadata() {
+        // Regression: after a workspace transition the registered record
+        // carries the owner binding and bumped generation, while a client
+        // that missed the re-stamp still sends owner=None/generation=0.
+        // The abort read path must match on the identity triple only —
+        // stopping a live run must not be blocked by routing bookkeeping.
+        let mut coordinator = RuntimeCoordinator::new(8);
+        let registered =
+            RuntimeTarget::with_owner("workspace-a", "session-a", "instance-a", "owner-1", 1);
+        coordinator
+            .register(registered, RuntimeState::Ready)
+            .unwrap();
+
+        let stale_metadata = target("instance-a");
+        assert_eq!(stale_metadata.owner_id, None);
+        assert_eq!(stale_metadata.workspace_generation, 0);
+        assert!(coordinator.bound_active_turn(&stale_metadata).is_ok());
+        assert!(coordinator
+            .active_turn_operation(&stale_metadata, "t1")
+            .is_ok());
+        // Strict validate keeps guarding the rest: metadata drift still
+        // rejects there, and identity drift rejects everywhere.
+        assert!(coordinator.validate(&stale_metadata).is_err());
+        assert!(coordinator
+            .bound_active_turn(&RuntimeTarget::new(
+                "workspace-a",
+                "session-b",
+                "instance-a"
+            ))
+            .is_err());
     }
 
     #[test]
