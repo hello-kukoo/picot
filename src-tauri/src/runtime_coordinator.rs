@@ -326,6 +326,26 @@ impl RuntimeCoordinator {
         Ok(())
     }
 
+    /// The turn currently bound to a Working runtime: `(turn_id, operation_id)`.
+    /// A stop click can land between `agent_end` (which resets the client's
+    /// live-turn id) and the next `turn_start` (the frame that carries the new
+    /// id), so the abort arrives bare while the run continues. This binding is
+    /// the same id the client would have sent a moment later.
+    pub fn bound_active_turn(
+        &self,
+        target: &RuntimeTarget,
+    ) -> Result<Option<(String, String)>, CoordinatorError> {
+        self.validate(target)?;
+        let record = self.instances.get(&target.instance_id).unwrap();
+        if record.state != RuntimeState::Working {
+            return Ok(None);
+        }
+        Ok(record
+            .active_turn
+            .as_ref()
+            .map(|turn| (turn.turn_id.clone(), turn.operation_id.clone())))
+    }
+
     pub fn active_turn_operation(
         &self,
         target: &RuntimeTarget,
@@ -596,6 +616,25 @@ mod tests {
                 .unwrap(),
             Some("op-b".into())
         );
+    }
+
+    #[test]
+    fn bound_active_turn_reports_the_working_runtime_turn_only() {
+        let mut coordinator = RuntimeCoordinator::new(8);
+        let active = target("instance-a");
+        coordinator
+            .register(active.clone(), RuntimeState::Working)
+            .unwrap();
+        // Working but no turn bound yet (before the first turn_start).
+        assert_eq!(coordinator.bound_active_turn(&active).unwrap(), None);
+        coordinator.bind_turn(&active, "turn-a", "op-a").unwrap();
+        assert_eq!(
+            coordinator.bound_active_turn(&active).unwrap(),
+            Some(("turn-a".into(), "op-a".into()))
+        );
+        // Idle clears the binding: a bare abort then has nothing to resolve.
+        coordinator.set_state(&active, RuntimeState::Idle).unwrap();
+        assert_eq!(coordinator.bound_active_turn(&active).unwrap(), None);
     }
 
     #[test]

@@ -3240,9 +3240,11 @@ const TURNS_RENDERING = true; // opt-in; reverting restores flat rendering
 
 let activeTurn = null;
 let activeTurnStartedAt = null;
-// Pi reports the running turn's id on runtime_event frames (agent_start …).
-// The host's abort gate requires it — a bare abort is rejected there and the
-// drop is silent — so the pump keeps the newest id for the abort path.
+// Pi reports the running turn's id on runtime_event frames (turn_start/turn_end;
+// agent_start carries none). The pump keeps the newest id for the abort path; when
+// it is null (stop clicked between agent_end and the next turn_start) the bare
+// abort is still sent — the host resolves it to the coordinator's bound active
+// turn, and rejects only when no turn is bound at all.
 let liveTurnId = null;
 let pendingUserEl = null; // optimistic user bubble awaiting agent_start claim
 let pendingUserKey = null; // runtime key the bubble was rendered under
