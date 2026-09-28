@@ -929,6 +929,10 @@ impl NativePiManager {
         // turn IS the id the client would have sent a moment later; with no
         // binding either there is nothing exact to abort and the strict gate
         // stands.
+        // Two lock acquisitions (resolve, then validate the operation): a turn
+        // that naturally ends between them yields no operation below and the
+        // abort settles as `stale_turn` — the correct outcome for a target
+        // that finished on its own, so the gap is accepted rather than closed.
         let turn_id = {
             let coordinator = self
                 .inner
