@@ -346,7 +346,7 @@ impl RuntimeCoordinator {
     /// where instance equality is the map lookup). Abort acts on the bound
     /// active turn of that exact instance, so stale routing bookkeeping on
     /// the caller's copy must never block stopping a live run.
-    fn validate_identity(&self, target: &RuntimeTarget) -> Result<(), CoordinatorError> {
+    pub(crate) fn validate_identity(&self, target: &RuntimeTarget) -> Result<(), CoordinatorError> {
         let record = self
             .instances
             .get(&target.instance_id)

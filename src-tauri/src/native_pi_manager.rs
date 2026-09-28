@@ -922,38 +922,62 @@ impl NativePiManager {
         if scope.workspace_id != target.workspace_id || scope.session_id != target.session_id {
             return Ok(serde_json::json!({ "disposition": "stale_turn" }));
         }
-        // A bare abort still targets the exact active turn: pi reports turn ids
-        // only on turn_start/turn_end frames, and a stop click between
-        // agent_end (the client resets its live id) and the next turn_start
-        // arrives with no id while the run continues. The coordinator's bound
-        // turn IS the id the client would have sent a moment later; with no
-        // binding either there is nothing exact to abort and the strict gate
-        // stands.
-        // Two lock acquisitions (resolve, then validate the operation): a turn
-        // that naturally ends between them yields no operation below and the
-        // abort settles as `stale_turn` — the correct outcome for a target
-        // that finished on its own, so the gap is accepted rather than closed.
-        let turn_id = {
-            let coordinator = self
-                .inner
-                .coordinator
-                .lock()
-                .map_err(|_| "Runtime coordinator lock poisoned".to_string())?;
-            match turn_id.filter(|turn_id| !turn_id.is_empty()) {
-                Some(turn_id) => turn_id.to_string(),
-                None => coordinator
-                    .bound_active_turn(target)
-                    .map_err(|error| format!("Abort target rejected: {error:?}"))?
-                    .map(|(turn_id, _operation_id)| turn_id)
-                    .ok_or_else(|| "Invalid runtime command: abort requires turnId".to_string())?,
+        if turn_id.is_none() {
+            let working = {
+                let coordinator = self
+                    .inner
+                    .coordinator
+                    .lock()
+                    .map_err(|_| "Runtime coordinator lock poisoned".to_string())?;
+                coordinator
+                    .validate_identity(target)
+                    .map_err(|error| format!("Abort target rejected: {error:?}"))?;
+                coordinator.state_of(target) == Some(RuntimeState::Working)
+            };
+            if !working {
+                return Ok(serde_json::json!({ "disposition": "stale_turn" }));
             }
-        };
+            let binding = self
+                .inner
+                .turn_operations
+                .lock()
+                .map_err(|_| "Turn operation lock poisoned".to_string())?
+                .get(&target.instance_id)
+                .cloned();
+            let Some((operation_id, operation_scope)) = binding else {
+                return Ok(serde_json::json!({ "disposition": "stale_turn" }));
+            };
+            if operation_scope != *scope
+                || self
+                    .inner
+                    .operations
+                    .lock()
+                    .map_err(|_| "Operation registry lock poisoned".to_string())?
+                    .get_scoped(&operation_id, scope)
+                    .is_err()
+            {
+                return Ok(serde_json::json!({ "disposition": "stale_turn" }));
+            }
+            let bridge = self
+                .inner
+                .runtimes
+                .lock()
+                .map_err(|_| "Native runtime registry lock poisoned".to_string())?
+                .get(&target.instance_id)
+                .map(|runtime| runtime.bridge.clone())
+                .ok_or_else(|| "Native runtime instance is not running".to_string())?;
+            return bridge
+                .request(serde_json::json!({ "type": "abort" }), timeout)
+                .await
+                .map_err(|error| format!("Pi abort failed: {error:?}"));
+        }
+        let turn_id = turn_id.unwrap();
         let operation_id = self
             .inner
             .coordinator
             .lock()
             .map_err(|_| "Runtime coordinator lock poisoned".to_string())?
-            .active_turn_operation(target, &turn_id)
+            .active_turn_operation(target, turn_id)
             .map_err(|error| format!("Abort target rejected: {error:?}"))?;
         let Some(operation_id) = operation_id else {
             return Ok(serde_json::json!({ "disposition": "stale_turn" }));
@@ -2169,6 +2193,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn abort_live_prompt_with_real_pi_events_without_turn_id() {
+        let manager = NativePiManager::in_memory(8);
+        let target = RuntimeTarget::new("workspace-a", "session-a", "instance-a");
+        let scope = OperationScope::new("owner-a", "workspace-a", "session-a", 1);
+        let mut fake = manager.register_in_memory(target.clone()).unwrap();
+        let mut events = manager.subscribe();
+        let prompt = tokio::spawn({
+            let manager = manager.clone();
+            let target = target.clone();
+            let scope = scope.clone();
+            async move {
+                manager
+                    .request_scoped(
+                        &target,
+                        scope,
+                        json!({"type": "prompt", "message": "turn"}),
+                        "intent",
+                        Duration::from_secs(1),
+                    )
+                    .await
+            }
+        });
+        let request = fake.read_request().await.unwrap();
+        fake.write_frame(json!({"type": "agent_start"}))
+            .await
+            .unwrap();
+        fake.write_frame(json!({"type": "turn_start"}))
+            .await
+            .unwrap();
+        while events.recv().await.unwrap().event["type"] != "turn_start" {}
+        fake.write_frame(
+            json!({"id": request["id"], "type": "response", "command": "prompt", "success": true}),
+        )
+        .await
+        .unwrap();
+        prompt.await.unwrap().unwrap();
+
+        let wrong_scope = OperationScope::new("other-owner", "workspace-a", "session-a", 1);
+        assert_eq!(
+            manager
+                .abort_turn(&target, &wrong_scope, None, Duration::from_secs(1))
+                .await
+                .unwrap()["disposition"],
+            "stale_turn"
+        );
+        assert!(fake.try_read_request().is_none());
+
+        let abort = tokio::spawn({
+            let manager = manager.clone();
+            let target = target.clone();
+            let scope = scope.clone();
+            async move {
+                manager
+                    .abort_turn(&target, &scope, None, Duration::from_secs(1))
+                    .await
+            }
+        });
+        let outbound = tokio::time::timeout(Duration::from_secs(2), fake.read_request())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(outbound["type"], "abort");
+        assert!(outbound.get("turnId").is_none());
+        fake.write_frame(
+            json!({"id": outbound["id"], "type": "response", "command": "abort", "success": true}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(abort.await.unwrap().unwrap()["success"], true);
+    }
+
+    #[tokio::test]
     async fn abort_turn_forwards_only_current_authorized_turn_and_retries_safely() {
         let manager = NativePiManager::in_memory(8);
         let target = RuntimeTarget::new("workspace-a", "session-a", "instance-a");
@@ -2244,9 +2340,7 @@ mod tests {
         assert_eq!(stale["disposition"], "stale_turn");
         assert!(fake.try_read_request().is_none());
 
-        // A bare abort (stop clicked between agent_end and the next
-        // turn_start) resolves to the coordinator's bound turn and still
-        // targets exactly that turn.
+        // Bare abort uses Pi's native command without a turnId.
         let bare = tokio::spawn({
             let manager = manager.clone();
             let target = target.clone();
@@ -2259,10 +2353,7 @@ mod tests {
         });
         let outbound = fake.read_request().await.unwrap();
         assert_eq!(outbound["type"], "abort");
-        assert_eq!(
-            outbound["turnId"], "turn-a",
-            "a bare abort must forward the bound turn's id"
-        );
+        assert!(outbound.get("turnId").is_none());
         let id = outbound["id"].as_str().unwrap();
         fake.write_frame(json!({ "id": id, "type": "response", "success": true }))
             .await
@@ -2282,9 +2373,7 @@ mod tests {
         assert_eq!(stale["disposition"], "stale_turn");
         assert!(fake.try_read_request().is_none());
 
-        // The strict gate stands when nothing is bound: idle the runtime
-        // (the pump clears the active turn on agent_end), then a bare abort
-        // is rejected exactly as before.
+        // Idle runtimes must not receive an abort.
         fake.write_frame(json!({ "type": "agent_end" }))
             .await
             .unwrap();
@@ -2296,7 +2385,7 @@ mod tests {
         let missing = manager
             .abort_turn(&target, &scope, None, Duration::from_secs(1))
             .await;
-        assert!(missing.unwrap_err().contains("requires turnId"));
+        assert_eq!(missing.unwrap()["disposition"], "stale_turn");
     }
 
     #[tokio::test]

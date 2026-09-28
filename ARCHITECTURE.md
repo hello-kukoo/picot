@@ -222,7 +222,7 @@ pi runtime 的存活不依赖 Picot 的 teardown：`pi` 在 stdin EOF 时退出�
 - 逻辑 scope `(owner, workspace, session, generation)`
 - 幂等键去重：`accepted_pending` / `duplicate_pending` / `duplicate_completed`
 - crash/restart → Pending → Indeterminate（不可重放）
-- turn-bound abort：事件泵绑定 `turnId → operationId`（RPC response 不携带 turnId）
+- 主聊天终止：宿主确认 owner/workspace/session/instance 与当前运行中的操作 scope 后，向 Pi 发送原生 `{ "type": "abort" }`；Pi RPC 的 `agent_start`/`turn_start` 和命令响应都不承诺 `turnId`，不能用它作为终止前提。显式携带 `turnId` 的旧路径仍执行 turn-bound 校验。
 
 ## 模块清单
 
