@@ -68,6 +68,67 @@ describe("task notifications", () => {
     expect(sendData.mock.calls[0][1].title).toBe("[[settings.taskCompleteTitle]]");
   });
 
+  it("previews the last assistant message in the completion body", () => {
+    const { notifications, sendData } = harness();
+    notifications.handleRuntimeFrame(frame("agent_start"));
+    notifications.handleRuntimeFrame({
+      target: TARGET,
+      event: { type: "message_end", message: { role: "assistant", content: "Done" } },
+    });
+    notifications.handleRuntimeFrame(frame("agent_settled"));
+    expect(sendData.mock.calls[0][1].body).toBe("Done");
+  });
+
+  it("strips markdown and truncates the assistant preview", () => {
+    const { notifications, sendData } = harness();
+    notifications.handleRuntimeFrame(frame("agent_start"));
+    notifications.handleRuntimeFrame({
+      target: TARGET,
+      event: {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: `## Summary\n\n- fixed **the** bug\n- see [docs](http://x/y)\n\n${"word ".repeat(80)}`,
+        },
+      },
+    });
+    notifications.handleRuntimeFrame(frame("agent_settled"));
+    const body = sendData.mock.calls[0][1].body;
+    expect(body).not.toContain("##");
+    expect(body).not.toContain("**");
+    expect(body).not.toContain("http");
+    expect(body.length).toBeLessThanOrEqual(220);
+    expect(body.endsWith("...")).toBe(true);
+  });
+
+  it("never previews the previous turn's reply, and falls back when no assistant message streamed", () => {
+    const { notifications, sendData } = harness({
+      t: (key) => `[[${key}]]`,
+    });
+    notifications.handleRuntimeFrame(frame("agent_start"));
+    notifications.handleRuntimeFrame({
+      target: TARGET,
+      event: { type: "message_end", message: { role: "assistant", content: "old turn" } },
+    });
+    notifications.handleRuntimeFrame(frame("agent_settled"));
+    expect(sendData.mock.calls[0][1].body).toBe("old turn");
+    // Second turn without any assistant message: stale text must not leak.
+    notifications.handleRuntimeFrame(frame("agent_start"));
+    notifications.handleRuntimeFrame(frame("agent_end"));
+    expect(sendData.mock.calls[1][1].body).toBe("[[settings.taskCompleteMessage]]");
+  });
+
+  it("failure body stays the runtime error, not the assistant preview", () => {
+    const { notifications, sendData } = harness();
+    notifications.handleRuntimeFrame(frame("agent_start"));
+    notifications.handleRuntimeFrame({
+      target: TARGET,
+      event: { type: "message_end", message: { role: "assistant", content: "partial work" } },
+    });
+    notifications.handleRuntimeFrame(frame("agent_end", TARGET, { error: "boom" }));
+    expect(sendData.mock.calls[0][1].body).toBe("boom");
+  });
+
   it("calls sendData as a transport method so its `this` stays bound", async () => {
     // Regression: destructuring sendData off the transport detached it, and
     // the real wsClient.sendData threw "undefined is not an object
