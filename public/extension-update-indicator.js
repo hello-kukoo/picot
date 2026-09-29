@@ -11,6 +11,7 @@ export function setupExtensionUpdateIndicator({
   t: translate = t,
   buttonEl,
   onOpen,
+  onUpdates,
 } = {}) {
   if (!buttonEl) return { refresh: async () => {}, setCount: () => {} };
 
@@ -33,6 +34,7 @@ export function setupExtensionUpdateIndicator({
       count = (Array.isArray(updates) ? updates : []).filter(
         (update) => update.available === true,
       ).length;
+      onUpdates?.(updates);
     } catch {
       // Keep the last known count; the Installed page check re-notifies.
     }

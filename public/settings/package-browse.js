@@ -9,6 +9,7 @@ export function setupPackageBrowse({
   createIcon,
   renderPackageInstallFailure,
   setExtensionActionButton,
+  onInstalledChanged,
   catalogUrl = "https://raw.githubusercontent.com/hello-kukoo/picot/private/features-v3/community-extensions.json",
 }) {
   // Catalog is a committed snapshot refreshed manually via
@@ -409,9 +410,11 @@ export function setupPackageBrowse({
           if (installed) {
             await transport.removePiPackage(source);
             browseInstalledSet.delete(source);
+            onInstalledChanged?.(source);
           } else {
             await transport.installPiPackage(source);
             browseInstalledSet.add(source);
+            onInstalledChanged?.(source);
           }
           renderBrowsePackages();
         } catch (err) {

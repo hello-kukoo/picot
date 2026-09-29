@@ -7383,9 +7383,10 @@ function selectSettingsTab(tabKey = "general") {
   }
   if (targetTabKey === "extensions") {
     extensionsTabs?.select(document.querySelector('[data-extensions-tab="installed"]'));
-    // Tab activation is one-time; re-entering the Extensions page must still
-    // re-check updates so every Update button starts disabled again.
-    void packageManager?.refresh();
+    // Tab activation is one-time; re-entering the Extensions page re-checks
+    // updates only when the cached result is stale, so a fresh badge paints
+    // instantly instead of re-running the expensive network check.
+    void packageManager?.auto();
   }
   if (targetTabKey === "skills") {
     void skillsPage.activate();
@@ -7512,7 +7513,8 @@ wsClient.addEventListener("hostCapabilities", () => {
   document.getElementById("side-chat-btn")?.classList.toggle("hidden", !showEphemeral);
   document.getElementById("quick-chat-btn")?.classList.toggle("hidden", !showEphemeral);
   if (showEphemeral) {
-    void packageManager?.refresh();
+    // The indicator's check feeds packageManager via onUpdates; the Installed
+    // list itself stays lazy and first loads when Settings opens.
     void extensionUpdateIndicator?.refresh();
   }
   // Registry rows require authenticated host capability. Native startup
@@ -8180,6 +8182,7 @@ const packageBrowse = setupPackageBrowse({
   createIcon,
   renderPackageInstallFailure,
   setExtensionActionButton,
+  onInstalledChanged: () => packageManager?.load({ recheck: false }),
 });
 
 const mcpPage = setupMcpPage({
@@ -8206,6 +8209,7 @@ const extensionUpdateIndicator = setupExtensionUpdateIndicator({
   t,
   buttonEl: document.getElementById("sidebar-extension-update-btn"),
   onOpen: () => void openSettings("extensions"),
+  onUpdates: (updates) => packageManager?.applyUpdateStates(updates),
 });
 extensionsTabs = setupExtensionsTabShell({
   tabs: document.querySelectorAll("[data-extensions-tab]"),
@@ -8214,7 +8218,7 @@ extensionsTabs = setupExtensionsTabShell({
     community: document.getElementById("extensions-community"),
   },
   activate: (name) => {
-    if (name === "installed") return packageManager.load();
+    if (name === "installed") return packageManager.auto();
     if (name === "community") return packageBrowse.load();
   },
 });

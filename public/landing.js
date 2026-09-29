@@ -453,7 +453,7 @@ function selectLandingSettingsTab(tabKey) {
     void skillsPage.activate();
   }
   if (target === "extensions") {
-    void packageManager.load();
+    void packageManager.auto();
   }
   if (target === "models") {
     void modelsPage.activate();
@@ -1107,6 +1107,7 @@ const packageBrowse = setupPackageBrowse({
   createIcon,
   renderPackageInstallFailure,
   setExtensionActionButton: landingSetExtensionActionButton,
+  onInstalledChanged: () => packageManager?.load({ recheck: false }),
 });
 
 setupExtensionsTabShell({
@@ -1116,7 +1117,7 @@ setupExtensionsTabShell({
     community: document.getElementById("extensions-community"),
   },
   activate: (name) => {
-    if (name === "installed") return packageManager.load();
+    if (name === "installed") return packageManager.auto();
     if (name === "community") return packageBrowse.load();
   },
 });

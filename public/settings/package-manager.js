@@ -89,6 +89,14 @@ export function setupPackageManager({
   let pendingLoad = null;
   let notice = null;
 
+  const UPDATE_CHECK_TTL_MS = 5 * 60 * 1000; // Mirrors extension-update-indicator.js RECHECK_INTERVAL_MS.
+  let lastUpdatesByKey = null;
+  let lastCheckAt = 0;
+
+  function hasFreshCheck() {
+    return lastUpdatesByKey !== null && Date.now() - lastCheckAt < UPDATE_CHECK_TTL_MS;
+  }
+
   function normalized(listed) {
     return (Array.isArray(listed) ? listed : [])
       .map((entry) => {
@@ -132,6 +140,8 @@ export function setupPackageManager({
       packages = normalized(await transport.listPiPackages()).map((pkg) => {
         const key = packageKey(pkg);
         if (updatedKeys?.includes(key)) return { ...pkg, updateAvailable: false };
+        if (!recheck && hasFreshCheck())
+          return { ...pkg, updateAvailable: lastUpdatesByKey.get(key) ?? false };
         if (!recheck && previousByKey.has(key))
           return { ...pkg, updateAvailable: previousByKey.get(key) };
         return { ...pkg, updateAvailable: null };
@@ -164,6 +174,8 @@ export function setupPackageManager({
           update.available === true,
         ]),
       );
+      lastUpdatesByKey = availableByKey;
+      lastCheckAt = Date.now();
       packages = packages.map((pkg) => ({
         ...pkg,
         updateAvailable: availableByKey.get(packageKey(pkg)) ?? false,
@@ -176,14 +188,43 @@ export function setupPackageManager({
     render();
   }
 
-  // Every entry into the Installed page re-runs the list + update check with all
-  // update buttons disabled first; concurrent activations share one in-flight load.
+  // Every entry into the Installed page runs the list plus an update check whose
+  // buttons are disabled first; auto() skips the network check while a recent
+  // result is cached, and concurrent activations share one in-flight load.
   function load(options = {}) {
     if (pendingLoad) return pendingLoad;
     pendingLoad = runLoad(options).finally(() => {
       pendingLoad = null;
     });
     return pendingLoad;
+  }
+
+  // Page entries reuse the last update check while fresh; the manual Refresh
+  // button and stale entries still force a full re-check.
+  function auto() {
+    return load({ recheck: !hasFreshCheck() });
+  }
+
+  // Shares one check result (e.g. the startup indicator's) with the loaded
+  // list; merging keeps the master list badges fresh without a re-check.
+  function applyUpdateStates(updates) {
+    lastUpdatesByKey = new Map(
+      (Array.isArray(updates) ? updates : []).map((update) => [
+        `${update.scope}\0${update.source}`,
+        update.available === true,
+      ]),
+    );
+    lastCheckAt = Date.now();
+    if (packages.length) {
+      packages = packages.map((pkg) => ({
+        ...pkg,
+        updateAvailable: lastUpdatesByKey.get(packageKey(pkg)) ?? false,
+      }));
+      render();
+      // Notify only when the list actually shows these states; with no list
+      // loaded the indicator still holds its own freshly computed count.
+      onUpdatesChecked?.(updateCount());
+    }
   }
 
   function render() {
@@ -497,6 +538,8 @@ export function setupPackageManager({
 
   return {
     load,
+    auto,
+    applyUpdateStates,
     refresh: () => load(),
     updateAll: () => updateAll(),
     getPackages: () => packages.slice(),

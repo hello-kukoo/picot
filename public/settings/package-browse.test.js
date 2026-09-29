@@ -123,4 +123,59 @@ describe("Community package browser", () => {
     expect(button.disabled).toBe(true);
     expect(button.textContent).toBe("Desktop only");
   });
+  it("notifies the Installed list after a successful install but not on failure", async () => {
+    const root = createRoot();
+    const transport = {
+      listPiPackages: vi.fn().mockResolvedValue([]),
+      installPiPackage: vi
+        .fn()
+        .mockImplementation((source) =>
+          source === "npm:bad" ? Promise.reject(new Error("offline")) : Promise.resolve({}),
+        ),
+      removePiPackage: vi.fn(),
+      openExternal: vi.fn(),
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          packages: [
+            { name: "good", description: "Installs", types: [] },
+            { name: "bad", description: "Fails", types: [] },
+          ],
+        }),
+      }),
+    );
+    const onInstalledChanged = vi.fn();
+    const browser = setupPackageBrowse({
+      root,
+      transport,
+      nativeAvailable: () => true,
+      t: translations,
+      createIcon: () => document.createElement("span"),
+      renderPackageInstallFailure: vi.fn(),
+      setExtensionActionButton: (button, label) => {
+        button.textContent = label;
+      },
+      onInstalledChanged,
+      catalogUrl: "https://registry.test/catalog.json",
+    });
+    await browser.load();
+
+    const buttons = () =>
+      root.querySelectorAll(".pkg-browse-row .settings-extension-actions button");
+    buttons()[0].click();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(transport.installPiPackage).toHaveBeenCalledWith("npm:good");
+    expect(onInstalledChanged).toHaveBeenCalledTimes(1);
+    expect(onInstalledChanged).toHaveBeenCalledWith("npm:good");
+
+    buttons()[1].click();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(transport.installPiPackage).toHaveBeenCalledWith("npm:bad");
+    expect(onInstalledChanged).toHaveBeenCalledTimes(1);
+  });
 });

@@ -65,4 +65,32 @@ describe("extension update indicator", () => {
     expect(transport.listPiPackages).not.toHaveBeenCalled();
     expect(button.getAttribute("aria-label")).toContain("(1)");
   });
+  it("passes the raw updates array to onUpdates on success and stays silent on failure", async () => {
+    const { button } = createButton();
+    const updates = [
+      { source: "npm:a", scope: "global", available: true },
+      { source: "npm:b", scope: "global", available: false },
+    ];
+    const onUpdates = vi.fn();
+    const transport = {
+      listPiPackages: vi.fn(),
+      checkPiPackageUpdates: vi
+        .fn()
+        .mockResolvedValueOnce(updates)
+        .mockRejectedValueOnce(new Error("offline")),
+    };
+    const indicator = setupExtensionUpdateIndicator({
+      transport,
+      nativeAvailable: () => true,
+      t,
+      buttonEl: button,
+      onUpdates,
+    });
+
+    await indicator.refresh({ force: true });
+    expect(onUpdates).toHaveBeenCalledWith(updates);
+
+    await indicator.refresh({ force: true });
+    expect(onUpdates).toHaveBeenCalledTimes(1);
+  });
 });

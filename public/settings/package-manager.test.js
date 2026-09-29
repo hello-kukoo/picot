@@ -631,4 +631,76 @@ describe("Installed package manager", () => {
       local: true,
     });
   });
+  it("reuses a pushed check result on the next auto load without re-checking", async () => {
+    const root = createRoot();
+    const transport = {
+      listPiPackages: vi.fn().mockResolvedValue(records),
+      checkPiPackageUpdates: vi.fn(),
+    };
+    const manager = setupPackageManager({ root, transport, nativeAvailable: () => true, t });
+
+    manager.applyUpdateStates([{ source: "npm:global-tool", scope: "global", available: true }]);
+    await manager.auto();
+
+    expect(transport.listPiPackages).toHaveBeenCalledTimes(1);
+    expect(transport.checkPiPackageUpdates).not.toHaveBeenCalled();
+    expect(
+      root.querySelectorAll(".pkg-manager-sidebar-row .pkg-manager-update-badge"),
+    ).toHaveLength(1);
+  });
+
+  it("forces a full update check on auto when no fresh result is cached", async () => {
+    const root = createRoot();
+    const transport = {
+      listPiPackages: vi.fn().mockResolvedValue(records),
+      checkPiPackageUpdates: vi.fn().mockResolvedValue([]),
+    };
+    const manager = setupPackageManager({ root, transport, nativeAvailable: () => true, t });
+
+    await manager.auto();
+
+    expect(transport.listPiPackages).toHaveBeenCalledTimes(1);
+    expect(transport.checkPiPackageUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it("merges pushed update states into an already loaded list without a re-check", async () => {
+    const root = createRoot();
+    const transport = {
+      listPiPackages: vi.fn().mockResolvedValue(records),
+      checkPiPackageUpdates: vi.fn().mockResolvedValue([]),
+    };
+    const manager = setupPackageManager({ root, transport, nativeAvailable: () => true, t });
+    await manager.load();
+
+    manager.applyUpdateStates([{ source: "npm:global-tool", scope: "global", available: true }]);
+
+    expect(transport.listPiPackages).toHaveBeenCalledTimes(1);
+    expect(transport.checkPiPackageUpdates).toHaveBeenCalledTimes(1);
+    expect(
+      root.querySelectorAll(".pkg-manager-sidebar-row .pkg-manager-update-badge"),
+    ).toHaveLength(1);
+  });
+});
+
+it("does not notify the indicator before the list has loaded", async () => {
+  const root = createRoot();
+  const transport = {
+    listPiPackages: vi.fn().mockResolvedValue(records),
+    checkPiPackageUpdates: vi.fn().mockResolvedValue([]),
+  };
+  const onUpdatesChecked = vi.fn();
+  const manager = setupPackageManager({
+    root,
+    transport,
+    nativeAvailable: () => true,
+    t,
+    onUpdatesChecked,
+  });
+
+  manager.applyUpdateStates([{ source: "npm:global-tool", scope: "global", available: true }]);
+  expect(onUpdatesChecked).not.toHaveBeenCalled();
+
+  await manager.load();
+  manager.applyUpdateStates([{ source: "npm:global-tool", scope: "global", available: true }]);
+  expect(onUpdatesChecked).toHaveBeenCalledWith(1);
 });
