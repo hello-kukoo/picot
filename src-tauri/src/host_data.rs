@@ -1172,15 +1172,19 @@ fn session_summary_value(path: &Path, header: &SessionHeader) -> serde_json::Val
 }
 
 fn scan_session_sidebar_visibility(path: &Path) -> Result<SidebarScan, HostDataError> {
+    // ponytail: full linear scan per file; if sidebar refresh latency hurts
+    // on huge buckets, re-land a head+tail window (see reverted 4c73f52) —
+    // the head window must not truncate before the first user message.
     let file = std::fs::File::open(path).map_err(|error| HostDataError::Io(error.to_string()))?;
     let mut header: Option<(String, String, Option<String>, Option<String>)> = None;
     let mut name: Option<String> = None;
-    let mut name_sealed = false;
     let mut first_message: Option<String> = None;
     let mut user_messages = 0usize;
     let mut line_count = 0usize;
     for line in BufReader::new(file).lines() {
-        let line = line.map_err(|error| HostDataError::Io(error.to_string()))?;
+        // A corrupt tail (invalid UTF-8, IO error) ends the scan with the
+        // fields collected so far instead of failing the whole file.
+        let Ok(line) = line else { break };
         if line.trim().is_empty() {
             continue;
         }
@@ -1219,14 +1223,16 @@ fn scan_session_sidebar_visibility(path: &Path) -> Result<SidebarScan, HostDataE
                 }
             }
             Some("session_info") => {
-                if let Some(session_name) = entry
+                // Pi naming semantics (buildSessionInfo): every session_info
+                // entry restates the name — the latest wins, empty clears.
+                // Renames append at the file tip, so a scan can never stop
+                // early on a settled name.
+                name = entry
                     .get("name")
                     .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
                     .filter(|value| !value.is_empty())
-                {
-                    name = Some(session_name.to_owned());
-                    name_sealed = true;
-                }
+                    .map(str::to_owned);
             }
             Some("message")
                 if entry
@@ -1258,9 +1264,6 @@ fn scan_session_sidebar_visibility(path: &Path) -> Result<SidebarScan, HostDataE
             }
             _ => {}
         }
-        if header.is_some() && user_messages > 0 && first_message.is_some() && name_sealed {
-            break;
-        }
     }
     let header = header.and_then(|(id, timestamp, cwd, parent_session)| {
         if id.is_empty() || (user_messages == 0 && line_count <= 4) {
@@ -1283,7 +1286,6 @@ pub(crate) fn parse_session_header(path: &Path) -> Option<SessionHeader> {
     let file = std::fs::File::open(path).ok()?;
     let mut header: Option<(String, String, Option<String>, Option<String>)> = None;
     let mut name: Option<String> = None;
-    let mut name_sealed = false;
     let mut first_message: Option<String> = None;
     let mut user_messages = 0usize;
     let mut line_count = 0usize;
@@ -1327,14 +1329,13 @@ pub(crate) fn parse_session_header(path: &Path) -> Option<SessionHeader> {
                 }
             }
             Some("session_info") => {
-                if let Some(session_name) = entry
+                // Same latest-wins semantics as scan_session_sidebar_visibility.
+                name = entry
                     .get("name")
                     .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
                     .filter(|value| !value.is_empty())
-                {
-                    name = Some(session_name.to_owned());
-                    name_sealed = true;
-                }
+                    .map(str::to_owned);
             }
             Some("message") => {
                 let role = entry
@@ -1365,9 +1366,6 @@ pub(crate) fn parse_session_header(path: &Path) -> Option<SessionHeader> {
                 }
             }
             _ => {}
-        }
-        if header.is_some() && user_messages > 0 && first_message.is_some() && name_sealed {
-            break;
         }
     }
     let (id, timestamp, cwd, parent_session) = header?;
@@ -1563,10 +1561,6 @@ fn parse_session_summary(
     workspace_id: &str,
     workspace: &Path,
 ) -> Result<Option<SessionSummary>, HostDataError> {
-    // Summary fields live in the session header by construction; the hard
-    // line cap bounds work on pathological files where no user text block
-    // ever appears (the 50-line early exit requires first_message).
-    const MAX_SUMMARY_LINES: usize = 200;
     let file = std::fs::File::open(path).map_err(|error| HostDataError::Io(error.to_string()))?;
     let mut id = None;
     let mut timestamp = String::new();
@@ -1601,9 +1595,13 @@ fn parse_session_summary(
                     .map(PathBuf::from);
             }
             Some("session_info") => {
+                // Latest session_info wins (Pi buildSessionInfo semantics);
+                // renames append at the file tip, so the whole file streams.
                 name = entry
                     .get("name")
                     .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
                     .map(str::to_owned);
             }
             Some("message")
@@ -1619,12 +1617,6 @@ fn parse_session_summary(
                 }
             }
             _ => {}
-        }
-        if line_count > 50 && first_message.is_some() {
-            break;
-        }
-        if line_count >= MAX_SUMMARY_LINES {
-            break;
         }
     }
     let Some(id) = id else { return Ok(None) };
@@ -3051,7 +3043,7 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_scan_stops_after_required_fields_are_found() {
+    fn sidebar_scan_survives_trailing_invalid_utf8() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("early-stop.jsonl");
         let mut content = session_fixture("early-stop", "/workspace", None, "hello").into_bytes();
@@ -3362,6 +3354,95 @@ mod tests {
             Err(HostDataError::OutsideWorkspace)
         );
         fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn rename_appended_beyond_the_summary_window_is_visible_in_both_scans() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-host-rename-{nonce}"));
+        let workspace = temp.join("workspace");
+        let sessions = temp.join("sessions/--test-bucket--");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&sessions).unwrap();
+        let mut content = format!(
+            "{{\"type\":\"session\",\"id\":\"renamed\",\"timestamp\":\"2026-01-01\",\"cwd\":{}}}\n",
+            serde_json::to_string(&workspace.to_string_lossy()).unwrap()
+        );
+        content.push_str(
+            "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"first user message\"}}\n",
+        );
+        for index in 0..300 {
+            content.push_str(&format!(
+                "{{\"type\":\"message\",\"id\":\"m{index}\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"padding {index}\"}}]}}}}\n"
+            ));
+        }
+        content.push_str(
+            "{\"type\":\"session_info\",\"id\":\"rr1\",\"parentId\":\"m299\",\"name\":\"Renamed late\"}\n",
+        );
+        fs::write(sessions.join("renamed.jsonl"), content).unwrap();
+        let (data, workspace_id) = test_data(&workspace);
+        let data = data.with_session_root(temp.join("sessions"));
+
+        let (bucket_name, bucket_sessions, _, _) =
+            data.read_workspace_session_bucket(&workspace_id, false);
+        assert_eq!(
+            bucket_sessions
+                .first()
+                .and_then(|value| value.get("name"))
+                .and_then(serde_json::Value::as_str),
+            Some("Renamed late"),
+            "sidebar bucket scan must see the end-of-file rename (bucket={bucket_name:?})"
+        );
+
+        let listed = data.list_sessions(&workspace_id).unwrap();
+        assert_eq!(
+            listed.first().and_then(|summary| summary.name.as_deref()),
+            Some("Renamed late"),
+            "list_sessions summary must see the end-of-file rename"
+        );
+    }
+
+    #[test]
+    fn repeated_renames_resolve_to_the_latest_session_info() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("multi-rename.jsonl");
+        let mut content = String::from(
+            "{\"type\":\"session\",\"id\":\"multi\",\"timestamp\":\"2026-01-01\",\"cwd\":\"/workspace\"}\n\
+             {\"type\":\"session_info\",\"name\":\"first name\"}\n\
+             {\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"hello\"}}\n",
+        );
+        content.push_str(&"{}\n".repeat(200));
+        content.push_str("{\"type\":\"session_info\",\"name\":\"latest name\"}\n");
+        fs::write(&path, content).unwrap();
+
+        assert_eq!(
+            super::scan_session_sidebar_visibility(&path)
+                .unwrap()
+                .header
+                .and_then(|header| header.name),
+            Some("latest name".to_owned())
+        );
+        assert_eq!(
+            super::parse_session_header(&path).and_then(|header| header.name),
+            Some("latest name".to_owned())
+        );
+
+        // Pi semantics: the latest session_info with an empty name clears it.
+        fs::write(
+            &path,
+            fs::read_to_string(&path).unwrap() + "{\"type\":\"session_info\",\"name\":\"   \"}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            super::scan_session_sidebar_visibility(&path)
+                .unwrap()
+                .header
+                .and_then(|header| header.name),
+            None
+        );
     }
 
     #[test]
