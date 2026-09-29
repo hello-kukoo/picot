@@ -26,6 +26,17 @@ import { onLocaleChange, t } from "./i18n.js";
 import { createIcon, setButtonIcon } from "./icons.js";
 import { normalizeLocalPath, relativeLocalPath } from "./workspace/path-utils.js";
 
+/** Full-window host overlays (all toggle a `hidden` class on themselves).
+ * Native panes must hide while any of them is up — z-index cannot lift
+ * host DOM above the OS-level child webviews. */
+const FULL_WINDOW_OVERLAY_SELECTORS = [
+  "#settings-panel",
+  "#dialog-container",
+  "#session-search-overlay",
+  "#lan-qr-modal",
+  "#config-editor-overlay",
+];
+
 const AUTO_SAVE_DELAY = 1500;
 const DEFAULT_PANEL_RATIO = 0.42;
 const MIN_PANEL_WIDTH = 320;
@@ -116,29 +127,21 @@ export class FilePreviewPanel {
     // see it; the app announces when such a layout has settled.
     this._onLayoutSettled = () => this._syncActiveBrowserPane();
     window.addEventListener("picot-layout-settled", this._onLayoutSettled);
-    // Settings is a full-window host overlay, and native child webviews
-    // always paint above host DOM: while it is up every pane must hide, and
-    // the active one comes back when it closes. One class observer covers
-    // every entry point (header button, hash navigation, Esc, close button).
-    this._settingsObserver = null;
-    const settingsEl = document.getElementById("settings-panel");
-    if (settingsEl) {
-      this._settingsObserver = new MutationObserver(() => {
-        if (!settingsEl.classList.contains("hidden")) {
-          hideAllPanes();
-          return;
-        }
-        const tab = this.state.getActiveTab();
-        if (this.panelOpen && tab?.kind === "browser") {
-          showPane(tab.id, true);
-          void syncPane(tab.id).catch(() => {});
-        }
-      });
-      this._settingsObserver.observe(settingsEl, {
-        attributes: true,
-        attributeFilter: ["class"],
-      });
+    // Full-window host overlays vs native child webviews: the panes always
+    // paint above host DOM, so any overlay that covers the chat area must
+    // hide them until it closes. Every root below toggles a `hidden` class
+    // on itself; the lightbox appends itself to <body> instead, hence the
+    // extra body childList observer.
+    this._overlayObservers = [];
+    for (const selector of FULL_WINDOW_OVERLAY_SELECTORS) {
+      const el = document.querySelector(selector);
+      if (!el) continue;
+      const observer = new MutationObserver(() => this._syncOverlayPanes());
+      observer.observe(el, { attributes: true, attributeFilter: ["class"] });
+      this._overlayObservers.push(observer);
     }
+    this._lightboxObserver = new MutationObserver(() => this._syncOverlayPanes());
+    this._lightboxObserver.observe(document.body, { childList: true });
     this.activeDialogCancel = null;
     // Transient (non-file) content tabs — Side Chats — projected into the same
     // tab strip as file tabs but never persisted to FileTabState.
@@ -376,8 +379,10 @@ export class FilePreviewPanel {
 
   destroy() {
     window.removeEventListener("picot-layout-settled", this._onLayoutSettled);
-    this._settingsObserver?.disconnect();
-    this._settingsObserver = null;
+    for (const observer of this._overlayObservers ?? []) observer.disconnect();
+    this._overlayObservers = [];
+    this._lightboxObserver?.disconnect();
+    this._lightboxObserver = null;
     this._cancelPaneLayoutSync?.();
     this._cancelPaneLayoutSync = null;
     for (const timer of this.autoSaveTimers.values()) clearTimeout(timer);
@@ -686,6 +691,26 @@ export class FilePreviewPanel {
   _syncActiveBrowserPane() {
     const tab = this.state.getActiveTab();
     if (tab?.kind === "browser") void syncPane(tab.id).catch(() => {});
+  }
+
+  /** Hide the native panes while any full-window overlay is up; restore the
+   * active one only once every overlay is down again. */
+  _syncOverlayPanes() {
+    const overlayUp =
+      FULL_WINDOW_OVERLAY_SELECTORS.some((selector) => {
+        const el = document.querySelector(selector);
+        return el !== null && !el.classList.contains("hidden");
+      }) ||
+      [...document.body.children].some((el) => el.classList?.contains("image-lightbox-overlay"));
+    if (overlayUp) {
+      hideAllPanes();
+      return;
+    }
+    const tab = this.state.getActiveTab();
+    if (this.panelOpen && tab?.kind === "browser") {
+      showPane(tab.id, true);
+      void syncPane(tab.id).catch(() => {});
+    }
   }
 
   _syncActiveBrowserPaneAfterLayout() {

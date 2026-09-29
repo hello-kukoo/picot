@@ -446,6 +446,79 @@ describe("FilePreviewPanel", () => {
     delete window.__TAURI__;
   });
 
+  test("full-window overlays (dialogs, search) hide panes and restore on close", async () => {
+    global.ResizeObserver = class {
+      observe() {}
+      disconnect() {}
+    };
+    window.__TAURI__ = { window: { getCurrentWindow: () => ({ label: "overlay-test" }) } };
+    const overlays = ["dialog-container", "session-search-overlay"].map((id) => {
+      const el = document.createElement("div");
+      el.id = id;
+      el.className = "hidden";
+      document.body.append(el);
+      return el;
+    });
+    const p = createPanel();
+    await p.openBrowserTab("http://127.0.0.1:41001/", {
+      file: "/test/workspace/a.docx",
+      fileName: "a.docx",
+    });
+    await Promise.resolve();
+    p.transport.browserPaneSetVisible.mockClear();
+    for (const el of overlays) {
+      el.classList.remove("hidden");
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    expect(p.transport.browserPaneSetVisible).toHaveBeenCalledWith(
+      expect.objectContaining({ visible: false }),
+    );
+    // Restore only once every watched overlay is down again.
+    p.transport.browserPaneSetVisible.mockClear();
+    overlays[0].classList.add("hidden");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(p.transport.browserPaneSetVisible).not.toHaveBeenCalledWith(
+      expect.objectContaining({ visible: true }),
+    );
+    overlays[1].classList.add("hidden");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(p.transport.browserPaneSetVisible).toHaveBeenLastCalledWith(
+      expect.objectContaining({ visible: true }),
+    );
+    p.destroy();
+    for (const el of overlays) el.remove();
+    delete window.__TAURI__;
+  });
+
+  test("the image lightbox hides panes while appended to the body", async () => {
+    global.ResizeObserver = class {
+      observe() {}
+      disconnect() {}
+    };
+    window.__TAURI__ = { window: { getCurrentWindow: () => ({ label: "lightbox-test" }) } };
+    const p = createPanel();
+    await p.openBrowserTab("http://127.0.0.1:41001/", {
+      file: "/test/workspace/a.docx",
+      fileName: "a.docx",
+    });
+    await Promise.resolve();
+    p.transport.browserPaneSetVisible.mockClear();
+    const lightbox = document.createElement("div");
+    lightbox.className = "image-lightbox-overlay";
+    document.body.append(lightbox);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(p.transport.browserPaneSetVisible).toHaveBeenCalledWith(
+      expect.objectContaining({ visible: false }),
+    );
+    lightbox.remove();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(p.transport.browserPaneSetVisible).toHaveBeenLastCalledWith(
+      expect.objectContaining({ visible: true }),
+    );
+    p.destroy();
+    delete window.__TAURI__;
+  });
+
   test("switching back to a browser tab does not stick on loading", async () => {
     const p = createPanel();
     await p.openBrowserTab("http://127.0.0.1:41001/", {
