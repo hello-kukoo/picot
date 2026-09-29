@@ -246,9 +246,10 @@ prompt 模板已在响应中，仅被 `listSkillsViaRuntime`（`public/app.js`�
 
 **决策**：
 
-- 菜单泛化为「命令菜单」，只收**展开型**条目：prompt 模板 + skills。extension
+- 菜单泛化为「命令菜单」，只收**展开型**条目：prompt 模板 + skills。~~extension
   commands 不进——其语义是执行代码而非展开文本，部分依赖 TUI 交互面，在 Picot
-  composer 中行为不可靠。
+  composer 中行为不可靠。~~ **[SUPERSEDED 2026-09-27 by Addendum B：extension
+  commands 进菜单；发送侧本就支持，交互经 extension_ui_request 桥可用]**
 - 选中行为沿用现有 `select()`：插入 `/name ` 到输入框，参数（`$1`/`$@`）由用户补写，
   发送时 Pi 原生展开。零新机制。
 - 呈现：单列表混排；模板用 `file-text` 图标（Lucide v1.33.0，与注册表同步版一致）、
@@ -268,6 +269,50 @@ prompt 模板已在响应中，仅被 `listSkillsViaRuntime`（`public/app.js`�
 
 **验证**：菜单混合渲染/过滤/选中单测（kind 图标与 data-kind 断言）；`bun run check`；
 locale 触碰跑全量 `bun run test`。
+
+## Addendum B — extension commands 进命令菜单（2026-09-27，未实施）
+
+**背景**：Addendum A 排除 extension commands 的理由（执行代码非展开文本、TUI
+交互不可靠）被 Paseo 源码核实推翻（2026-09-27，`~/tmp/PI/paseo`）：Paseo
+composer 把 `/cmd` 原文经 RPC `prompt` 透传，由 pi 进程原生执行——pi rpc.md
+明文 extension command 即使流式中也立即执行；命令发现走 `get_commands` RPC；
+执行中的交互经 `extension_ui_request` 事件桥回 GUI，答案经
+`extension_ui_response` 回传。Paseo host 自身也用同一通道调自家 extension
+（`providers/pi/agent.ts:1570`，`runtimeSession.prompt("/paseo-tree …")`）。
+
+**Picot 现状事实**（2026-09-27 核实）：
+
+- 发送侧已完整支持：`loadExtensionCommandNames()`（`public/app.js:4272`）缓存
+  `get_commands` 的 extension 源命令；`planFollowUpSend`
+  （`public/composer-follow-up.js:10`）把 extension 命令路由为直发 prompt——
+  pi 拒绝 extension command 入 follow_up 队列。
+- UI 桥已存在：`extension_ui_request` 两路根治（2026-09-18 决策），问卷卡/
+  对话框渲染，`extension_ui_response` 回传（`public/ui/dialogs.js:169`）。
+- 唯一缺口是发现：`listSlashCommandsViaRuntime`（`public/app.js:4724`）只放行
+  `source === "skill" || "prompt"`，extension 条目被丢弃，菜单不可见。
+
+**决策**：
+
+- extension commands 进命令菜单：数据面放开 `source === "extension"`，映射
+  `kind:"extension"`，与 prompt/skill 单列表混排；图标 Lucide `puzzle`（图标
+  注册表无则按 lucide-icons skill 补录）。extension 无 project/personal 之分，
+  不显示 scope 标签。
+- builtin 命令（`/tree` `/fork` `/new` `/session` `/share` `/export` 等）仍不进：
+  树/fork/新会话已由 Picot 原生 UI 拥有，其余 TUI 绑定；不重造、不透传。
+- 发送链路零改动（C5 已含 extension 直发路由）；选中行为沿用现有 `select()`
+  插入 `/name `。
+- 未受信项目的项目级 extension 不加载（pi 信任门禁），其命令天然不出现在
+  `get_commands`，无需额外 gate。
+
+**不做**：builtin 命令纳管、`argumentHint` 提示、Quick/Side Chat 菜单、
+`loadExtensionCommandNames` 与菜单列表的请求合并（各自缓存可接受）。
+
+**状态**：设计 Approved（2026-09-27，Dr. Lin 指示），未实施；实施计划见
+`docs/superpowers/plans/2026-09-27-composer-extension-commands.md`。
+
+**验证**：菜单三 kind 混排/过滤/选中单测；真实 extension command 手测（如
+auto-memory 的 `/memory`）；命令执行期间 `extension_ui_request` 问卷弹卡与
+回答回传；`bun run check` + focused vitest。
 
 ## Decisions (resolved 2026-09-18)
 
