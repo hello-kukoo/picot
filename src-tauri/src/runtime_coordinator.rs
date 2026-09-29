@@ -101,13 +101,6 @@ struct RuntimeRecord {
     state: RuntimeState,
     sequence: u64,
     mutations: VecDeque<MutationRecord>,
-    active_turn: Option<ActiveTurn>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ActiveTurn {
-    turn_id: String,
-    operation_id: String,
 }
 
 #[allow(dead_code)]
@@ -150,7 +143,6 @@ impl RuntimeCoordinator {
                 state,
                 sequence: 0,
                 mutations: VecDeque::new(),
-                active_turn: None,
             },
         );
         Ok(())
@@ -295,39 +287,6 @@ impl RuntimeCoordinator {
         self.validate_identity(target)?;
         let record = self.instances.get_mut(&target.instance_id).unwrap();
         record.state = state;
-        if matches!(
-            state,
-            RuntimeState::Idle | RuntimeState::Crashed | RuntimeState::Stopped
-        ) {
-            record.active_turn = None;
-        }
-        Ok(())
-    }
-
-    pub fn bind_turn(
-        &mut self,
-        target: &RuntimeTarget,
-        turn_id: impl Into<String>,
-        operation_id: impl Into<String>,
-    ) -> Result<(), CoordinatorError> {
-        // Wire frames carry the wire target (owner None, generation 0 — see
-        // the deserialization test below), so after a workspace transition
-        // the strict validate would silently reject every turn binding and
-        // later aborts would find no active turn. Identity is enough here:
-        // same workspace+session+instance is unambiguously this runtime.
-        self.validate_identity(target)?;
-        let turn_id = turn_id.into();
-        if turn_id.is_empty() {
-            return Err(CoordinatorError::InvalidCommand);
-        }
-        let record = self.instances.get_mut(&target.instance_id).unwrap();
-        if record.state != RuntimeState::Working {
-            return Err(CoordinatorError::InvalidState);
-        }
-        record.active_turn = Some(ActiveTurn {
-            turn_id,
-            operation_id: operation_id.into(),
-        });
         Ok(())
     }
 
@@ -351,62 +310,6 @@ impl RuntimeCoordinator {
                 record.target
             );
             return Err(CoordinatorError::IdentityMismatch);
-        }
-        Ok(())
-    }
-
-    /// The turn currently bound to a Working runtime: `(turn_id, operation_id)`.
-    /// (Legacy turn-bound abort surface — dormant on pi 0.85.1, which never
-    /// emits turn ids on runtime events; see the event pump note.)
-    /// A stop click can land between `agent_end` (which resets the client's
-    /// live-turn id) and the next `turn_start` (the frame that carries the new
-    /// id), so the abort arrives bare while the run continues. This binding is
-    /// the same id the client would have sent a moment later.
-    pub fn bound_active_turn(
-        &self,
-        target: &RuntimeTarget,
-    ) -> Result<Option<(String, String)>, CoordinatorError> {
-        self.validate_identity(target)?;
-        let record = self.instances.get(&target.instance_id).unwrap();
-        if record.state != RuntimeState::Working {
-            return Ok(None);
-        }
-        Ok(record
-            .active_turn
-            .as_ref()
-            .map(|turn| (turn.turn_id.clone(), turn.operation_id.clone())))
-    }
-
-    pub fn active_turn_operation(
-        &self,
-        target: &RuntimeTarget,
-        turn_id: &str,
-    ) -> Result<Option<String>, CoordinatorError> {
-        self.validate_identity(target)?;
-        let record = self.instances.get(&target.instance_id).unwrap();
-        if record.state != RuntimeState::Working {
-            return Ok(None);
-        }
-        Ok(record
-            .active_turn
-            .as_ref()
-            .and_then(|turn| (turn.turn_id == turn_id).then(|| turn.operation_id.clone())))
-    }
-
-    #[allow(dead_code)]
-    pub fn end_turn(
-        &mut self,
-        target: &RuntimeTarget,
-        turn_id: &str,
-    ) -> Result<(), CoordinatorError> {
-        self.validate_identity(target)?;
-        let record = self.instances.get_mut(&target.instance_id).unwrap();
-        if record
-            .active_turn
-            .as_ref()
-            .is_some_and(|turn| turn.turn_id == turn_id)
-        {
-            record.active_turn = None;
         }
         Ok(())
     }
@@ -506,8 +409,9 @@ mod tests {
         // Regression: after a workspace transition the registered record
         // carries the owner binding and bumped generation, while a client
         // that missed the re-stamp still sends owner=None/generation=0.
-        // The abort read path must match on the identity triple only —
-        // stopping a live run must not be blocked by routing bookkeeping.
+        // State transitions (agent_start/agent_end from the wire target) and
+        // the abort path must match on the identity triple only — stopping a
+        // live run must not be blocked by routing bookkeeping.
         let mut coordinator = RuntimeCoordinator::new(8);
         let registered =
             RuntimeTarget::with_owner("workspace-a", "session-a", "instance-a", "owner-1", 1);
@@ -518,35 +422,22 @@ mod tests {
         let stale_metadata = target("instance-a");
         assert_eq!(stale_metadata.owner_id, None);
         assert_eq!(stale_metadata.workspace_generation, 0);
-        // Turn lifecycle arrives on the wire target (stale metadata): the
-        // binding must succeed or later aborts find no active turn.
+        // State arrives on the wire target (stale metadata): it must land.
         coordinator
             .set_state(&stale_metadata, RuntimeState::Working)
             .unwrap();
-        coordinator
-            .bind_turn(&stale_metadata, "turn-1", "operation-1")
-            .unwrap();
         assert_eq!(
-            coordinator.bound_active_turn(&stale_metadata).unwrap(),
-            Some(("turn-1".to_string(), "operation-1".to_string()))
-        );
-        assert!(coordinator
-            .active_turn_operation(&stale_metadata, "turn-1")
-            .is_ok());
-        coordinator.end_turn(&stale_metadata, "turn-1").unwrap();
-        assert_eq!(
-            coordinator.bound_active_turn(&stale_metadata).unwrap(),
-            None
+            coordinator.state_of(&stale_metadata),
+            Some(RuntimeState::Working)
         );
         // Strict validate keeps guarding the rest: metadata drift still
         // rejects there, and identity drift rejects everywhere.
         assert!(coordinator.validate(&stale_metadata).is_err());
         assert!(coordinator
-            .bound_active_turn(&RuntimeTarget::new(
-                "workspace-a",
-                "session-b",
-                "instance-a"
-            ))
+            .set_state(
+                &RuntimeTarget::new("workspace-a", "session-b", "instance-a"),
+                RuntimeState::Idle
+            )
             .is_err());
     }
 
@@ -651,70 +542,6 @@ mod tests {
             coordinator.snapshot(&resumed).unwrap().state,
             RuntimeState::Starting
         );
-    }
-
-    #[test]
-    fn turn_binding_is_current_only_and_clears_on_idle() {
-        let mut coordinator = RuntimeCoordinator::new(8);
-        let active = target("instance-a");
-        coordinator
-            .register(active.clone(), RuntimeState::Working)
-            .unwrap();
-        coordinator.bind_turn(&active, "turn-a", "op-a").unwrap();
-        assert_eq!(
-            coordinator
-                .active_turn_operation(&active, "turn-a")
-                .unwrap(),
-            Some("op-a".into())
-        );
-        assert_eq!(
-            coordinator
-                .active_turn_operation(&active, "turn-old")
-                .unwrap(),
-            None
-        );
-        coordinator.set_state(&active, RuntimeState::Idle).unwrap();
-        assert_eq!(
-            coordinator
-                .active_turn_operation(&active, "turn-a")
-                .unwrap(),
-            None
-        );
-        coordinator
-            .set_state(&active, RuntimeState::Working)
-            .unwrap();
-        coordinator.bind_turn(&active, "turn-b", "op-b").unwrap();
-        assert_eq!(
-            coordinator
-                .active_turn_operation(&active, "turn-a")
-                .unwrap(),
-            None
-        );
-        assert_eq!(
-            coordinator
-                .active_turn_operation(&active, "turn-b")
-                .unwrap(),
-            Some("op-b".into())
-        );
-    }
-
-    #[test]
-    fn bound_active_turn_reports_the_working_runtime_turn_only() {
-        let mut coordinator = RuntimeCoordinator::new(8);
-        let active = target("instance-a");
-        coordinator
-            .register(active.clone(), RuntimeState::Working)
-            .unwrap();
-        // Working but no turn bound yet (before the first turn_start).
-        assert_eq!(coordinator.bound_active_turn(&active).unwrap(), None);
-        coordinator.bind_turn(&active, "turn-a", "op-a").unwrap();
-        assert_eq!(
-            coordinator.bound_active_turn(&active).unwrap(),
-            Some(("turn-a".into(), "op-a".into()))
-        );
-        // Idle clears the binding: a bare abort then has nothing to resolve.
-        coordinator.set_state(&active, RuntimeState::Idle).unwrap();
-        assert_eq!(coordinator.bound_active_turn(&active).unwrap(), None);
     }
 
     #[test]

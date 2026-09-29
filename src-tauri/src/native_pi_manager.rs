@@ -169,18 +169,14 @@ struct ManagedRuntime {
 }
 
 struct NativePiManagerInner {
-    /// One-shot flag: the first runtime event observed carrying a turnId logs
-    /// once (pi 0.85.1 never sends one; a future pi that does is worth
-    /// noticing from the terminal).
-    turn_operations_seen_turn_id: std::sync::atomic::AtomicBool,
     coordinator: Mutex<RuntimeCoordinator>,
     /// P1 adapter boundary: native callers currently provide RuntimeTarget only.
     /// Owner/workspace generation must come from Gate R before production admission;
     /// no browser-root or synthetic owner fallback is allowed here.
     operations: Mutex<OperationRegistry>,
-    /// Most recent accepted operation per runtime instance. Feeds the legacy
-    /// turn-bound abort binding: pi 0.85.1 never emits turnId on runtime
-    /// events, so the binding is dormant until a future pi reports one.
+    /// Most recent accepted operation per runtime instance. Sole consumer is
+    /// the bare-abort authorization: a stop may only forward to pi when the
+    /// requester's scope matches the operation that started the running turn.
     turn_operations: Mutex<HashMap<String, (String, OperationScope)>>,
     runtimes: Mutex<HashMap<String, ManagedRuntime>>,
     events: broadcast::Sender<NativeRuntimeEvent>,
@@ -319,7 +315,6 @@ impl NativePiManager {
                 )),
                 runtimes: Mutex::new(HashMap::new()),
                 turn_operations: Mutex::new(HashMap::new()),
-                turn_operations_seen_turn_id: std::sync::atomic::AtomicBool::new(false),
                 events,
                 pending_ui: Mutex::new(HashMap::new()),
                 closing: Mutex::new(HashMap::new()),
@@ -542,52 +537,6 @@ impl NativePiManager {
                     sequence: sequenced.sequence,
                     event: sequenced.event,
                 };
-                // Turn binding (legacy turn-bound abort): pi 0.85.1 never
-                // emits turnId on runtime_event frames (probed live), so this
-                // block is dormant. Kept for a future pi that reports turn
-                // identity; the first observed id logs once so an upgrade is
-                // visible from the dev terminal.
-                if let Some(turn_id) = runtime_event
-                    .event
-                    .get("turnId")
-                    .and_then(Value::as_str)
-                    .filter(|turn_id| !turn_id.is_empty())
-                {
-                    let binding = inner
-                        .turn_operations
-                        .lock()
-                        .ok()
-                        .and_then(|turn_operations| {
-                            turn_operations
-                                .get(&runtime_event.target.instance_id)
-                                .cloned()
-                        });
-                    if !inner
-                        .turn_operations_seen_turn_id
-                        .swap(true, std::sync::atomic::Ordering::Relaxed)
-                    {
-                        log::info!(
-                            "[picot-native] runtime event carried a turnId ({turn_id}): turn-bound abort path is live for instance {}",
-                            runtime_event.target.instance_id
-                        );
-                    }
-                    if let Some((operation_id, scope)) = binding {
-                        if scope.workspace_id == runtime_event.target.workspace_id
-                            && scope.session_id == runtime_event.target.session_id
-                        {
-                            if let Ok(mut registry) = inner.operations.lock() {
-                                let _ = registry.bind_turn(&operation_id, turn_id);
-                            }
-                            if let Ok(mut coordinator) = inner.coordinator.lock() {
-                                let _ = coordinator.bind_turn(
-                                    &runtime_event.target,
-                                    turn_id,
-                                    &operation_id,
-                                );
-                            }
-                        }
-                    }
-                }
                 if runtime_event.event.get("type").and_then(Value::as_str)
                     == Some("extension_ui_request")
                 {
@@ -889,123 +838,52 @@ impl NativePiManager {
         Ok((operation_id, acceptance, Some(response)))
     }
 
-    /// Binds a turn-starting operation to the current runtime turn (legacy
-    /// turn-bound abort surface; dormant on pi 0.85.1, which never reports
-    /// turn ids on events).
-    pub fn bind_turn(
-        &self,
-        target: &RuntimeTarget,
-        scope: &OperationScope,
-        turn_id: &str,
-        operation_id: &str,
-    ) -> Result<(), String> {
-        if scope.workspace_id != target.workspace_id || scope.session_id != target.session_id {
-            return Err("Operation scope does not match runtime target".into());
-        }
-        let operation_scope_matches = self
-            .inner
-            .operations
-            .lock()
-            .map_err(|_| "Operation registry lock poisoned".to_string())?
-            .get_scoped(operation_id, scope)
-            .is_ok();
-        if !operation_scope_matches {
-            return Err("Operation scope does not authorize turn binding".into());
-        }
-        self.inner
-            .operations
-            .lock()
-            .map_err(|_| "Operation registry lock poisoned".to_string())?
-            .bind_turn(operation_id, turn_id)
-            .map_err(|error| format!("Turn operation binding rejected: {error:?}"))?;
-        self.inner
-            .coordinator
-            .lock()
-            .map_err(|_| "Runtime coordinator lock poisoned".to_string())?
-            .bind_turn(target, turn_id, operation_id)
-            .map_err(|error| format!("Turn binding rejected: {error:?}"))
-    }
-
-    /// Aborts only exact current turn. Stale turns return successful no-op.
-    /// This path deliberately bypasses both idempotency caches.
+    /// Aborts the current run with pi's native bare abort command. Requires
+    /// the runtime to be Working and the requester's scope to match the most
+    /// recent accepted operation for the instance; anything less settles as
+    /// `stale_turn`. Deliberately bypasses both idempotency caches.
     pub async fn abort_turn(
         &self,
         target: &RuntimeTarget,
         scope: &OperationScope,
-        turn_id: Option<&str>,
         timeout: Duration,
     ) -> Result<Value, String> {
         if scope.workspace_id != target.workspace_id || scope.session_id != target.session_id {
             return Ok(serde_json::json!({ "disposition": "stale_turn" }));
         }
-        if turn_id.is_none() {
-            let working = {
-                let coordinator = self
-                    .inner
-                    .coordinator
-                    .lock()
-                    .map_err(|_| "Runtime coordinator lock poisoned".to_string())?;
-                coordinator
-                    .validate_identity(target)
-                    .map_err(|error| format!("Abort target rejected: {error:?}"))?;
-                coordinator.state_of(target) == Some(RuntimeState::Working)
-            };
-            if !working {
-                return Ok(serde_json::json!({ "disposition": "stale_turn" }));
-            }
-            let binding = self
+        let working = {
+            let coordinator = self
                 .inner
-                .turn_operations
+                .coordinator
                 .lock()
-                .map_err(|_| "Turn operation lock poisoned".to_string())?
-                .get(&target.instance_id)
-                .cloned();
-            let Some((operation_id, operation_scope)) = binding else {
-                return Ok(serde_json::json!({ "disposition": "stale_turn" }));
-            };
-            if operation_scope != *scope
-                || self
-                    .inner
-                    .operations
-                    .lock()
-                    .map_err(|_| "Operation registry lock poisoned".to_string())?
-                    .get_scoped(&operation_id, scope)
-                    .is_err()
-            {
-                return Ok(serde_json::json!({ "disposition": "stale_turn" }));
-            }
-            let bridge = self
-                .inner
-                .runtimes
-                .lock()
-                .map_err(|_| "Native runtime registry lock poisoned".to_string())?
-                .get(&target.instance_id)
-                .map(|runtime| runtime.bridge.clone())
-                .ok_or_else(|| "Native runtime instance is not running".to_string())?;
-            return bridge
-                .request(serde_json::json!({ "type": "abort" }), timeout)
-                .await
-                .map_err(|error| format!("Pi abort failed: {error:?}"));
+                .map_err(|_| "Runtime coordinator lock poisoned".to_string())?;
+            coordinator
+                .validate_identity(target)
+                .map_err(|error| format!("Abort target rejected: {error:?}"))?;
+            coordinator.state_of(target) == Some(RuntimeState::Working)
+        };
+        if !working {
+            return Ok(serde_json::json!({ "disposition": "stale_turn" }));
         }
-        let turn_id = turn_id.unwrap();
-        let operation_id = self
+        let binding = self
             .inner
-            .coordinator
+            .turn_operations
             .lock()
-            .map_err(|_| "Runtime coordinator lock poisoned".to_string())?
-            .active_turn_operation(target, turn_id)
-            .map_err(|error| format!("Abort target rejected: {error:?}"))?;
-        let Some(operation_id) = operation_id else {
+            .map_err(|_| "Turn operation lock poisoned".to_string())?
+            .get(&target.instance_id)
+            .cloned();
+        let Some((operation_id, operation_scope)) = binding else {
             return Ok(serde_json::json!({ "disposition": "stale_turn" }));
         };
-        let authorized = self
-            .inner
-            .operations
-            .lock()
-            .map_err(|_| "Operation registry lock poisoned".to_string())?
-            .get_scoped(&operation_id, scope)
-            .is_ok();
-        if !authorized {
+        if operation_scope != *scope
+            || self
+                .inner
+                .operations
+                .lock()
+                .map_err(|_| "Operation registry lock poisoned".to_string())?
+                .get_scoped(&operation_id, scope)
+                .is_err()
+        {
             return Ok(serde_json::json!({ "disposition": "stale_turn" }));
         }
         let bridge = self
@@ -1017,10 +895,7 @@ impl NativePiManager {
             .map(|runtime| runtime.bridge.clone())
             .ok_or_else(|| "Native runtime instance is not running".to_string())?;
         bridge
-            .request(
-                serde_json::json!({ "type": "abort", "turnId": turn_id }),
-                timeout,
-            )
+            .request(serde_json::json!({ "type": "abort" }), timeout)
             .await
             .map_err(|error| format!("Pi abort failed: {error:?}"))
     }
@@ -2249,7 +2124,7 @@ mod tests {
         let wrong_scope = OperationScope::new("other-owner", "workspace-a", "session-a", 1);
         assert_eq!(
             manager
-                .abort_turn(&target, &wrong_scope, None, Duration::from_secs(1))
+                .abort_turn(&target, &wrong_scope, Duration::from_secs(1))
                 .await
                 .unwrap()["disposition"],
             "stale_turn"
@@ -2262,7 +2137,7 @@ mod tests {
             let scope = scope.clone();
             async move {
                 manager
-                    .abort_turn(&target, &scope, None, Duration::from_secs(1))
+                    .abort_turn(&target, &scope, Duration::from_secs(1))
                     .await
             }
         });
@@ -2315,130 +2190,6 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(abort.await.unwrap().unwrap()["success"], true);
-    }
-
-    #[tokio::test]
-    async fn abort_turn_forwards_only_current_authorized_turn_and_retries_safely() {
-        let manager = NativePiManager::in_memory(8);
-        let target = RuntimeTarget::new("workspace-a", "session-a", "instance-a");
-        let scope = OperationScope::new("owner-a", "workspace-a", "session-a", 1);
-        let mut fake = manager.register_in_memory(target.clone()).unwrap();
-        let mut events = manager.subscribe();
-        fake.write_frame(json!({ "type": "agent_start" }))
-            .await
-            .unwrap();
-
-        let request = tokio::spawn({
-            let manager = manager.clone();
-            let target = target.clone();
-            let scope = scope.clone();
-            async move {
-                manager
-                    .request_scoped(
-                        &target,
-                        scope,
-                        json!({ "type": "prompt", "message": "turn" }),
-                        "intent-turn-a",
-                        Duration::from_secs(1),
-                    )
-                    .await
-            }
-        });
-        let outbound = fake.read_request().await.unwrap();
-        let id = outbound["id"].as_str().unwrap();
-        // The Pi RPC response never carries a turnId: turn identity arrives on
-        // runtime_event frames while the turn is still running. Wait until the
-        // pump has processed the turn-bearing event before resolving the RPC.
-        fake.write_frame(json!({ "type": "agent_start", "turnId": "turn-a" }))
-            .await
-            .unwrap();
-        while let Ok(event) = events.recv().await {
-            if event.event.get("turnId").is_some() {
-                break;
-            }
-        }
-        fake.write_frame(json!({
-            "id": id,
-            "type": "response",
-            "command": "prompt",
-            "success": true
-        }))
-        .await
-        .unwrap();
-        request.await.unwrap().unwrap();
-
-        let abort = tokio::spawn({
-            let manager = manager.clone();
-            let target = target.clone();
-            let scope = scope.clone();
-            async move {
-                manager
-                    .abort_turn(&target, &scope, Some("turn-a"), Duration::from_secs(1))
-                    .await
-            }
-        });
-        let outbound = fake.read_request().await.unwrap();
-        assert_eq!(outbound["type"], "abort");
-        assert_eq!(outbound["turnId"], "turn-a");
-        let id = outbound["id"].as_str().unwrap();
-        fake.write_frame(json!({ "id": id, "type": "response", "success": true }))
-            .await
-            .unwrap();
-        assert_eq!(abort.await.unwrap().unwrap()["success"], true);
-
-        let stale = manager
-            .abort_turn(&target, &scope, Some("turn-old"), Duration::from_secs(1))
-            .await
-            .unwrap();
-        assert_eq!(stale["disposition"], "stale_turn");
-        assert!(fake.try_read_request().is_none());
-
-        // Bare abort uses Pi's native command without a turnId.
-        let bare = tokio::spawn({
-            let manager = manager.clone();
-            let target = target.clone();
-            let scope = scope.clone();
-            async move {
-                manager
-                    .abort_turn(&target, &scope, None, Duration::from_secs(1))
-                    .await
-            }
-        });
-        let outbound = fake.read_request().await.unwrap();
-        assert_eq!(outbound["type"], "abort");
-        assert!(outbound.get("turnId").is_none());
-        let id = outbound["id"].as_str().unwrap();
-        fake.write_frame(json!({ "id": id, "type": "response", "success": true }))
-            .await
-            .unwrap();
-        assert_eq!(bare.await.unwrap().unwrap()["success"], true);
-
-        let wrong_scope = OperationScope::new("owner-b", "workspace-a", "session-a", 1);
-        let stale = manager
-            .abort_turn(
-                &target,
-                &wrong_scope,
-                Some("turn-a"),
-                Duration::from_secs(1),
-            )
-            .await
-            .unwrap();
-        assert_eq!(stale["disposition"], "stale_turn");
-        assert!(fake.try_read_request().is_none());
-
-        // Idle runtimes must not receive an abort.
-        fake.write_frame(json!({ "type": "agent_end" }))
-            .await
-            .unwrap();
-        while let Ok(event) = events.recv().await {
-            if event.event.get("type") == Some(&serde_json::json!("agent_end")) {
-                break;
-            }
-        }
-        let missing = manager
-            .abort_turn(&target, &scope, None, Duration::from_secs(1))
-            .await;
-        assert_eq!(missing.unwrap()["disposition"], "stale_turn");
     }
 
     #[tokio::test]

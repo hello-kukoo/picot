@@ -222,7 +222,7 @@ pi runtime 的存活不依赖 Picot 的 teardown：`pi` 在 stdin EOF 时退出�
 - 逻辑 scope `(owner, workspace, session, generation)`
 - 幂等键去重：`accepted_pending` / `duplicate_pending` / `duplicate_completed`
 - crash/restart → Pending → Indeterminate（不可重放）
-- 聊天终止（主聊天 + Quick/Side Chat）：宿主确认 owner/workspace/session/instance 与运行中操作 scope 后，向 Pi 发送原生 `{ "type": "abort" }`；Pi RPC 的 `agent_start`/`turn_start` 和命令响应都不承诺 `turnId`，`validate_command` 不再对 abort 强制 turnId（与 rpc-commands.md 一致）。事件泵的 turnId 绑定为休眠的 turn-bound 遗产面，仅在 Pi 未来上报 turnId 时激活（首见记日志）。
+- 聊天终止（主聊天 + Quick/Side Chat）：宿主确认 owner/workspace/session/instance 与运行中操作 scope（每实例最近受理操作）后，向 Pi 发送原生 `{ "type": "abort" }`。Pi 0.85.1 的 `agent_start`/`turn_start` 与命令响应均不携带 `turnId`（实测 + rpc-commands.md），turn-bound abort 机制（turnId 事件绑定、显式 turnId 校验）已整体移除；若未来 Pi 上报 turnId，按 `pi-upgrade-impact` 流程基于新文档重新设计，不复活旧实现。
 
 ## 模块清单
 

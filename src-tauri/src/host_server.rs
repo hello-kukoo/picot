@@ -2009,23 +2009,12 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
 }
 
 fn runtime_event_frame(event: crate::native_pi_manager::NativeRuntimeEvent) -> Value {
-    // operationId/turnId passthrough: pi 0.85.1 emits neither on session
-    // events, so both branches are dormant; kept for a future pi that does.
-    let operation_id = event.event.get("operationId").cloned();
-    let turn_id = event.event.get("turnId").cloned();
-    let mut frame = json!({
+    json!({
         "type": "runtime_event",
         "target": event.target,
         "sequence": event.sequence,
         "event": event.event,
-    });
-    if let Some(operation_id) = operation_id {
-        frame["operationId"] = operation_id;
-    }
-    if let Some(turn_id) = turn_id {
-        frame["turnId"] = turn_id;
-    }
-    frame
+    })
 }
 
 fn runtime_target_is_live(state: &HostState, target: &RuntimeTarget) -> bool {
@@ -2379,7 +2368,6 @@ async fn dispatch(
                 "requestId": request_id,
                 "operationId": operation_id,
                 "state": record.state,
-                "turnId": record.turn_id,
                 "crashReason": record.crash_reason,
                 "response": record.terminal_response,
             }))
@@ -2571,12 +2559,7 @@ async fn dispatch(
             if command.get("type").and_then(Value::as_str) == Some("abort") {
                 let response = state
                     .runtimes
-                    .abort_turn(
-                        &target,
-                        &scope,
-                        command.get("turnId").and_then(Value::as_str),
-                        Duration::from_secs(30),
-                    )
+                    .abort_turn(&target, &scope, Duration::from_secs(30))
                     .await
                     .map_err(|message| ("runtime_request_failed", message))?;
                 return Ok(
@@ -5512,7 +5495,7 @@ mod tests {
                     ))
                     .await
                     .unwrap();
-                let (prompt, turn_id) = loop {
+                let prompt = loop {
                     let frame: Value = serde_json::from_str(
                         tokio::time::timeout(Duration::from_secs(30), socket.next())
                             .await
@@ -5524,17 +5507,13 @@ mod tests {
                     )
                     .unwrap();
                     if frame["type"] == "runtime_event" {
-                        let turn_id = frame["turnId"]
-                            .as_str()
-                            .filter(|id| !id.is_empty())
-                            .map(str::to_owned);
-                        break (prompt_started.elapsed().as_secs_f64() * 1000.0, turn_id);
+                        break prompt_started.elapsed().as_secs_f64() * 1000.0;
                     }
                 };
-                if let Some(turn_id) = turn_id {
+                {
                     socket.send(Message::Text(json!({
                         "type": "runtime_request", "requestId": format!("perf-abort-{index}"),
-                        "target": target.clone(), "command": { "type": "abort", "turnId": turn_id }
+                        "target": target.clone(), "command": { "type": "abort" }
                     }).to_string())).await.unwrap();
                     loop {
                         let frame: Value = serde_json::from_str(
@@ -5755,7 +5734,6 @@ mod tests {
             .await
             .unwrap();
         let mut prompt_response = None;
-        let mut turn_id = None;
         let mut first_event_sequence = None;
         for _ in 0..16 {
             let frame: Value = serde_json::from_str(
@@ -5774,9 +5752,6 @@ mod tests {
             }
             if frame["type"] == "runtime_event" {
                 first_event_sequence = frame["sequence"].as_u64();
-                if let Some(id) = frame["turnId"].as_str().filter(|id| !id.is_empty()) {
-                    turn_id = Some(id.to_owned());
-                }
             }
         }
         let prompt_response = prompt_response.expect("prompt response must arrive");
@@ -5790,62 +5765,37 @@ mod tests {
             Some("accepted_pending" | "duplicate_pending" | "duplicate_completed")
         ));
 
-        for _ in 0..16 {
-            if turn_id.is_some() {
-                break;
-            }
-            let event: Value = serde_json::from_str(
-                tokio::time::timeout(Duration::from_secs(30), socket.next())
-                    .await
-                    .unwrap()
-                    .unwrap()
-                    .unwrap()
-                    .to_text()
-                    .unwrap(),
-            )
-            .unwrap();
-            if event["type"] != "runtime_event" {
-                continue;
-            }
-            first_event_sequence = event["sequence"].as_u64();
-            if let Some(id) = event["turnId"].as_str().filter(|id| !id.is_empty()) {
-                turn_id = Some(id.to_owned());
-                break;
-            }
-        }
         assert!(
             first_event_sequence.is_some(),
             "prompt must produce runtime event"
         );
-        if let Some(turn_id) = turn_id {
-            // Abort exact observed turn; stale turn IDs must never affect a new turn.
-            socket
-                .send(Message::Text(
-                    json!({
-                        "type": "runtime_request", "requestId": "abort-1", "target": target,
-                        "command": { "type": "abort", "turnId": turn_id }
-                    })
-                    .to_string(),
-                ))
-                .await
-                .unwrap();
-            let abort_response: Value = serde_json::from_str(
-                tokio::time::timeout(Duration::from_secs(30), socket.next())
-                    .await
-                    .unwrap()
-                    .unwrap()
-                    .unwrap()
-                    .to_text()
-                    .unwrap(),
-            )
+        // Bare abort (pi's command carries no turnId): the running turn stops.
+        socket
+            .send(Message::Text(
+                json!({
+                    "type": "runtime_request", "requestId": "abort-1", "target": target,
+                    "command": { "type": "abort" }
+                })
+                .to_string(),
+            ))
+            .await
             .unwrap();
-            assert_eq!(
-                abort_response["type"], "runtime_response",
-                "abort response: {abort_response}"
-            );
-            assert_eq!(abort_response["requestId"], "abort-1");
-            assert_ne!(abort_response["response"]["disposition"], "stale_turn");
-        }
+        let abort_response: Value = serde_json::from_str(
+            tokio::time::timeout(Duration::from_secs(30), socket.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
+                .to_text()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            abort_response["type"], "runtime_response",
+            "abort response: {abort_response}"
+        );
+        assert_eq!(abort_response["requestId"], "abort-1");
+        assert_ne!(abort_response["response"]["disposition"], "stale_turn");
 
         // Reconnect on same authorized owner, then hydrate from authoritative snapshot.
         let _ = socket.close(None).await;

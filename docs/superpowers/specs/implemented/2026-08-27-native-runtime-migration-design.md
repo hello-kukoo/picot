@@ -532,7 +532,9 @@ OperationRecord {
 - capacity、TTL、eviction 顺序、record persistence 范围必须在 Gate B 定义。最低要求：operation registry 生命周期独立于 execution instance；host restart 的 pending record 不得伪装为完成，应恢复为 `Indeterminate` 或明确不支持并 fail closed；
 - **crash 时按完成度二分**：已收到 terminal response → `Completed`；否则 `Indeterminate` 并返回 `runtime_crashed`。客户端先拉 snapshot/operation status，再决定是否用**新 key**重发；UI 必须明示这可能双重执行。
 
-#### Turn-bound abort
+> **实现偏差（2026-09-28，Dr. Lin 拍板）**：下文 "Turn-bound abort" 小节及所有 `turnId` 契约**未按设计实现**。Pi 0.85.1 的 `agent_start`/`turn_start` 事件与 RPC 响应均不携带 `turnId`（实测 + rpc-commands.md），该设计的前提字段在协议中不存在。实际实现：abort 走 Pi 原生裸命令 `{ "type": "abort" }`，host 侧以 owner/workspace/session/instance + 运行中操作 scope 准入；turnId 事件绑定、显式 turnId 校验与 `OperationRecord.turnId` 已整体移除。若未来 Pi 上报 turnId，按 `pi-upgrade-impact` 流程重新设计，不复活本节。原文保留为设计历史。
+
+#### Turn-bound abort（未实现，见上偏差）
 
 - 能启动/改变 agent turn 的 operation 会生成 `turnId`，并在 agent lifecycle event 中返回；host 保存 active `turnId → operationId` binding；
 - abort 请求必须带 `turnId`，不带即 `invalid_command`；

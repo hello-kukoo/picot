@@ -54,9 +54,6 @@ pub struct OperationRecord {
     pub accepted_at: Instant,
     pub expires_at: Instant,
     pub state: OperationState,
-    /// Bound by the legacy turn-binding path; pi 0.85.1 never reports turn
-    /// ids on runtime events, so this stays None in practice.
-    pub turn_id: Option<String>,
     pub terminal_response: Option<Value>,
     pub crash_reason: Option<String>,
 }
@@ -145,7 +142,6 @@ impl OperationRegistry {
                 accepted_at: now,
                 expires_at: now + self.ttl,
                 state: OperationState::Pending,
-                turn_id: None,
                 terminal_response: None,
                 crash_reason: None,
             },
@@ -201,20 +197,6 @@ impl OperationRegistry {
             return Err(OperationLookupError::NotFound);
         }
         Ok(record)
-    }
-
-    pub fn bind_turn(
-        &mut self,
-        operation_id: &str,
-        turn_id: impl Into<String>,
-    ) -> Result<(), OperationLookupError> {
-        let turn_id = turn_id.into();
-        if turn_id.is_empty() {
-            return Err(OperationLookupError::NotFound);
-        }
-        let stored = self.mutable(operation_id)?;
-        stored.turn_id = Some(turn_id);
-        Ok(())
     }
 
     pub fn complete(

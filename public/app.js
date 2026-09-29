@@ -2849,7 +2849,6 @@ wsClient.addEventListener("runtimeEvent", (e) => {
     ...frame.event,
     __target: frame.target,
     __sequence: frame.sequence,
-    __turnId: frame.turnId ?? frame.event?.turnId ?? null,
   });
 });
 
@@ -3292,7 +3291,7 @@ function openLiveTurn(event = null, { deferElapsed = false } = {}) {
   // instead of counting from the moment we mounted the turn.
   activeTurnStartedAt = deferElapsed ? null : Date.now();
   activeTurn = createTurnSection({
-    turnId: event?.__turnId ?? null,
+    turnId: null,
     modelLabel: currentModelId || "",
     startedAt: activeTurnStartedAt,
   });

@@ -136,7 +136,7 @@ test("a scripted live turn renders rail + answer + settled status in one section
   const assistantMessage = (text) => ({ role: "assistant", content: [{ type: "text", text }] });
 
   // ── The scripted sequence from the spec's verification note ──
-  send({ type: "agent_start", turnId: "turn-7" });
+  send({ type: "agent_start" });
   send({ type: "message_start", message: { role: "assistant", content: [] } });
   send({
     type: "message_update",
@@ -177,7 +177,6 @@ test("a scripted live turn renders rail + answer + settled status in one section
   const sections = messages.querySelectorAll("section.turn");
   expect(sections).toHaveLength(1);
   const section = sections[0];
-  expect(section.dataset.turnId).toBe("turn-7");
 
   // Thinking renders ONCE, in the rail — never inside the answer's content
   // (the finalize path must not duplicate what the rail already owns).
@@ -239,7 +238,7 @@ test("abort mid-turn closes the live turn — settled without duration, rail fol
       }),
     });
 
-  send({ type: "agent_start", turnId: "turn-abort" });
+  send({ type: "agent_start" });
   send({ type: "message_start", message: { role: "assistant", content: [] } });
   send({
     type: "message_update",
@@ -249,7 +248,7 @@ test("abort mid-turn closes the live turn — settled without duration, rail fol
   await new Promise((resolve) => setTimeout(resolve, 20));
 
   const messages = document.getElementById("messages");
-  let section = messages.querySelector("section.turn[data-turn-id='turn-abort']");
+  let section = messages.querySelector("section.turn");
   expect(section).not.toBeNull();
   expect(section.querySelector(".turn-status").classList.contains("live")).toBe(true);
 
@@ -258,7 +257,7 @@ test("abort mid-turn closes the live turn — settled without duration, rail fol
   document.getElementById("abort-btn").click();
   await new Promise((resolve) => setTimeout(resolve, 20));
 
-  section = messages.querySelector("section.turn[data-turn-id='turn-abort']");
+  section = messages.querySelector("section.turn");
   expect(section).not.toBeNull();
   const status = section.querySelector(".turn-status");
   expect(status.classList.contains("live")).toBe(false);
@@ -288,7 +287,7 @@ test("a live turn's write tool settles a turn-files card under the answer", asyn
 
   const assistantMessage = (text) => ({ role: "assistant", content: [{ type: "text", text }] });
 
-  send({ type: "agent_start", turnId: "turn-files" });
+  send({ type: "agent_start" });
   send({ type: "message_start", message: { role: "assistant", content: [] } });
   send({
     type: "message_update",

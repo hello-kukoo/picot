@@ -280,7 +280,7 @@ Mutation 必须有 UUID idempotency key；read 不带。同 scope + same key：�
 - owner revoke、generation change、TTL expiry → `Revoked`/`Expired`，不得泄露 cached response；
 - client 收到 `event_sequence_gap` 必须请求 snapshot，不能盲目重放 mutation；
 - runtime event sequence 按 target 单调递增；terminal event 带 operationId，turn lifecycle 带 turnId；
-- active turn 绑定 `turnId → operationId`。abort 必须带 turnId，target/scope/current active turn 不匹配时只做成功 no-op/stale disposition，绝不转发给后继 turn。
+- active turn 绑定 `turnId → operationId`。abort 必须带 turnId，target/scope/current active turn 不匹配时只做成功 no-op/stale disposition，绝不转发给后继 turn。（**实现偏差 2026-09-28**：Pi 0.85.1 事件与响应均不携带 turnId，turn-bound 机制已整体移除，abort 走原生裸命令 + host scope 准入。）
 
 当前 host event broadcaster 有 lag → `event_sequence_gap` 错误，native coordinator 有 per-instance sequence；但 operation registry、crash event、snapshot-required、turn-bound abort 尚未实现。
 
