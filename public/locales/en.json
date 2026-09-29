@@ -831,7 +831,7 @@
     "costDashboard": "Cost Dashboard",
     "loadingProviders": "Loading providers…",
     "thinkingLevel": "Thinking: {level}",
-    "thinkingCompact": "Think {level}",
+    "thinkingCompact": "{level}",
     "off": "off",
     "thinkingTitle": "Thinking effort controls reasoning depth. Click to cycle.",
     "thinkingAriaLabel": "Thinking effort: {level}. Click to cycle reasoning depth.",

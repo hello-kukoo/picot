@@ -831,7 +831,7 @@
     "costDashboard": "コストダッシュボード",
     "loadingProviders": "プロバイダーを読み込み中…",
     "thinkingLevel": "思考：{level}",
-    "thinkingCompact": "思考 {level}",
+    "thinkingCompact": "{level}",
     "off": "オフ",
     "thinkingTitle": "思考の深さは推論の深度を制御します。クリックで切り替え。",
     "thinkingAriaLabel": "思考の深さ：{level}。クリックして推論の深度を切り替え。",

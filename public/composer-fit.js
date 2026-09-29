@@ -6,8 +6,8 @@
  * Cumulative degradation levels. Level N applies every class from 0..N.
  * Order is by dispensability, mirroring what the user asked to keep longest:
  * the aggregate cluster, then the toolbox, then the mic, then the model label's
- * width, then the thinking prefix word. Attach, donut, model, thinking, queue
- * and send are never hidden — at the tightest level the row still fits them.
+ * width. Attach, donut, model, thinking, queue and send are never hidden — at
+ * the tightest level the row still fits them.
  */
 export const COMPOSER_FIT_LEVELS = [
   [],
@@ -15,7 +15,6 @@ export const COMPOSER_FIT_LEVELS = [
   ["composer-fit--hide-toolbox"],
   ["composer-fit--hide-mic"],
   ["composer-fit--shrink-model"],
-  ["composer-fit--hide-think-prefix"],
 ];
 
 export const COMPOSER_FIT_MAX_LEVEL = COMPOSER_FIT_LEVELS.length - 1;

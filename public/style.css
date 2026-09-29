@@ -6055,10 +6055,6 @@ body.hide-thinking .thinking-block {
   white-space: nowrap;
 }
 
-.composer-fit--hide-think-prefix .thinking-prefix {
-  display: none;
-}
-
 /* Toolbar variants of model/thinking pills — flatter to sit inside the card */
 .composer-toolbar .model-dropdown-btn {
   background: transparent;

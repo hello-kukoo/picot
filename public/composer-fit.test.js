@@ -40,24 +40,24 @@ describe("nextComposerFitLevel", () => {
     const seen = [];
     const overflowPx = (level) => {
       seen.push(level);
-      if (level === 5) return 10; // still tight at the level we are on
+      if (level === 4) return 10; // still tight at the level we are on
       if (level === 1) return 0; // no slack: 1 is as tight as it may get
       return -40;
     };
-    expect(nextComposerFitLevel({ current: 5, overflowPx })).toBe(2);
-    // 5 is tried first, then 4, 3, 2 are accepted and 1 is rejected.
-    expect(seen).toEqual([5, 4, 3, 2, 1]);
+    expect(nextComposerFitLevel({ current: 4, overflowPx })).toBe(2);
+    // 4 is tried first, then 3, 2 are accepted and 1 is rejected.
+    expect(seen).toEqual([4, 3, 2, 1]);
   });
 
   it("settles on the fitting level in one call, measuring each step", () => {
     const seen = [];
     const overflowPx = (level) => {
       seen.push(level);
-      return level < 5 ? 10 : 0;
+      return level < 4 ? 10 : 0;
     };
-    expect(nextComposerFitLevel({ current: 0, overflowPx })).toBe(5);
-    // Measured 0..5 walking up, then level 4 once for the release check.
-    expect(seen).toEqual([0, 1, 2, 3, 4, 5, 4]);
+    expect(nextComposerFitLevel({ current: 0, overflowPx })).toBe(4);
+    // Measured 0..4 walking up, then level 3 once for the release check.
+    expect(seen).toEqual([0, 1, 2, 3, 4, 3]);
   });
 });
 
@@ -151,9 +151,6 @@ describe("setupComposerFit", () => {
           if (id === "model-dropdown" && card.classList.contains("composer-fit--shrink-model")) {
             return 116;
           }
-          if (id === "thinking-btn" && card.classList.contains("composer-fit--hide-think-prefix")) {
-            return 30; // the "思考"/"Think" prefix word drops out
-          }
           return widths[id] ?? 0;
         },
       });
@@ -189,11 +186,10 @@ describe("setupComposerFit", () => {
   });
 
   it("reaches the tightest level only when even shrinking is not enough", () => {
-    setAvailable(200); // 268 after the model shrinks; the thinking prefix must go.
+    setAvailable(200); // 268 after the model shrinks; nothing tighter exists.
     const fit = setupComposerFit({ card, toolbar, view: window });
     expect(fit.level).toBe(COMPOSER_FIT_MAX_LEVEL);
     expect(card.classList.contains("composer-fit--shrink-model")).toBe(true);
-    expect(card.classList.contains("composer-fit--hide-think-prefix")).toBe(true);
     fit.destroy();
   });
 

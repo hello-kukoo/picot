@@ -831,7 +831,7 @@
     "costDashboard": "Panel de costos",
     "loadingProviders": "Cargando proveedores…",
     "thinkingLevel": "Razonamiento: {level}",
-    "thinkingCompact": "Razonar {level}",
+    "thinkingCompact": "{level}",
     "off": "apagado",
     "thinkingTitle": "El esfuerzo de razonamiento controla la profundidad de razonamiento. Haz clic para cambiar.",
     "thinkingAriaLabel": "Esfuerzo de razonamiento: {level}. Haz clic para cambiar la profundidad de razonamiento.",

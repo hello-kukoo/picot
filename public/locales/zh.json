@@ -831,7 +831,7 @@
     "costDashboard": "成本面板",
     "loadingProviders": "正在加载提供者…",
     "thinkingLevel": "思考：{level}",
-    "thinkingCompact": "思考 {level}",
+    "thinkingCompact": "{level}",
     "off": "关闭",
     "thinkingTitle": "思考深度控制推理深度。点击切换。",
     "thinkingAriaLabel": "思考深度：{level}。点击切换推理深度。",

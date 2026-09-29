@@ -4987,24 +4987,12 @@ if (modelDropdownChevron) {
 }
 const modelDropdownMenu = document.getElementById("model-dropdown-menu");
 const thinkingBtn = document.getElementById("thinking-btn");
-function formatCompactThinkingLevelLabel(level) {
-  return t("settings.thinkingCompact", { level: level || t("settings.off") });
-}
 function updateThinkingBtn() {
-  // Split prefix from level so the tightest fit level can drop the prefix word
-  // ("思考"/"Think") in CSS while the level itself stays readable. The compact
-  // template must embed {level}; a locale that leads with the level simply
-  // yields an empty prefix and nothing to hide.
-  const level = currentThinkingLevel || t("settings.off");
-  const full = formatCompactThinkingLevelLabel(currentThinkingLevel);
-  const splitAt = full.indexOf(level);
-  const prefix = document.createElement("span");
-  prefix.className = "thinking-prefix";
-  prefix.textContent = splitAt > 0 ? full.slice(0, splitAt) : "";
-  const levelText = document.createElement("span");
-  levelText.className = "thinking-level";
-  levelText.textContent = level;
-  thinkingBtn.replaceChildren(prefix, levelText);
+  // The button shows only the level word (upstream composer shape); the
+  // template exists so a locale may still prepend a word if it ever needs one.
+  thinkingBtn.textContent = t("settings.thinkingCompact", {
+    level: currentThinkingLevel || t("settings.off"),
+  });
   thinkingBtn.title = t("settings.thinkingTitle");
   thinkingBtn.setAttribute(
     "aria-label",

@@ -15,7 +15,7 @@ describe("thinking effort cycle controls", () => {
     const thinkingBtn = document.querySelector("#thinking-btn");
 
     expect(thinkingBtn.tagName).toBe("BUTTON");
-    expect(thinkingBtn.textContent.trim()).toBe("Think off");
+    expect(thinkingBtn.textContent.trim()).toBe("off");
     expect(thinkingBtn.getAttribute("title")).toContain("Click to cycle");
   });
 
