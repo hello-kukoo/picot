@@ -42,6 +42,25 @@ Dr. Lin's hand edits there always win over agent merges.
 
 Use **Bun** exclusively. Never run `npm install` or `npm ci`; they create a
 stray `package-lock.json` that conflicts with `bun.lock`.
+### Bun lockfile discipline
+
+Tauri CLI 2.11.2+ hard-blocks `tauri build` when any `@tauri-apps/<plugin>`
+npm version drifts in major/minor from its Rust crate counterpart (PR
+`tauri-apps/tauri#13993`). Bare `bun install` silently resolves carets like
+`^2` to the latest npm release, which can drift past the Rust minor that
+`Cargo.lock` has frozen. The build then fails for the next person with a
+mysterious "Found version mismatched Tauri packages" error and a half-built
+`src-tauri/target/`.
+
+Rules:
+- **Never** run `bun install` bare. Always `bun install --frozen-lockfile`
+  (or `--lockfile-only` if you only want to refresh the lockfile from the
+  current `package.json`).
+- After `bun add <pkg>`, run `bun install --lockfile-only` and commit
+  `bun.lock` together with `package.json` — never one without the other.
+- `scripts/build.sh` `install_deps` refuses to proceed if `bun.lock` has
+  uncommitted changes, with a hint to revert. Trust it; the check exists
+  to surface drift at the gate, not after a 5-minute build.
 
 ```bash
 bun install --frozen-lockfile

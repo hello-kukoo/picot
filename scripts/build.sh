@@ -112,7 +112,26 @@ check_requirements() {
 # Picot uses Bun exclusively (see AGENTS.md). Never npm/pnpm.
 install_deps() {
 	log_info "Installing dependencies (bun)..."
+	# Tauri CLI 2.11.2+ (PR tauri-apps/tauri#13993) hard-blocks `tauri build`
+	# when any @tauri-apps/<plugin> npm version differs in major/minor from
+	# its Rust crate counterpart. Bare `bun install` silently resolves
+	# carets like ^2 to whatever is latest on npm today, which can drift
+	# past the Rust minor that Cargo.lock has frozen and break local builds
+	# for the next person. Reject any pre-existing dirty bun.lock before
+	# we touch it so the failure shows up here, not 5 minutes into a build.
+	if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+		if ! git diff --quiet -- bun.lock; then
+			log_error "bun.lock has uncommitted changes. A bare 'bun install' (without --frozen-lockfile) likely auto-bumped caret-resolved versions past the Rust minor; this will fail the Tauri CLI build check. Revert with: git checkout bun.lock"
+			exit 1
+		fi
+	fi
 	bun install --frozen-lockfile
+	# Post-check: --frozen-lockfile must not modify the lockfile. If it did,
+	# something is wrong with the package.json/bun.lock pair.
+	if [ -n "$(git status --porcelain -- bun.lock 2>/dev/null)" ]; then
+		log_error "bun install --frozen-lockfile modified bun.lock. Package.json and bun.lock are out of sync; review the diff before retrying."
+		exit 1
+	fi
 }
 
 # Mirrors tauri.conf.json's beforeBuildCommand. Run explicitly so the
