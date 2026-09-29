@@ -88,6 +88,24 @@ describe("renderMarkdown", () => {
     expect(html).not.toContain("```acceptance-report");
   });
 
+  it("keeps loose ordered list numbering (blank lines between items)", () => {
+    const html = renderMarkdown("1. first item\n\n2. second item\n\n3. third item");
+
+    expect(html).toContain('<ol start="2">');
+    expect(html).toContain('<ol start="3">');
+  });
+
+  it("emits a plain <ol> when the list starts at 1", () => {
+    const html = renderMarkdown("1. first\n2. second");
+
+    expect(html).toContain("<ol><li>");
+  });
+
+  it("preserves an ordered list that starts at an arbitrary number", () => {
+    const html = renderMarkdown("3. third\n4. fourth");
+
+    expect(html).toContain('<ol start="3">');
+  });
   it("does not leak code block placeholders for unordered or ordered list items", () => {
     for (const marker of ["-", "1."]) {
       const html = renderMarkdown(`${marker} \`\`\`sh\necho ok\n\`\`\``);

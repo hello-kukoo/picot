@@ -219,16 +219,18 @@ export function renderMarkdown(text) {
     }
 
     // Ordered list
-    const olMatch = line.match(/^(\s*)\d+\.\s+(.+)$/);
+    const olMatch = line.match(/^(\s*)(\d+)\.\s+(.+)$/);
     if (olMatch) {
       flushBlockquote();
       if (!inList || listType !== "ol") {
         if (inList) html += `</${listType}>`;
-        html += "<ol>";
+        // Blank lines between items split the list into separate <ol> blocks;
+        // carry the item number in start= so loose lists keep 1,2,3 numbering.
+        html += olMatch[2] === "1" ? "<ol>" : `<ol start="${olMatch[2]}">`;
         inList = true;
         listType = "ol";
       }
-      html += `<li>${renderInline(olMatch[2])}</li>`;
+      html += `<li>${renderInline(olMatch[3])}</li>`;
       continue;
     }
 
