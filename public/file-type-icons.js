@@ -386,6 +386,9 @@ export function resolveFileTypeIcon({ name, isDirectory = false, expanded = fals
 export function createFileTypeIcon(descriptor, { size = 16 } = {}) {
   const iconName = typeof descriptor === "string" ? descriptor : resolveFileTypeIcon(descriptor);
   const svg = document.createElementNS(SVG_NS, "svg");
+  // Class is the CSS hook for light-theme resaturation (see style.css);
+  // the baked 65%-chroma fills never re-render on theme switch.
+  svg.setAttribute("class", "file-type-icon");
   svg.setAttribute("aria-hidden", "true");
   svg.setAttribute("focusable", "false");
   svg.setAttribute("width", String(size));

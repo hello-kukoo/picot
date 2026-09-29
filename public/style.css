@@ -8008,6 +8008,28 @@ body.file-dragging * {
   opacity: 0.6;
 }
 
+/* Light themes: the shared 65%-chroma icon palette plus the tree wrappers'
+   0.6 opacity read as flat gray against bright backgrounds. Restore presence
+   via opacity + saturate() — CSS-only, so cached icon DOM never re-renders on
+   theme switch. Dark themes keep the muted column design. */
+:root[data-theme="clean"] .file-icon,
+:root[data-theme="terracotta"] .file-icon,
+:root[data-theme="sage"] .file-icon,
+:root[data-theme="clean"] .git-tree-file-icon,
+:root[data-theme="terracotta"] .git-tree-file-icon,
+:root[data-theme="sage"] .git-tree-file-icon,
+:root[data-theme="clean"] .git-tree-folder-icon,
+:root[data-theme="terracotta"] .git-tree-folder-icon,
+:root[data-theme="sage"] .git-tree-folder-icon {
+  opacity: 0.9;
+}
+
+:root[data-theme="clean"] .file-type-icon,
+:root[data-theme="terracotta"] .file-type-icon,
+:root[data-theme="sage"] .file-type-icon {
+  filter: saturate(1.45);
+}
+
 .file-name {
   font-size: var(--font-size-md);
   color: var(--text-primary);
