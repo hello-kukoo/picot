@@ -119,6 +119,7 @@ impl BrowserPaneRuntime {
         // so the reloaded page's create is authoritative — replace the
         // stale pane instead of erroring (its tab would be wedged forever).
         if let Some(stale) = self.panes.lock().unwrap().remove(pane_id) {
+            log::info!("[browser-pane] replacing stale pane {pane_id} (host page reloaded)");
             let _ = stale.close();
         }
         let host_origin = self.host_origin.clone();
