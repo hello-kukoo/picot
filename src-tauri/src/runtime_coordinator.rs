@@ -195,15 +195,6 @@ impl RuntimeCoordinator {
         if matches!(command_type, "new_session" | "switch_session") {
             return Err(CoordinatorError::ForbiddenIdentityReplacement);
         }
-        if command_type == "abort"
-            && command
-                .get("turnId")
-                .and_then(serde_json::Value::as_str)
-                .filter(|turn_id| !turn_id.is_empty())
-                .is_none()
-        {
-            return Err(CoordinatorError::InvalidCommand);
-        }
         Ok(())
     }
 
@@ -365,6 +356,8 @@ impl RuntimeCoordinator {
     }
 
     /// The turn currently bound to a Working runtime: `(turn_id, operation_id)`.
+    /// (Legacy turn-bound abort surface — dormant on pi 0.85.1, which never
+    /// emits turn ids on runtime events; see the event pump note.)
     /// A stop click can land between `agent_end` (which resets the client's
     /// live-turn id) and the next `turn_start` (the frame that carries the new
     /// id), so the abort arrives bare while the run continues. This binding is
@@ -725,18 +718,17 @@ mod tests {
     }
 
     #[test]
-    fn abort_command_requires_turn_id() {
+    fn bare_abort_passes_command_validation() {
+        // Pi's RPC abort command legitimately carries no turnId
+        // (rpc-commands.md); the generic request path (Quick/Side Chat
+        // forward_command) must not reject it before it reaches the runtime.
         let mut coordinator = RuntimeCoordinator::new(8);
         let active = target("instance-a");
         coordinator
             .register(active.clone(), RuntimeState::Working)
             .unwrap();
-        assert_eq!(
-            coordinator.validate_command(&active, &json!({ "type": "abort" })),
-            Err(super::CoordinatorError::InvalidCommand)
-        );
         assert!(coordinator
-            .validate_command(&active, &json!({ "type": "abort", "turnId": "turn-a" }))
+            .validate_command(&active, &json!({ "type": "abort" }))
             .is_ok());
     }
 

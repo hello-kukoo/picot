@@ -2966,10 +2966,6 @@ function handleRPCEvent(event) {
   widgetMirrorRegistry.handleRuntimeChange(eventRuntimeId);
   turnTrace.handleRuntimeFrame({ target: eventTarget || currentTarget, event });
 
-  if (typeof event.__turnId === "string" && event.__turnId) {
-    liveTurnId = event.__turnId;
-  }
-
   switch (event.type) {
     case "agent_start":
       handleAgentStart(event);
@@ -2977,7 +2973,6 @@ function handleRPCEvent(event) {
       break;
     case "agent_end":
       handleAgentEnd(event);
-      liveTurnId = null;
       taskAnalysis?.setStreaming(false);
       if (pendingNewSessionRefresh) {
         scheduleNewSessionSidebarRefresh(event);
@@ -2985,7 +2980,6 @@ function handleRPCEvent(event) {
       break;
     case "agent_settled":
       handleAgentSettled();
-      liveTurnId = null;
       taskAnalysis?.setStreaming(false);
       break;
     case "message_start":
@@ -3236,12 +3230,6 @@ const TURNS_RENDERING = true; // opt-in; reverting restores flat rendering
 
 let activeTurn = null;
 let activeTurnStartedAt = null;
-// Pi reports the running turn's id on runtime_event frames (turn_start/turn_end;
-// agent_start carries none). The pump keeps the newest id for the abort path; when
-// it is null (stop clicked between agent_end and the next turn_start) the bare
-// abort is still sent — the host resolves it to the coordinator's bound active
-// turn, and rejects only when no turn is bound at all.
-let liveTurnId = null;
 let pendingUserEl = null; // optimistic user bubble awaiting agent_start claim
 let pendingUserKey = null; // runtime key the bubble was rendered under
 let pendingPromptPreview = ""; // prompt text for the turn registry at open
@@ -7124,14 +7112,12 @@ async function abortCurrentRun() {
   // terminates ("abort continues queued messages") — so no clear_queue and no
   // composer restore on the stop path.
   //
-  // The stop must be CONFIRMED before the UI unlocks (2026-09-26 fix): the
-  // host gate rejects an abort without a live turnId and pi can reject a
-  // stale one, and an optimistic unlock over a dropped abort leaves a blue
-  // composer on a run that never stopped — exactly the state that stranded
-  // queued messages. A pi abort replies only once the session is idle, so
-  // agent_end/agent_settled usually unlock first; this path is the fallback.
+  // The stop must be CONFIRMED before the UI unlocks (2026-09-26 fix): an
+  // optimistic unlock over a dropped abort leaves a blue composer on a run
+  // that never stopped — exactly the state that stranded queued messages. A
+  // pi abort replies only once the session is idle, so agent_end/
+  // agent_settled usually unlock first; this path is the fallback.
   const command = { type: "abort" };
-  if (liveTurnId) command.turnId = liveTurnId;
   let response = null;
   let failure = null;
   try {
@@ -7145,7 +7131,7 @@ async function abortCurrentRun() {
   // stale_turn (a turn that is no longer active) carries no `success`: pi
   // aborted nothing, so it is a failure for this stop, not a silent pass.
   if (response?.success !== true) {
-    const detail = failure?.message || response?.error || (command.turnId ? "" : "no live turnId");
+    const detail = failure?.message || response?.error || "";
     messageRenderer.renderError(t("errors.abortFailed", { detail }));
     updateUI();
     return;

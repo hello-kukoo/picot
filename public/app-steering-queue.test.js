@@ -114,7 +114,7 @@ class FakeWebSocket extends EventTarget {
         return;
       }
       if (command.type === "abort" && abortFails) {
-        // The host gate's rejection shape (missing/stale turnId): pi never
+        // A simulated stop failure (host or pi rejected it): pi never
         // aborted anything.
         this.reply({
           type: "runtime_response",
@@ -287,7 +287,7 @@ test("streaming Enter sends a steer prompt with no optimistic bubble", async () 
   await import("./app.js?steering-enter");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t1" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
 
   typeIntoComposer("switch to tabs");
@@ -321,7 +321,7 @@ test("queue_update renders read-only pills and clear_queue refills the composer"
   await import("./app.js?steering-clear");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t2" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
   renderPiQueue(ws, ["switch to tabs"], ["summarize"], 2);
   await settle();
@@ -351,7 +351,7 @@ test("a rejected clear keeps the pills and leaves the composer untouched", async
   await import("./app.js?steering-clear-fails");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t3" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
   renderPiQueue(ws, ["keep me queued"], [], 2);
   await settle();
@@ -376,15 +376,16 @@ test("a rejected clear keeps the pills and leaves the composer untouched", async
   expect(document.getElementById("pi-queue").classList.contains("hidden")).toBe(false);
 });
 
-test("Escape aborts with the live turnId and leaves pi's queue alone", async () => {
+test("Escape aborts bare and leaves pi's queue alone", async () => {
   // Pi-native (2026-09-25, supersedes Q3-A): Esc aborts ONLY. Queued
   // steer/followUp stay at pi — it continues with them once the run
-  // terminates — so no clear_queue and no composer restore. The abort must
-  // carry the live turnId or the host gate silently drops it.
+  // terminates — so no clear_queue and no composer restore. Pi's abort
+  // command carries no turnId (rpc-commands.md); the host authorizes the
+  // active operation and forwards it bare.
   await import("./app.js?steering-esc");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t4" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
   renderPiQueue(ws, ["hold on"], [], 1);
   typeIntoComposer("my draft");
@@ -392,11 +393,11 @@ test("Escape aborts with the live turnId and leaves pi's queue alone", async () 
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   await settle(80);
 
-  // Exactly one command: the abort, bound to the live turn. No clear_queue.
+  // Exactly one command: the bare abort. No clear_queue.
   expect(commandFrames(ws, "clear_queue")).toHaveLength(0);
   const aborts = commandFrames(ws, "abort");
   expect(aborts).toHaveLength(1);
-  expect(aborts[0].command.turnId).toBe("t4");
+  expect(aborts[0].command.turnId).toBeUndefined();
   // The queued text and the draft stay exactly where they were.
   expect(document.getElementById("message-input").value).toBe("my draft");
   // "run 真正终止" from the UI's side: back to idle (send visible, abort gone).
@@ -410,7 +411,7 @@ test("an extension command while streaming goes out as a bare prompt", async () 
   await import("./app.js?steering-extension");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t6" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
 
   typeIntoComposer("/mycommand now");
@@ -429,7 +430,7 @@ test("clearing appends the restored text below an existing draft", async () => {
   await import("./app.js?steering-refill-append");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t7" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
   renderPiQueue(ws, ["queued follow-up text"], [], 2);
   await settle();
@@ -442,13 +443,13 @@ test("clearing appends the restored text below an existing draft", async () => {
   expect(input.value).toBe("draft I typed\nqueued follow-up text");
 });
 
-test("Escape aborts immediately when the turn id was never seen", async () => {
-  // No turnId-carrying event arrived (edge): the abort still goes out at once,
-  // bare — the host gate may reject it, but nothing queues up in front of it.
+test("Escape aborts bare even before any turn event arrives", async () => {
+  // Streaming started but no further event arrived (edge): the bare abort
+  // still goes out at once — nothing queues up in front of the stop.
   await import("./app.js?steering-esc-no-turn");
   const ws = wsInstances.at(-1);
   await settle();
-  // Streaming, but no event ever carried a turnId.
+  // Streaming, with no turn-scoped event yet.
   runtimeEvent(ws, { type: "agent_start" });
   await settle();
 
@@ -467,7 +468,7 @@ test("Escape aborts immediately — nothing is sent ahead of the stop", async ()
   await import("./app.js?steering-esc-cap");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t9" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
 
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -476,14 +477,14 @@ test("Escape aborts immediately — nothing is sent ahead of the stop", async ()
   expect(commandFrames(ws, "clear_queue")).toHaveLength(0);
   const aborts = commandFrames(ws, "abort");
   expect(aborts).toHaveLength(1);
-  expect(aborts[0].command.turnId).toBe("t9");
+  expect(aborts[0].command.turnId).toBeUndefined();
 });
 
 test("Alt+Enter while streaming queues a follow_up, not a steer", async () => {
   await import("./app.js?steering-alt-enter");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t10" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
 
   typeIntoComposer("summarize when done");
@@ -507,7 +508,7 @@ test("a queued item can be edited back into the composer and deleted", async () 
   await import("./app.js?followup-edit-delete");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t21" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
   typeIntoComposer("first item");
   pressAltEnter();
@@ -536,7 +537,7 @@ test("send-now during a run goes out as a steer without aborting", async () => {
   await import("./app.js?followup-send-now");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t22" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
   typeIntoComposer("jump the queue");
   pressAltEnter();
@@ -563,7 +564,7 @@ test("a rejected send-now returns the item to the head of the queue", async () =
   await import("./app.js?followup-requeue");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t24" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
   typeIntoComposer("will bounce");
   pressAltEnter();
@@ -590,11 +591,11 @@ test("a rejected send-now returns the item to the head of the queue", async () =
 
 test("a rejected abort keeps the streaming UI honest instead of unlocking", async () => {
   // 2026-09-26 fix: the optimistic unlock painted a blue composer over a run
-  // pi never stopped (host gate drops an abort without a live turnId).
+  // pi never stopped (a dropped or failed abort).
   await import("./app.js?abort-rejected");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t25" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
 
   abortFails = true;
@@ -603,7 +604,7 @@ test("a rejected abort keeps the streaming UI honest instead of unlocking", asyn
 
   const aborts = commandFrames(ws, "abort");
   expect(aborts).toHaveLength(1);
-  expect(aborts[0].command.turnId).toBe("t25");
+  expect(aborts[0].command.turnId).toBeUndefined();
   // The stop was NOT confirmed: the run's UI must stay locked.
   expect(document.getElementById("abort-btn").classList.contains("hidden")).toBe(false);
   expect(document.getElementById("send-btn").classList.contains("hidden")).toBe(true);
@@ -613,7 +614,7 @@ test("agent_settled drains the queue head as a plain prompt, one at a time", asy
   await import("./app.js?followup-drain");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t23" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
   typeIntoComposer("first follow-up");
   pressAltEnter();
@@ -697,7 +698,7 @@ test("a rejected steer keeps the run's streaming state", async () => {
   await import("./app.js?steering-steer-rejected");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t11" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
 
   const abortBtn = document.getElementById("abort-btn");
@@ -727,7 +728,7 @@ test("a steer renders no optimistic bubble, and pi's echo still appears", async 
   await import("./app.js?steering-echo");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t12" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
 
   typeIntoComposer("steer me");
@@ -811,7 +812,7 @@ test("switching the session identity drops the previous session's queue pills", 
 
   snapshot("/pi/sessions/s1.jsonl", 1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t13" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
   renderPiQueue(ws, ["belongs to s1"], [], 2);
   await settle();
@@ -842,7 +843,7 @@ test("a queue parked by the session switch comes back with that session", async 
 
   snapshot("/pi/sessions/s1.jsonl", 1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t15" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
   renderPiQueue(ws, ["belongs to s1"], ["and its follow-up"], 2);
   await settle();
@@ -886,7 +887,7 @@ test("a freshly spawned runtime starts with an empty parked queue", async () => 
 
   snapshot("/pi/sessions/s1.jsonl", 1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t17" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
   renderPiQueue(ws, ["orphaned by a restart"], [], 2);
   await settle();
@@ -933,7 +934,7 @@ test("a stopped runtime's parked queue does not come back", async () => {
 
   snapshot("/pi/sessions/s1.jsonl", 1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t16" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
   renderPiQueue(ws, ["dies with the process"], [], 2);
   await settle();
@@ -957,7 +958,7 @@ test("the panel comes back when pi reports a new queue after a clear", async () 
   await import("./app.js?steering-queue-repaint");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t14" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
   renderPiQueue(ws, ["first"], [], 2);
   await settle();
@@ -985,7 +986,7 @@ test("Esc during an in-flight steer leaves the queue at pi and the composer empt
   await import("./app.js?steering-esc-inflight");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t15" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
 
   deferPromptResponse = true;
@@ -1001,7 +1002,7 @@ test("Esc during an in-flight steer leaves the queue at pi and the composer empt
   expect(commandFrames(ws, "clear_queue")).toHaveLength(0);
   const aborts = commandFrames(ws, "abort");
   expect(aborts).toHaveLength(1);
-  expect(aborts[0].command.turnId).toBe("t15");
+  expect(aborts[0].command.turnId).toBeUndefined();
 
   // The steer's own acceptance lands after the abort without injecting the
   // queued text anywhere.
@@ -1020,7 +1021,7 @@ test("clearing restores both buckets, in queue order, when the composer is empty
   await import("./app.js?steering-clear-both");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t16" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
   renderPiQueue(ws, ["steer text"], ["follow-up text"], 2);
   await settle();
@@ -1038,7 +1039,7 @@ test("a steer carries the pending image and acceptance releases exactly it", asy
   await import("./app.js?steering-attachments");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t17" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
 
   pasteImage();
@@ -1076,7 +1077,7 @@ test("a rejected steer leaves the pending image attached", async () => {
   await import("./app.js?steering-attachments-rejected");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t18" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
 
   pasteImage();
@@ -1097,7 +1098,7 @@ test("pi's echo of a steer renders above that turn's answer, not below it", asyn
   await import("./app.js?steering-echo-order");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t19" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
 
   // A steer draws no optimistic bubble, and pi emits agent_start BEFORE the
@@ -1145,7 +1146,7 @@ test("a follow-up delivered inside the same run opens its own turn", async () =>
   await import("./app.js?steering-followup-turn");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t20" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
 
   const userStart = (text, sequence) =>
@@ -1209,7 +1210,7 @@ test("the delayed-send caret exists only while a run is active", async () => {
   // abort button (4 = DOCUMENT_POSITION_FOLLOWING).
   expect(caret.compareDocumentPosition(abortBtn) & 4).toBeTruthy();
 
-  runtimeEvent(ws, { type: "agent_start", turnId: "t5" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
   expect(caret.classList.contains("hidden")).toBe(false);
 
@@ -1226,7 +1227,7 @@ test("a pulled-back item is not re-queued when its rejection lands late", async 
     await import("./app.js?followup-pulledback");
     const ws = wsInstances.at(-1);
     await vi.advanceTimersByTimeAsync(0);
-    runtimeEvent(ws, { type: "agent_start", turnId: "t26" });
+    runtimeEvent(ws, { type: "agent_start" });
     await vi.advanceTimersByTimeAsync(0);
     typeIntoComposer("take me back");
     pressAltEnter();
@@ -1269,7 +1270,7 @@ test("editing an item after a rejected send-now does not duplicate its images", 
   await import("./app.js?followup-edit-images");
   const ws = wsInstances.at(-1);
   await settle();
-  runtimeEvent(ws, { type: "agent_start", turnId: "t27" });
+  runtimeEvent(ws, { type: "agent_start" });
   await settle();
   pasteImage();
   await settle();

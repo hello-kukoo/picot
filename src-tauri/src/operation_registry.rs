@@ -54,6 +54,8 @@ pub struct OperationRecord {
     pub accepted_at: Instant,
     pub expires_at: Instant,
     pub state: OperationState,
+    /// Bound by the legacy turn-binding path; pi 0.85.1 never reports turn
+    /// ids on runtime events, so this stays None in practice.
     pub turn_id: Option<String>,
     pub terminal_response: Option<Value>,
     pub crash_reason: Option<String>,

@@ -169,15 +169,18 @@ struct ManagedRuntime {
 }
 
 struct NativePiManagerInner {
+    /// One-shot flag: the first runtime event observed carrying a turnId logs
+    /// once (pi 0.85.1 never sends one; a future pi that does is worth
+    /// noticing from the terminal).
+    turn_operations_seen_turn_id: std::sync::atomic::AtomicBool,
     coordinator: Mutex<RuntimeCoordinator>,
     /// P1 adapter boundary: native callers currently provide RuntimeTarget only.
     /// Owner/workspace generation must come from Gate R before production admission;
     /// no browser-root or synthetic owner fallback is allowed here.
     operations: Mutex<OperationRegistry>,
-    /// Most recent accepted operation per runtime instance. The event pump
-    /// uses this to bind turnId-bearing runtime events to the operation that
-    /// started the turn: the Pi RPC response never carries a turnId, so the
-    /// binding must come from the observed event stream.
+    /// Most recent accepted operation per runtime instance. Feeds the legacy
+    /// turn-bound abort binding: pi 0.85.1 never emits turnId on runtime
+    /// events, so the binding is dormant until a future pi reports one.
     turn_operations: Mutex<HashMap<String, (String, OperationScope)>>,
     runtimes: Mutex<HashMap<String, ManagedRuntime>>,
     events: broadcast::Sender<NativeRuntimeEvent>,
@@ -316,6 +319,7 @@ impl NativePiManager {
                 )),
                 runtimes: Mutex::new(HashMap::new()),
                 turn_operations: Mutex::new(HashMap::new()),
+                turn_operations_seen_turn_id: std::sync::atomic::AtomicBool::new(false),
                 events,
                 pending_ui: Mutex::new(HashMap::new()),
                 closing: Mutex::new(HashMap::new()),
@@ -538,10 +542,11 @@ impl NativePiManager {
                     sequence: sequenced.sequence,
                     event: sequenced.event,
                 };
-                // Pi reports turn identity on runtime_event frames, never on
-                // the RPC response. Bind the observed turnId to the most
-                // recent accepted operation for this instance so abort_turn
-                // can gate on the exact active turn.
+                // Turn binding (legacy turn-bound abort): pi 0.85.1 never
+                // emits turnId on runtime_event frames (probed live), so this
+                // block is dormant. Kept for a future pi that reports turn
+                // identity; the first observed id logs once so an upgrade is
+                // visible from the dev terminal.
                 if let Some(turn_id) = runtime_event
                     .event
                     .get("turnId")
@@ -557,6 +562,15 @@ impl NativePiManager {
                                 .get(&runtime_event.target.instance_id)
                                 .cloned()
                         });
+                    if !inner
+                        .turn_operations_seen_turn_id
+                        .swap(true, std::sync::atomic::Ordering::Relaxed)
+                    {
+                        log::info!(
+                            "[picot-native] runtime event carried a turnId ({turn_id}): turn-bound abort path is live for instance {}",
+                            runtime_event.target.instance_id
+                        );
+                    }
                     if let Some((operation_id, scope)) = binding {
                         if scope.workspace_id == runtime_event.target.workspace_id
                             && scope.session_id == runtime_event.target.session_id
@@ -875,7 +889,9 @@ impl NativePiManager {
         Ok((operation_id, acceptance, Some(response)))
     }
 
-    /// Binds a turn-starting operation to current runtime turn.
+    /// Binds a turn-starting operation to the current runtime turn (legacy
+    /// turn-bound abort surface; dormant on pi 0.85.1, which never reports
+    /// turn ids on events).
     pub fn bind_turn(
         &self,
         target: &RuntimeTarget,
@@ -2254,6 +2270,43 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+        assert_eq!(outbound["type"], "abort");
+        assert!(outbound.get("turnId").is_none());
+        fake.write_frame(
+            json!({"id": outbound["id"], "type": "response", "command": "abort", "success": true}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(abort.await.unwrap().unwrap()["success"], true);
+    }
+
+    #[tokio::test]
+    async fn bare_abort_via_generic_request_path_reaches_pi() {
+        // Quick/Side Chat forward_command routes commands through request(),
+        // whose validate_command once rejected a turnId-less abort (the
+        // fabricated-contract regression): the stop never left the host.
+        let manager = NativePiManager::in_memory(8);
+        let target = RuntimeTarget::new("workspace-a", "session-a", "instance-a");
+        let mut fake = manager.register_in_memory(target.clone()).unwrap();
+        fake.write_frame(json!({ "type": "agent_start" }))
+            .await
+            .unwrap();
+
+        let abort = tokio::spawn({
+            let manager = manager.clone();
+            let target = target.clone();
+            async move {
+                manager
+                    .request(
+                        &target,
+                        json!({ "type": "abort" }),
+                        Some("ep-1-quick-chat"),
+                        Duration::from_secs(1),
+                    )
+                    .await
+            }
+        });
+        let outbound = fake.read_request().await.unwrap();
         assert_eq!(outbound["type"], "abort");
         assert!(outbound.get("turnId").is_none());
         fake.write_frame(

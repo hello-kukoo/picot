@@ -2009,6 +2009,8 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>) {
 }
 
 fn runtime_event_frame(event: crate::native_pi_manager::NativeRuntimeEvent) -> Value {
+    // operationId/turnId passthrough: pi 0.85.1 emits neither on session
+    // events, so both branches are dormant; kept for a future pi that does.
     let operation_id = event.event.get("operationId").cloned();
     let turn_id = event.event.get("turnId").cloned();
     let mut frame = json!({
