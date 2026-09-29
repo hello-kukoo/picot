@@ -153,9 +153,10 @@ export class GitPanel {
       message.textContent = t("git.discardConfirm", { count });
       dialog.append(message);
       const actions = document.createElement("div");
-      actions.className = "git-confirm-actions";
+      actions.className = "dialog-actions";
       const cancel = document.createElement("button");
       cancel.type = "button";
+      cancel.className = "dialog-cancel";
       cancel.textContent = t("git.cancel");
       cancel.addEventListener("click", () => {
         overlay.remove();
@@ -164,7 +165,7 @@ export class GitPanel {
       const confirm = document.createElement("button");
       confirm.type = "button";
       confirm.textContent = t("git.discard");
-      confirm.className = "git-confirm-discard";
+      confirm.className = "dialog-submit git-confirm-discard";
       confirm.addEventListener("click", () => {
         overlay.remove();
         resolve(true);
@@ -265,15 +266,16 @@ export class GitPanel {
     });
     dialog.append(textarea);
     const actions = document.createElement("div");
-    actions.className = "git-commit-actions";
+    actions.className = "dialog-actions";
     const cancel = document.createElement("button");
     cancel.type = "button";
+    cancel.className = "dialog-cancel";
     cancel.textContent = t("git.cancel");
     cancel.addEventListener("click", () => this.closeCommitDialog());
     const submit = document.createElement("button");
     submit.type = "button";
     submit.textContent = t("git.commit");
-    submit.className = "git-commit-submit";
+    submit.className = "dialog-submit";
     submit.addEventListener("click", () => {
       this.commitMessage = textarea.value;
       this.commit();

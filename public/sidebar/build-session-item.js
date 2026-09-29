@@ -41,6 +41,7 @@ export function buildSessionItem({
   isStreaming = false,
   showDeleteButton = false,
   deletionBlockedReason = null,
+  renameBlockedReason = null,
   projectSearchText = "",
   formattedTime = "",
   treeDepth = 0,
@@ -103,13 +104,18 @@ export function buildSessionItem({
     });
   }
 
+  // Gated rows keep the buttons in the DOM but visually removed
+  // (.action-hidden), so state flips can toggle them in place.
   if (typeof onRename === "function") {
     const renameBtn = document.createElement("button");
     renameBtn.type = "button";
     renameBtn.className = "session-rename-btn";
-    const renameLabel = t("sidebar.rename");
-    renameBtn.title = renameLabel;
-    renameBtn.setAttribute("aria-label", renameLabel);
+    renameBtn.title = renameBlockedReason || t("sidebar.rename");
+    renameBtn.setAttribute("aria-label", renameBlockedReason || t("sidebar.rename"));
+    if (renameBlockedReason) {
+      renameBtn.disabled = true;
+      renameBtn.classList.add("action-hidden");
+    }
     if (typeof createIcon === "function") {
       const renameIcon = createIcon("pencil", { size: 13 });
       if (renameIcon) renameBtn.replaceChildren(renameIcon);
@@ -119,6 +125,7 @@ export function buildSessionItem({
     }
     renameBtn.addEventListener("click", (event) => {
       event.stopPropagation();
+      if (renameBtn.disabled) return;
       onRename(session.filePath, session, item);
     });
     actionSlot.appendChild(renameBtn);
@@ -128,12 +135,11 @@ export function buildSessionItem({
     const deleteBtn = document.createElement("button");
     deleteBtn.type = "button";
     deleteBtn.className = "session-delete-btn";
-    const deleteLabel = t("sidebar.deleteSession");
-    deleteBtn.title = deletionBlockedReason || deleteLabel;
-    deleteBtn.setAttribute("aria-label", deletionBlockedReason || deleteLabel);
+    deleteBtn.title = deletionBlockedReason || t("sidebar.deleteSession");
+    deleteBtn.setAttribute("aria-label", deletionBlockedReason || t("sidebar.deleteSession"));
     if (deletionBlockedReason) {
       deleteBtn.disabled = true;
-      deleteBtn.classList.add("disabled");
+      deleteBtn.classList.add("action-hidden");
     }
     if (typeof createIcon === "function") deleteBtn.appendChild(createIcon("trash-2"));
     deleteBtn.addEventListener("click", (event) => {
@@ -144,5 +150,32 @@ export function buildSessionItem({
     actionSlot.appendChild(deleteBtn);
   }
 
+  applySessionItemActionVisibility(item, {
+    renameBlocked: Boolean(renameBlockedReason),
+    deleteBlocked: Boolean(deletionBlockedReason),
+  });
+
   return item;
+}
+
+/** Toggle the gated action buttons and the slot's all-hidden marker in place,
+ * so streaming/live state flips update rendered rows without a rebuild. */
+export function applySessionItemActionVisibility(item, { renameBlocked, deleteBlocked }) {
+  if (!item) return;
+  const renameBtn = item.querySelector(".session-rename-btn");
+  const deleteBtn = item.querySelector(".session-delete-btn");
+  if (renameBtn) {
+    renameBtn.disabled = Boolean(renameBlocked);
+    renameBtn.classList.toggle("action-hidden", Boolean(renameBlocked));
+  }
+  if (deleteBtn) {
+    deleteBtn.disabled = Boolean(deleteBlocked);
+    deleteBtn.classList.toggle("action-hidden", Boolean(deleteBlocked));
+  }
+  const slot = item.querySelector(".session-action-slot");
+  if (slot) {
+    const renameHidden = !renameBtn || Boolean(renameBlocked);
+    const deleteHidden = !deleteBtn || Boolean(deleteBlocked);
+    slot.classList.toggle("all-actions-hidden", renameHidden && deleteHidden);
+  }
 }

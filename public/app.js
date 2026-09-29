@@ -315,6 +315,8 @@ async function enterFocus(project) {
     unread: sidebar.unread,
     streaming: sidebar.streamingFiles,
     buildSessionItem,
+    deletionBlockedReason: (filePath) => sidebar.deletionBlockedReason(filePath),
+    renameBlockedReason: (filePath) => sidebar.renameBlockedReason(filePath),
     createIcon,
     registerStatusItem: (filePath, item) => {
       const items = sidebar.statusItemsByPath.get(filePath) || new Set();

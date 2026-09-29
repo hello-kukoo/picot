@@ -663,7 +663,10 @@
     "removedFromList": "一覧から削除しました。ディレクトリとセッションファイルは変更されていません。",
     "removedFromListStillRunning": "一覧から削除しました。ウィンドウが実行中のため、閉じるとこの行は消えます。",
     "removeDisabledCurrent": "現在のワークスペースは削除できません",
-    "addFailed": "プロジェクトを追加できませんでした"
+    "addFailed": "プロジェクトを追加できませんでした",
+    "renameDisabledActive": "現在のセッションの名前は変更できません",
+    "renameDisabledStreaming": "ストリーミング中のセッションの名前は変更できません",
+    "renameDisabledRunning": "実行中のセッションの名前は変更できません"
   },
   "updater": {
     "update": "更新",

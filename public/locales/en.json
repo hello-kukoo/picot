@@ -663,7 +663,10 @@
     "removedFromList": "Removed from the list; directory and session files were kept.",
     "removedFromListStillRunning": "Removed from the list; a window is still running — the row disappears once it closes.",
     "removeDisabledCurrent": "Cannot remove the current workspace",
-    "addFailed": "Could not add project"
+    "addFailed": "Could not add project",
+    "renameDisabledActive": "Cannot rename the current session",
+    "renameDisabledStreaming": "Cannot rename a streaming session",
+    "renameDisabledRunning": "Cannot rename a running session"
   },
   "updater": {
     "update": "Update",

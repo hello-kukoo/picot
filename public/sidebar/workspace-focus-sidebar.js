@@ -39,6 +39,8 @@ export class WorkspaceFocusSidebar {
     this.unread = options.unread instanceof Set ? options.unread : new Set();
     this.streaming = options.streaming instanceof Set ? options.streaming : new Set();
     this.buildSessionItem = options.buildSessionItem || null;
+    this.deletionBlockedReason = options.deletionBlockedReason || null;
+    this.renameBlockedReason = options.renameBlockedReason || null;
     this.createIcon = options.createIcon || createIcon;
     this.cardInfo = options.cardInfo || null;
     this.onBack = options.onBack || null;
@@ -170,6 +172,8 @@ export class WorkspaceFocusSidebar {
       formattedTime: formatSessionTime(session.mtime ?? session.timestamp),
       showPinButton: false,
       showDeleteButton: true,
+      deletionBlockedReason: this.deletionBlockedReason?.(session.filePath) ?? null,
+      renameBlockedReason: this.renameBlockedReason?.(session.filePath) ?? null,
       onSelect: (s, p) => this.onSessionSelect?.(s, p),
       onDelete: (filePath) => this.onDelete?.(filePath),
       onRename: (filePath, targetSession, targetItem) =>

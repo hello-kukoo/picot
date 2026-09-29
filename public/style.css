@@ -1289,6 +1289,17 @@ body.landing-mode #landing {
 .session-item:hover .session-time {
   opacity: 0;
 }
+/* Gated rows (active/streaming/running) keep their buttons out of sight and
+   out of tab order; the time label stays visible because no action competes
+   for the slot. JS toggles the classes on streaming/live state flips. */
+.session-rename-btn.action-hidden,
+.session-delete-btn.action-hidden {
+  display: none;
+}
+
+.session-item:hover .session-action-slot.all-actions-hidden .session-time {
+  opacity: 1;
+}
 
 .session-item:hover .session-delete-btn,
 .session-item:hover .session-rename-btn {
@@ -6290,9 +6301,9 @@ body.hide-thinking .thinking-block {
   transition: transform 0.1s var(--ease);
 }
 
-/* Primary button — use .btn-primary or dialog action buttons */
-.btn-primary,
-.dialog-actions button {
+/* Primary button — dialog action buttons get their own secondary/primary
+   dialect below (unified with sidebar-confirm and file-preview dialogs). */
+.btn-primary {
   padding: var(--space-2) var(--space-5);
   background: var(--accent);
   color: white;
@@ -6306,12 +6317,10 @@ body.hide-thinking .thinking-block {
   font-size: var(--font-size-md);
 }
 
-.btn-primary:hover:not(:disabled),
-.dialog-actions button:hover:not(:disabled) {
+.btn-primary:hover:not(:disabled) {
   filter: brightness(1.1);
 }
-.btn-primary:disabled,
-.dialog-actions button:disabled {
+.btn-primary:disabled {
   opacity: 0.35;
   cursor: not-allowed;
 }
@@ -6576,12 +6585,52 @@ details.sg-section > summary {
   justify-content: flex-end;
 }
 
+/* Secondary (cancel) / primary (confirm) dialect shared by dialogs.js
+   confirm dialogs, extension questionnaires and the git-panel dialogs.
+   Sizing matches .questionnaire-actions button. */
 .dialog-actions button {
-  flex: 1;
-  max-width: 120px;
-  padding: var(--space-2) var(--space-4);
+  min-height: var(--control-height-md);
+  padding: 0 var(--space-4);
   border-radius: var(--radius-md);
   font-size: var(--font-size-md);
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    background var(--duration) var(--ease),
+    color var(--duration) var(--ease),
+    border-color var(--duration) var(--ease),
+    filter var(--duration) var(--ease);
+}
+
+.dialog-actions .dialog-cancel,
+.dialog-actions .dialog-no {
+  border: 1px solid var(--border);
+  background: var(--bg-glass);
+  color: var(--text-primary);
+}
+
+.dialog-actions .dialog-cancel:hover:not(:disabled),
+.dialog-actions .dialog-no:hover:not(:disabled) {
+  background: var(--bg-glass-hover);
+}
+
+.dialog-actions .dialog-yes,
+.dialog-actions .dialog-submit,
+.dialog-actions .dialog-save {
+  border: none;
+  background: var(--accent);
+  color: #fff;
+}
+
+.dialog-actions .dialog-yes:hover:not(:disabled),
+.dialog-actions .dialog-submit:hover:not(:disabled),
+.dialog-actions .dialog-save:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.dialog-actions button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -7717,14 +7766,12 @@ details.sg-section > summary {
   font-size: 0.875rem;
   line-height: 1.5;
 }
-.git-confirm-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
-}
 .git-confirm-discard {
-  border-color: var(--danger, #e54);
-  color: var(--danger, #e54);
+  background: var(--danger, #ef4444);
+}
+.git-confirm-discard:hover:not(:disabled) {
+  filter: brightness(1.1);
+  background: var(--danger, #ef4444);
 }
 .git-commit-dialog {
   background: var(--bg-frosted, #1e1e2e);
@@ -7748,11 +7795,6 @@ details.sg-section > summary {
   font-size: 0.875rem;
   padding: 0.5rem;
   box-sizing: border-box;
-}
-.git-commit-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
 }
 .git-commit-error,
 .git-commit-confirmation,

@@ -663,7 +663,10 @@
     "removedFromList": "已从列表移除；目录与会话文件未改动。",
     "removedFromListStillRunning": "已从列表移除；该工作区仍有窗口运行中，窗口关闭后该行消失。",
     "removeDisabledCurrent": "无法移除当前工作区",
-    "addFailed": "添加项目失败"
+    "addFailed": "添加项目失败",
+    "renameDisabledActive": "无法重命名当前会话",
+    "renameDisabledStreaming": "无法重命名正在流式输出的会话",
+    "renameDisabledRunning": "无法重命名正在运行的会话"
   },
   "updater": {
     "update": "更新",

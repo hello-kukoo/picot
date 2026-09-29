@@ -103,6 +103,10 @@ impl NativeLaunchSpec {
             args.push(extension.to_string_lossy().into_owned());
         }
         args.extend(["--mode".into(), "rpc".into()]);
+        // pi-subagents gates `subagent` behind `subagents_enable` on Pi >= 0.86.1;
+        // excluding the loader keeps `subagent` and its advertised catalog active
+        // from process start, since every Picot runtime is operator-driven.
+        args.extend(["--exclude-tools".into(), "subagents_enable".into()]);
         if let Some(session_path) = &self.session_path {
             args.push("--session".into());
             args.push(session_path.to_string_lossy().into_owned());
@@ -1812,6 +1816,30 @@ mod tests {
             .args
             .iter()
             .any(|argument| argument.parse::<u16>().is_ok()));
+    }
+
+    #[test]
+    fn launch_spec_keeps_subagent_tool_active_from_start() {
+        let spec = NativeLaunchSpec {
+            binary: PathBuf::from("/embedded/pi"),
+            cwd: PathBuf::from("/workspace"),
+            session_path: None,
+            extensions: vec![PathBuf::from("/extensions/picot-bridge.mjs")],
+            pi_version: "0.86.1".into(),
+            path_env: "/usr/bin".into(),
+            agent_root: None,
+            static_dir: None,
+            install_secret: None,
+            runtime_type: super::NativeRuntimeType::Primary,
+            no_tools: false,
+            readiness: super::ReadinessPolicy::default(),
+            cleanup: super::NativeCleanupResources::default(),
+        };
+        let launch = spec.command_description();
+        assert!(launch
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--exclude-tools", "subagents_enable"]));
     }
 
     #[tokio::test]

@@ -129,7 +129,7 @@ describe("buildSessionItem state and safety", () => {
     expect(title.querySelector("img")).toBeNull();
   });
 
-  test("disabled delete button keeps reason and does not fire delete", () => {
+  test("blocked delete button is action-hidden and never fires delete", () => {
     const onDelete = vi.fn();
     const item = buildSessionItem({
       session: makeSession(),
@@ -139,8 +139,8 @@ describe("buildSessionItem state and safety", () => {
       createIcon: fakeIcon,
     });
     const del = item.querySelector(".session-delete-btn");
+    expect(del.classList.contains("action-hidden")).toBe(true);
     expect(del.disabled).toBe(true);
-    expect(del.title).toBe("sidebar.deleteDisabledActive");
     del.click();
     expect(onDelete).not.toHaveBeenCalled();
   });

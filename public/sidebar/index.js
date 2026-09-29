@@ -17,6 +17,7 @@ import {
   workspacePathKey,
 } from "../workspace-projects.js";
 import {
+  applySessionItemActionVisibility,
   buildSessionItem as buildSessionItemNode,
   formatSessionTime,
   getSessionDisplayTitle,
@@ -118,6 +119,8 @@ export class SessionSidebar {
     this._registryPins = null;
     this.statusItemsByPath = new Map();
     this.streamingFiles = new Set();
+    // Last runtimeInstances() result; feeds isLiveSession between refreshes.
+    this.liveInstancesSnapshot = [];
     this.projectVisibleSessionCounts = new Map();
     this.contextMenu = null;
     // `loadSeq` counts issued loads; `loadCommitted` is the highest seq that has
@@ -217,10 +220,23 @@ export class SessionSidebar {
       el.classList.toggle("streaming", this.streamingFiles.has(filePath));
       el.classList.toggle("mirror-live", this.streamingFiles.has(filePath));
     });
+    // Streaming/live flips re-evaluate the action gate on the rendered row,
+    // so a session that just started working loses its buttons in place.
+    const renameBlocked = Boolean(this.renameBlockedReason(filePath));
+    const deleteBlocked = Boolean(this.deletionBlockedReason(filePath));
+    items.forEach((el) => {
+      if (!el.isConnected) return;
+      applySessionItemActionVisibility(el, { renameBlocked, deleteBlocked });
+    });
   }
 
   async deleteSession(filePath) {
     if (!filePath) return false;
+    const blocked = this.deletionBlockedReason(filePath);
+    if (blocked) {
+      this.onSessionNotice?.(blocked);
+      return false;
+    }
     const ok = await this.confirmSessionDeletion(1);
     if (!ok) return false;
 
@@ -738,7 +754,9 @@ export class SessionSidebar {
   async fetchLiveInstances() {
     try {
       const data = await this.transport?.runtimeInstances?.();
-      return Array.isArray(data?.instances) ? data.instances : [];
+      const instances = Array.isArray(data?.instances) ? data.instances : [];
+      this.liveInstancesSnapshot = instances;
+      return instances;
     } catch {
       return [];
     }
@@ -894,15 +912,21 @@ export class SessionSidebar {
       titleElement.title = title;
       titleElement.textContent = title;
       titleRow.appendChild(titleElement);
+      const renameBlocked = this.renameBlockedReason(result.filePath);
       const renameButton = document.createElement("button");
       renameButton.type = "button";
       renameButton.className = "session-rename-btn";
-      renameButton.title = t("sidebar.rename");
-      renameButton.setAttribute("aria-label", t("sidebar.renameSessionAriaLabel"));
+      renameButton.title = renameBlocked || t("sidebar.rename");
+      renameButton.setAttribute("aria-label", renameBlocked || t("sidebar.renameSessionAriaLabel"));
+      if (renameBlocked) {
+        renameButton.disabled = true;
+        renameButton.classList.add("action-hidden");
+      }
       const renameIcon = createActionIcon("pencil", 13);
       if (renameIcon) renameButton.appendChild(renameIcon);
       renameButton.addEventListener("click", (event) => {
         event.stopPropagation();
+        if (renameButton.disabled) return;
         this.startRename(item, {
           filePath: result.filePath,
           name: result.sessionName || "",
@@ -1008,6 +1032,9 @@ export class SessionSidebar {
     this.activeSessionFile = null;
     this.container.querySelectorAll(".session-item").forEach((el) => {
       el.classList.remove("active");
+    });
+    this.container.querySelectorAll(".session-item[data-file-path]").forEach((el) => {
+      this.applyStatusToItem(el.dataset.filePath);
     });
   }
 
@@ -1203,9 +1230,20 @@ export class SessionSidebar {
     return null;
   }
 
+  /** Rename mirrors the delete gate: the open session and any session with a
+   * running turn keep a stable identity until they go idle. */
+  renameBlockedReason(filePath) {
+    if (filePath === this.activeSessionFile) return t("sidebar.renameDisabledActive");
+    if (this.streamingFiles.has(filePath)) return t("sidebar.renameDisabledStreaming");
+    if (this.isLiveSession(filePath)) return t("sidebar.renameDisabledRunning");
+    return null;
+  }
+
   isLiveSession(filePath) {
-    if (typeof this.getLiveInstances !== "function") return false;
-    const live = this.getLiveInstances();
+    const live =
+      typeof this.getLiveInstances === "function"
+        ? this.getLiveInstances()
+        : this.liveInstancesSnapshot;
     return Array.isArray(live) && live.some((instance) => instance?.sessionFile === filePath);
   }
 
@@ -1314,6 +1352,8 @@ export class SessionSidebar {
   showSessionContextMenu(event, itemEl, session) {
     event?.preventDefault();
     this.closeContextMenu();
+    const renameBlocked = session ? this.renameBlockedReason(session.filePath) : null;
+    if (renameBlocked) return;
     const menu = document.createElement("div");
     menu.className = "sidebar-context-menu";
     menu.setAttribute("role", "menu");
@@ -1350,6 +1390,8 @@ export class SessionSidebar {
   }
 
   startRename(itemEl, session = null) {
+    const filePath = session?.filePath || itemEl?.dataset?.filePath;
+    if (filePath && this.renameBlockedReason(filePath)) return;
     const titleEl = itemEl.querySelector(".session-title");
     if (!titleEl || itemEl.querySelector(".session-rename-input")) return;
     const target = session ||
@@ -1503,6 +1545,7 @@ export class SessionSidebar {
     const {
       showDeleteButton = false,
       deletionBlockedReason = null,
+      renameBlockedReason = null,
       onDelete = null,
       treeDepth = 0,
       treeIsLast = true,
@@ -1523,6 +1566,7 @@ export class SessionSidebar {
       showPinButton: false,
       showDeleteButton: isProvisional ? false : showDeleteButton,
       deletionBlockedReason: deletionBlockedReason ?? this.deletionBlockedReason(session.filePath),
+      renameBlockedReason: renameBlockedReason ?? this.renameBlockedReason(session.filePath),
       projectSearchText: this.getProjectSearchText(project),
       formattedTime: this.formatTime(session.mtime ?? session.timestamp),
       treeDepth,
