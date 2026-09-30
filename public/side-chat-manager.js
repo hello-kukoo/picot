@@ -30,18 +30,11 @@ function segmentGraphemes(text) {
 }
 
 export class SideChatManager {
-  constructor({
-    transport,
-    filePreviewPanel,
-    confirmDiscard,
-    createView,
-    getStartupProfile = async () => null,
-  }) {
+  constructor({ transport, filePreviewPanel, confirmDiscard, createView }) {
     this.transport = transport;
     this.filePreviewPanel = filePreviewPanel;
     this.confirmDiscard = confirmDiscard;
     this.createView = createView;
-    this.getStartupProfile = getStartupProfile;
     this.createView = createView || (() => null);
     this.chats = new Map(); // instanceId -> { descriptor, runtime, view, title }
     this.order = [];
@@ -75,16 +68,16 @@ export class SideChatManager {
     this.filePreviewPanel.activateContent({ kind: "transient", id: loadingId });
     this.filePreviewPanel.showPanel();
     try {
-      const startupProfile = await this.getStartupProfile();
-      const descriptor = await this.transport.createEphemeral("side-chat", {
-        startupProfile,
-      });
+      // Model/thinking defaults come from Pi's own settings (advisor
+      // restore at spawn); Side Chat deliberately does NOT inherit the
+      // main session's selection (2026-09-30 decision).
+      const descriptor = await this.transport.createEphemeral("side-chat");
       if (!descriptor) {
         this.filePreviewPanel.unregisterTransientTab(loadingId);
         return null;
       }
       try {
-        this._instantiate(descriptor, true, startupProfile);
+        this._instantiate(descriptor, true);
         this.filePreviewPanel.unregisterTransientTab(loadingId);
       } catch (error) {
         await this.transport
@@ -251,7 +244,7 @@ export class SideChatManager {
 
   // ── Internals ───────────────────────────────────────────────────────────────
 
-  _instantiate(descriptor, activate = true, startupProfile = null) {
+  _instantiate(descriptor, activate = true) {
     const runtime = new EphemeralChatRuntime({ descriptor, transport: this.transport });
     runtime.active = activate;
     runtime.unread = Boolean(descriptor.unread);
@@ -303,22 +296,6 @@ export class SideChatManager {
     // Both fresh and re-bound runtimes begin from an authoritative snapshot;
     // any broker events that arrive first remain queued until it is applied.
     runtime.requestSnapshot();
-    // After the runtime's first snapshot is applied (renderstate fires), push
-    // the inherited model + thinking level via WS. The host also sends
-    // set_model via stdin at spawn time, but the runtime snapshot may race
-    // ahead and show Pi's advisor-restored model. This WS set_model is the
-    // authoritative path: it updates Pi's state and emits a fresh renderstate
-    // with the correct model, so the view re-renders correctly.
-    if (startupProfile?.provider && startupProfile?.modelId) {
-      const applyOnce = () => {
-        runtime.removeEventListener("renderstate", applyOnce);
-        void runtime.setModel(startupProfile.provider, startupProfile.modelId).catch(() => {});
-        if (startupProfile.thinkingLevel && startupProfile.thinkingLevel !== "off") {
-          void runtime.setThinkingLevel(startupProfile.thinkingLevel).catch(() => {});
-        }
-      };
-      runtime.addEventListener("renderstate", applyOnce);
-    }
     this._updateQuotaUi();
   }
 

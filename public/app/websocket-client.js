@@ -812,7 +812,7 @@ export class WebSocketClient extends EventTarget {
     }
 
     // A sequenced event from one of this owner's ephemeral runtimes.
-    if (message.type === "ephemeral_event") {
+    if (message.type === "ephemeral_event" || message.type === "ephemeral_snapshot") {
       this.dispatchEvent(new CustomEvent("ephemeralEvent", { detail: message }));
       return;
     }

@@ -280,9 +280,19 @@ impl EphemeralRenderState {
     }
 
     /// Update non-event context (used after explicit host-side knowledge).
-    pub fn set_context_state(&mut self, model: Option<Value>, context_usage: Option<Value>) {
+    pub fn set_context_state(
+        &mut self,
+        model: Option<Value>,
+        thinking_level: Option<String>,
+        context_usage: Option<Value>,
+    ) {
         if let Some(model) = model {
             self.model = Some(model);
+        }
+        if let Some(level) = thinking_level {
+            if !level.is_empty() {
+                self.thinking_level = level;
+            }
         }
         if context_usage.is_some() {
             self.context_usage = context_usage;
@@ -662,6 +672,10 @@ impl EphemeralHub {
                     .or_insert_with(EphemeralRenderState::new);
                 state.set_context_state(
                     state_reply.pointer("/data/model").cloned(),
+                    state_reply
+                        .pointer("/data/thinkingLevel")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
                     state_reply.pointer("/data/contextUsage").cloned(),
                 );
             }
@@ -1581,5 +1595,66 @@ mod generation_token_tests {
             }
         }
         assert!(bootstrap_seen, "crash cleanup must rebroadcast bootstrap");
+    }
+
+    #[tokio::test]
+    async fn forward_command_snapshot_includes_pi_thinking_level() {
+        // Pi's get_state is the only carrier of the settings-default thinking
+        // level (advisor restore happens before RPC readiness and emits no
+        // event); the snapshot must surface it or every ephemeral chat shows
+        // "off" regardless of the user's Pi settings.
+        let (hub, owner, instance_id, mut receiver) = hub_with_record("owner-a", 5);
+        let hub = Arc::new(hub);
+        let runtimes = Arc::new(NativePiManager::new(8));
+        let target = hub
+            .target_of(&instance_id)
+            .expect("target registered")
+            .target;
+        let mut fake = runtimes.register_in_memory(target).unwrap();
+        let forward = tokio::spawn({
+            let hub = Arc::clone(&hub);
+            let runtimes = Arc::clone(&runtimes);
+            let owner = owner.clone();
+            let instance_id = instance_id.clone();
+            async move {
+                hub.forward_command(
+                    &runtimes,
+                    &owner,
+                    &instance_id,
+                    1,
+                    json!({ "type": "ephemeral_snapshot_request" }),
+                    "ep-snap",
+                )
+                .await
+            }
+        });
+        let request = tokio::time::timeout(Duration::from_secs(2), fake.read_request())
+            .await
+            .expect("probe must reach pi")
+            .expect("request frame");
+        assert_eq!(request["type"], "get_state");
+        let bridge_id = request["id"].as_str().expect("bridge id").to_string();
+        fake.write_frame(json!({
+            "type": "response",
+            "command": "get_state",
+            "success": true,
+            "id": bridge_id,
+            "data": {
+                "model": { "id": "ZHIPU/glm-5.3-flash", "provider": "OpenCodex" },
+                "thinkingLevel": "high"
+            }
+        }))
+        .await
+        .expect("state must reach the bridge");
+        tokio::time::timeout(Duration::from_secs(2), forward)
+            .await
+            .expect("forward must complete")
+            .expect("forward result")
+            .expect("forward must succeed");
+        let frame = receiver.try_recv().expect("owner frame").value;
+        assert_eq!(frame["type"], "ephemeral_snapshot");
+        assert_eq!(frame["requestId"], "ep-snap");
+        assert_eq!(frame["model"]["id"], "ZHIPU/glm-5.3-flash");
+        assert_eq!(frame["thinkingLevel"], "high");
     }
 }

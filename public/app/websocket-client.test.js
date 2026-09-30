@@ -195,15 +195,16 @@ describe("WebSocketClient control commands", () => {
     expect(sent[0].sourcePort).toBeUndefined();
   });
 
-  test("ephemeral_event and ephemeral_command_failed dispatch distinct events", () => {
+  test("ephemeral_event, ephemeral_snapshot, and ephemeral_command_failed dispatch events", () => {
     const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
     const events = [];
     const fails = [];
     client.addEventListener("ephemeralEvent", (e) => events.push(e.detail));
     client.addEventListener("ephemeralCommandFailed", (e) => fails.push(e.detail));
     client.handleMessage({ type: "ephemeral_event", instanceId: "i", generation: 1, payload: {} });
+    client.handleMessage({ type: "ephemeral_snapshot", instanceId: "i", generation: 1 });
     client.handleMessage({ type: "ephemeral_command_failed", requestId: "ep-1", error: "x" });
-    expect(events).toHaveLength(1);
+    expect(events).toHaveLength(2);
     expect(fails).toHaveLength(1);
   });
 

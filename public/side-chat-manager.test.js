@@ -77,7 +77,6 @@ function makeManager(overrides = {}) {
     filePreviewPanel,
     confirmDiscard: overrides.confirmDiscard ?? vi.fn(async () => "discard"),
     createView: overrides.createView ?? (() => fakeView()),
-    getStartupProfile: overrides.getStartupProfile,
   });
   return { manager, transport, filePreviewPanel };
 }
@@ -96,44 +95,21 @@ describe("SideChatManager create + quota", () => {
     expect(filePreviewPanel.unregisterTransientTab).toHaveBeenCalled();
   });
 
-  it("passes the active session model and thinking level to a new Side Chat", async () => {
-    const getStartupProfile = vi.fn(async () => ({
-      provider: "openai",
-      modelId: "gpt-4.1",
-      thinkingLevel: "high",
-    }));
-    const { manager, transport } = makeManager({ getStartupProfile });
-    await manager.create();
-    expect(transport.createEphemeral).toHaveBeenCalledWith("side-chat", {
-      startupProfile: {
-        provider: "openai",
-        modelId: "gpt-4.1",
-        thinkingLevel: "high",
-      },
-    });
-  });
-
-  it("applies the startup profile to the runtime after its first snapshot", async () => {
-    const getStartupProfile = vi.fn(async () => ({
-      provider: "openai",
-      modelId: "gpt-4.1",
-      thinkingLevel: "high",
-    }));
-    const { manager } = makeManager({ getStartupProfile });
+  it("does not inherit the main session's model — Pi settings defaults stand", async () => {
+    const { manager, transport } = makeManager();
     const descriptor = await manager.create();
+    expect(transport.createEphemeral).toHaveBeenCalledWith("side-chat");
     const chat = manager.chats.get(descriptor.instanceId);
-    expect(chat).toBeDefined();
     const setModel = vi.spyOn(chat.runtime, "setModel");
     const setThinking = vi.spyOn(chat.runtime, "setThinkingLevel");
-    // Simulate the first snapshot arriving — this fires renderstate.
     chat.runtime.applySnapshot({
       type: "ephemeral_snapshot",
       instanceId: descriptor.instanceId,
       generation: descriptor.generation,
       messages: [],
     });
-    expect(setModel).toHaveBeenCalledWith("openai", "gpt-4.1");
-    expect(setThinking).toHaveBeenCalledWith("high");
+    expect(setModel).not.toHaveBeenCalled();
+    expect(setThinking).not.toHaveBeenCalled();
   });
 
   it("limits new Side Chat creation to one instance", async () => {

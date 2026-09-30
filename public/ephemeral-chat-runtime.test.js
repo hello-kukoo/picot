@@ -406,3 +406,93 @@ describe("EphemeralChatRuntime unread + title", () => {
     expect(runtime.lastAppliedSequence).toBe(1);
   });
 });
+
+// Frames below mirror the real native-hub wire: the Rust host forwards Pi's
+// session events as raw top-level frames (captured against embedded pi
+// 0.87.1), not the legacy Node-broker {type:"event"} envelope.
+function rawEventFrame(runtimeSequence, event) {
+  return { instanceId: "inst-1", generation: 3, runtimeSequence, payload: event };
+}
+
+describe("EphemeralChatRuntime raw native event frames", () => {
+  it("applies a raw Pi turn: user echo, assistant stream, agent lifecycle", () => {
+    const { runtime } = makeRuntime();
+    runtime.applySnapshot(snapshot());
+    runtime.applySequencedEvent(rawEventFrame(1, { type: "agent_start" }));
+    runtime.applySequencedEvent(
+      rawEventFrame(2, { type: "message_start", message: { role: "user", content: "hi" } }),
+    );
+    runtime.applySequencedEvent(
+      rawEventFrame(3, { type: "message_start", message: { role: "assistant", content: [] } }),
+    );
+    runtime.applySequencedEvent(
+      rawEventFrame(4, {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "PONG" },
+      }),
+    );
+    runtime.applySequencedEvent(
+      rawEventFrame(5, {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: "PONG",
+          usage: { input: 10, output: 5, cost: { total: 0.01 } },
+        },
+      }),
+    );
+    runtime.applySequencedEvent(rawEventFrame(6, { type: "agent_end", messages: [] }));
+    expect(runtime.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(runtime.assistantDraft).toBeNull();
+    expect(runtime.isStreaming).toBe(false);
+    expect(runtime.totalTokens).toBe(15);
+    expect(runtime.cost).toBe(0.01);
+  });
+
+  it("applies raw model_select and thinking_level_select frames", () => {
+    const { runtime } = makeRuntime();
+    runtime.applySnapshot(snapshot());
+    runtime.applySequencedEvent(
+      rawEventFrame(1, { type: "model_select", model: { id: "m", provider: "p" } }),
+    );
+    runtime.applySequencedEvent(rawEventFrame(2, { type: "thinking_level_select", level: "high" }));
+    expect(runtime.model).toEqual({ id: "m", provider: "p" });
+    expect(runtime.thinkingLevel).toBe("high");
+  });
+
+  it("keeps the default thinking-level ladder when the snapshot omits the list", () => {
+    const { runtime } = makeRuntime();
+    runtime.applySnapshot(snapshot({ thinkingLevel: "high" }));
+    expect(runtime.thinkingLevel).toBe("high");
+    expect(runtime.thinkingLevels).toEqual(["off", "minimal", "low", "medium", "high"]);
+  });
+
+  it("routes a top-level native snapshot frame to applySnapshot", () => {
+    const { runtime } = makeRuntime();
+    runtime.applySequencedEvent({
+      type: "ephemeral_snapshot",
+      requestId: "ep-snap",
+      instanceId: "inst-1",
+      generation: 3,
+      runtimeSequenceWatermark: 0,
+      messages: [],
+      assistantDraft: null,
+      tools: [],
+      model: { id: "ZHIPU/glm-5.3-flash", provider: "OpenCodex" },
+      thinkingLevel: "high",
+      isStreaming: false,
+      contextUsage: null,
+      error: null,
+    });
+    expect(runtime.mounted).toBe(true);
+    expect(runtime.model?.id).toBe("ZHIPU/glm-5.3-flash");
+    expect(runtime.thinkingLevel).toBe("high");
+  });
+
+  it('still accepts the legacy {type:"event"} envelope', () => {
+    const { runtime } = makeRuntime();
+    runtime.applySnapshot(snapshot());
+    runtime.applySequencedEvent(eventFrame(1, { type: "agent_start" }));
+    expect(runtime.isStreaming).toBe(true);
+  });
+});

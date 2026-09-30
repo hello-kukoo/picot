@@ -189,9 +189,10 @@ export class EphemeralChatRuntime extends EventTarget {
     this.tools = new Map((snapshot.tools || []).map((tool) => [tool.toolCallId, { ...tool }]));
     this.model = snapshot.model ?? null;
     this.thinkingLevel = snapshot.thinkingLevel ?? "off";
-    this.thinkingLevels = Array.isArray(snapshot.thinkingLevels)
-      ? snapshot.thinkingLevels
-      : ["off"];
+    this.thinkingLevels =
+      Array.isArray(snapshot.thinkingLevels) && snapshot.thinkingLevels.length
+        ? snapshot.thinkingLevels
+        : this.thinkingLevels;
     this.isStreaming = Boolean(snapshot.isStreaming);
     this.contextUsage = snapshot.contextUsage ?? null;
     this.error = snapshot.error ?? null;
@@ -210,8 +211,13 @@ export class EphemeralChatRuntime extends EventTarget {
     if (!frame || frame.instanceId !== this.instanceId || frame.generation !== this.generation) {
       return;
     }
-    // A snapshot response (ephemeral_snapshot_request reply) is wrapped by the
-    // broker as an ephemeral_event; route it to applySnapshot, not the reducer.
+    // A snapshot reply (ephemeral_snapshot_request) arrives from the native
+    // hub as a top-level frame; the legacy broker wrapped it in an
+    // ephemeral_event payload. Accept both shapes.
+    if (frame.type === "ephemeral_snapshot") {
+      this.applySnapshot(frame);
+      return;
+    }
     if (frame.payload?.type === "ephemeral_snapshot") {
       this.applySnapshot(frame.payload);
       return;
@@ -340,8 +346,11 @@ export class EphemeralChatRuntime extends EventTarget {
       this._emit("extensionuirequest", { request: payload });
       return;
     }
-    if (payload?.type !== "event") return;
-    const event = payload.event || {};
+    // The native hub forwards Pi's session events as raw top-level frames
+    // (message_start, agent_start, ...). The {type:"event", event} envelope is
+    // the legacy Node-broker shape, still accepted.
+    const event = payload?.type === "event" ? payload.event || {} : payload;
+    if (!event?.type) return;
     switch (event.type) {
       case "message_start": {
         const message = event.message;

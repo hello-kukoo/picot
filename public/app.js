@@ -57,11 +57,11 @@ import { InfoPanel } from "./info-panel.js";
 import { setupLanQr } from "./lan-qr.js";
 import { createLiveRuntimeSubscriptions } from "./live-runtime-subscriptions.js";
 import { getLastModel, setLastModel } from "./models/last-model-store.js";
+import { openModelDropdownMenu } from "./models/model-dropdown.js";
 import {
   filterModelsByCatalogVisibility,
   isSelectedModel,
   selectModel,
-  splitModelsByScope,
 } from "./models/selection.js";
 import { renderPackageInstallFailure } from "./packages/install-status.js";
 import {
@@ -1423,29 +1423,17 @@ const createEphemeralView = (runtime) =>
     // main-session Pi), never the Quick Chat temporary cwd.
     getWorkspaceRoot: () => getCurrentWorkspacePath(),
     loadModelCatalog: () => configGateway.call("list_model_catalog"),
+    configGateway,
+    onOpenModelsSettings: () => openModelsSettings().catch(() => {}),
   });
 
-async function getActiveSessionStartupProfile() {
-  if (!activeUiSessionFile) return null;
-  const profile = await sessionUiState.loadProfile();
-  if (profile) return profile;
-  const model = availableModels.find((entry) =>
-    isSelectedModel(entry, { provider: currentModelProvider, modelId: currentModelId }),
-  );
-  if (!model?.provider || !model?.id) return null;
-  return {
-    provider: model.provider,
-    modelId: model.id,
-    thinkingLevel: currentThinkingLevel || "off",
-  };
-}
-
+// Side Chat defaults come from Pi's own settings — no main-session model
+// inheritance (2026-09-30 decision).
 const sideChatManager = new SideChatManager({
   transport,
   filePreviewPanel,
   confirmDiscard: confirmEphemeralDiscard,
   createView: createEphemeralView,
-  getStartupProfile: getActiveSessionStartupProfile,
 });
 const quickChatDialog = new QuickChatDialog({
   transport,
@@ -5160,175 +5148,51 @@ function toggleModelDropdown() {
 }
 
 function openModelDropdown() {
-  modelDropdownMenu.replaceChildren();
-
-  // Search input
-  const search = document.createElement("input");
-  search.className = "model-dropdown-search";
-  search.placeholder = t("models.searchPlaceholder");
-  search.type = "text";
-  modelDropdownMenu.appendChild(search);
-
-  // Items container
-  const itemsContainer = document.createElement("div");
-  itemsContainer.className = "model-dropdown-items";
-  modelDropdownMenu.appendChild(itemsContainer);
-
-  let scopedModelIds = [];
-
-  function renderItems(filter) {
-    itemsContainer.replaceChildren();
-    const query = (filter || "").toLowerCase();
-    // Empty-state: no API keys configured anywhere. Surface this loudly
-    // instead of leaving the dropdown blank — empty dropdowns look like
-    // a hung load, not a setup problem.
-    if (visibleModels.length === 0) {
-      const empty = document.createElement("div");
-      empty.className = "model-dropdown-empty";
-      const content = document.createElement("div");
-      content.style.cssText = "padding:14px;color:var(--text-dim);font-size:12px;line-height:1.5";
-      const title = document.createElement("div");
-      title.style.cssText = "color:var(--text-primary);margin-bottom:6px";
-      title.textContent = modelsCatalogUnavailable
-        ? t("models.unavailableTitle")
-        : t("models.emptyTitle");
-      const help = document.createElement("div");
-      help.textContent = modelsCatalogUnavailable
-        ? t("models.unavailableHelp")
-        : t("models.emptyHelp");
-      const settingsButton = document.createElement("button");
-      settingsButton.type = "button";
-      settingsButton.className = "btn-primary";
-      settingsButton.style.marginTop = "10px";
-      settingsButton.textContent = t("settings.openSettings");
-      settingsButton.addEventListener("click", () => {
-        closeModelDropdown();
-        openModelsSettings().catch(() => {});
-      });
-      content.append(title, help, settingsButton);
-      empty.appendChild(content);
-      itemsContainer.appendChild(empty);
-      return;
-    }
-    const matchingModels = visibleModels.filter((m) => {
-      const shortName = m.id.replace(/-\d{8}$/, "");
-      const providerStr = m.provider || "";
-      return (
-        !query ||
-        shortName.toLowerCase().includes(query) ||
-        providerStr.toLowerCase().includes(query)
-      );
-    });
-    const { scoped, remaining } = splitModelsByScope(matchingModels, scopedModelIds);
-
-    function appendSection(models, label, isScoped) {
-      if (models.length === 0) return;
-      const heading = document.createElement("div");
-      heading.className = "model-dropdown-section";
-      heading.textContent = label;
-      itemsContainer.appendChild(heading);
-      models.forEach((m) => {
-        const el = document.createElement("div");
-        const selected = isSelectedModel(m, {
-          provider: currentModelProvider,
-          modelId: currentModelId,
-        });
-        el.className = `model-dropdown-item${selected ? " active" : ""}`;
-        const ctxK = m.contextWindow ? `${(m.contextWindow / 1000).toFixed(0)}k` : "";
-        const name = document.createElement("span");
-        name.textContent = m.id.replace(/-\d{8}$/, "");
-        if (m.provider && m.provider !== "anthropic") {
-          const provider = document.createElement("span");
-          provider.className = "model-dropdown-item-provider";
-          provider.textContent = m.provider;
-          name.appendChild(provider);
-        }
-        const context = document.createElement("span");
-        context.className = "model-dropdown-item-ctx";
-        context.textContent = ctxK;
-        const star = document.createElement("button");
-        star.type = "button";
-        star.className = `model-dropdown-star${isScoped ? " active" : ""}`;
-        star.textContent = isScoped ? "★" : "☆";
-        star.setAttribute("aria-label", t(isScoped ? "models.removeScoped" : "models.addScoped"));
-        star.addEventListener("click", async (event) => {
-          event.stopPropagation();
-          const response = await configGateway.call("set_scoped_model", {
-            provider: m.provider,
-            modelId: m.id,
-            enabled: !isScoped,
-          });
-          if (response?.ok && Array.isArray(response.data?.modelIds)) {
-            scopedModelIds = response.data.modelIds;
-            renderItems(search.value);
-          }
-        });
-        el.append(name, context, star);
-        el.addEventListener("click", async () => {
-          closeModelDropdown();
-          // If the session is stuck auto-retrying the current (failing) model, or
-          // the last turn errored out, the in-flight run stays bound to the old
-          // model and the switch would have no visible effect. Abort the dead run
-          // first so the new model applies to the next prompt immediately. A
-          // healthy stream is left untouched — we only interrupt retry/error runs.
-          if (isAutoRetrying || lastTurnErrored) {
-            // Route through the confirmed stop: an optimistic unlock over a
-            // dropped abort strands a blue composer on a run pi never
-            // stopped (the 2026-09-26 fix's very bug class).
-            await abortCurrentRun();
-            isAutoRetrying = false;
-            lastTurnErrored = false;
-          }
-          const result = await selectModel({
-            model: m,
-            rpcCommand,
-            refreshModelInfo: fetchModelInfo,
-            applySelectedModel: (selectedModel) => {
-              // Remember the manual pick so future new sessions inherit it.
-              setLastModel(selectedModel);
-              applySelectedComposerModel(selectedModel);
-            },
-          });
-          if (!result?.success) {
-            messageRenderer.renderError(`Model switch failed: ${result?.error || "unknown error"}`);
-          }
-        });
-        itemsContainer.appendChild(el);
-      });
-    }
-
-    appendSection(scoped, t("models.scoped"), true);
-    appendSection(remaining, t("models.allEnabled"), false);
-  }
-
-  const loadScopedModels = async () => {
-    try {
-      const response = await configGateway.call("list_scoped_models");
-      if (response?.ok && Array.isArray(response.data?.modelIds)) {
-        scopedModelIds = response.data.modelIds;
-      }
-    } catch {
-      // An unavailable config bridge degrades to the unscoped enabled list.
-    }
-    if (!modelDropdownMenu.classList.contains("hidden")) renderItems(search.value);
-  };
-
-  search.addEventListener("input", () => renderItems(search.value));
-  search.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
+  openModelDropdownMenu({
+    doc: document,
+    dropdown: modelDropdown,
+    menu: modelDropdownMenu,
+    loadModels: () => visibleModels,
+    isSelected: (m) =>
+      isSelectedModel(m, { provider: currentModelProvider, modelId: currentModelId }),
+    onPick: async (m) => {
       closeModelDropdown();
-      e.stopPropagation();
-    }
-    if (e.key === "Enter") {
-      const first = itemsContainer.querySelector(".model-dropdown-item");
-      if (first) first.click();
-    }
+      // If the session is stuck auto-retrying the current (failing) model, or
+      // the last turn errored out, the in-flight run stays bound to the old
+      // model and the switch would have no visible effect. Abort the dead run
+      // first so the new model applies to the next prompt immediately. A
+      // healthy stream is left untouched — we only interrupt retry/error runs.
+      if (isAutoRetrying || lastTurnErrored) {
+        // Route through the confirmed stop: an optimistic unlock over a
+        // dropped abort strands a blue composer on a run pi never
+        // stopped (the 2026-09-26 fix's very bug class).
+        await abortCurrentRun();
+        isAutoRetrying = false;
+        lastTurnErrored = false;
+      }
+      const result = await selectModel({
+        model: m,
+        rpcCommand,
+        refreshModelInfo: fetchModelInfo,
+        applySelectedModel: (selectedModel) => {
+          // Remember the manual pick so future new sessions inherit it.
+          setLastModel(selectedModel);
+          applySelectedComposerModel(selectedModel);
+        },
+      });
+      if (!result?.success) {
+        messageRenderer.renderError(`Model switch failed: ${result?.error || "unknown error"}`);
+      }
+    },
+    configGateway,
+    onOpenSettingsClick: () => {
+      closeModelDropdown();
+      openModelsSettings().catch(() => {});
+    },
+    modelsUnavailable: modelsCatalogUnavailable,
+    close: closeModelDropdown,
+    t,
   });
-
-  modelDropdownMenu.classList.remove("hidden");
-  modelDropdown.classList.add("open");
-  void loadScopedModels();
-  requestAnimationFrame(() => search.focus());
 }
 
 function closeModelDropdown() {

@@ -108,6 +108,10 @@ WindowOwnerRegistry
 
 任何已认证 desktop owner 可订阅任意 live runtime 的**事件流**（跨工作区侧栏绿/蓝点的数据源）；`runtime_request` 命令面仍要求 owner+workspace+generation 全匹配。阻塞型 `extension_ui_request`（select/confirm/input/editor）仅投递给 `authorize_target` 通过的订阅者，其余订阅者（以及 pending replay）不接收；`setWidget`/`notify` 等非阻塞 UI 事件与普通事件一样按订阅投递。
 
+### Ephemeral 帧契约（Side/Quick Chat，2026-09-30 定契约）
+
+native hub（`host_ephemeral.rs`）向 owner 投递两类 WS 帧，**均为顶层 type、不套信封**：①`ephemeral_event`（`payload` = Pi 原始会话事件帧，如 `{type:"message_start",…}`；`runtimeSequence` 由 hub 的 `EphemeralRenderState` 单调编号，与 `ephemeral_snapshot.runtimeSequenceWatermark` 同源）；②`ephemeral_snapshot`（快照字段平铺在帧顶层，含 `requestId`）。前端 `EphemeralChatRuntime.applySequencedEvent/_reduce` 按此契约消费；`{type:"event",event}` 与 payload 内嵌快照是已废弃的 Node-broker 形状，仅为兼容保留。快照的 `thinkingLevel` 只能来自 `get_state`（advisor 恢复发生在 RPC 就绪前、不发事件），`forward_command` 的快照分支必须回填。
+
 ### 数据面 containment
 
 `HostDataPlane` 强制所有文件**读写**操作限制在注册工作区根目录内：

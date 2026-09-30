@@ -8,6 +8,7 @@ import { setupComposerPasteOffload } from "./composer-paste-offload.js";
 import { onLocaleChange, t } from "./i18n.js";
 import { createIcon } from "./icons.js";
 import { processImageFile, processImagePayload } from "./image-attachments.js";
+import { openModelDropdownMenu } from "./models/model-dropdown.js";
 import { filterModelsByCatalogVisibility } from "./models/selection.js";
 import { createHostFileMentionSearch, setupAtFileMention } from "./ui/at-file-mention.js";
 import { guardComposerArrowInsertion } from "./ui/composer-caret-guard.js";
@@ -30,12 +31,23 @@ function setRegistryIcon(doc, button, name, options = {}) {
  * views can stay alive while only one is visible.
  */
 export class EphemeralChatView {
-  constructor({ runtime, kind, toolsEnabled, getWorkspaceRoot, searchFiles, loadModelCatalog }) {
+  constructor({
+    runtime,
+    kind,
+    toolsEnabled,
+    getWorkspaceRoot,
+    searchFiles,
+    loadModelCatalog,
+    configGateway = null,
+    onOpenModelsSettings = null,
+  }) {
     this.runtime = runtime;
     this.kind = kind || "side-chat";
     this.toolsEnabled = toolsEnabled !== false;
     this.destroyed = false;
     this._interactionLocked = false;
+    // Model list for the shared selector; populated on first menu open.
+    this._models = [];
     // Live owner-workspace lookup for @-file mentions. Never cached, never the
     // Quick Chat temporary cwd — supplied by the manager via app.js.
     this._getWorkspaceRoot = getWorkspaceRoot || (() => null);
@@ -43,6 +55,8 @@ export class EphemeralChatView {
     // HTTP origin of its own, so a fetch against the Pi port could never work.
     this._searchFiles = searchFiles || createHostFileMentionSearch(() => this.runtime?.transport);
     this._loadModelCatalog = loadModelCatalog;
+    this._configGateway = configGateway;
+    this._onOpenModelsSettings = onOpenModelsSettings;
 
     const doc = globalThis.document;
     this._doc = doc;
@@ -437,10 +451,31 @@ export class EphemeralChatView {
       this._closeModelMenu();
       return;
     }
-
-    this._modelMenu.replaceChildren();
-    this._modelDropdown.classList.add("open");
-    this._modelMenu.classList.remove("hidden");
+    // The shared main-composer selector renders once models resolve; the
+    // menu opens empty (with the shared search box) in the meantime.
+    openModelDropdownMenu({
+      doc: this._doc,
+      dropdown: this._modelDropdown,
+      menu: this._modelMenu,
+      loadModels: () => this._models,
+      isSelected: (m) => {
+        const activeId = this.runtime.model?.id ?? this.runtime.model?.modelId;
+        return Boolean(activeId) && m.id === activeId;
+      },
+      onPick: (m) => {
+        void this.runtime.setModel(m.provider, m.id).catch(() => {});
+        this._closeModelMenu();
+      },
+      configGateway: this._configGateway,
+      onOpenSettingsClick: this._onOpenModelsSettings
+        ? () => {
+            this._closeModelMenu();
+            this._onOpenModelsSettings();
+          }
+        : null,
+      close: () => this._closeModelMenu(),
+      t,
+    });
     try {
       // Live query against this ephemeral Pi: there is no host-side model
       // cache (the landing cold start removed it — no runtime to warm it).
@@ -452,90 +487,40 @@ export class EphemeralChatView {
           // Keep the runtime list if the shared configuration bridge is unavailable.
         }
       }
-      if (this.destroyed || this._modelMenu.classList.contains("hidden")) return;
-      this._renderModelMenu(models);
+      this._models = models;
     } catch {
-      this._renderModelMenu([]);
+      this._models = [];
     }
+    if (this.destroyed || this._modelMenu.classList.contains("hidden")) return;
+    // Re-render through the shared selector now that models are available.
+    openModelDropdownMenu({
+      doc: this._doc,
+      dropdown: this._modelDropdown,
+      menu: this._modelMenu,
+      loadModels: () => this._models,
+      isSelected: (m) => {
+        const activeId = this.runtime.model?.id ?? this.runtime.model?.modelId;
+        return Boolean(activeId) && m.id === activeId;
+      },
+      onPick: (m) => {
+        void this.runtime.setModel(m.provider, m.id).catch(() => {});
+        this._closeModelMenu();
+      },
+      configGateway: this._configGateway,
+      onOpenSettingsClick: this._onOpenModelsSettings
+        ? () => {
+            this._closeModelMenu();
+            this._onOpenModelsSettings();
+          }
+        : null,
+      close: () => this._closeModelMenu(),
+      t,
+    });
   }
 
   _closeModelMenu() {
     this._modelMenu.classList.add("hidden");
     this._modelDropdown.classList.remove("open");
-  }
-
-  _renderModelMenu(models) {
-    this._modelMenu.replaceChildren();
-
-    const search = this._doc.createElement("input");
-    search.className = "model-dropdown-search";
-    search.placeholder = t("models.searchPlaceholder");
-    search.type = "text";
-    this._modelMenu.appendChild(search);
-
-    const itemsContainer = this._doc.createElement("div");
-    itemsContainer.className = "model-dropdown-items";
-    this._modelMenu.appendChild(itemsContainer);
-
-    const activeModelId = this.runtime.model?.id ?? this.runtime.model?.modelId;
-    const renderItems = (filter) => {
-      itemsContainer.replaceChildren();
-      const query = (filter || "").toLowerCase();
-      if (!models.length) {
-        const empty = this._doc.createElement("div");
-        empty.className = "model-dropdown-empty";
-        empty.textContent = t("models.emptyTitle");
-        itemsContainer.appendChild(empty);
-        return;
-      }
-
-      for (const model of models) {
-        const id = model.id || "";
-        const shortName = id.replace(/-\d{8}$/, "");
-        const providerName = model.provider || "";
-        if (
-          query &&
-          !shortName.toLowerCase().includes(query) &&
-          !providerName.toLowerCase().includes(query)
-        ) {
-          continue;
-        }
-
-        const option = this._doc.createElement("div");
-        option.className = `model-dropdown-item${id === activeModelId ? " active" : ""}`;
-        const name = this._doc.createElement("span");
-        name.textContent = shortName;
-        if (providerName && providerName !== "anthropic") {
-          const provider = this._doc.createElement("span");
-          provider.className = "model-dropdown-item-provider";
-          provider.textContent = providerName;
-          name.appendChild(provider);
-        }
-        const context = this._doc.createElement("span");
-        context.className = "model-dropdown-item-ctx";
-        context.textContent = model.contextWindow
-          ? `${(model.contextWindow / 1000).toFixed(0)}k`
-          : "";
-        option.append(name, context);
-        option.addEventListener("click", () => {
-          void this.runtime.setModel(model.provider, id).catch(() => {});
-          this._closeModelMenu();
-        });
-        itemsContainer.appendChild(option);
-      }
-    };
-
-    renderItems("");
-    search.addEventListener("input", () => renderItems(search.value));
-    search.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") {
-        this._closeModelMenu();
-        event.stopPropagation();
-      } else if (event.key === "Enter") {
-        itemsContainer.querySelector(".model-dropdown-item")?.click();
-      }
-    });
-    requestAnimationFrame(() => search.focus());
   }
 
   async _cycleThinkingLevel() {
