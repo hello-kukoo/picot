@@ -1,0 +1,45 @@
+{
+  "_provenance": "Cross-language pin: host_ephemeral.rs snapshot_carries_turn_grouped_projection asserts its serialized snapshot.turns equals the turns array below; ephemeral-chat-runtime.test.js applySnapshot-rebuilds from this exact file. Changing either side without the other fails one of the two tests.",
+  "type": "ephemeral_snapshot",
+  "instanceId": "inst-1",
+  "generation": 3,
+  "runtimeSequenceWatermark": 7,
+  "messages": [
+    { "role": "user", "content": "run ls" },
+    { "role": "assistant", "content": "done", "stopReason": "end_turn" }
+  ],
+  "assistantDraft": null,
+  "turns": [
+    {
+      "user": { "role": "user", "content": "run ls" },
+      "tools": [
+        {
+          "toolCallId": "t1",
+          "toolName": "bash",
+          "args": { "command": "ls" },
+          "output": "a.txt",
+          "status": "complete"
+        }
+      ],
+      "assistant": { "role": "assistant", "content": "done", "stopReason": "end_turn" },
+      "closed": true
+    }
+  ],
+  "tools": [
+    {
+      "toolCallId": "t1",
+      "toolName": "bash",
+      "args": { "command": "ls" },
+      "output": "a.txt",
+      "status": "complete"
+    }
+  ],
+  "model": null,
+  "thinkingLevel": "off",
+  "thinkingLevels": ["off", "minimal", "low", "medium", "high"],
+  "isStreaming": false,
+  "contextUsage": null,
+  "error": null,
+  "cost": 0.0,
+  "totalTokens": 0
+}

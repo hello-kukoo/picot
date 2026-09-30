@@ -9931,7 +9931,6 @@ body.file-preview-resizing {
   flex: 1 1 auto;
   min-height: 0;
 }
-.ephemeral-tools,
 .ephemeral-usage,
 .ephemeral-dialog-container {
   flex: 0 0 auto;

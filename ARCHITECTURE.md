@@ -110,7 +110,7 @@ WindowOwnerRegistry
 
 ### Ephemeral 帧契约（Side/Quick Chat，2026-09-30 定契约）
 
-native hub（`host_ephemeral.rs`）向 owner 投递两类 WS 帧，**均为顶层 type、不套信封**：①`ephemeral_event`（`payload` = Pi 原始会话事件帧，如 `{type:"message_start",…}`；`runtimeSequence` 由 hub 的 `EphemeralRenderState` 单调编号，与 `ephemeral_snapshot.runtimeSequenceWatermark` 同源）；②`ephemeral_snapshot`（快照字段平铺在帧顶层，含 `requestId`）。前端 `EphemeralChatRuntime.applySequencedEvent/_reduce` 按此契约消费；`{type:"event",event}` 与 payload 内嵌快照是已废弃的 Node-broker 形状，仅为兼容保留。快照的 `thinkingLevel` 只能来自 `get_state`（advisor 恢复发生在 RPC 就绪前、不发事件），`forward_command` 的快照分支必须回填。
+native hub（`host_ephemeral.rs`）向 owner 投递两类 WS 帧，**均为顶层 type、不套信封**：①`ephemeral_event`（`payload` = Pi 原始会话事件帧，如 `{type:"message_start",…}`；`runtimeSequence` 由 hub 的 `EphemeralRenderState` 单调编号，与 `ephemeral_snapshot.runtimeSequenceWatermark` 同源）；②`ephemeral_snapshot`（快照字段平铺在帧顶层，含 `requestId`）。前端 `EphemeralChatRuntime.applySequencedEvent/_reduce` 按此契约消费；`{type:"event",event}` 与 payload 内嵌快照是已废弃的 Node-broker 形状，仅为兼容保留。快照的 `thinkingLevel` 只能来自 `get_state`（advisor 恢复发生在 RPC 就绪前、不发事件），`forward_command` 的快照分支必须回填。快照另携带 `turns`（turn 分组投影：`turn_start`/`turn_end` 为界，user/toolCallId 序列/assistant 归属开 turn，工具状态单源存于 `tools`、按 id 内联进各 turn）——前端按主聊天 turn 架构（`ui/turn.js` 的 process rail）渲染；无 `turns` 的旧快照走平铺回退。
 
 ### 数据面 containment
 

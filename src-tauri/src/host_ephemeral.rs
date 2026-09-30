@@ -54,6 +54,19 @@ pub struct EphemeralRenderState {
     thinking_levels: Vec<String>,
     is_streaming: bool,
     context_usage: Option<Value>,
+    /// Turn-grouped projection for main-chat-parity rendering; mirrors the
+    /// frontend reducer (turn_start/turn_end boundaries, lazy open turn).
+    turns: Vec<EphemeralTurnState>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct EphemeralTurnState {
+    user: Option<Value>,
+    /// Tool call ids in first-execution order; resolved against `tools` at
+    /// snapshot time so per-tool state stays single-sourced.
+    tool_ids: Vec<String>,
+    assistant: Option<Value>,
+    closed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -69,6 +82,7 @@ impl EphemeralRenderState {
     pub fn new() -> Self {
         Self {
             thinking_level: "off".into(),
+            turns: Vec::new(),
             thinking_levels: vec![
                 "off".into(),
                 "minimal".into(),
@@ -85,11 +99,21 @@ impl EphemeralRenderState {
         self.sequence += 1;
         let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
         match kind {
+            "turn_start" => {
+                self.open_turn();
+            }
+            "turn_end" => {
+                if let Some(turn) = self.turns.last_mut() {
+                    turn.closed = true;
+                }
+            }
             "message_start" => {
                 let message = event.get("message");
                 match message.and_then(|m| m.get("role")).and_then(Value::as_str) {
                     Some("user") => {
-                        self.push_message(message.cloned().unwrap_or(Value::Null));
+                        let message = message.cloned().unwrap_or(Value::Null);
+                        self.push_message(message.clone());
+                        self.open_turn().user = Some(message);
                     }
                     Some("assistant") => {
                         self.assistant_active = true;
@@ -123,22 +147,24 @@ impl EphemeralRenderState {
                     .and_then(Value::as_str)
                     .unwrap_or("");
                 if role == "assistant" {
-                    self.push_message(message.cloned().unwrap_or(Value::Null));
+                    let owned = message.cloned().unwrap_or(Value::Null);
+                    self.push_message(owned.clone());
+                    self.open_turn().assistant = Some(owned.clone());
                     self.assistant_active = false;
                     self.assistant_text = String::new();
                     self.assistant_thinking = String::new();
-                    let stop_reason = message
-                        .and_then(|m| m.get("stopReason"))
+                    let stop_reason = owned
+                        .get("stopReason")
                         .and_then(Value::as_str)
                         .unwrap_or("");
                     if stop_reason == "error" {
-                        let detail = message
-                            .and_then(|m| m.get("errorMessage"))
+                        let detail = owned
+                            .get("errorMessage")
                             .and_then(Value::as_str)
                             .unwrap_or("Assistant request failed");
                         self.error = Some(detail.to_string());
                     }
-                    let usage = message.and_then(|m| m.get("usage"));
+                    let usage = owned.get("usage");
                     let cost_total = usage
                         .and_then(|u| u.pointer("/cost/total"))
                         .and_then(Value::as_f64)
@@ -162,6 +188,7 @@ impl EphemeralRenderState {
                     .unwrap_or("")
                     .to_string();
                 if !tool_call_id.is_empty() {
+                    self.open_turn().tool_ids.push(tool_call_id.clone());
                     self.tools.retain(|(id, _)| id != &tool_call_id);
                     self.tools.push((
                         tool_call_id.clone(),
@@ -300,6 +327,14 @@ impl EphemeralRenderState {
     }
 
     /// Authoritative render snapshot at the current watermark.
+    /// The open turn: the last turn while not closed, else a fresh one.
+    fn open_turn(&mut self) -> &mut EphemeralTurnState {
+        if self.turns.last().is_none_or(|turn| turn.closed) {
+            self.turns.push(EphemeralTurnState::default());
+        }
+        self.turns.last_mut().expect("just pushed")
+    }
+
     pub fn snapshot(&self, instance_id: &str, generation: u64) -> Value {
         let draft = if self.assistant_active
             && (!self.assistant_text.is_empty() || !self.assistant_thinking.is_empty())
@@ -315,6 +350,23 @@ impl EphemeralRenderState {
             "runtimeSequenceWatermark": self.sequence,
             "messages": self.messages,
             "assistantDraft": draft,
+            "turns": self.turns.iter().map(|turn| {
+                json!({
+                    "user": turn.user.clone().unwrap_or(Value::Null),
+                    "tools": turn.tool_ids.iter()
+                        .filter_map(|id| self.tools.iter().find(|(tid, _)| tid == id))
+                        .map(|(_, tool)| json!({
+                            "toolCallId": tool.tool_call_id,
+                            "toolName": tool.tool_name,
+                            "args": tool.args,
+                            "output": tool.output,
+                            "status": tool.status,
+                        }))
+                        .collect::<Vec<_>>(),
+                    "assistant": turn.assistant.clone().unwrap_or(Value::Null),
+                    "closed": turn.closed,
+                })
+            }).collect::<Vec<_>>(),
             "tools": self.tools.iter().map(|(_, tool)| json!({
                 "toolCallId": tool.tool_call_id,
                 "toolName": tool.tool_name,
@@ -963,6 +1015,59 @@ impl EphemeralHub {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_carries_turn_grouped_projection() {
+        let mut state = EphemeralRenderState::new();
+        state.apply_event(&json!({ "type": "turn_start" }));
+        state.apply_event(&json!({
+            "type": "message_start",
+            "message": { "role": "user", "content": "run ls" }
+        }));
+        state.apply_event(&json!({
+            "type": "tool_execution_start",
+            "toolCallId": "t1",
+            "toolName": "bash",
+            "args": { "command": "ls" }
+        }));
+        state.apply_event(&json!({
+            "type": "tool_execution_end",
+            "toolCallId": "t1",
+            "result": "a.txt",
+            "isError": false
+        }));
+        state.apply_event(&json!({
+            "type": "message_end",
+            "message": { "role": "assistant", "content": "done", "stopReason": "end_turn" }
+        }));
+        state.apply_event(&json!({ "type": "turn_end" }));
+        let snapshot = state.snapshot("inst-1", 3);
+        let turns = snapshot["turns"].as_array().expect("turns array");
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0]["user"]["content"], "run ls");
+        let tools = turns[0]["tools"].as_array().expect("turn tools");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["toolCallId"], "t1");
+        assert_eq!(tools[0]["status"], "complete");
+        assert_eq!(turns[0]["assistant"]["content"], "done");
+        assert_eq!(turns[0]["closed"], true);
+
+        // Cross-language pin: the serialized turns must equal the shared
+        // fixture consumed verbatim by the frontend reducer test. Changing
+        // this serialization without regenerating the fixture fails here;
+        // changing the fixture without this serializer fails on the JS side.
+        let fixture_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/fixtures/ephemeral/turns-snapshot.json"
+        );
+        let fixture: Value =
+            serde_json::from_str(&std::fs::read_to_string(fixture_path).expect("fixture readable"))
+                .expect("fixture parses");
+        assert_eq!(
+            snapshot["turns"], fixture["turns"],
+            "turns serialization must match the shared fixture"
+        );
+    }
 
     #[test]
     fn folds_user_and_assistant_messages_into_snapshot() {

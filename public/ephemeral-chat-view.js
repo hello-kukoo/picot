@@ -16,6 +16,8 @@ import { DialogHandler } from "./ui/dialogs.js";
 import { MessageRenderer } from "./ui/message-renderer.js";
 import { SafetyGuardDialog } from "./ui/safety-guard-dialog.js";
 import { ToolCardRenderer } from "./ui/tool-card.js";
+import { createTurnSection } from "./ui/turn.js";
+import { summarizeTurnRail } from "./ui/turn-model.js";
 
 // Monotonic counter guarantees unique mention-popup ids across ephemeral views.
 let ephemeralPopupSeq = 0;
@@ -68,12 +70,6 @@ export class EphemeralChatView {
     this._messagesEl = doc.createElement("div");
     this._messagesEl.className = "messages ephemeral-messages";
     this._root.appendChild(this._messagesEl);
-
-    if (this.toolsEnabled) {
-      this._toolsEl = doc.createElement("div");
-      this._toolsEl.className = "ephemeral-tools";
-      this._root.appendChild(this._toolsEl);
-    }
 
     this._usageEl = doc.createElement("div");
     this._usageEl.className = "ephemeral-usage";
@@ -178,7 +174,7 @@ export class EphemeralChatView {
 
     // Shared render helpers, each scoped to this view's containers.
     this.messageRenderer = new MessageRenderer(this._messagesEl);
-    this.toolCardRenderer = this.toolsEnabled ? new ToolCardRenderer(this._toolsEl) : null;
+    this.toolCardRenderer = this.toolsEnabled ? new ToolCardRenderer(this._messagesEl) : null;
     this.dialogHandler = new DialogHandler({
       container: this._dialogContainer,
       notificationContainer: this._messagesEl,
@@ -368,6 +364,78 @@ export class EphemeralChatView {
   _render(state) {
     if (this.destroyed || !state) return;
     this.messageRenderer.clear();
+    // Main-chat parity: turn-grouped rendering with in-stream process rails
+    // (tool cards live inside their turn, between the user message and the
+    // answer — never in a separate block under the stream).
+    if (Array.isArray(state.turns)) {
+      this._renderTurns(state);
+    } else {
+      this._renderFlat(state);
+    }
+    if (state.error) {
+      this.messageRenderer.renderError(state.error);
+    }
+    this._renderUsage(state);
+    this._renderComposerState(state);
+  }
+
+  _renderTurns(state) {
+    let openAnswerHost = null;
+    for (const turn of state.turns) {
+      const section = createTurnSection({ withStatus: false });
+      if (turn.user) {
+        // Render into a detached holder, then move the bubble into the turn's
+        // user slot (the slot's only public API is claimUserElement).
+        const holder = this._doc.createElement("div");
+        const userEl = this.messageRenderer.renderUserMessage(turn.user, true, holder);
+        section.claimUserElement(userEl);
+      }
+      if (this.toolCardRenderer && turn.tools.length > 0) {
+        for (const tool of turn.tools) {
+          this.toolCardRenderer.createToolCard(tool, section.rail.host);
+          this.toolCardRenderer.updateToolCard(tool);
+        }
+        if (turn.closed || !state.isStreaming) {
+          section.rail.setLabel(summarizeTurnRail(0, turn.tools.length));
+          section.rail.setDisclosure(false);
+        } else {
+          // Live turn: keep the rail expanded so streaming tool output reads
+          // in place, exactly like the main chat's live process details.
+          section.rail.setDisclosure(true);
+        }
+      }
+      if (turn.assistant) {
+        this.messageRenderer.renderAssistantMessage(
+          turn.assistant,
+          false,
+          true,
+          section.answer.host,
+          false,
+        );
+      } else if (!turn.closed) {
+        openAnswerHost = section.answer.host;
+      }
+      this._messagesEl.appendChild(section.element);
+    }
+    if (state.assistantDraft) {
+      // The draft belongs to the open turn's answer slot; if every turn is
+      // already closed (edge ordering: agent still streaming after turn_end),
+      // fall back to the stream tail so streaming text is never lost.
+      const host = openAnswerHost ?? this._messagesEl;
+      const streamingEl = this.messageRenderer.renderAssistantMessage(
+        { content: state.assistantDraft.text || "" },
+        true,
+        false,
+        host,
+      );
+      if (state.assistantDraft.thinking) {
+        this.messageRenderer.updateStreamingThinking(streamingEl, state.assistantDraft.thinking);
+      }
+    }
+  }
+
+  /** Legacy hosts without a turns-bearing snapshot: flat transcript fallback. */
+  _renderFlat(state) {
     for (const message of state.messages || []) {
       if (message.role === "user") {
         this.messageRenderer.renderUserMessage(message);
@@ -384,10 +452,6 @@ export class EphemeralChatView {
         this.messageRenderer.updateStreamingThinking(streamingEl, state.assistantDraft.thinking);
       }
     }
-    if (state.error) {
-      this.messageRenderer.renderError(state.error);
-    }
-
     if (this.toolCardRenderer) {
       this.toolCardRenderer.clear();
       for (const tool of state.tools || []) {
@@ -395,9 +459,6 @@ export class EphemeralChatView {
         this.toolCardRenderer.updateToolCard(tool);
       }
     }
-
-    this._renderUsage(state);
-    this._renderComposerState(state);
   }
 
   _sideCommands() {

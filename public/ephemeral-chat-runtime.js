@@ -72,6 +72,10 @@ export class EphemeralChatRuntime extends EventTarget {
     this.messages = [];
     this.assistantDraft = null;
     this.tools = new Map();
+    // Turn-grouped projection for main-chat-parity rendering (null until a
+    // turns-bearing snapshot or a turn event arrives — legacy snapshots keep
+    // the flat fallback).
+    this.turns = null;
     this.model = null;
     this.thinkingLevel = "off";
     this.thinkingLevels = ["off", "minimal", "low", "medium", "high"];
@@ -187,6 +191,14 @@ export class EphemeralChatRuntime extends EventTarget {
       : [];
     this.assistantDraft = snapshot.assistantDraft ? clone(snapshot.assistantDraft) : null;
     this.tools = new Map((snapshot.tools || []).map((tool) => [tool.toolCallId, { ...tool }]));
+    this.turns = Array.isArray(snapshot.turns)
+      ? snapshot.turns.map((turn) => ({
+          user: clone(turn.user),
+          tools: (turn.tools || []).map((tool) => ({ ...tool })),
+          assistant: clone(turn.assistant),
+          closed: Boolean(turn.closed),
+        }))
+      : null;
     this.model = snapshot.model ?? null;
     this.thinkingLevel = snapshot.thinkingLevel ?? "off";
     this.thinkingLevels =
@@ -306,6 +318,35 @@ export class EphemeralChatRuntime extends EventTarget {
 
   // ── Internals ───────────────────────────────────────────────────────────────
 
+  /**
+   * Legacy snapshot (no `turns`) followed by live events: fold the historical
+   * messages into user/assistant pairs (tools attached to the last turn, their
+   * original ordering being unrecoverable from the flat shape) so the first
+   * new event lands alongside history instead of erasing it visually.
+   */
+  _synthesizeHistoryTurns() {
+    if (this.messages.length === 0) return [];
+    const turns = [];
+    let open = null;
+    for (const message of this.messages) {
+      if (message?.role === "user") {
+        open = { user: clone(message), tools: [], assistant: null, closed: true };
+        turns.push(open);
+      } else if (message?.role === "assistant") {
+        if (!open) {
+          open = { user: null, tools: [], assistant: null, closed: true };
+          turns.push(open);
+        }
+        open.assistant = clone(message);
+      }
+    }
+    if (turns.length > 0) {
+      const last = turns[turns.length - 1];
+      for (const tool of this.tools.values()) last.tools.push({ ...tool });
+    }
+    return turns;
+  }
+
   _drainQueue() {
     if (this._queue.length === 0) return;
     const ordered = this._queue.splice(0).sort((a, b) => a.runtimeSequence - b.runtimeSequence);
@@ -351,11 +392,31 @@ export class EphemeralChatRuntime extends EventTarget {
     // the legacy Node-broker shape, still accepted.
     const event = payload?.type === "event" ? payload.event || {} : payload;
     if (!event?.type) return;
+    // Turn-grouped projection: turn boundaries follow Pi's turn_start/turn_end
+    // (a turn can span multiple agent runs), user/tools/assistant attach to the
+    // open turn. Lazily created so event streams without turn_start still group.
+    if (this.turns === null) this.turns = this._synthesizeHistoryTurns();
+    const openTurn = () => {
+      if (!this.turns.length || this.turns[this.turns.length - 1].closed) {
+        this.turns.push({ user: null, tools: [], assistant: null, closed: false });
+      }
+      return this.turns[this.turns.length - 1];
+    };
     switch (event.type) {
+      case "turn_start": {
+        openTurn();
+        break;
+      }
+      case "turn_end": {
+        if (this.turns.length) this.turns[this.turns.length - 1].closed = true;
+        break;
+      }
       case "message_start": {
         const message = event.message;
         if (message?.role === "user") {
-          this.messages.push(normalizeUserMessage(message));
+          const normalized = normalizeUserMessage(message);
+          this.messages.push(normalized);
+          openTurn().user = clone(normalized);
         } else if (message?.role === "assistant") {
           this.assistantDraft = { text: assistantText(message), thinking: "" };
         }
@@ -375,6 +436,7 @@ export class EphemeralChatRuntime extends EventTarget {
         const tokens = Number(usage?.input || 0) + Number(usage?.output || 0);
         if (message?.role === "assistant") {
           this.messages.push(clone(message));
+          openTurn().assistant = clone(message);
           this.assistantDraft = null;
           if (message.stopReason === "error") {
             this.error = message.errorMessage || GENERIC_FAILURE;
@@ -388,13 +450,15 @@ export class EphemeralChatRuntime extends EventTarget {
       case "tool_execution_start": {
         const id = event.toolCallId;
         if (id) {
-          this.tools.set(id, {
+          const tool = {
             toolCallId: id,
             toolName: event.toolName || "",
             args: event.args,
             output: "",
             status: "pending",
-          });
+          };
+          this.tools.set(id, tool);
+          openTurn().tools.push(tool);
         }
         break;
       }
@@ -445,6 +509,14 @@ export class EphemeralChatRuntime extends EventTarget {
 
   _emitRender() {
     this._emit("renderstate", {
+      turns: this.turns
+        ? this.turns.map((turn) => ({
+            user: clone(turn.user),
+            tools: turn.tools.map((tool) => ({ ...tool })),
+            assistant: clone(turn.assistant),
+            closed: turn.closed,
+          }))
+        : null,
       messages: clone(this.messages),
       assistantDraft: this.assistantDraft ? clone(this.assistantDraft) : null,
       tools: Array.from(this.tools.values()).map((t) => ({ ...t })),

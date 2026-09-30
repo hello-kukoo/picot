@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { EphemeralChatRuntime } from "./ephemeral-chat-runtime.js";
 
@@ -465,6 +466,142 @@ describe("EphemeralChatRuntime raw native event frames", () => {
     runtime.applySnapshot(snapshot({ thinkingLevel: "high" }));
     expect(runtime.thinkingLevel).toBe("high");
     expect(runtime.thinkingLevels).toEqual(["off", "minimal", "low", "medium", "high"]);
+  });
+
+  it("groups a raw Pi turn: user, tools, assistant, closed on turn_end", () => {
+    const { runtime } = makeRuntime();
+    runtime.applySnapshot(snapshot());
+    runtime.applySequencedEvent(rawEventFrame(1, { type: "turn_start" }));
+    runtime.applySequencedEvent(
+      rawEventFrame(2, { type: "message_start", message: { role: "user", content: "run ls" } }),
+    );
+    runtime.applySequencedEvent(
+      rawEventFrame(3, {
+        type: "tool_execution_start",
+        toolCallId: "t1",
+        toolName: "bash",
+        args: { command: "ls" },
+      }),
+    );
+    runtime.applySequencedEvent(
+      rawEventFrame(4, { type: "tool_execution_update", toolCallId: "t1", partialResult: "a.txt" }),
+    );
+    runtime.applySequencedEvent(
+      rawEventFrame(5, {
+        type: "tool_execution_end",
+        toolCallId: "t1",
+        result: "a.txt",
+        isError: false,
+      }),
+    );
+    runtime.applySequencedEvent(
+      rawEventFrame(6, {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: "done",
+          usage: { input: 1, output: 1, cost: { total: 0 } },
+        },
+      }),
+    );
+    runtime.applySequencedEvent(
+      rawEventFrame(7, { type: "turn_end", message: { role: "assistant", content: "done" } }),
+    );
+    runtime.applySequencedEvent(rawEventFrame(8, { type: "turn_start" }));
+    expect(runtime.turns).toHaveLength(2);
+    expect(runtime.turns[0].user.content).toBe("run ls");
+    expect(runtime.turns[0].tools).toHaveLength(1);
+    expect(runtime.turns[0].tools[0]).toMatchObject({
+      toolCallId: "t1",
+      toolName: "bash",
+      status: "complete",
+      output: "a.txt",
+    });
+    expect(runtime.turns[0].assistant.content).toBe("done");
+    expect(runtime.turns[0].closed).toBe(true);
+    expect(runtime.turns[1].closed).toBe(false);
+  });
+
+  it("rebuilds turns from a snapshot carrying a turns array", () => {
+    const { runtime } = makeRuntime();
+    runtime.applySnapshot(
+      snapshot({
+        turns: [
+          {
+            user: { role: "user", content: "hi" },
+            tools: [
+              { toolCallId: "t9", toolName: "bash", args: {}, output: "", status: "complete" },
+            ],
+            assistant: { role: "assistant", content: "yo" },
+            closed: true,
+          },
+        ],
+      }),
+    );
+    expect(runtime.turns).toHaveLength(1);
+    expect(runtime.turns[0].tools[0].toolCallId).toBe("t9");
+  });
+
+  it("preserves legacy-snapshot history when the first live event arrives", () => {
+    const { runtime } = makeRuntime();
+    // Legacy host snapshot: messages + flat tools, no turns.
+    runtime.applySnapshot(
+      snapshot({
+        messages: [
+          { role: "user", content: "old question" },
+          { role: "assistant", content: "old answer" },
+        ],
+        tools: [
+          { toolCallId: "t0", toolName: "bash", args: {}, output: "old", status: "complete" },
+        ],
+      }),
+    );
+    expect(runtime.turns).toBeNull();
+    runtime.applySequencedEvent(rawEventFrame(1, { type: "turn_start" }));
+    runtime.applySequencedEvent(
+      rawEventFrame(2, { type: "message_start", message: { role: "user", content: "new" } }),
+    );
+    // History survives as a synthesized closed turn; the new event opens one.
+    expect(runtime.turns).toHaveLength(2);
+    expect(runtime.turns[0].user.content).toBe("old question");
+    expect(runtime.turns[0].assistant.content).toBe("old answer");
+    expect(runtime.turns[0].tools[0].toolCallId).toBe("t0");
+    expect(runtime.turns[0].closed).toBe(true);
+    expect(runtime.turns[1].user.content).toBe("new");
+    expect(runtime.turns[1].closed).toBe(false);
+  });
+
+  it("rebuilds from the shared cross-language fixture (pinned to Rust serialization)", () => {
+    // tests/fixtures/ephemeral/turns-snapshot.json is asserted byte-equal on
+    // the Rust side (snapshot_carries_turn_grouped_projection); consuming it
+    // here pins both ends of the wire contract.
+    const fixture = JSON.parse(
+      readFileSync("tests/fixtures/ephemeral/turns-snapshot.json", "utf8"),
+    );
+    const { runtime } = makeRuntime();
+    runtime.applySnapshot(fixture);
+    expect(runtime.turns).toEqual([
+      {
+        user: { role: "user", content: "run ls" },
+        tools: [
+          {
+            toolCallId: "t1",
+            toolName: "bash",
+            args: { command: "ls" },
+            output: "a.txt",
+            status: "complete",
+          },
+        ],
+        assistant: { role: "assistant", content: "done", stopReason: "end_turn" },
+        closed: true,
+      },
+    ]);
+  });
+
+  it("keeps turns null when the snapshot carries no turns (legacy host)", () => {
+    const { runtime } = makeRuntime();
+    runtime.applySnapshot(snapshot());
+    expect(runtime.turns).toBeNull();
   });
 
   it("routes a top-level native snapshot frame to applySnapshot", () => {

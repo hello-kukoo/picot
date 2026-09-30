@@ -278,6 +278,97 @@ describe("EphemeralChatView", () => {
     view.destroy();
   });
 
+  it("renders turn sections: tool cards live inside the turn rail, not a separate block", () => {
+    const runtime = makeRuntime();
+    const view = new EphemeralChatView({ runtime, kind: "side-chat", toolsEnabled: true });
+    runtime.applySnapshot({
+      type: "ephemeral_snapshot",
+      instanceId: "inst-1",
+      generation: 1,
+      runtimeSequenceWatermark: 0,
+      messages: [
+        { role: "user", content: "run ls" },
+        { role: "assistant", content: "done" },
+      ],
+      assistantDraft: null,
+      tools: [
+        {
+          toolCallId: "t1",
+          toolName: "bash",
+          args: { command: "ls" },
+          output: "a.txt",
+          status: "complete",
+        },
+      ],
+      turns: [
+        {
+          user: { role: "user", content: "run ls" },
+          tools: [
+            {
+              toolCallId: "t1",
+              toolName: "bash",
+              args: { command: "ls" },
+              output: "a.txt",
+              status: "complete",
+            },
+          ],
+          assistant: { role: "assistant", content: "done" },
+          closed: true,
+        },
+      ],
+      model: null,
+      thinkingLevel: "off",
+      isStreaming: false,
+      contextUsage: null,
+      error: null,
+      cost: 0,
+      totalTokens: 0,
+    });
+
+    const stream = view.element.querySelector(".messages");
+    const turn = stream.querySelector("section.turn");
+    expect(turn).not.toBeNull();
+    // The bash card is INSIDE the turn's process rail, between user and answer.
+    const railCard = turn.querySelector(".process-details-group .tool-card");
+    expect(railCard).not.toBeNull();
+    expect(railCard.dataset.toolCallId).toBe("t1");
+    // No separate tools block under the stream anymore.
+    expect(view.element.querySelector(".ephemeral-tools")).toBeNull();
+    expect(stream.querySelector(".ephemeral-tools")).toBeNull();
+    // User and answer sit inside the turn, in order.
+    const userMsg = turn.querySelector(".message.user");
+    const answerMsg = turn.querySelector(".message.assistant");
+    expect(userMsg?.textContent).toContain("run ls");
+    expect(answerMsg?.textContent).toContain("done");
+    expect(turn.elementType).toBeUndefined();
+    view.destroy();
+  });
+
+  it("falls back to the flat transcript when the snapshot carries no turns", () => {
+    const runtime = makeRuntime();
+    const view = new EphemeralChatView({ runtime, kind: "side-chat", toolsEnabled: true });
+    runtime.applySnapshot({
+      type: "ephemeral_snapshot",
+      instanceId: "inst-1",
+      generation: 1,
+      runtimeSequenceWatermark: 0,
+      messages: [{ role: "user", content: "legacy" }],
+      assistantDraft: null,
+      tools: [{ toolCallId: "t1", toolName: "bash", args: {}, output: "x", status: "complete" }],
+      model: null,
+      thinkingLevel: "off",
+      isStreaming: false,
+      contextUsage: null,
+      error: null,
+      cost: 0,
+      totalTokens: 0,
+    });
+    expect(view.element.querySelector("section.turn")).toBeNull();
+    expect(view.element.querySelector(".message.user")?.textContent).toContain("legacy");
+    expect(view.element.querySelector(".tool-card")).not.toBeNull();
+    view.destroy();
+  });
+
   it("does not render tool cards when tools are disabled (Quick Chat)", () => {
     const runtime = makeRuntime();
     const view = new EphemeralChatView({ runtime, kind: "quick-chat", toolsEnabled: false });
