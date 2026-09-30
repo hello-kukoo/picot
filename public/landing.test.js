@@ -519,6 +519,35 @@ test("quick chat button unhides after host capabilities arrive", async () => {
   expect(harness.refreshCalls.length).toBeGreaterThanOrEqual(1);
 });
 
+test("Pi version row recovers when settings opens before hello_ack", async () => {
+  // Cold-start race: the user opens Settings -> General before the WS
+  // handshake completes. The row must not stay on "Loading..." forever — the
+  // version loads once host capabilities arrive, without reopening settings.
+  await bootLanding();
+  harness.transport.getPiVersion = async () => "0.87.1";
+  harness.transport.capabilities = { native: false };
+  document.body.insertAdjacentHTML(
+    "beforeend",
+    `
+<div class="settings-panel hidden" id="settings-panel">
+<div class="settings-tab active" data-settings-panel="general">
+<div class="settings-row" id="setting-pi-version">
+<span id="setting-pi-version-value">Loading...</span>
+</div>
+</div>
+</div>`,
+  );
+  document.getElementById("settings-btn").click();
+  const value = document.getElementById("setting-pi-version-value");
+  expect(value.textContent).not.toBe("0.87.1");
+  harness.transport.capabilities = { native: true, class: "native" };
+  harness.wsClient.dispatchEvent(new Event("hostCapabilities"));
+  await vi.waitFor(() => {
+    expect(value.textContent).toBe("0.87.1");
+  });
+  expect(value.dataset.loaded).toBe("1");
+});
+
 test("errors render into the landing notice, never a chat renderer", async () => {
   await bootLanding();
   harness.transport.prepareWorkspaceTarget = async () => {

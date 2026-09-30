@@ -402,8 +402,18 @@ function openLandingSettings(tabKey = "general") {
 // embedded binary's locked version.
 async function loadLandingPiVersion() {
   const value = document.getElementById("setting-pi-version-value");
-  if (!value || !transport.capabilities.native) return;
+  if (!value) return;
   if (value.dataset.loaded === "1") return;
+  if (!transport.capabilities.native) {
+    // Cold-start race: Settings can open before the authenticated hello
+    // lands (capabilities flip to native on hello_ack). Retry once on the
+    // event instead of leaving the row on "Loading..." forever — same fix
+    // class as the 2026-09-21 MCP nav reveal.
+    wsClient.addEventListener("hostCapabilities", () => void loadLandingPiVersion(), {
+      once: true,
+    });
+    return;
+  }
   try {
     value.textContent = String(await transport.getPiVersion());
     value.dataset.loaded = "1";
