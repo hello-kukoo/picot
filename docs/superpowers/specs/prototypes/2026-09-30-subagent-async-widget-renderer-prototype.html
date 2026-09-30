@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="night">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Picot · 后台任务状态面板（设计原型）</title>
+  <style>
+    /* Self-contained excerpt of Picot's style-theme.css roles; no product assets or API. */
+    :root {
+      color-scheme: dark;
+      --font-size-sm: 12px; --font-size-md: 14px; --font-size-lg: 16px;
+      --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-6: 24px;
+      --radius-sm: 6px; --radius-md: 10px;
+      --duration: .2s; --ease: cubic-bezier(.4,0,.2,1);
+      --bg-solid: #212121; --bg-glass: rgba(255,255,255,.04); --bg-glass-hover: rgba(255,255,255,.06);
+      --bg-frosted: rgba(33,33,33,.85); --text-primary: rgba(255,255,255,.88);
+      --text-secondary: rgba(255,255,255,.5); --accent: #a0a0a0; --accent-text: #c0c0c0;
+      --border: rgba(255,255,255,.06); --border-hover: rgba(255,255,255,.1);
+      --success: #34d399; --error: #f87171; --warning: #fbbf24;
+      --status-text: var(--text-primary); --status-wash: rgba(255,255,255,.045);
+    }
+    :root[data-theme="terracotta"] {
+      color-scheme: light;
+      --bg-solid: #f4f1ec; --bg-glass: rgba(244,241,236,.6); --bg-glass-hover: rgba(0,0,0,.06);
+      --bg-frosted: rgba(244,241,236,.8); --text-primary: rgba(0,0,0,.92);
+      --text-secondary: rgba(0,0,0,.62); --accent: #b06a48; --accent-text: #a05e3e;
+      --border: rgba(0,0,0,.06); --border-hover: rgba(0,0,0,.1);
+      --success: #1a8a5a; --error: #b63f3f; --warning: #946000;
+      --status-wash: rgba(0,0,0,.035);
+    }
+    * { box-sizing: border-box; }
+    html { font-size: 16px; }
+    body { margin: 0; background: var(--bg-solid); color: var(--text-primary); font: 0.875rem/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; }
+    button, textarea { font: inherit; }
+    button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; }
+    .review-bar { min-height: 3.25rem; display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; padding: var(--space-2) var(--space-4); border-bottom: 1px solid var(--border-hover); }
+    .review-bar__label { font-size: .75rem; color: var(--text-secondary); }
+    .review-bar__controls { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+    .review-bar button { padding: .35rem .7rem; color: var(--text-primary); border: 1px solid var(--border-hover); border-radius: var(--radius-sm); background: var(--bg-glass); cursor: pointer; }
+    .review-bar button:hover, .review-bar button[aria-pressed="true"] { background: var(--bg-glass-hover); border-color: var(--accent); }
+    .app-layout { display: grid; grid-template-columns: 14rem minmax(0, 1fr); height: calc(100dvh - 3.25rem); min-height: 32rem; }
+    .sidebar { border-right: 1px solid var(--border); display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-4); color: var(--text-secondary); }
+    .sidebar__brand { font-weight: 650; color: var(--text-primary); letter-spacing: -.02em; font-size: 1rem; }
+    .sidebar__section { padding: var(--space-2) 0; border-top: 1px solid var(--border); font-size: .75rem; }
+    .sidebar__item { padding: var(--space-2); border-radius: var(--radius-sm); color: var(--text-primary); background: var(--bg-glass-hover); }
+    .main { position: relative; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+    .main__header { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border); font-weight: 600; }
+    .messages { flex: 1; min-height: 0; overflow: auto; padding: var(--space-6) var(--space-4); }
+    .messages__inner { max-width: 50rem; margin: 0 auto; display: grid; align-content: start; gap: var(--space-6); }
+    .message { max-width: 38rem; line-height: 1.6; }
+    .message__by { margin-bottom: var(--space-1); color: var(--text-secondary); font-size: .75rem; }
+    .message p { margin: 0; }
+    .message--self { justify-self: end; padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-glass-hover); }
+    .input-area { position: relative; z-index: 1; background: var(--bg-solid); padding: var(--space-2) max(var(--space-4), calc((100% - 960px)/2)) var(--space-4); }
+    .composer-card { border: 1px solid var(--border-hover); border-radius: var(--radius-md); background: var(--bg-glass); }
+    .composer-card textarea { display: block; width: 100%; min-height: 4rem; padding: var(--space-3); resize: none; border: 0; background: none; color: var(--text-primary); outline-offset: -3px; }
+    .composer-card textarea::placeholder { color: var(--text-secondary); }
+    .composer-card__toolbar { display: flex; justify-content: space-between; padding: 0 var(--space-3) var(--space-2); font-size: .75rem; color: var(--text-secondary); }
+    /* Proposed renderer: same density, radius and frosted surface as rpiv-todo-panel-v3. */
+    .subagent-async-panel { width: min(34rem, 100%); max-height: min(19rem, 44dvh); overflow-y: auto; margin: 0 0 var(--space-2) auto; padding: var(--space-2) var(--space-3); border: 1px solid var(--border-hover); border-radius: var(--radius-md); background: var(--bg-frosted); color: var(--text-primary); }
+    .subagent-async-panel[hidden] { display: none; }
+    .subagent-async-panel__header { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-2); min-height: 1.75rem; }
+    .subagent-async-panel__title { font-size: .75rem; font-weight: 650; color: var(--text-primary); }
+    .subagent-async-panel__summary { text-align: right; color: var(--text-secondary); font-size: .75rem; font-variant-numeric: tabular-nums; }
+    .subagent-async-panel__list { padding: 0; margin: var(--space-1) 0 0; list-style: none; }
+    .subagent-async-panel__job { position: relative; min-width: 0; padding: var(--space-2) var(--space-1) var(--space-2) var(--space-3); border-top: 1px solid var(--border); border-radius: 2px; transition: background var(--duration) var(--ease); }
+    .subagent-async-panel__job:hover { background: var(--status-wash); }
+    .subagent-async-panel__job::before { position: absolute; left: 0; top: var(--space-3); bottom: var(--space-3); content: ""; width: 2px; border-radius: 2px; background: var(--job-accent, var(--accent)); }
+    .subagent-async-panel__job[data-state="running"] { --job-accent: var(--accent-text); }
+    .subagent-async-panel__job[data-state="complete"] { --job-accent: var(--success); }
+    .subagent-async-panel__job[data-state="failed"] { --job-accent: var(--error); }
+    .subagent-async-panel__job[data-state="attention"] { --job-accent: var(--warning); }
+    .subagent-async-panel__job[data-state="queued"] { --job-accent: var(--text-secondary); }
+    .subagent-async-panel__jobMain { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+    .subagent-async-panel__glyph { width: 1rem; flex: none; color: var(--job-accent, var(--accent)); font-size: .875rem; text-align: center; }
+    .subagent-async-panel__glyph.is-live { animation: live 2.4s ease-in-out infinite; }
+    .subagent-async-panel__name { font-weight: 600; flex: 1 1 auto; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0; }
+    .subagent-async-panel__state { flex: none; font-size: .75rem; color: var(--status-text); }
+    .subagent-async-panel__detail { margin-left: calc(1rem + var(--space-2)); display: flex; flex-wrap: wrap; column-gap: var(--space-2); color: var(--text-secondary); font-size: .75rem; line-height: 1.5; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; user-select: text; }
+    .subagent-async-panel__detail span + span::before { content: "·"; margin-right: var(--space-2); }
+    .subagent-async-panel__more { border-top: 1px solid var(--border); padding: var(--space-2) var(--space-1); color: var(--text-secondary); font-size: .75rem; }
+    @keyframes live { 50% { opacity: .55; } }
+    @media (prefers-reduced-motion: reduce) { .subagent-async-panel__glyph.is-live { animation: none; } .subagent-async-panel__job { transition: none; } }
+    @media (max-width: 700px) { .app-layout { display: block; height: calc(100dvh - 5rem); } .sidebar { display: none; } .main { height: 100%; } .subagent-async-panel { width: 100%; } }
+    @media (max-height: 570px) { .subagent-async-panel { max-height: 35dvh; } }
+  </style>
+</head>
+<body>
+  <!-- Controls live outside the app shell; not proposed Picot UI. -->
+  <header class="review-bar">
+    <span class="review-bar__label">设计原型 · 假数据 · 下方控件仅供评审</span>
+    <div class="review-bar__controls" aria-label="评审场景">
+      <button type="button" data-scene="many" aria-pressed="true">多任务</button>
+      <button type="button" data-scene="single" aria-pressed="false">单任务</button>
+      <button type="button" data-scene="empty" aria-pressed="false">空态</button>
+      <button type="button" id="theme-switch" aria-label="切换明暗主题">切换主题</button>
+    </div>
+  </header>
+  <div class="app-layout">
+    <aside class="sidebar" aria-hidden="true"><div class="sidebar__brand">Picot</div><div class="sidebar__section">最近会话</div><div class="sidebar__item">后台任务状态面板</div><div class="sidebar__section">项目工作区</div></aside>
+    <main class="main">
+      <header class="main__header">后台任务状态面板</header>
+      <div class="messages"><div class="messages__inner">
+        <div class="message message--self"><div class="message__by">你</div><p>请核对异步子代理状态面板的信息层级，重点看并行任务与异常状态。</p></div>
+        <div class="message"><div class="message__by">Pi</div><p>已派出子代理并行处理。它们的最新状态显示在输入框上方；聊天记录仍保留在这里。</p></div>
+      </div></div>
+      <div class="input-area">
+        <section id="panel" class="subagent-async-panel" aria-label="后台任务状态" aria-live="off">
+          <div class="subagent-async-panel__header"><strong class="subagent-async-panel__title">后台任务</strong><span class="subagent-async-panel__summary" id="summary"></span></div>
+          <ol class="subagent-async-panel__list" id="jobs"></ol><div class="subagent-async-panel__more" id="more" hidden></div>
+        </section>
+        <div class="composer-card"><textarea aria-label="消息输入（原型，不发送）" placeholder="Message… Type / for commands, @ for files"></textarea><div class="composer-card__toolbar"><span>原型展示，不发送消息</span><span>Enter ↵</span></div></div>
+      </div>
+    </main>
+  </div>
+  <script>
+    // Shape mirrors pi-subagents.async-status-snapshot v1: runs, node.activity, children.
+    const now = Date.now();
+    const run = (id, label, state, age, extra = {}) => ({ id, kind: 'subagent', label, state, startedAt: now - age * 1000, updatedAt: now, ...extra });
+    const scenes = {
+      many: [
+        run('r1', '侦察兵', 'running', 114, { activity: { state: 'active', currentTool: 'grep', currentToolStartedAt: now - 12500, turnCount: 6, toolCount: 14 } }),
+        run('r2', '架构狮', 'complete', 260, { endedAt: now - 8000, activity: { turnCount: 10, toolCount: 21 } }),
+        run('r3', '程序猿', 'failed', 191, { endedAt: now - 33000, activity: { turnCount: 4, toolCount: 7 } }),
+        run('r4', '产品经理', 'running', 73, { activity: { state: 'needs_attention', turnCount: 3, toolCount: 5 } }),
+        run('r5', '测试员', 'queued', 0), run('r6', '文档员', 'paused', 440, { endedAt: now - 45000 }),
+      ],
+      single: [run('one', '侦察兵', 'running', 52, { activity: { state: 'active', currentTool: 'read', currentToolStartedAt: now - 7900, turnCount: 2, toolCount: 4 } })],
+      empty: [],
+    };
+    const label = { running: ['◐','运行中'], complete: ['✓','已完成'], failed: ['×','失败'], queued: ['○','排队中'], partial: ['◑','部分完成'], paused: ['Ⅱ','已暂停'], stopped: ['■','已停止'], rejected: ['×','已拒绝'], attention: ['!','需要注意'] };
+    const panel = document.getElementById('panel'), jobs = document.getElementById('jobs'), summary = document.getElementById('summary'), more = document.getElementById('more');
+    let scene = 'many';
+    const elapsed = ms => `${Math.max(0, Math.floor(ms / 1000))} 秒`;
+    const appendDetail = (parent, text) => { const span = document.createElement('span'); span.textContent = text; parent.append(span); };
+    function draw() {
+      const roots = scenes[scene], rows = roots.slice(0, 4), omitted = roots.length - rows.length;
+      panel.hidden = roots.length === 0; if (panel.hidden) { jobs.replaceChildren(); return; }
+      const count = state => roots.filter(node => node.state === state).length;
+      summary.textContent = `${count('running')} 运行中 · ${count('complete')} 已完成 · ${count('failed')} 失败`;
+      jobs.replaceChildren(...rows.map(node => {
+        const state = node.activity?.state === 'needs_attention' ? 'attention' : node.state;
+        const li = document.createElement('li'); li.className = 'subagent-async-panel__job'; li.dataset.state = state;
+        const main = document.createElement('div'); main.className = 'subagent-async-panel__jobMain';
+        const glyph = document.createElement('span'); glyph.className = 'subagent-async-panel__glyph' + (state === 'running' ? ' is-live' : ''); glyph.setAttribute('aria-hidden', 'true'); glyph.textContent = (label[state] || label.partial)[0];
+        const name = document.createElement('span'); name.className = 'subagent-async-panel__name'; name.textContent = node.label; name.title = node.label;
+        const status = document.createElement('span'); status.className = 'subagent-async-panel__state'; status.textContent = (label[state] || label.partial)[1];
+        main.append(glyph, name, status); li.append(main);
+        const detail = document.createElement('div'); detail.className = 'subagent-async-panel__detail';
+        if (node.activity?.currentTool && (state === 'running' || state === 'attention')) {
+          appendDetail(detail, `工具 ${node.activity.currentTool}`);
+          if (node.activity.currentToolStartedAt) { const timer = document.createElement('span'); timer.dataset.since = node.activity.currentToolStartedAt; detail.append(timer); }
+        }
+        if (node.activity?.turnCount !== undefined) appendDetail(detail, `${node.activity.turnCount} 轮`);
+        if (node.activity?.toolCount !== undefined) appendDetail(detail, `${node.activity.toolCount} 次工具`);
+        if (node.endedAt !== undefined && node.startedAt !== undefined) appendDetail(detail, `耗时 ${elapsed(node.endedAt - node.startedAt)}`);
+        if (detail.childNodes.length) li.append(detail);
+        return li;
+      }));
+      more.hidden = omitted === 0; more.textContent = omitted ? `+${omitted} 个后台任务` : '';
+      tick();
+    }
+    function tick() { for (const node of jobs.querySelectorAll('[data-since]')) node.textContent = `已运行 ${elapsed(Date.now() - Number(node.dataset.since))}`; }
+    document.querySelectorAll('[data-scene]').forEach(button => button.addEventListener('click', () => {
+      scene = button.dataset.scene;
+      document.querySelectorAll('[data-scene]').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+      draw();
+    }));
+    document.getElementById('theme-switch').addEventListener('click', () => {
+      document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'night' ? 'terracotta' : 'night';
+    });
+    draw(); setInterval(tick, 1000);
+  </script>
+</body>
+</html>
