@@ -326,6 +326,28 @@
     "clearConfirmBody": "Ask the agent to clear the todo list?",
     "clearPrompt": "Please clear the todo list by calling the todo tool with {\"action\":\"clear\"}."
   },
+  "subagentAsync": {
+    "title": "Background Tasks",
+    "state": {
+      "queued": "Queued",
+      "running": "Running",
+      "complete": "Complete",
+      "failed": "Failed",
+      "partial": "Partial",
+      "paused": "Paused",
+      "stopped": "Stopped",
+      "rejected": "Rejected"
+    },
+    "attention": "Needs attention",
+    "summary": "{count} background tasks · details unavailable",
+    "more": "+{count} background tasks",
+    "currentTool": "Tool {name}",
+    "turns": "{count} turns",
+    "toolCalls": "{count} tool calls",
+    "elapsed": "{duration} elapsed",
+    "toolElapsed": "running {duration}",
+    "seconds": "{count}s"
+  },
   "extensions": {
     "loadingPackages": "Loading packages...",
     "failedToLoadPackages": "Failed to load packages",

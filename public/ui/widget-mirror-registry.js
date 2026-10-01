@@ -69,18 +69,27 @@ export class WidgetMirrorRegistry {
     if (request?.method !== "setWidget" || typeof request.widgetKey !== "string") return false;
     const widgetKey = request.widgetKey.trim();
     if (!widgetKey) return false;
-    if (request.widgetLines !== undefined && !isStringArray(request.widgetLines)) return false;
     const placement = VALID_PLACEMENTS.has(request.widgetPlacement)
       ? request.widgetPlacement
       : DEFAULT_PLACEMENT;
     const key = panelKey(widgetKey, runtimeId);
+    const renderer = this.#renderers.get(widgetKey);
 
     if (request.widgetLines === undefined) {
       this.#removePanel(key);
       return true;
     }
 
-    const renderer = this.#renderers.get(widgetKey);
+    // A malformed frame must reach an existing renderer panel that can clear
+    // itself, but must never create a panel or touch another widget's panel.
+    if (!isStringArray(request.widgetLines)) {
+      const entry = this.#panels.get(key);
+      if (!renderer || entry?.renderer !== renderer) return false;
+      if (typeof entry.panel.applyWidgetLines !== "function") return false;
+      entry.panel.applyWidgetLines(request.widgetLines);
+      return true;
+    }
+
     if (!renderer) {
       let panel = this.#panels.get(key)?.panel;
       if (!panel) {
@@ -96,9 +105,12 @@ export class WidgetMirrorRegistry {
       return true;
     }
 
-    // A registered renderer owns its own state; setWidget is still recorded as
-    // a runtime heartbeat, but only the renderer-specific tool result changes it.
-    this.#ensureRegisteredPanel(renderer, runtimeId, placement);
+    // A registered renderer owns its own state: frames are only delivered to
+    // panels that opted into applyWidgetLines (rpiv-todos just gets a heartbeat).
+    const entry = this.#ensureRegisteredPanel(renderer, runtimeId, placement);
+    if (typeof entry.panel.applyWidgetLines === "function") {
+      entry.panel.applyWidgetLines(request.widgetLines);
+    }
     return true;
   }
 

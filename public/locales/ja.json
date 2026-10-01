@@ -326,6 +326,28 @@
     "clearConfirmBody": "エージェントにTodosのクリアを依頼しますか？",
     "clearPrompt": "todoツールに {\"action\":\"clear\"} を渡してTodosをクリアしてください。"
   },
+  "subagentAsync": {
+    "title": "バックグラウンドタスク",
+    "state": {
+      "queued": "待機中",
+      "running": "実行中",
+      "complete": "完了",
+      "failed": "失敗",
+      "partial": "一部完了",
+      "paused": "一時停止",
+      "stopped": "停止",
+      "rejected": "拒否"
+    },
+    "attention": "要確認",
+    "summary": "{count} 件のバックグラウンドタスク · 詳細は利用できません",
+    "more": "+{count} 件のバックグラウンドタスク",
+    "currentTool": "ツール {name}",
+    "turns": "{count} ターン",
+    "toolCalls": "{count} ツール呼び出し",
+    "elapsed": "{duration} 経過",
+    "toolElapsed": "実行中 {duration}",
+    "seconds": "{count} 秒"
+  },
   "extensions": {
     "loadingPackages": "パッケージを読み込み中...",
     "failedToLoadPackages": "パッケージの読み込みに失敗しました",

@@ -326,6 +326,28 @@
     "clearConfirmBody": "让代理清除待办列表？",
     "clearPrompt": "请调用 todo 工具并传入 {\"action\":\"clear\"} 来清除待办列表。"
   },
+  "subagentAsync": {
+    "title": "后台任务",
+    "state": {
+      "queued": "排队中",
+      "running": "运行中",
+      "complete": "已完成",
+      "failed": "失败",
+      "partial": "部分完成",
+      "paused": "已暂停",
+      "stopped": "已停止",
+      "rejected": "已拒绝"
+    },
+    "attention": "需关注",
+    "summary": "{count} 个后台任务 · 详情不可用",
+    "more": "+{count} 个后台任务",
+    "currentTool": "工具 {name}",
+    "turns": "{count} 轮",
+    "toolCalls": "{count} 次工具",
+    "elapsed": "耗时 {duration}",
+    "toolElapsed": "已运行 {duration}",
+    "seconds": "{count} 秒"
+  },
   "extensions": {
     "loadingPackages": "正在加载包...",
     "failedToLoadPackages": "加载包失败",

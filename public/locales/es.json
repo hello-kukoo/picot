@@ -326,6 +326,28 @@
     "clearConfirmBody": "¿Pedir al agente que borre la lista de tareas?",
     "clearPrompt": "Borra la lista llamando a la herramienta todo con {\"action\":\"clear\"}."
   },
+  "subagentAsync": {
+    "title": "Tareas en segundo plano",
+    "state": {
+      "queued": "En cola",
+      "running": "En curso",
+      "complete": "Completado",
+      "failed": "Fallido",
+      "partial": "Parcial",
+      "paused": "En pausa",
+      "stopped": "Detenido",
+      "rejected": "Rechazado"
+    },
+    "attention": "Requiere atención",
+    "summary": "{count} tareas en segundo plano · detalles no disponibles",
+    "more": "+{count} tareas en segundo plano",
+    "currentTool": "Herramienta {name}",
+    "turns": "{count} turnos",
+    "toolCalls": "{count} llamadas a herramientas",
+    "elapsed": "{duration} transcurrido",
+    "toolElapsed": "en ejecución {duration}",
+    "seconds": "{count} s"
+  },
   "extensions": {
     "loadingPackages": "Cargando paquetes...",
     "failedToLoadPackages": "Error al cargar paquetes",

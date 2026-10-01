@@ -163,6 +163,7 @@ import { SafetyGuardDialog } from "./ui/safety-guard-dialog.js";
 import { setupScrollbarAutoHide } from "./ui/scrollbar-auto-hide.js";
 import { setupSessionSearchDialog } from "./ui/session-search-dialog.js";
 import { setupSkillSlashCommand } from "./ui/skill-slash-command.js";
+import { SubagentAsyncMirrorPanel } from "./ui/subagent-async-mirror.js";
 import { ToolCardRenderer } from "./ui/tool-card.js";
 import { createTurnSection } from "./ui/turn.js";
 import { mountTurnFilesCard, renderTurnFilesCard } from "./ui/turn-files-card.js";
@@ -991,6 +992,15 @@ widgetMirrorRegistry.registerRenderer({
   replay: (panel, messages) => panel.hydrateFromMessages(messages),
   createPanel: ({ container, widgetPlacement }) =>
     new RpivTodoMirrorPanel({ container, widgetPlacement, onClear: requestTodoClear }),
+});
+
+// pi-subagents background runs arrive as `subagent-async` snapshots; the panel
+// owns its own state, so no replay and no notify suppression are wired.
+widgetMirrorRegistry.registerRenderer({
+  widgetKey: "subagent-async",
+  toolNames: [],
+  createPanel: ({ container, widgetPlacement }) =>
+    new SubagentAsyncMirrorPanel({ container, widgetPlacement }),
 });
 
 async function requestTodoClear() {

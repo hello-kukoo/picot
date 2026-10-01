@@ -1,0 +1,9 @@
+{
+  "type": "extension_ui_request",
+  "id": "744b14ba-e21f-4f7d-8197-d8c2fa8bb2a1",
+  "method": "setWidget",
+  "widgetKey": "subagent-async",
+  "widgetLines": [
+    "PI_SUBAGENT_ASYNC_JSON:{\"kind\":\"pi-subagents.async-status-snapshot\",\"version\":1,\"generatedAt\":1790778415086,\"caps\":{\"maxRuns\":20,\"maxChildrenPerNode\":8,\"maxDepth\":3,\"maxStringLength\":160,\"maxSerializedBytes\":32768},\"omitted\":{\"runs\":0,\"children\":0,\"byteLimitExceeded\":false},\"runs\":[{\"id\":\"78091d57-dc75-4429-a68d-5345f417bc04\",\"kind\":\"workflow\",\"label\":\"worker\",\"state\":\"running\",\"startedAt\":1790778414943,\"updatedAt\":1790778415073,\"children\":[{\"id\":\"run\",\"kind\":\"step\",\"label\":\"run\",\"state\":\"queued\",\"startedAt\":1790778415085,\"updatedAt\":1790778415085}]}]}"
+  ]
+}

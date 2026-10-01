@@ -1,0 +1,198 @@
+/* ABOUTME: Styles the read-only, flat-root pi-subagents background task panel. */
+/* ABOUTME: Uses own classes and theme tokens without altering rpiv-todo styles. */
+
+.subagent-async-panel {
+  /* Light-theme contrast knob: the base --warning/--error are tuned for dark
+     surfaces and fall under 3:1 on light frosted ones — darkened overrides
+     live below rather than in the global theme tokens. */
+  --sa-warning: var(--warning);
+  --sa-error: var(--error);
+  position: relative;
+  overflow-y: auto;
+  width: min(34rem, 100%);
+  max-height: min(19rem, 44dvh);
+  margin: 0 0 var(--space-2) auto;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-md);
+  background: var(--bg-frosted);
+  box-shadow: var(--shadow-sm), var(--shadow-inset);
+  color: var(--text-primary);
+  font-size: var(--font-size-md);
+}
+
+:root[data-theme="clean"] .subagent-async-panel,
+:root[data-theme="terracotta"] .subagent-async-panel,
+:root[data-theme="sage"] .subagent-async-panel {
+  --sa-warning: #946000;
+  --sa-error: #b63f3f;
+}
+
+.subagent-async-panel__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: var(--control-height-sm);
+}
+
+.subagent-async-panel__title {
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: 650;
+}
+
+.subagent-async-panel__summary {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.subagent-async-panel__list {
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Rows are plain text, never buttons: no cursor or focus affordance. */
+.subagent-async-panel__job {
+  position: relative;
+  min-width: 0;
+  padding: var(--space-2) var(--space-1) var(--space-2) var(--space-3);
+  border-radius: var(--radius-xs);
+  transition: background var(--duration) var(--ease);
+}
+
+.subagent-async-panel__job:hover {
+  background: var(--bg-glass-hover);
+}
+
+.subagent-async-panel__job + .subagent-async-panel__job {
+  border-top: 1px solid var(--border);
+}
+
+.subagent-async-panel__job::before {
+  position: absolute;
+  left: 0;
+  top: var(--space-3);
+  bottom: var(--space-3);
+  width: 2px;
+  border-radius: var(--radius-xs);
+  background: var(--job-accent, var(--accent));
+  content: "";
+}
+
+.subagent-async-panel__job[data-state="running"] {
+  --job-accent: var(--accent-text);
+}
+
+.subagent-async-panel__job[data-state="complete"] {
+  --job-accent: var(--success);
+}
+
+.subagent-async-panel__job[data-state="failed"] {
+  --job-accent: var(--sa-error);
+}
+
+.subagent-async-panel__job[data-state="queued"] {
+  --job-accent: var(--text-secondary);
+}
+
+.subagent-async-panel__jobMain {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.subagent-async-panel__glyph {
+  flex: none;
+  width: var(--space-4);
+  color: var(--job-accent, var(--accent));
+  font-size: var(--font-size-md);
+  text-align: center;
+}
+
+/* Breathing is decorative; the state word next to it carries the meaning. */
+.subagent-async-panel__glyph.is-live {
+  animation: subagent-async-live 2.4s ease-in-out infinite;
+}
+
+.subagent-async-panel__name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.subagent-async-panel__state {
+  flex: none;
+  font-size: var(--font-size-sm);
+}
+
+.subagent-async-panel__attention {
+  flex: none;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--sa-warning);
+  border-radius: var(--radius-sm);
+  color: var(--sa-warning);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.subagent-async-panel__detail {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--space-2);
+  margin-left: calc(var(--space-4) + var(--space-2));
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.subagent-async-panel__detail > span + span::before {
+  margin-right: var(--space-2);
+  content: "·";
+}
+
+.subagent-async-panel__more {
+  margin-top: var(--space-1);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+@keyframes subagent-async-live {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .subagent-async-panel__glyph.is-live {
+    animation: none;
+  }
+
+  .subagent-async-panel__job {
+    transition: none;
+  }
+}
+
+@media (max-width: 700px) {
+  .subagent-async-panel {
+    width: 100%;
+  }
+}
+
+@media (max-height: 570px) {
+  .subagent-async-panel {
+    max-height: 35dvh;
+  }
+}

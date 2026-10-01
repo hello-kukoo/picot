@@ -1,9 +1,37 @@
+// ABOUTME: Verifies runtime-isolated widget and tool-result routing.
+// ABOUTME: Guards malformed-frame handling without changing legacy todo behavior.
+
 import { beforeEach, describe, expect, it } from "vitest";
 import { setMessages } from "../i18n.js";
 import { RpivTodoMirrorPanel } from "./rpiv-todo-mirror.js";
 import { createWidgetMirrorRegistry, runtimeIdForTarget } from "./widget-mirror-registry.js";
 
 const runtimeA = "w\u0000s-a\u0000primary";
+const SNAPSHOT_LINES = ['PI_SUBAGENT_ASYNC_JSON:{"kind":"pi-subagents.async-status-snapshot"}'];
+class FakeApplyPanel {
+  constructor({ container, widgetPlacement = "aboveEditor" }) {
+    this.applied = [];
+    this.element = document.createElement("section");
+    this.element.className = "subagent-async-panel";
+    this.element.dataset.widgetKey = "subagent-async";
+    const form = container?.querySelector("form");
+    if (!form) return;
+    if (widgetPlacement === "belowEditor") form.insertAdjacentElement("afterend", this.element);
+    else form.insertAdjacentElement("beforebegin", this.element);
+  }
+  applyWidgetLines(lines) {
+    this.applied.push(lines);
+    this.element.classList.toggle("hidden", !Array.isArray(lines));
+    return true;
+  }
+}
+function registerApplyRenderer(registry) {
+  return registry.registerRenderer({
+    widgetKey: "subagent-async",
+    toolNames: [],
+    createPanel: (options) => new FakeApplyPanel(options),
+  });
+}
 const runtimeB = "w\u0000s-b\u0000primary";
 
 describe("widget mirror registry", () => {
@@ -84,6 +112,126 @@ describe("widget mirror registry", () => {
     ).toBe(false);
   });
 
+  it("forwards bad frames to an existing applyWidgetLines panel without creating another", () => {
+    const registry = createWidgetMirrorRegistry({
+      container: document.querySelector(".input-area"),
+    });
+    registerApplyRenderer(registry);
+    registry.handleWidgetRequest(
+      { method: "setWidget", widgetKey: "subagent-async", widgetLines: SNAPSHOT_LINES },
+      runtimeA,
+    );
+    const panel = registry.getPanel("subagent-async", runtimeA);
+    for (const bad of [null, [1], "raw", {}]) {
+      expect(
+        registry.handleWidgetRequest(
+          { method: "setWidget", widgetKey: "subagent-async", widgetLines: bad },
+          runtimeA,
+        ),
+      ).toBe(true);
+    }
+    expect(panel.applied).toEqual([SNAPSHOT_LINES, null, [1], "raw", {}]);
+    expect(document.querySelectorAll('[data-widget-key="subagent-async"]').length).toBe(1);
+    expect(panel.element.classList.contains("hidden")).toBe(true);
+  });
+  it("ignores bad frames for widgets without a renderer", () => {
+    const registry = createWidgetMirrorRegistry({
+      container: document.querySelector(".input-area"),
+    });
+    registry.handleWidgetRequest(
+      { method: "setWidget", widgetKey: "fleet", widgetLines: ["ready"] },
+      runtimeA,
+    );
+    for (const bad of [null, [1]]) {
+      expect(
+        registry.handleWidgetRequest(
+          { method: "setWidget", widgetKey: "fleet", widgetLines: bad },
+          runtimeA,
+        ),
+      ).toBe(false);
+      expect(document.querySelector("[data-widget-key=fleet]").textContent).toContain("ready");
+    }
+  });
+  it("ignores bad frames and keeps valid heartbeats for renderers without applyWidgetLines", () => {
+    const registry = createWidgetMirrorRegistry({
+      container: document.querySelector(".input-area"),
+    });
+    registry.registerRenderer({
+      widgetKey: "rpiv-todos",
+      toolNames: ["todo"],
+      createPanel: ({ container }) => new RpivTodoMirrorPanel({ container }),
+    });
+    registry.handleRuntimeChange(runtimeA);
+    registry.handleToolResult(
+      "todo",
+      { details: { tasks: [{ id: 1, subject: "A", status: "pending" }], nextId: 2 } },
+      runtimeA,
+    );
+    for (const bad of [null, [1]]) {
+      expect(
+        registry.handleWidgetRequest(
+          { method: "setWidget", widgetKey: "rpiv-todos", widgetLines: bad },
+          runtimeA,
+        ),
+      ).toBe(false);
+      expect(document.querySelector(".rpiv-todo-panel").textContent).toContain("A");
+    }
+    expect(
+      registry.handleWidgetRequest(
+        { method: "setWidget", widgetKey: "rpiv-todos", widgetLines: ["heartbeat"] },
+        runtimeA,
+      ),
+    ).toBe(true);
+    expect(document.querySelector(".rpiv-todo-panel").textContent).toContain("A");
+  });
+  it("does not create a panel from a bad frame for a renderer that has none yet", () => {
+    const registry = createWidgetMirrorRegistry({
+      container: document.querySelector(".input-area"),
+    });
+    registerApplyRenderer(registry);
+    expect(
+      registry.handleWidgetRequest(
+        { method: "setWidget", widgetKey: "subagent-async", widgetLines: null },
+        runtimeA,
+      ),
+    ).toBe(false);
+    expect(document.querySelector('[data-widget-key="subagent-async"]')).toBeNull();
+  });
+  it("removes panels on undefined widgetLines and forwards valid frames to renderers", () => {
+    const registry = createWidgetMirrorRegistry({
+      container: document.querySelector(".input-area"),
+    });
+    registerApplyRenderer(registry);
+    expect(
+      registry.handleWidgetRequest(
+        { method: "setWidget", widgetKey: "subagent-async", widgetLines: SNAPSHOT_LINES },
+        runtimeA,
+      ),
+    ).toBe(true);
+    expect(registry.getPanel("subagent-async", runtimeA).applied).toEqual([SNAPSHOT_LINES]);
+    expect(
+      registry.handleWidgetRequest({ method: "setWidget", widgetKey: "subagent-async" }, runtimeA),
+    ).toBe(true);
+    expect(registry.getPanel("subagent-async", runtimeA)).toBeNull();
+    expect(document.querySelectorAll('[data-widget-key="subagent-async"]').length).toBe(0);
+  });
+  it("ignores a bad frame for a panel owned by another runtime", () => {
+    const registry = createWidgetMirrorRegistry({
+      container: document.querySelector(".input-area"),
+    });
+    registerApplyRenderer(registry);
+    registry.handleWidgetRequest(
+      { method: "setWidget", widgetKey: "subagent-async", widgetLines: SNAPSHOT_LINES },
+      runtimeA,
+    );
+    expect(
+      registry.handleWidgetRequest(
+        { method: "setWidget", widgetKey: "subagent-async", widgetLines: null },
+        runtimeB,
+      ),
+    ).toBe(false);
+    expect(document.querySelectorAll('[data-widget-key="subagent-async"]').length).toBe(1);
+  });
   it("hydrates registered renderers on session switch", () => {
     const registry = createWidgetMirrorRegistry({
       container: document.querySelector(".input-area"),
