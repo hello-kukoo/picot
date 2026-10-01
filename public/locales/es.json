@@ -832,6 +832,8 @@
     "agent": "Agente",
     "updates": "Actualizaciones",
     "autoCompaction": "Compactación automática",
+    "codemode": "Modo código",
+    "codemodeDescription": "Ejecuta llamadas de herramientas como JavaScript en sandbox en nuevas sesiones.",
     "thinkingEffort": "Esfuerzo de razonamiento",
     "reasoningDepth": "Profundidad de razonamiento",
     "showThinking": "Mostrar razonamiento",

@@ -832,6 +832,8 @@
     "agent": "智能体",
     "updates": "更新",
     "autoCompaction": "自动压缩",
+    "codemode": "代码模式",
+    "codemodeDescription": "新会话中通过沙箱脚本调用工具（需 Pi 0.99+）。",
     "thinkingEffort": "思考深度",
     "reasoningDepth": "推理深度",
     "showThinking": "显示思考",

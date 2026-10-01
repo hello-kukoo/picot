@@ -279,6 +279,49 @@ describe("agent settings dual-track persistence", () => {
     });
   });
 
+  test("toggles code mode through the global default only", async () => {
+    const document = makeDom();
+    const toggleCodemode = document.querySelector("#toggle-codemode");
+    const rpcCommand = vi.fn().mockResolvedValue({ success: true });
+
+    setupSettingsToggles({
+      toggleAutoCompact: null,
+      toggleCodemode,
+      thinkingSteps: null,
+      thinkingMarker: null,
+      thinkingName: null,
+      toggleShowThinking: null,
+      rpcCommand,
+    });
+    toggleCodemode.click();
+    await vi.waitFor(() =>
+      expect(rpcCommand).toHaveBeenCalledWith({ type: "set_default_codemode", enabled: true }),
+    );
+
+    // No session-level RPC exists for code mode — exactly one write.
+    expect(rpcCommand).toHaveBeenCalledTimes(1);
+    expect(toggleCodemode.classList.contains("on")).toBe(true);
+  });
+
+  test("rolls the code mode toggle back when the write fails", async () => {
+    const document = makeDom();
+    const toggleCodemode = document.querySelector("#toggle-codemode");
+    const rpcCommand = vi.fn().mockRejectedValue(new Error("down"));
+
+    setupSettingsToggles({
+      toggleAutoCompact: null,
+      toggleCodemode,
+      thinkingSteps: null,
+      thinkingMarker: null,
+      thinkingName: null,
+      toggleShowThinking: null,
+      rpcCommand,
+    });
+    toggleCodemode.click();
+    await vi.waitFor(() => expect(toggleCodemode.classList.contains("on")).toBe(false));
+    expect(rpcCommand).toHaveBeenCalledTimes(1);
+  });
+
   test("skips the global settings write when the session RPC fails", async () => {
     const document = makeDom();
     const toggleAutoCompact = document.querySelector("#toggle-auto-compact");

@@ -931,6 +931,7 @@ async function loadLandingConfigurationTab() {
 // Session-bound affordances ("apply to current session") have no object at
 // landing; only the global-default writes are wired.
 const landingAutoCompactToggle = document.getElementById("toggle-auto-compact");
+const landingCodemodeToggle = document.getElementById("toggle-codemode");
 const landingThinkingSteps = document.getElementById("thinking-effort-steps");
 const landingThinkingMarker = document.getElementById("thinking-effort-marker");
 const landingThinkingName = document.getElementById("thinking-effort-name");
@@ -958,6 +959,14 @@ async function loadLandingAgentDefaults() {
     // Leave the control untouched; a failed read must not fake a default.
   }
   try {
+    const codemode = await landingConfig.configGateway.call("get_default_codemode");
+    if (codemode?.ok && typeof codemode.data?.enabled === "boolean") {
+      landingCodemodeToggle?.classList.toggle("on", codemode.data.enabled);
+    }
+  } catch {
+    // Same contract: keep the neutral default.
+  }
+  try {
     const thinking = await landingConfig.configGateway.call("get_default_thinking_level");
     const level = thinking?.data?.level;
     if (thinking?.ok && LANDING_THINKING_LEVELS.includes(level)) {
@@ -975,6 +984,17 @@ landingAutoCompactToggle?.addEventListener("click", () => {
     .call("set_default_auto_compaction", { enabled: next })
     .then((result) => {
       if (result?.ok) landingAutoCompactToggle.classList.toggle("on", next);
+      else showSettingsSaveError(configSaveMessageEl, result?.error || "save failed");
+    })
+    .catch((error) => showSettingsSaveError(configSaveMessageEl, String(error?.message || error)));
+});
+
+landingCodemodeToggle?.addEventListener("click", () => {
+  const next = !landingCodemodeToggle.classList.contains("on");
+  void landingConfig.configGateway
+    .call("set_default_codemode", { enabled: next })
+    .then((result) => {
+      if (result?.ok) landingCodemodeToggle.classList.toggle("on", next);
       else showSettingsSaveError(configSaveMessageEl, result?.error || "save failed");
     })
     .catch((error) => showSettingsSaveError(configSaveMessageEl, String(error?.message || error)));

@@ -4780,6 +4780,8 @@ const SKILL_HOST_COMMANDS = new Map([
     "set_default_auto_compaction",
     (cmd) => bridgeData("set_default_auto_compaction", { enabled: cmd.enabled }),
   ],
+  ["get_default_codemode", () => bridgeData("get_default_codemode", {})],
+  ["set_default_codemode", (cmd) => bridgeData("set_default_codemode", { enabled: cmd.enabled })],
 ]);
 
 function nativeRpcCommand(cmd) {
@@ -7212,6 +7214,7 @@ const terminalSmoothScrollInput = document.getElementById("settings-terminal-smo
 const toggleTerminalWebgl = document.getElementById("toggle-terminal-webgl");
 
 const toggleAutoCompact = document.getElementById("toggle-auto-compact");
+const toggleCodemode = document.getElementById("toggle-codemode");
 const thinkingEffortSteps = document.getElementById("thinking-effort-steps");
 const thinkingEffortMarker = document.getElementById("thinking-effort-marker");
 const thinkingEffortName = document.getElementById("thinking-effort-name");
@@ -7860,6 +7863,12 @@ async function openSettings(tabKey = "general", options = {}) {
     if (typeof defaultEnabled === "boolean") {
       toggleAutoCompact.className = `settings-toggle${defaultEnabled ? " on" : ""}`;
     }
+    // Code mode owns the same kind of global default (defaultTools in
+    // settings.json); it applies to new sessions only.
+    const codemode = await rpcCommand({ type: "get_default_codemode" }, null, true);
+    if (typeof codemode?.data?.enabled === "boolean") {
+      toggleCodemode.className = `settings-toggle${codemode.data.enabled ? " on" : ""}`;
+    }
     const data = await rpcCommand({ type: "get_state" }, null, true);
     if (data.success && data.data) {
       const s = data.data;
@@ -7928,6 +7937,7 @@ settingsNavItems.forEach((item) => {
 
 const settingsToggles = setupSettingsToggles({
   toggleAutoCompact,
+  toggleCodemode,
   thinkingSteps: thinkingEffortSteps,
   thinkingMarker: thinkingEffortMarker,
   thinkingName: thinkingEffortName,

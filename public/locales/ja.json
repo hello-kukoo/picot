@@ -832,6 +832,8 @@
     "agent": "エージェント",
     "updates": "アップデート",
     "autoCompaction": "自動コンパクト",
+    "codemode": "コードモード",
+    "codemodeDescription": "新しいセッションでツール呼び出しをサンドボックスの JavaScript として実行します。",
     "thinkingEffort": "思考の深さ",
     "reasoningDepth": "推論の深さ",
     "showThinking": "思考を表示",

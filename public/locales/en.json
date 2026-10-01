@@ -832,6 +832,8 @@
     "agent": "Agent",
     "updates": "Updates",
     "autoCompaction": "Auto-compaction",
+    "codemode": "Code mode",
+    "codemodeDescription": "Run tool calls as sandboxed JavaScript in new sessions.",
     "thinkingEffort": "Thinking effort",
     "reasoningDepth": "Reasoning depth",
     "showThinking": "Show thinking",

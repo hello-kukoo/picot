@@ -44,6 +44,7 @@ export function applyShowThinking(show) {
 
 export function setupSettingsToggles({
   toggleAutoCompact,
+  toggleCodemode,
   thinkingSteps,
   thinkingMarker,
   thinkingName,
@@ -76,6 +77,22 @@ export function setupSettingsToggles({
       await rpcCommand({ type: "set_default_auto_compaction", enabled: enabling });
     } catch (error) {
       console.error("[settings] global auto-compaction default failed:", error);
+    }
+  });
+
+  // Code mode: a pure settings.json default (defaultTools "+codemode"). It
+  // takes effect for new sessions — unlike auto-compaction there is no
+  // live-session RPC, so this is a single global write with UI rollback.
+  toggleCodemode?.addEventListener("click", async () => {
+    const isOn = toggleCodemode.classList.contains("on");
+    const enabling = !isOn;
+    toggleCodemode.className = `settings-toggle${enabling ? " on" : ""}`;
+    try {
+      const data = await rpcCommand({ type: "set_default_codemode", enabled: enabling });
+      if (data?.success === false) throw new Error(data.error || "set_default_codemode failed");
+    } catch (error) {
+      console.error("[settings] code mode change failed:", error);
+      toggleCodemode.className = `settings-toggle${isOn ? " on" : ""}`;
     }
   });
 
