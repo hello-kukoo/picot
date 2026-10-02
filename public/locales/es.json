@@ -812,7 +812,12 @@
         "env": "Variables de entorno (KEY=value por línea, los ${VAR} se conservan tal cual)",
         "headers": "Cabeceras (KEY=value por línea)",
         "urlRequired": "Los servidores remotos requieren URL.",
-        "commandRequired": "Los servidores stdio requieren comando."
+        "commandRequired": "Los servidores stdio requieren comando.",
+        "exposure": "Exposición de herramientas",
+        "exposure_codemode": "Predeterminado (codemode)",
+        "exposure_direct": "Directa",
+        "exposure_deferred": "Diferida (búsqueda de herramientas)",
+        "exposure_hidden": "Oculta"
       },
       "noProject": "Sin servidores MCP de proyecto. Abre un espacio de trabajo o añade uno.",
       "sourceLabel": "Origen",
@@ -862,7 +867,7 @@
         "user": "Definiciones personales",
         "project": "Definiciones del proyecto",
         "package": "Paquetes",
-        "builtin": "Integrados (solo lectura)"
+        "builtinExtension": "Extensión integrada de pi-subagents (solo lectura)"
       },
       "status": {
         "candidate": "Candidato en disco; resultado de ejecución sin verificar"
@@ -874,7 +879,7 @@
         "error": "No se pudieron cargar los subagentes. Reintenta.",
         "conflict": "El espacio de trabajo o el inventario cambió. Actualiza y reintenta."
       },
-      "retry": "Reintentar",
+      "rescan": "Volver a escanear",
       "detail": {
         "runtimeName": "Nombre de ejecución",
         "source": "Origen",
@@ -891,7 +896,36 @@
         "rawLoading": "Cargando definición…",
         "rawUnavailable": "Definición no disponible.",
         "invalidModel": "Introduce un ID con formato provider/model.",
-        "saved": "Guardado en disco. Verifica con /subagents-models o /run tras recargar o iniciar otra sesión."
+        "saved": "Guardado en disco. Verifica con /subagents-models o /run tras recargar o iniciar otra sesión.",
+        "package": "Paquete",
+        "noLayerOverride": "Sin ajuste en esta capa",
+        "keepCurrent": "Mantener el actual: {value}",
+        "thinkingFalse": "Desactivado (false)",
+        "thinkingHint": "Solo se aplican los niveles que /subagents-models admita en la práctica.",
+        "writeLayer": "Capa de escritura: {scope} · ajuste por nombre {runtimeName} · no modifica los archivos de definición",
+        "writeLayerGlobal": "Global ~/.pi/agent/settings.json",
+        "writeLayerProject": "Proyecto actual {root}/.pi/settings.json",
+        "writeLayerProjectUnknown": "Proyecto actual .pi/settings.json"
+      },
+      "diagnostics": {
+        "scanBudget": "Se agotó el presupuesto de exploración.",
+        "scanUnreadableSource": "Se omitió un directorio de origen ilegible.",
+        "scanUnreadableEntry": "Se omitió una entrada ilegible.",
+        "symlinkOmitted": "Se omitió un origen con enlace simbólico.",
+        "invalidSettings": "settings no es válido; el inventario está incompleto.",
+        "projectRootMismatch": "La raíz del proyecto de la extensión difiere de la del espacio de trabajo; escritura en el proyecto deshabilitada.",
+        "outOfScope": "Fuentes fuera de ámbito sin verificar; no se leyó el cuerpo de la definición.",
+        "builtinsDisabled": "Los integrados están deshabilitados por los ajustes; nombres de ejecución sin verificar.",
+        "builtinsUnavailable": "Los integrados de la extensión instalada no están disponibles; nombres desconocidos.",
+        "invalidManifest": "Manifest del paquete no válido.",
+        "manifestOutsidePackageRoot": "Ruta de agente del manifest fuera de la raíz del paquete.",
+        "definitionUnreadable": "Definición ilegible, demasiado grande o no es UTF-8 válido.",
+        "missingFrontmatter": "Falta el frontmatter.",
+        "unsupportedFrontmatter": "Frontmatter no admitido.",
+        "unterminatedFrontmatter": "Frontmatter sin cerrar.",
+        "invalidPackageName": "Nombre de paquete no válido.",
+        "nameCollision": "Nombre de ejecución o alias duplicado; resultado de ejecución sin verificar.",
+        "parityUnverified": "Sin instantánea en vivo; solo candidatos en disco."
       },
       "create": {
         "title": "Nuevo agente .md",
@@ -902,7 +936,11 @@
         "disabled": "No disponible: identidad de ejecución sin verificar.",
         "invalid": "Introduce nombre, descripción y un prompt no vacío."
       },
-      "alsoIn": "También en: {scopes}"
+      "alsoIn": "También en: {scopes}",
+      "subtabs": {
+        "definitions": "Personalizados",
+        "packages": "Paquetes"
+      }
     },
     "updates": "Actualizaciones",
     "autoCompaction": "Compactación automática",

@@ -8084,6 +8084,7 @@ const mcpPage = setupMcpPage({
   // the session runtime the config gateway needs.
   mcpLogin: createMcpHostOps(transport),
   openExternal: (url) => transport.openExternal(url),
+  captionEl: document.getElementById("mcp-tab-caption"),
 });
 packageManager = setupPackageManager({
   root: document,

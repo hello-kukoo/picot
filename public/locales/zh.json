@@ -812,7 +812,12 @@
         "env": "环境变量（每行 KEY=value，${VAR} 占位符原样保留）",
         "headers": "请求头（每行 KEY=value）",
         "urlRequired": "远程 server 必须填写 URL。",
-        "commandRequired": "stdio server 必须填写命令。"
+        "commandRequired": "stdio server 必须填写命令。",
+        "exposure": "工具暴露（exposure）",
+        "exposure_codemode": "默认（codemode，脚本检索调用）",
+        "exposure_direct": "直接声明（direct）",
+        "exposure_deferred": "搜索加载（deferred）",
+        "exposure_hidden": "隐藏（hidden）"
       },
       "noProject": "无项目级 MCP server。打开一个工作区，或添加一个。",
       "sourceLabel": "来源",
@@ -861,8 +866,8 @@
       "groups": {
         "user": "个人定义",
         "project": "项目定义",
-        "package": "安装包",
-        "builtin": "扩展内置（只读）"
+        "package": "扩展包",
+        "builtinExtension": "pi-subagents 扩展内置（只读）"
       },
       "status": {
         "candidate": "磁盘候选，运行时胜出者尚未核实"
@@ -874,7 +879,7 @@
         "error": "加载子代理失败，请重试。",
         "conflict": "工作区或盘点已变化，请刷新后重试。"
       },
-      "retry": "重试",
+      "rescan": "重新扫描",
       "detail": {
         "runtimeName": "运行时名称",
         "source": "来源",
@@ -891,7 +896,36 @@
         "rawLoading": "正在读取定义…",
         "rawUnavailable": "定义不可用。",
         "invalidModel": "请输入 provider/model 格式的 ID。",
-        "saved": "已写入磁盘；重载或新建会话后用 /subagents-models 或 /run 核对。"
+        "saved": "已写入磁盘；重载或新建会话后用 /subagents-models 或 /run 核对。",
+        "package": "扩展包",
+        "noLayerOverride": "无本层覆盖",
+        "keepCurrent": "保留当前：{value}",
+        "thinkingFalse": "关闭(false)",
+        "thinkingHint": "以 /subagents-models 实际支持为准。",
+        "writeLayer": "写入层：{scope} · 名字级覆盖 {runtimeName} · 不修改定义文件",
+        "writeLayerGlobal": "全局 ~/.pi/agent/settings.json",
+        "writeLayerProject": "当前项目 {root}/.pi/settings.json",
+        "writeLayerProjectUnknown": "当前项目 .pi/settings.json"
+      },
+      "diagnostics": {
+        "scanBudget": "发现预算已用尽。",
+        "scanUnreadableSource": "源目录无法读取，已跳过。",
+        "scanUnreadableEntry": "条目无法读取，已跳过。",
+        "symlinkOmitted": "符号链接来源已忽略。",
+        "invalidSettings": "settings 无效，盘点不完整。",
+        "projectRootMismatch": "扩展项目根与工作区根不一致，已禁用项目写入。",
+        "outOfScope": "范围外来源未核实，未读取定义正文。",
+        "builtinsDisabled": "设置已禁用内置项，运行时名称未核实。",
+        "builtinsUnavailable": "已安装扩展的内置代理不可用，名称未知。",
+        "invalidManifest": "包 manifest 无效。",
+        "manifestOutsidePackageRoot": "manifest 中的代理路径超出包根目录。",
+        "definitionUnreadable": "定义无法读取、过大或不是有效 UTF-8。",
+        "missingFrontmatter": "缺少 frontmatter。",
+        "unsupportedFrontmatter": "frontmatter 不受支持。",
+        "unterminatedFrontmatter": "frontmatter 未闭合。",
+        "invalidPackageName": "包名无效。",
+        "nameCollision": "运行时名称或别名重复，运行时胜出者未核实。",
+        "parityUnverified": "未提供实时快照，仅磁盘候选。"
       },
       "create": {
         "title": "新建代理 .md",
@@ -902,7 +936,11 @@
         "disabled": "无法创建：运行时身份尚未核实。",
         "invalid": "请填写名称、描述及非空 prompt。"
       },
-      "alsoIn": "另见于：{scopes}"
+      "alsoIn": "另见于：{scopes}",
+      "subtabs": {
+        "definitions": "自定义",
+        "packages": "扩展包"
+      }
     },
     "updates": "更新",
     "autoCompaction": "自动压缩",

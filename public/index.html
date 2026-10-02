@@ -1930,13 +1930,15 @@
                 Project
               </button>
             </div>
-            <p class="settings-help" data-i18n="settings.mcp.effectHint">
-              Changes apply to new sessions (or after /reload).
-            </p>
+            <p class="settings-help" id="mcp-tab-caption" aria-live="polite"></p>
             <div class="pkg-manager-layout">
               <div id="mcp-master" class="pkg-manager-groups"></div>
               <div id="mcp-detail" class="pkg-manager-detail" aria-live="polite"></div>
             </div>
+            <p class="settings-help" data-i18n="settings.mcp.effectHint">
+              Changes apply to new sessions (or after /reload).
+            </p>
+            <div id="mcp-migrations"></div>
           </div>
         </div>
 

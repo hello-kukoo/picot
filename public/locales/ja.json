@@ -812,7 +812,12 @@
         "env": "環境変数（1行に KEY=value、${VAR} プレースホルダーはそのまま）",
         "headers": "ヘッダー（1行に KEY=value）",
         "urlRequired": "リモート server には URL が必要です。",
-        "commandRequired": "stdio server にはコマンドが必要です。"
+        "commandRequired": "stdio server にはコマンドが必要です。",
+        "exposure": "ツール露出（exposure）",
+        "exposure_codemode": "デフォルト（codemode）",
+        "exposure_direct": "直接宣言（direct）",
+        "exposure_deferred": "検索ロード（deferred）",
+        "exposure_hidden": "非表示（hidden）"
       },
       "noProject": "プロジェクトの MCP サーバーはありません。ワークスペースを開くか、追加してください。",
       "sourceLabel": "ソース",
@@ -862,7 +867,7 @@
         "user": "ユーザー定義",
         "project": "プロジェクト定義",
         "package": "パッケージ",
-        "builtin": "組み込み（読み取り専用）"
+        "builtinExtension": "pi-subagents 組み込み拡張（読み取り専用）"
       },
       "status": {
         "candidate": "ディスク上の候補：有効な定義は未確認"
@@ -874,7 +879,7 @@
         "error": "読み込みに失敗しました。再試行してください。",
         "conflict": "ワークスペースまたは一覧が変更されました。再読み込みして再試行してください。"
       },
-      "retry": "再試行",
+      "rescan": "再スキャン",
       "detail": {
         "runtimeName": "実行時名",
         "source": "ソース",
@@ -891,7 +896,36 @@
         "rawLoading": "定義を読み込み中…",
         "rawUnavailable": "定義を表示できません。",
         "invalidModel": "provider/model 形式の ID を入力してください。",
-        "saved": "ディスクに保存しました。/subagents-models または /run で確認してください。"
+        "saved": "ディスクに保存しました。/subagents-models または /run で確認してください。",
+        "package": "パッケージ",
+        "noLayerOverride": "このレイヤーの上書きなし",
+        "keepCurrent": "現在の値を保持: {value}",
+        "thinkingFalse": "オフ(false)",
+        "thinkingHint": "実際に反映されるのは /subagents-models が対応しているレベルだけです。",
+        "writeLayer": "書き込み先: {scope} · 名前単位の上書き {runtimeName} · 定義ファイルは変更しません",
+        "writeLayerGlobal": "グローバル ~/.pi/agent/settings.json",
+        "writeLayerProject": "現在のプロジェクト {root}/.pi/settings.json",
+        "writeLayerProjectUnknown": "現在のプロジェクト .pi/settings.json"
+      },
+      "diagnostics": {
+        "scanBudget": "探索の上限に達しました。",
+        "scanUnreadableSource": "読み取れないソースディレクトリをスキップしました。",
+        "scanUnreadableEntry": "読み取れない項目をスキップしました。",
+        "symlinkOmitted": "シンボリックリンクのソースは除外しました。",
+        "invalidSettings": "settings が無効なため、探索は不完全です。",
+        "projectRootMismatch": "拡張のプロジェクトルートがワークスペースルートと異なるため、プロジェクトへの書き込みを無効にしました。",
+        "outOfScope": "範囲外のソースは未確認です。定義本文は読み取っていません。",
+        "builtinsDisabled": "設定で組み込みが無効化されています。実行時名は未確認です。",
+        "builtinsUnavailable": "インストール済み拡張の組み込みエージェントを利用できません。名前は不明です。",
+        "invalidManifest": "パッケージの manifest が無効です。",
+        "manifestOutsidePackageRoot": "manifest のエージェントパスがパッケージルートの外にあります。",
+        "definitionUnreadable": "定義を読み取れないか、サイズ超過、または有効な UTF-8 ではありません。",
+        "missingFrontmatter": "frontmatter がありません。",
+        "unsupportedFrontmatter": "未対応の frontmatter です。",
+        "unterminatedFrontmatter": "frontmatter が閉じられていません。",
+        "invalidPackageName": "パッケージ名が無効です。",
+        "nameCollision": "実行時名または別名が重複しています。有効な定義は未確認です。",
+        "parityUnverified": "ライブスナップショットがないため、ディスク上の候補のみです。"
       },
       "create": {
         "title": "新しいエージェント .md",
@@ -902,7 +936,11 @@
         "disabled": "作成不可：実行時の識別情報が未確認です。",
         "invalid": "名前、説明、空でないプロンプトを入力してください。"
       },
-      "alsoIn": "次にもあります：{scopes}"
+      "alsoIn": "次にもあります：{scopes}",
+      "subtabs": {
+        "definitions": "カスタム",
+        "packages": "パッケージ"
+      }
     },
     "updates": "アップデート",
     "autoCompaction": "自動コンパクト",

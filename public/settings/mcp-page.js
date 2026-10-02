@@ -42,6 +42,8 @@ export function setupMcpPage({
   // plain config list (no badges, no sign-in buttons).
   mcpLogin = null,
   openExternal = null,
+  captionEl = null,
+  migrationsEl = null,
 }) {
   /** @type {McpListData | null} */
   let data = null;
@@ -200,8 +202,17 @@ export function setupMcpPage({
 
   function render() {
     renderTabs();
+    renderCaption();
     renderMaster();
     renderDetail();
+  }
+
+  /** Tab-level caption outside the master list: scope label + entry count. */
+  function renderCaption() {
+    if (!data) return;
+    const entries = groupEntries();
+    const el = captionEl ?? document.getElementById("mcp-tab-caption");
+    if (el) el.textContent = `${scopeLabel(activeTab)} · ${entries.length}`;
   }
 
   function renderTabs() {
@@ -214,39 +225,9 @@ export function setupMcpPage({
 
   function renderMaster() {
     masterEl.replaceChildren();
+    (migrationsEl ?? document.getElementById("mcp-migrations"))?.replaceChildren();
     if (!data) return;
     const entries = groupEntries();
-
-    for (const target of data.migrations ?? []) {
-      const notice = document.createElement("div");
-      notice.className = "mcp-legacy-notice";
-      const text = document.createElement("span");
-      // Full path, not basename: adapter, shared, and native files all end
-      // in mcp.json / mcp-adapter.json, so the directory is the identifier.
-      text.textContent = t("settings.mcp.migrateNotice")
-        .replace("{file}", target.sourceFile)
-        .replace("{count}", String(target.missing.length));
-      const action = document.createElement("button");
-      action.type = "button";
-      action.className = "mcp-legacy-migrate";
-      action.textContent = t("settings.mcp.migrate");
-      // Disable on first click: the op is fast, but a double-fire would run
-      // twice; the re-render after load() replaces this button anyway.
-      action.addEventListener("click", () => {
-        action.disabled = true;
-        void migrate(target.id);
-      });
-      notice.append(text, action);
-      masterEl.appendChild(notice);
-    }
-
-    const head = document.createElement("div");
-    head.className = "mcp-master-head";
-    const count = document.createElement("span");
-    count.className = "pkg-manager-group-header";
-    count.textContent = `${scopeLabel(activeTab)} · ${entries.length}`;
-    head.appendChild(count);
-    masterEl.appendChild(head);
 
     if (statusError) {
       const note = document.createElement("div");
@@ -317,6 +298,31 @@ export function setupMcpPage({
       render();
     });
     masterEl.appendChild(add);
+
+    // Migration notices live OUTSIDE the master/detail layout entirely:
+    // migrating is the user's call and must not compete with the live view.
+    for (const target of data.migrations ?? []) {
+      const notice = document.createElement("div");
+      notice.className = "mcp-legacy-notice";
+      const text = document.createElement("span");
+      // Full path, not basename: adapter, shared, and native files all end
+      // in mcp.json / mcp-adapter.json, so the directory is the identifier.
+      text.textContent = t("settings.mcp.migrateNotice")
+        .replace("{file}", target.sourceFile)
+        .replace("{count}", String(target.missing.length));
+      const action = document.createElement("button");
+      action.type = "button";
+      action.className = "mcp-legacy-migrate";
+      action.textContent = t("settings.mcp.migrate");
+      // Disable on first click: the op is fast, but a double-fire would run
+      // twice; the re-render after load() replaces this button anyway.
+      action.addEventListener("click", () => {
+        action.disabled = true;
+        void migrate(target.id);
+      });
+      notice.append(text, action);
+      (migrationsEl ?? document.getElementById("mcp-migrations") ?? masterEl).appendChild(notice);
+    }
   }
 
   function basename(filePath) {
@@ -392,7 +398,13 @@ export function setupMcpPage({
     const state = live?.state ?? null;
     const untrustedProject = activeTab === "project" && !live;
     const canSignOut = isHttp && state === "connected";
-    const canSignIn = isHttp && item.enabled && state !== "connected" && state !== "disabled";
+    // Sign-in targets MCP OAuth only: pi must explicitly report
+    // `needs-auth`. An `error` or missing report (status query failed,
+    // headers-based auth) is not something `/mcp login` can fix, so no
+    // button — the error badge carries the detail instead. The one
+    // exception is an unreported project row: pi omits untrusted projects,
+    // so the disabled button explains why.
+    const canSignIn = isHttp && item.enabled && (state === "needs-auth" || untrustedProject);
     if (!canSignIn && !canSignOut) return null;
 
     const row = document.createElement("div");
@@ -664,6 +676,24 @@ export function setupMcpPage({
     }
     const headersRow = fieldRow(t("settings.mcp.form.headers"), headersInput);
 
+    // Exposure mirrors pi's own /mcp picker: codemode (default) / deferred /
+    // direct / hidden. Saving "codemode" omits the key, matching pi's
+    // updateMcpServerConfig (config.ts:145 deletes the default value).
+    const exposureSelect = document.createElement("select");
+    for (const value of ["codemode", "direct", "deferred", "hidden"]) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = t(`settings.mcp.form.exposure_${value}`);
+      exposureSelect.appendChild(opt);
+    }
+    exposureSelect.value =
+      existing?.exposure === "direct" ||
+      existing?.exposure === "deferred" ||
+      existing?.exposure === "hidden"
+        ? existing.exposure
+        : "codemode";
+    const exposureRow = fieldRow(t("settings.mcp.form.exposure"), exposureSelect);
+
     const syncTransport = () => {
       const remote = typeSelect.value === "remote";
       commandRow.classList.toggle("hidden", remote);
@@ -729,6 +759,8 @@ export function setupMcpPage({
         else delete entry.args;
         parseKeyValue(envInput.value, entry, "env");
       }
+      if (exposureSelect.value === "codemode") delete entry.exposure;
+      else entry.exposure = exposureSelect.value;
       const targetName = isEdit ? name : nameInput.value.trim();
       const result = await call("mcp_save_server", {
         scope,
@@ -743,7 +775,17 @@ export function setupMcpPage({
       } else setStatus(String(result.error ?? "save failed"));
     });
 
-    form.append(nameRow, typeRow, commandRow, urlRow, argsRow, envRow, headersRow, actions);
+    form.append(
+      nameRow,
+      typeRow,
+      commandRow,
+      urlRow,
+      argsRow,
+      envRow,
+      headersRow,
+      exposureRow,
+      actions,
+    );
     return form;
   }
 

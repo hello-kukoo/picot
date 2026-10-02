@@ -63,6 +63,11 @@ setMessages({
         headers: "Headers",
         urlRequired: "url required",
         commandRequired: "command required",
+        exposure: "Tool exposure",
+        exposure_codemode: "Default (codemode, via script search)",
+        exposure_direct: "Direct",
+        exposure_deferred: "Deferred (tool search)",
+        exposure_hidden: "Hidden",
       },
     },
   },
@@ -126,15 +131,19 @@ function mount(gateway, extra = {}) {
   }
   const navItem = document.createElement("button");
   navItem.className = "hidden";
+  const captionEl = document.createElement("p");
+  const migrationsEl = document.createElement("div");
   const page = setupMcpPage({
     masterEl,
     detailEl,
     tabs: tabs.querySelectorAll("[data-mcp-tab]"),
     navItem,
     configGateway: gateway,
+    captionEl,
+    migrationsEl,
     ...extra,
   });
-  return { page, masterEl, detailEl, tabs, navItem };
+  return { page, masterEl, detailEl, tabs, navItem, captionEl, migrationsEl };
 }
 
 function clickRow(masterEl, name) {
@@ -202,6 +211,13 @@ const LIST_OAUTH = {
         {
           name: "flaky",
           entry: { url: "https://mcp.flaky/mcp" },
+          sourceFile: "/home/u/.pi/agent/mcp.json",
+          editable: true,
+          enabled: true,
+        },
+        {
+          name: "ghost",
+          entry: { url: "https://mcp.ghost/mcp" },
           sourceFile: "/home/u/.pi/agent/mcp.json",
           editable: true,
           enabled: true,
@@ -323,6 +339,36 @@ describe("mcp-page", () => {
     expect(payload.entry.futureField).toEqual({ a: 1 }); // unknown keys preserved
   });
 
+  it("exposure select defaults to codemode and round-trips the choice", async () => {
+    const gateway = makeGateway(LIST);
+    const { page, masterEl, detailEl } = mount(gateway);
+    await page.activate();
+    clickRow(masterEl, "context7"); // no exposure in config
+    const form = detailEl.querySelector(".mcp-form");
+    const exposure = Array.from(form.querySelectorAll("select")).at(-1);
+    expect(exposure.value).toBe("codemode");
+    form.dispatchEvent(new Event("submit"));
+    await vi.waitFor(() =>
+      expect(gateway.call).toHaveBeenCalledWith("mcp_save_server", expect.anything()),
+    );
+    const payload = gateway.call.mock.calls.find((c) => c[0] === "mcp_save_server")[1];
+    expect("exposure" in payload.entry).toBe(false); // default stays omitted
+
+    exposure.value = "direct";
+    form.dispatchEvent(new Event("submit"));
+    await vi.waitFor(() => {
+      const saves = gateway.call.mock.calls.filter((c) => c[0] === "mcp_save_server");
+      expect(saves.at(-1)[1].entry.exposure).toBe("direct");
+    });
+
+    exposure.value = "codemode";
+    form.dispatchEvent(new Event("submit"));
+    await vi.waitFor(() => {
+      const saves = gateway.call.mock.calls.filter((c) => c[0] === "mcp_save_server");
+      expect("exposure" in saves.at(-1)[1].entry).toBe(false); // back to default removes the key
+    });
+  });
+
   it("detail: exactly one switch at the top; clicking sends scope+name+disable", async () => {
     const gateway = makeGateway(LIST);
     const { page, masterEl, detailEl } = mount(gateway);
@@ -378,11 +424,13 @@ describe("mcp-page", () => {
       .mockResolvedValueOnce(withMigrations) // activate() load
       .mockResolvedValueOnce({ ok: true, data: { migrated: ["zread"], skipped: [], lossy: [] } })
       .mockResolvedValueOnce(afterMigrate); // reload after migrate
-    const { page, masterEl } = mount({ call });
+    const { page, masterEl, migrationsEl } = mount({ call });
 
     await page.activate();
-    const banners = masterEl.querySelectorAll(".mcp-legacy-notice");
+    const banners = migrationsEl.querySelectorAll(".mcp-legacy-notice");
     expect(banners.length).toBe(2);
+    // Notices live OUTSIDE the master list entirely (below the layout).
+    expect(masterEl.querySelector(".mcp-legacy-notice")).toBeNull();
     expect(banners[0].textContent).toContain("mcp-adapter.json");
     expect(banners[0].textContent).toContain("1"); // missing count
     expect(banners[1].textContent).toContain(".agents/mcp.json");
@@ -397,7 +445,7 @@ describe("mcp-page", () => {
       "mcp_list_servers",
     ]);
     expect(call.mock.calls[1][1]).toEqual({ target: "adapterGlobal" });
-    expect(masterEl.querySelectorAll(".mcp-legacy-notice").length).toBe(0);
+    expect(migrationsEl.querySelectorAll(".mcp-legacy-notice").length).toBe(0);
   });
 
   it("save and delete share one action row in the edit form; add has no delete", async () => {
@@ -479,6 +527,28 @@ describe("mcp-page", () => {
       // Config-disabled rows keep a disabled badge and no sign-in affordance.
       clickRow(masterEl, "paused");
       expect(detailEl.querySelector('[data-action="mcp-login"]')).toBeNull();
+
+      // An `error` row cannot be fixed by `/mcp login` (headers auth, env
+      // problems): no sign-in promise, the error badge carries the detail.
+      clickRow(masterEl, "flaky");
+      expect(detailEl.querySelector('[data-action="mcp-login"]')).toBeNull();
+
+      // No live report at all (status query failed / server not listed):
+      // no button either — the row stays a plain config entry.
+      clickRow(masterEl, "ghost");
+      expect(detailEl.querySelector('[data-action="mcp-login"]')).toBeNull();
+    });
+
+    it("renders the tab caption outside the master list and follows tab switches", async () => {
+      const { masterEl, captionEl, tabs } = await mountWithStatus();
+      const groupCount = LIST_OAUTH.data.groups.piGlobal.length;
+      expect(captionEl.textContent).toBe(`User (global) · ${groupCount}`);
+      // The caption lives outside the master list; the list itself starts
+      // with a row, not the scope header.
+      expect(masterEl.textContent).not.toContain(`User (global) · ${groupCount}`);
+
+      clickTab(tabs, "project");
+      expect(captionEl.textContent).toBe(`Project · ${LIST_OAUTH.data.groups.project.length}`);
     });
 
     it("offers sign-out only for connected http rows", async () => {

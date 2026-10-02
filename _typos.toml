@@ -1,0 +1,52 @@
+# Project typos allowlist — takes precedence over pi-lens's bundled default
+# (pi-lens injects its config only when no project-owned typos config exists).
+#
+# All entries are correct Spanish from public/locales/es.json: the checker's
+# English dictionary flags them as misspellings of English words
+# (`Historial`→`Historical`, `ser`→`set`, `Tema`→`Team`). Exact identifiers
+# only, per the bundled config's discipline — no `extend-words`.
+
+[default.extend-identifiers]
+# UI nouns
+Alternar = "Alternar"
+Historial = "Historial"
+historial = "historial"
+Comandos = "Comandos"
+comandos = "comandos"
+Comando = "Comando"
+comando = "comando"
+Argumentos = "Argumentos"
+argumentos = "argumentos"
+Extensiones = "Extensiones"
+extensiones = "extensiones"
+directorio = "directorio"
+directorios = "directorios"
+controles = "controles"
+terminales = "terminales"
+versiones = "versiones"
+Secretos = "Secretos"
+editores = "editores"
+inventario = "inventario"
+manifiesto = "manifiesto"
+problemas = "problemas"
+principales = "principales"
+Tema = "Tema"
+tema = "tema"
+informe = "informe"
+curso = "curso"
+momento = "momento"
+credencial = "credencial"
+# Verbs / verb forms
+requiere = "requiere"
+Requiere = "Requiere"
+termine = "termine"
+Confirmas = "Confirmas"
+importan = "importan"
+ignora = "ignora"
+ser = "ser"
+Hace = "Hace"
+hace = "hace"
+# Adjectives / others
+posible = "posible"
+accesible = "accesible"
+fiel = "fiel"

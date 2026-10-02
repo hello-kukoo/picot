@@ -812,7 +812,12 @@
         "env": "Environment (KEY=value per line, ${VAR} placeholders kept as-is)",
         "headers": "Headers (KEY=value per line)",
         "urlRequired": "URL is required for remote servers.",
-        "commandRequired": "Command is required for stdio servers."
+        "commandRequired": "Command is required for stdio servers.",
+        "exposure": "Tool exposure",
+        "exposure_codemode": "Default (codemode, via script search)",
+        "exposure_direct": "Direct",
+        "exposure_deferred": "Deferred (tool search)",
+        "exposure_hidden": "Hidden"
       },
       "noProject": "No project MCP servers. Open a workspace, or add one.",
       "sourceLabel": "Source",
@@ -862,7 +867,7 @@
         "user": "Your definitions",
         "project": "Project definitions",
         "package": "Packages",
-        "builtin": "Built-in (read-only)"
+        "builtinExtension": "pi-subagents built-in extension (read-only)"
       },
       "status": {
         "candidate": "Disk candidate — runtime winner unverified"
@@ -874,7 +879,7 @@
         "error": "Failed to load subagents. Retry.",
         "conflict": "Workspace or inventory changed. Refresh and retry."
       },
-      "retry": "Retry",
+      "rescan": "Rescan",
       "detail": {
         "runtimeName": "Runtime name",
         "source": "Source",
@@ -891,7 +896,36 @@
         "rawLoading": "Loading definition…",
         "rawUnavailable": "Definition unavailable.",
         "invalidModel": "Use a provider/model ID.",
-        "saved": "Saved to disk. Reload or start a new session; verify with /subagents-models or /run."
+        "saved": "Saved to disk. Reload or start a new session; verify with /subagents-models or /run.",
+        "package": "Package",
+        "noLayerOverride": "No override in this layer",
+        "keepCurrent": "Keep current: {value}",
+        "thinkingFalse": "Off (false)",
+        "thinkingHint": "Only levels /subagents-models actually supports take effect.",
+        "writeLayer": "Write layer: {scope} · name-level override {runtimeName} · definition files are unchanged",
+        "writeLayerGlobal": "Global ~/.pi/agent/settings.json",
+        "writeLayerProject": "Current project {root}/.pi/settings.json",
+        "writeLayerProjectUnknown": "Current project .pi/settings.json"
+      },
+      "diagnostics": {
+        "scanBudget": "Discovery budget exhausted.",
+        "scanUnreadableSource": "Unreadable source directory skipped.",
+        "scanUnreadableEntry": "Unreadable entry skipped.",
+        "symlinkOmitted": "Symlinked source omitted.",
+        "invalidSettings": "Invalid settings; discovery incomplete.",
+        "projectRootMismatch": "Extension project root differs from the workspace root; project writes disabled.",
+        "outOfScope": "Out-of-scope occupancy not verified; no definition body read.",
+        "builtinsDisabled": "Built-ins disabled by settings; runtime names unverified.",
+        "builtinsUnavailable": "Installed extension built-ins unavailable; names unknown.",
+        "invalidManifest": "Invalid package manifest.",
+        "manifestOutsidePackageRoot": "Manifest agent path outside the package root.",
+        "definitionUnreadable": "Definition unreadable, oversized, or not valid UTF-8.",
+        "missingFrontmatter": "Missing frontmatter.",
+        "unsupportedFrontmatter": "Unsupported frontmatter.",
+        "unterminatedFrontmatter": "Unterminated frontmatter.",
+        "invalidPackageName": "Invalid package name.",
+        "nameCollision": "Duplicate runtime name or alias; runtime winner unverified.",
+        "parityUnverified": "No live snapshot supplied; disk candidates only."
       },
       "create": {
         "title": "New agent .md",
@@ -902,7 +936,11 @@
         "disabled": "Creation unavailable: runtime identity unverified.",
         "invalid": "Enter a name, description, and nonempty prompt."
       },
-      "alsoIn": "Also available in: {scopes}"
+      "alsoIn": "Also available in: {scopes}",
+      "subtabs": {
+        "definitions": "Custom",
+        "packages": "Packages"
+      }
     },
     "updates": "Updates",
     "autoCompaction": "Auto-compaction",
