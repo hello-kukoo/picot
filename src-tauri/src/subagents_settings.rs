@@ -70,7 +70,7 @@ impl SubagentsError {
                 "Agent inventory changed; refresh, reconfirm, and retry".into()
             }
             Self::WriteEligibilityUnknown => {
-                "Live winner or out-of-scope occupancy unverified; writes refused".into()
+                "In-scope discovery incomplete or candidate disabled; write refused".into()
             }
             Self::InvalidDefinition(reason) => format!("Invalid override payload: {reason}"),
             Self::ConfigBusy => "Settings are locked by another writer; retry shortly".into(),
@@ -179,7 +179,7 @@ pub fn authorize_scope(
 }
 
 /// Parity evidence from the checked-in spike (scripts/subagents-parity-spike.mjs).
-/// Current verdict: disk-candidates-only — no winner assertion, no write grants.
+/// Current verdict: disk-candidates-only — no winner assertion; scoped name writes allowed.
 fn parity_evidence() -> subagents_inventory::ParityEvidence {
     subagents_inventory::ParityEvidence::default()
 }
@@ -266,32 +266,45 @@ fn validate_thinking_value(value: &Value) -> Result<(), String> {
     }
 }
 
-/// Pure settings-tree edit for one runtime name's model/thinking override.
+fn validate_override_actions(actions: [(&str, &Value); 4]) -> Result<(), String> {
+    for (field, action) in actions {
+        if op_kind(action)? == "set" {
+            let selected = action.get("value").unwrap_or(&Value::Null);
+            match field {
+                "model" => validate_model_value(selected)?,
+                "thinking" => validate_thinking_value(selected)?,
+                _ if !selected.is_boolean() => {
+                    return Err(format!("{field} value must be a boolean"))
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Pure settings-tree edit for one runtime name's four supported overrides.
 /// `keep` never touches the field (preserving `false`, `"inherit"`, and
 /// unknown fields); fully-empty entries and layers are pruned, everything
 /// else survives untouched.
-pub fn apply_override_edit(
+pub fn apply_override_edit_four(
     value: &mut Value,
     runtime_name: &str,
     model: &Value,
     thinking: &Value,
+    advertise: &Value,
+    disabled: &Value,
 ) -> Result<(), String> {
     if runtime_name.is_empty() || runtime_name.contains('/') || runtime_name.contains('\\') {
         return Err("runtimeName must be a single path-free segment".into());
     }
-    let model_op = op_kind(model)?;
-    let thinking_op = op_kind(thinking)?;
-    let model_set = model.get("value").cloned().filter(|_| model_op == "set");
-    let thinking_set = thinking
-        .get("value")
-        .cloned()
-        .filter(|_| thinking_op == "set");
-    if let Some(model_value) = &model_set {
-        validate_model_value(model_value)?;
-    }
-    if let Some(thinking_value) = &thinking_set {
-        validate_thinking_value(thinking_value)?;
-    }
+    let actions = [
+        ("model", model),
+        ("thinking", thinking),
+        ("advertise", advertise),
+        ("disabled", disabled),
+    ];
+    validate_override_actions(actions)?;
     let root = value
         .as_object_mut()
         .ok_or_else(|| "settings must be an object".to_string())?;
@@ -311,23 +324,16 @@ pub fn apply_override_edit(
     let entry_map = entry
         .as_object_mut()
         .ok_or_else(|| "existing override entry is not an object".to_string())?;
-    match model_op {
-        "set" => {
-            entry_map.insert("model".into(), model_set.unwrap_or(Value::Null));
+    for (field, action) in actions {
+        match action["op"].as_str() {
+            Some("set") => {
+                entry_map.insert(field.into(), action["value"].clone());
+            }
+            Some("clear") => {
+                entry_map.remove(field);
+            }
+            _ => {}
         }
-        "clear" => {
-            entry_map.remove("model");
-        }
-        _ => {}
-    }
-    match thinking_op {
-        "set" => {
-            entry_map.insert("thinking".into(), thinking_set.unwrap_or(Value::Null));
-        }
-        "clear" => {
-            entry_map.remove("thinking");
-        }
-        _ => {}
     }
     if entry_map.is_empty() {
         overrides_map.remove(runtime_name);
@@ -339,6 +345,17 @@ pub fn apply_override_edit(
         root.remove("subagents");
     }
     Ok(())
+}
+
+#[cfg(test)]
+pub fn apply_override_edit(
+    value: &mut Value,
+    runtime_name: &str,
+    model: &Value,
+    thinking: &Value,
+) -> Result<(), String> {
+    let keep = json!({"op": "keep"});
+    apply_override_edit_four(value, runtime_name, model, thinking, &keep, &keep)
 }
 
 fn map_config_error(error: crate::host_config::ConfigError) -> SubagentsError {
@@ -368,10 +385,7 @@ fn fresh_inventory(
         .map_err(SubagentsError::ConfigUnavailable)
 }
 
-/// Name-level write-qualification: a candidate is only writable when it is
-/// the sole occupant of its runtime name (aliases included) AND its
-/// per-name qualification flag is set. Under disk-candidates-only parity the
-/// flag is never set, so every name-level write is refused here or earlier.
+/// Recheck current disk-snapshot qualification; never trust a caller-supplied flag.
 fn write_gate(
     fresh: &Inventory,
     candidate: &crate::subagents_inventory::Candidate,
@@ -384,19 +398,7 @@ fn write_gate(
     {
         return Err(SubagentsError::ExternalRunner);
     }
-    let shadowed = fresh.entries.iter().any(|other| {
-        other.id != candidate.id
-            && (other.runtime_name == candidate.runtime_name
-                || other
-                    .aliases
-                    .iter()
-                    .any(|alias| alias == &candidate.runtime_name)
-                || candidate
-                    .aliases
-                    .iter()
-                    .any(|alias| alias == &other.runtime_name))
-    });
-    if shadowed {
+    if subagents_inventory::collision(&fresh.entries, candidate).is_some() {
         return Err(SubagentsError::ShadowedCandidate);
     }
     if !candidate.write_qualified {
@@ -439,14 +441,36 @@ pub fn set_override(
         .get("thinking")
         .cloned()
         .ok_or_else(|| SubagentsError::InvalidDefinition("thinking action is required".into()))?;
+    let advertise = args
+        .get("advertise")
+        .cloned()
+        .ok_or_else(|| SubagentsError::InvalidDefinition("advertise action is required".into()))?;
+    let disabled = args
+        .get("disabled")
+        .cloned()
+        .ok_or_else(|| SubagentsError::InvalidDefinition("disabled action is required".into()))?;
+    validate_override_actions([
+        ("model", &model),
+        ("thinking", &thinking),
+        ("advertise", &advertise),
+        ("disabled", &disabled),
+    ])
+    .map_err(SubagentsError::InvalidDefinition)?;
     let runtime_name = candidate.runtime_name.clone();
     let revision = crate::host_config::update_json_locked(
         &settings_path,
         &lock_root,
         &expected_revision,
         |value| {
-            apply_override_edit(value, &runtime_name, &model, &thinking)
-                .map_err(crate::host_config::ConfigError::Io)
+            apply_override_edit_four(
+                value,
+                &runtime_name,
+                &model,
+                &thinking,
+                &advertise,
+                &disabled,
+            )
+            .map_err(crate::host_config::ConfigError::Io)
         },
     )
     .map_err(map_config_error)?;
@@ -1059,6 +1083,7 @@ mod tests {
                 "candidateId": candidate_id,
                 "model": {"op": "set", "value": "provider/model"},
                 "thinking": {"op": "keep"},
+                "advertise": {"op": "keep"}, "disabled": {"op": "keep"},
                 "expectedRevision": "any",
             })
         };
@@ -1077,11 +1102,34 @@ mod tests {
                 .id
                 .clone()
         };
+        let loser = inventory
+            .entries
+            .iter()
+            .find(|entry| entry.runtime_name == "project-agent" && entry.source == "user")
+            .unwrap();
         assert_eq!(
-            set_override(&args(&find("project-agent")), &snapshot, &fx.agent_root)
+            set_override(&args(&loser.id), &snapshot, &fx.agent_root)
                 .unwrap_err()
                 .code(),
             "shadowed_candidate"
+        );
+        assert_eq!(
+            set_override(
+                &args(
+                    &inventory
+                        .entries
+                        .iter()
+                        .find(|entry| entry.runtime_name == "project-agent"
+                            && entry.source == "project")
+                        .unwrap()
+                        .id
+                ),
+                &snapshot,
+                &fx.agent_root
+            )
+            .unwrap_err()
+            .code(),
+            "revision_conflict"
         );
         assert_eq!(
             set_override(&args(&find("external-agent")), &snapshot, &fx.agent_root)
@@ -1089,13 +1137,13 @@ mod tests {
                 .code(),
             "external_runner"
         );
-        // Sole occupant, native runner: still refused by the qualification gate.
+        // Sole occupant, native runner: stale revision still refuses.
         fs::remove_file(fx.agent_root.join("agents/twin.md")).unwrap();
         assert_eq!(
             set_override(&args(&find("global-agent")), &snapshot, &fx.agent_root)
                 .unwrap_err()
                 .code(),
-            "write_eligibility_unknown"
+            "revision_conflict"
         );
         // Stale candidate ID.
         assert_eq!(
@@ -1111,6 +1159,7 @@ mod tests {
             "scope": "project", "workspaceId": "w2", "workspaceGeneration": 5,
             "candidateId": find("global-agent"),
             "model": {"op": "keep"}, "thinking": {"op": "keep"},
+            "advertise": {"op": "keep"}, "disabled": {"op": "keep"},
             "expectedRevision": "any",
         });
         // Register the nested dir as the workspace: .pi lives at the parent,
@@ -1121,16 +1170,7 @@ mod tests {
             generation: 5,
         };
         let error = set_override(&mismatch_args, &mismatched_snapshot, &fx.agent_root).unwrap_err();
-        assert!(
-            error.code() == "project_root_mismatch" || error.code() == "write_eligibility_unknown",
-            "unexpected code {}",
-            error.code()
-        );
-        if error.code() == "write_eligibility_unknown" {
-            // The nested dir has no .pi of its own and the parent root still
-            // matches (nearest ancestor with .pi is the workspace), so the
-            // mismatch check legitimately cannot fire; the gate still refuses.
-        }
+        assert_eq!(error.code(), "project_root_mismatch");
         // Refused writes never touched any definition bytes.
         assert_eq!(
             fs::read_to_string(fx.workspace.join(".pi/agents/project-agent.md")).unwrap(),
@@ -1146,24 +1186,92 @@ mod tests {
     }
 
     #[test]
+    fn override_precedence_winner_passes_fresh_write_gate() {
+        let fx = make_fixture();
+        fs::write(
+            fx.agent_root.join("agents/duplicate.md"),
+            "---\nname: project-agent\ndescription: User\n---\nbody",
+        )
+        .unwrap();
+        let owner = registered(&fx, "w1", 3);
+        let args = json!({"scope":"project","workspaceId":"w1","workspaceGeneration":3});
+        let inv = handle_inventory(&args, &owner, &fx.agent_root).unwrap();
+        let winner = inv
+            .entries
+            .iter()
+            .find(|e| e.runtime_name == "project-agent" && e.source == "project")
+            .unwrap();
+        let loser = inv
+            .entries
+            .iter()
+            .find(|e| e.runtime_name == "project-agent" && e.source == "user")
+            .unwrap();
+        assert_eq!(
+            write_gate(&inv, loser),
+            Err(SubagentsError::ShadowedCandidate)
+        );
+        assert_eq!(write_gate(&inv, winner), Ok(()));
+        let response = set_override(
+            &json!({
+                "scope":"project", "workspaceId":"w1", "workspaceGeneration":3,
+                "candidateId":winner.id, "expectedRevision":winner.settings_revision,
+                "model":{"op":"set","value":"provider/winner"}, "thinking":{"op":"keep"},
+                "advertise":{"op":"set","value":false}, "disabled":{"op":"set","value":false}
+            }),
+            &owner,
+            &fx.agent_root,
+        )
+        .unwrap();
+        assert_eq!(
+            response["inventory"]["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["id"] == winner.id)
+                .unwrap()["savedOverride"]["model"],
+            "provider/winner"
+        );
+        let saved = &response["inventory"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["id"] == winner.id)
+            .unwrap()["savedOverride"];
+        assert_eq!(saved["advertise"], false);
+        assert_eq!(saved["disabled"], false);
+        assert_eq!(
+            serde_json::from_slice::<Value>(
+                &fs::read(fx.workspace.join(".pi/settings.json")).unwrap()
+            )
+            .unwrap()["subagents"]["agentOverrides"]["project-agent"]["model"],
+            "provider/winner"
+        );
+    }
+
+    #[test]
     fn apply_override_edit_validates_ops_and_values() {
         let mut settings = json!({});
+        let keep = json!({"op": "keep"});
         // Bad op.
-        assert!(apply_override_edit(
+        assert!(apply_override_edit_four(
             &mut settings,
             "a.b",
             &json!({"op": "nonsense"}),
-            &json!({"op": "keep"}),
+            &keep,
+            &keep,
+            &keep,
         )
         .is_err());
         // Bad model ids: empty, whitespace, missing provider segment.
         for bad in ["", "has space/x", "noprovider", "p/m\u{0000}"] {
             assert!(
-                apply_override_edit(
+                apply_override_edit_four(
                     &mut settings,
                     "a.b",
                     &json!({"op": "set", "value": bad}),
-                    &json!({"op": "keep"}),
+                    &keep,
+                    &keep,
+                    &keep,
                 )
                 .is_err(),
                 "model {bad:?} must reject"
@@ -1172,11 +1280,13 @@ mod tests {
         // Bad thinking values.
         for bad in [json!(true), json!("sometimes"), json!(5)] {
             assert!(
-                apply_override_edit(
+                apply_override_edit_four(
                     &mut settings,
                     "a.b",
-                    &json!({"op": "keep"}),
+                    &keep,
                     &json!({"op": "set", "value": bad}),
+                    &keep,
+                    &keep,
                 )
                 .is_err(),
                 "thinking {bad} must reject"
@@ -1193,11 +1303,13 @@ mod tests {
             json!("xhigh"),
             json!("max"),
         ] {
-            apply_override_edit(
+            apply_override_edit_four(
                 &mut settings,
                 "a.b",
-                &json!({"op": "keep"}),
+                &keep,
                 &json!({"op": "set", "value": good}),
+                &keep,
+                &keep,
             )
             .unwrap();
         }
@@ -1206,13 +1318,143 @@ mod tests {
             json!("max")
         );
         // runtimeName must be path-free.
-        assert!(apply_override_edit(
-            &mut settings,
-            "a/../b",
-            &json!({"op": "keep"}),
-            &json!({"op": "keep"}),
+        assert!(
+            apply_override_edit_four(&mut settings, "a/../b", &keep, &keep, &keep, &keep,).is_err()
+        );
+    }
+
+    #[test]
+    fn override_four_fields_set_keep_clear_and_preserve_unknown() {
+        let mut settings = json!({"other": 7, "subagents": {"agentOverrides": {
+            "agent": {"other": "untouched"}
+        }}});
+        let keep = json!({"op": "keep"});
+        let fields = [
+            ("model", json!("provider/model")),
+            ("thinking", json!(false)),
+            ("advertise", json!(false)),
+            ("disabled", json!(true)),
+        ];
+        for (index, (field, expected)) in fields.iter().enumerate() {
+            let mut actions = [keep.clone(), keep.clone(), keep.clone(), keep.clone()];
+            actions[index] = json!({"op": "set", "value": expected});
+            apply_override_edit_four(
+                &mut settings,
+                "agent",
+                &actions[0],
+                &actions[1],
+                &actions[2],
+                &actions[3],
+            )
+            .unwrap();
+            assert_eq!(
+                settings["subagents"]["agentOverrides"]["agent"][field], *expected,
+                "set {field}"
+            );
+            actions[index] = keep.clone();
+            apply_override_edit_four(
+                &mut settings,
+                "agent",
+                &actions[0],
+                &actions[1],
+                &actions[2],
+                &actions[3],
+            )
+            .unwrap();
+            assert_eq!(
+                settings["subagents"]["agentOverrides"]["agent"][field], *expected,
+                "keep {field}"
+            );
+            actions[index] = json!({"op": "clear"});
+            apply_override_edit_four(
+                &mut settings,
+                "agent",
+                &actions[0],
+                &actions[1],
+                &actions[2],
+                &actions[3],
+            )
+            .unwrap();
+            assert!(
+                settings["subagents"]["agentOverrides"]["agent"]
+                    .get(field)
+                    .is_none(),
+                "clear {field}"
+            );
+        }
+        assert_eq!(
+            settings,
+            json!({"other": 7, "subagents": {"agentOverrides": {
+                "agent": {"other": "untouched"}
+            }}})
+        );
+        let mut empty = json!({});
+        apply_override_edit_four(
+            &mut empty,
+            "agent",
+            &json!({"op":"set","value":"provider/model"}),
+            &json!({"op":"set","value":"high"}),
+            &json!({"op":"set","value":true}),
+            &json!({"op":"set","value":false}),
         )
-        .is_err());
+        .unwrap();
+        assert_eq!(
+            empty["subagents"]["agentOverrides"]["agent"],
+            json!({"model":"provider/model","thinking":"high","advertise":true,"disabled":false})
+        );
+        let clear = json!({"op":"clear"});
+        apply_override_edit_four(&mut empty, "agent", &clear, &clear, &clear, &clear).unwrap();
+        assert_eq!(
+            empty,
+            json!({}),
+            "all four fields clear prunes empty layers"
+        );
+    }
+
+    #[test]
+    fn override_boolean_actions_reject_non_boolean_without_writing() {
+        let fx = make_fixture();
+        let inv = handle_inventory(&json!({"scope":"global"}), &landing(), &fx.agent_root).unwrap();
+        let candidate = &inv.entries[0];
+        let settings_path = fx.agent_root.join("settings.json");
+        let valid = json!({
+            "scope":"global", "candidateId":candidate.id, "expectedRevision":candidate.settings_revision,
+            "model":{"op":"keep"}, "thinking":{"op":"keep"},
+            "advertise":{"op":"keep"}, "disabled":{"op":"keep"}
+        });
+        for field in ["advertise", "disabled"] {
+            for bad in [json!("true"), json!(1), Value::Null] {
+                let mut args = valid.clone();
+                args[field] = json!({"op":"set", "value":bad});
+                assert_eq!(
+                    set_override(&args, &landing(), &fx.agent_root)
+                        .unwrap_err()
+                        .code(),
+                    "invalid_definition",
+                    "{field}={bad}"
+                );
+                assert!(!settings_path.exists());
+            }
+            let mut missing_value = valid.clone();
+            missing_value[field] = json!({"op":"set"});
+            assert_eq!(
+                set_override(&missing_value, &landing(), &fx.agent_root)
+                    .unwrap_err()
+                    .code(),
+                "invalid_definition",
+                "{field} missing value"
+            );
+            let mut missing_action = valid.clone();
+            missing_action.as_object_mut().unwrap().remove(field);
+            assert_eq!(
+                set_override(&missing_action, &landing(), &fx.agent_root)
+                    .unwrap_err()
+                    .code(),
+                "invalid_definition",
+                "{field} missing action"
+            );
+            assert!(!settings_path.exists());
+        }
     }
 
     #[test]
@@ -1288,6 +1530,7 @@ mod tests {
             "candidateId": candidate_id, "runtimeName": "global-agent",
             "model": {"op": "set", "value": "provider/model"},
             "thinking": {"op": "keep"},
+            "advertise": {"op": "keep"}, "disabled": {"op": "keep"},
         });
         assert_eq!(
             handle(
@@ -1298,7 +1541,7 @@ mod tests {
             )
             .unwrap_err()
             .code(),
-            "write_eligibility_unknown"
+            "revision_conflict"
         );
         let create_args = json!({
             "scope": "global", "name": "x", "description": "d", "prompt": "p",
@@ -1345,6 +1588,225 @@ mod tests {
             "unknown_operation"
         );
         let _ = OwnerId::from_string("unused".into());
+    }
+
+    #[test]
+    fn override_cross_layer_and_package_preserves_definition_bytes() {
+        let fx = make_fixture();
+        let shared = fx.root.join("shared");
+        fs::create_dir_all(shared.join("agents")).unwrap();
+        fs::write(
+            shared.join("package.json"),
+            r#"{"name":"shared","pi-subagents":{"agents":["agents"]}}"#,
+        )
+        .unwrap();
+        let package_file = shared.join("agents/worker.md");
+        fs::write(
+            &package_file,
+            "---\nname: worker\ndescription: D\nmodel: frontmatter/model\n---\nPROMPT",
+        )
+        .unwrap();
+        let global_file = fx.agent_root.join("agents/global-agent.md");
+        let original_global_file = fs::read(&global_file).unwrap();
+        let original_package_file = fs::read(&package_file).unwrap();
+        let user_settings = json!({"packages":["file:../shared"], "subagents":{"agentOverrides":{
+            "worker":{"model":"user/model","thinking":"low","other":"keep"},
+            "global-agent":{"model":"user/old"}
+        }}, "unrelated": 7});
+        fs::write(
+            fx.agent_root.join("settings.json"),
+            user_settings.to_string(),
+        )
+        .unwrap();
+        let global_bytes = fs::read(fx.agent_root.join("settings.json")).unwrap();
+        fs::write(fx.workspace.join(".pi/settings.json"), json!({"packages":["file:../../shared"], "subagents":{"agentOverrides":{"worker":{"thinking":"high","other":"project"}}}}).to_string()).unwrap();
+        let snapshot = registered(&fx, "w1", 3);
+        let project_args = json!({"scope":"project","workspaceId":"w1","workspaceGeneration":3});
+        assert!(
+            handle_inventory(&project_args, &snapshot, &fx.agent_root)
+                .unwrap()
+                .entries
+                .iter()
+                .find(|e| e.runtime_name == "project-agent")
+                .unwrap()
+                .write_qualified
+        );
+        for name in ["global-agent", "worker"] {
+            let inventory = handle_inventory(&project_args, &snapshot, &fx.agent_root).unwrap();
+            let entry = inventory
+                .entries
+                .iter()
+                .find(|e| e.runtime_name == name)
+                .unwrap();
+            assert!(
+                entry.write_qualified,
+                "{name}: {:?}",
+                entry.write_diagnostic
+            );
+            assert_eq!(
+                entry.settings_revision,
+                inventory.settings_revisions["project"]
+            );
+            if name == "worker" {
+                assert_eq!(entry.source, "package");
+                assert_eq!(entry.saved_override["thinking"], "high");
+                assert_eq!(entry.saved_override["model"], Value::Null);
+            } else {
+                assert_eq!(entry.source_scope, "global");
+                assert_eq!(entry.saved_override, json!({}));
+            }
+            let output = set_override(
+                &json!({
+                    "scope":"project", "workspaceId":"w1", "workspaceGeneration":3,
+                    "candidateId":entry.id, "expectedRevision":entry.settings_revision,
+                    "model":{"op":"set","value":"project/new"}, "thinking":{"op":"keep"},
+                    "advertise":{"op":"keep"}, "disabled":{"op":"keep"}
+                }),
+                &snapshot,
+                &fx.agent_root,
+            )
+            .unwrap();
+            assert_eq!(
+                output["revision"],
+                output["inventory"]["settingsRevisions"]["project"]
+            );
+            let echoed = output["inventory"]["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["runtimeName"] == name)
+                .unwrap();
+            assert_eq!(echoed["savedOverride"]["model"], "project/new");
+        }
+        let project: Value =
+            serde_json::from_slice(&fs::read(fx.workspace.join(".pi/settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            project["subagents"]["agentOverrides"]["worker"],
+            json!({"model":"project/new","thinking":"high","other":"project"})
+        );
+        assert_eq!(
+            project["subagents"]["agentOverrides"]["global-agent"]["model"],
+            "project/new"
+        );
+        assert_eq!(
+            fs::read(fx.agent_root.join("settings.json")).unwrap(),
+            global_bytes
+        );
+        assert_eq!(fs::read(&global_file).unwrap(), original_global_file);
+        assert_eq!(fs::read(&package_file).unwrap(), original_package_file);
+        assert!(String::from_utf8(original_package_file.clone())
+            .unwrap()
+            .contains("model: frontmatter/model"));
+        // Global projection of same package sees user layer instead.
+        let global =
+            handle_inventory(&json!({"scope":"global"}), &landing(), &fx.agent_root).unwrap();
+        let worker = global
+            .entries
+            .iter()
+            .find(|e| e.runtime_name == "worker")
+            .unwrap();
+        assert_eq!(worker.saved_override["model"], "user/model");
+        assert_eq!(
+            worker.settings_revision,
+            global.settings_revisions["global"]
+        );
+        assert!(worker.write_qualified);
+        // Same package also permits writes to global layer, without affecting project bytes.
+        let project_bytes = fs::read(fx.workspace.join(".pi/settings.json")).unwrap();
+        let response = set_override(&json!({
+            "scope":"global", "candidateId":worker.id, "expectedRevision":worker.settings_revision,
+            "model":{"op":"set","value":"user/new"}, "thinking":{"op":"keep"},
+            "advertise":{"op":"keep"}, "disabled":{"op":"keep"}
+        }), &landing(), &fx.agent_root).unwrap();
+        assert_eq!(
+            response["inventory"]["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["runtimeName"] == "worker")
+                .unwrap()["savedOverride"]["model"],
+            "user/new"
+        );
+        assert_eq!(
+            fs::read(fx.workspace.join(".pi/settings.json")).unwrap(),
+            project_bytes
+        );
+        assert_eq!(fs::read(&global_file).unwrap(), original_global_file);
+        assert_eq!(fs::read(&package_file).unwrap(), original_package_file);
+    }
+
+    #[test]
+    fn override_refuses_alias_collisions_and_incomplete_scan_but_tolerates_bad_manifests() {
+        let fx = make_fixture();
+        let global = json!({"scope":"global"});
+        let path = fx.agent_root.join("agents/other.md");
+        for content in [
+            "---\nname: global-agent\ndescription: D\n---\nX",
+            "---\nname: other\ndescription: D\nalias: global-agent\n---\nX",
+        ] {
+            fs::write(&path, content).unwrap();
+            let inv = handle_inventory(&global, &landing(), &fx.agent_root).unwrap();
+            let entry = inv
+                .entries
+                .iter()
+                .find(|e| e.runtime_name == "global-agent")
+                .unwrap();
+            assert!(!entry.write_qualified);
+            assert_eq!(
+                write_gate(&inv, entry),
+                Err(SubagentsError::ShadowedCandidate)
+            );
+        }
+        fs::write(
+            fx.agent_root.join("agents/global-agent.md"),
+            "---\nname: global-agent\ndescription: D\nalias: same\n---\nX",
+        )
+        .unwrap();
+        fs::write(
+            &path,
+            "---\nname: other\ndescription: D\nalias: same\n---\nX",
+        )
+        .unwrap();
+        let inv = handle_inventory(&global, &landing(), &fx.agent_root).unwrap();
+        assert!(inv.entries.iter().all(|e| !e.write_qualified));
+        fs::remove_file(&path).unwrap();
+        // Repeated self-alias does not create a second occupant.
+        fs::write(
+            fx.agent_root.join("agents/global-agent.md"),
+            "---\nname: global-agent\ndescription: D\naliases: same, same\n---\nX",
+        )
+        .unwrap();
+        assert!(
+            handle_inventory(&global, &landing(), &fx.agent_root)
+                .unwrap()
+                .entries[0]
+                .write_qualified
+        );
+        fs::write(fx.agent_root.join("agents/bad.md"), "invalid").unwrap();
+        let inv = handle_inventory(&global, &landing(), &fx.agent_root).unwrap();
+        let entry = &inv.entries[0];
+        assert!(!entry.write_qualified);
+        assert_eq!(
+            write_gate(&inv, entry),
+            Err(SubagentsError::WriteEligibilityUnknown)
+        );
+        fs::remove_file(fx.agent_root.join("agents/bad.md")).unwrap();
+        fs::write(fx.agent_root.join("package.json"), "{").unwrap();
+        let inv = handle_inventory(&global, &landing(), &fx.agent_root).unwrap();
+        assert!(inv.entries[0].write_qualified);
+        assert!(inv
+            .diagnostics
+            .iter()
+            .any(|d| d.source == "package" && d.message.contains("invalid manifest")));
+        fs::remove_file(fx.agent_root.join("package.json")).unwrap();
+        fs::write(fx.agent_root.join("settings.json"), "{").unwrap();
+        assert!(
+            !handle_inventory(&global, &landing(), &fx.agent_root)
+                .unwrap()
+                .entries[0]
+                .write_qualified
+        );
     }
 
     fn no_stray_temp(dir: &Path) -> bool {

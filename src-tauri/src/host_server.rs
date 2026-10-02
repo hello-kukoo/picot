@@ -7743,7 +7743,7 @@ mod tests {
         }))
         .await;
         assert_eq!(refused["type"], "error");
-        assert_eq!(refused["error"]["code"], "write_eligibility_unknown");
+        assert_eq!(refused["error"]["code"], "revision_conflict");
 
         let _ = socket.close(None).await;
         host.stop();
