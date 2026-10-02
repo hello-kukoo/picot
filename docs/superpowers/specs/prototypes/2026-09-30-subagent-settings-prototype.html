@@ -21,8 +21,8 @@
     <h1 class="page-title">Subagents</h1>
     <p class="intro">Inspect agent definitions and set model or thinking overrides for this project or globally.</p>
     <div class="demo"><strong>Interactive prototype · sample data.</strong> “Create” and “Save” only update this page’s memory. No settings or agent files are read or written; reloading resets everything.</div>
-    <div class="tabs" role="tablist" aria-label="Subagent scope"><button class="tab" id="tab-project" role="tab" aria-controls="panel" aria-selected="true" tabindex="0" data-tab="project">Current project</button><button class="tab" id="tab-global" role="tab" aria-controls="panel" aria-selected="false" tabindex="-1" data-tab="global">Global</button></div>
-    <div id="panel" role="tabpanel" aria-labelledby="tab-project"><p class="scope-hint" id="scope"></p><div class="layout"><div class="master" aria-label="Agent definitions"><div class="list-title" id="count"></div><div id="list"></div><button type="button" class="add" id="add">+ New agent .md</button></div><section class="detail" id="detail" aria-label="Agent detail"></section></div></div>
+    <div class="tabs" role="tablist" aria-label="Subagent scope"><button class="tab" id="tab-global" role="tab" aria-controls="panel" aria-selected="true" tabindex="0" data-tab="global">Global</button><button class="tab" id="tab-project" role="tab" aria-controls="panel" aria-selected="false" tabindex="-1" data-tab="project">Current project</button></div>
+    <div id="panel" role="tabpanel" aria-labelledby="tab-global"><p class="scope-hint" id="scope"></p><div class="layout"><div class="master" aria-label="Agent definitions"><div class="list-title" id="count"></div><div id="list"></div><button type="button" class="add" id="add">+ New agent .md</button></div><section class="detail" id="detail" aria-label="Agent detail"></section></div></div>
     <p class="bottom-note">Scope, package resolution, same-name precedence, exact <code>subagents.agentOverrides</code> key schema and when changes take effect require Spec verification. Status examples below are illustrative, not runtime evidence.</p>
     <div class="feedback" id="announcement" role="status" aria-live="polite"></div>
   </main>
@@ -37,7 +37,7 @@
     {id:'g3',tab:'global',name:'planner',source:'Global package · read-only',file:'~/.pi/agent/npm/example-agents/agents/planner.md',status:'Package definition · candidate',description:'Turn a signed-off spec into an actionable plan.',prompt:'List implementation steps with testable exit criteria.',baseModel:'Inherit parent',baseThinking:'Inherit parent',model:'',thinking:''}
   ];
   const selected={project:'p1',global:'g1'};
-  let active='project',mode='detail',message='';
+  let active='global',mode='detail',message='';
   let serial=0;
   const $=id=>document.getElementById(id);
   const clean=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -89,7 +89,7 @@
     });
   }
   $('add').addEventListener('click',()=>{mode='new';render();say('');$('new-name').focus()});
-  document.querySelectorAll('.tab').forEach(el=>{el.addEventListener('click',()=>tab(el.dataset.tab));el.addEventListener('keydown',e=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;e.preventDefault();tab(e.key==='Home'?'project':e.key==='End'?'global':active==='project'?'global':'project',true)})});
+  document.querySelectorAll('.tab').forEach(el=>{el.addEventListener('click',()=>tab(el.dataset.tab));el.addEventListener('keydown',e=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;e.preventDefault();tab(e.key==='Home'?'global':e.key==='End'?'project':active==='project'?'global':'project',true)})});
   for(const r of records){r.savedModel=r.model;r.savedThinking=r.thinking}render();
 </script>
 </body>
