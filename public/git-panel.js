@@ -275,7 +275,9 @@ export class GitPanel {
     const submit = document.createElement("button");
     submit.type = "button";
     submit.textContent = t("git.commit");
-    submit.className = "dialog-submit";
+    // The dedicated class keeps the test selector unique: the confirm-discard
+    // button also carries the shared dialog-submit styling class.
+    submit.className = "dialog-submit git-commit-submit";
     submit.addEventListener("click", () => {
       this.commitMessage = textarea.value;
       this.commit();
