@@ -1,12 +1,12 @@
 {
-  "version": "0.99.2",
+  "version": "1.0.0",
   "sha256": {
-    "pi-darwin-arm64.tar.gz": "564707a7378dae4cce29d92693b45b49d3a3a25187dddcc6d8c2e4aca4fb3719",
-    "pi-darwin-x64.tar.gz": "afa8bda5c77b7ae1a14afe2c7a206925e89ea703a8479b4b7a743b1b52c0fd90",
-    "pi-linux-x64.tar.gz": "f998cc1232733eab240526d74acdce429d650b9e01f5804636d7aa96eb629846",
-    "pi-linux-arm64.tar.gz": "61fc3cd9a854cabb8554e353ff324701c952d2fdd0b1a96aa16ac44cf5357360",
-    "pi-windows-x64.zip": "6f0bd9869d5cf45d5adde79ebedb54357e0c26cb4c64bd4a256f7ae548995f22",
-    "pi-windows-arm64.zip": "ed7b4ceae0cf0d3b9ec160af8501f9eec9478769f382b969a9ccbd0e9a4479fa"
+    "pi-darwin-arm64.tar.gz": "97291e7d2eb2d7d95ab1f67d26de7902302201bc8786c132bbbc9e53fa8526cc",
+    "pi-darwin-x64.tar.gz": "62fb78fcdbc7c0dbd21044dd44bfb3af20df447285bb55e9debf86ff4838776d",
+    "pi-linux-x64.tar.gz": "8fd5543a52a889d60ad57ccbf6c969e73c75c5240aae18ac40b506947a63dc38",
+    "pi-linux-arm64.tar.gz": "b60b3fda830a43c1dc3f5edb5fc7b681f22a0a930b48cdac13b97570c6045819",
+    "pi-windows-x64.zip": "f7dbd39814bf6763f01e7f688ad089615de1d0eb55fc8915a49acdc2088f4404",
+    "pi-windows-arm64.zip": "122d3a1825eac4aa17081c769188c1d058febf579a9407091ae829626997ea96"
   },
   "_comment": "Locked pi-mono release version that pi-studio bundles. Bump this, run `bun run fetch:pi`, smoke-test, then commit. sha256 pins are taken from the official SHA256SUMS asset of the corresponding release (cross-checked against GitHub asset digests)."
 }
