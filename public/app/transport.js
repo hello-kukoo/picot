@@ -483,6 +483,27 @@ export class WsTransport {
     return this._control("settings_put", { name, value, scope });
   }
 
+  // Subagent controls accept scope and host-issued candidate IDs, never client paths.
+  listSubagents(scope, workspaceIdentity = null) {
+    return this._control("subagents_inventory", { scope, ...(workspaceIdentity || {}) });
+  }
+
+  getSubagentDetail(scope, candidateId, workspaceIdentity = null) {
+    return this._control("subagents_get_detail", {
+      scope,
+      candidateId,
+      ...(workspaceIdentity || {}),
+    });
+  }
+
+  createSubagent(payload) {
+    return this._control("subagents_create", payload);
+  }
+
+  setSubagentOverride(payload) {
+    return this._control("subagents_set_override", payload);
+  }
+
   // D4 mobile entry: LAN reachability + pairing-token minting. The mint is
   // desktop-only on the host side and refuses while the host is loopback-only.
   mobileAccessInfo() {

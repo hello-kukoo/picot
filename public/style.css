@@ -2433,6 +2433,72 @@ body.landing-mode #landing {
   display: block;
 }
 
+.subagents-scopes {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.subagents-scope,
+.subagents-row,
+.subagents-retry,
+.subagents-save {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-glass);
+  color: var(--text-primary);
+  padding: var(--space-2);
+  cursor: pointer;
+}
+.subagents-scope[aria-selected="true"],
+.subagents-row[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+.subagents-layout {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) minmax(0, 2fr);
+  gap: var(--space-3);
+}
+.subagents-master,
+.subagents-detail {
+  min-width: 0;
+}
+.subagents-master .subagents-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-bottom: var(--space-1);
+}
+.subagents-badge {
+  display: block;
+  color: var(--text-dim);
+  font-size: var(--font-size-sm);
+}
+.subagents-raw {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 22rem;
+  overflow: auto;
+  padding: var(--space-2);
+  background: var(--bg-glass);
+}
+.subagents-override-input {
+  width: 100%;
+  margin-bottom: var(--space-2);
+}
+.subagents-save:disabled,
+.subagents-override-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+@media (max-width: 760px) {
+  .subagents-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Usage page sub-tabs: the cost dashboard and the provider quota section are
+
 /* Usage page sub-tabs: the cost dashboard and the provider quota section are
    two views of one Settings page. */
 .usage-page-tabs {

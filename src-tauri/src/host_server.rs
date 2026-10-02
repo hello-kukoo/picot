@@ -164,6 +164,9 @@ struct HostState {
     /// `mobile.lanAccessEnabled` preference. Pairing controls re-check it so a
     /// runtime-disabled host never mints tokens even if the pref flips later.
     lan_access: bool,
+    /// Test seam: pins the agent root so subagents scans stay inside the test
+    /// fixture instead of the real Pi agent directory. Production never sets it.
+    agent_root_override: Mutex<Option<PathBuf>>,
     /// Port the host listener bound; stored after `start` binds because the
     /// OS assigns it. Mobile entry URLs are built from this.
     host_port: std::sync::atomic::AtomicU16,
@@ -269,6 +272,7 @@ impl HostServer {
             ),
             legacy_rpc_gone_hits: Mutex::new(HashMap::new()),
             lan_access,
+            agent_root_override: Mutex::new(None),
             host_port: std::sync::atomic::AtomicU16::new(0),
         });
         // Prewarm the cost-metrics cache in the background: one 90d scan at
@@ -491,6 +495,14 @@ impl HostServer {
     pub fn set_owner_registry(&self, registry: Arc<WindowOwnerRegistry>) {
         if let Ok(mut slot) = self.state.owner_registry.lock() {
             *slot = Some(registry);
+        }
+    }
+
+    /// Test seam for the subagents controls: pins the agent root so scans
+    /// stay inside a fixture. Production resolves the real root per request.
+    pub fn set_agent_root_for_tests(&self, root: PathBuf) {
+        if let Ok(mut slot) = self.state.agent_root_override.lock() {
+            *slot = Some(root);
         }
     }
 
@@ -2839,6 +2851,67 @@ async fn dispatch(
                 return Ok(
                     json!({ "type": "host_response", "requestId": request_id, "operation": operation, "response": response }),
                 );
+            }
+            // Subagents settings controls: four owner-scoped operations whose
+            // identity comes only from the live owner registry — the frame
+            // may carry scope labels, never roots or workspace identity.
+            if matches!(
+                operation.as_str(),
+                "subagents_inventory"
+                    | "subagents_get_detail"
+                    | "subagents_create"
+                    | "subagents_set_override"
+            ) {
+                let registry = state
+                    .owner_registry
+                    .lock()
+                    .map_err(|_| ("auth_unavailable", "Owner registry unavailable".into()))?
+                    .clone()
+                    .ok_or(("auth_unavailable", "Owner registry unavailable".to_owned()))?;
+                let before = registry.owner_current_workspace(&owner);
+                let agent_root = state
+                    .agent_root_override
+                    .lock()
+                    .ok()
+                    .and_then(|slot| slot.clone())
+                    .map(Ok)
+                    .unwrap_or_else(crate::pi_launch::resolve_pi_agent_root)
+                    .map_err(|error| ("config_unavailable", error))?;
+                let args = frame.get("args").cloned().unwrap_or(Value::Null);
+                let scan_operation = operation.clone();
+                let authorized_snapshot = before.clone();
+                // Bounded disk scans run off the WS worker; blocking reads
+                // must never stall the socket loop.
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::subagents_settings::handle(
+                        &scan_operation,
+                        &args,
+                        &authorized_snapshot,
+                        &agent_root,
+                    )
+                })
+                .await
+                .map_err(|_| {
+                    (
+                        "host_operation_failed",
+                        "Subagents scan task failed".to_owned(),
+                    )
+                })?
+                .map_err(|error| (error.code(), error.message()))?;
+                // The scan raced a workspace transition: only deliver data
+                // the binding that authorized it still matches.
+                if registry.owner_current_workspace(&owner) != before {
+                    return Err((
+                        "stale_generation",
+                        "Workspace binding changed during the scan".to_owned(),
+                    ));
+                }
+                return Ok(json!({
+                    "type": "host_response",
+                    "requestId": request_id,
+                    "operation": operation,
+                    "response": result,
+                }));
             }
             let handler = state
                 .control_handler
@@ -7375,5 +7448,198 @@ mod tests {
 
         host.stop();
         fs::remove_dir_all(temp).unwrap();
+    }
+    #[tokio::test]
+    async fn subagents_host_ops_scope_gates_over_ws() {
+        use tokio_tungstenite::tungstenite::Message;
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("picot-subagents-ws-{nonce}"));
+        let agent_root = temp.join("agent");
+        let workspace = temp.join("workspace");
+        fs::create_dir_all(agent_root.join("agents")).unwrap();
+        fs::create_dir_all(workspace.join(".pi/agents")).unwrap();
+        fs::write(
+            agent_root.join("agents/global-agent.md"),
+            "---\nname: global-agent\ndescription: fixture\n---\nWS_RAW_PROMPT",
+        )
+        .unwrap();
+        fs::write(
+            workspace.join(".pi/agents/project-agent.md"),
+            "---\nname: project-agent\ndescription: fixture\n---\nPROJECT_PROMPT",
+        )
+        .unwrap();
+        fs::write(
+            agent_root.join("trust.json"),
+            format!(
+                "{{\n  \"{}\": true\n}}\n",
+                workspace.canonicalize().unwrap().display()
+            ),
+        )
+        .unwrap();
+        let public = temp.join("public");
+        fs::create_dir_all(&public).unwrap();
+        fs::write(public.join("index.html"), "Picot").unwrap();
+        let metadata = Arc::new(Mutex::new(
+            MetadataStore::open(&temp.join("picot.sqlite3")).unwrap(),
+        ));
+        let workspace_id = metadata
+            .lock()
+            .unwrap()
+            .add_workspace(&workspace)
+            .unwrap()
+            .0
+            .workspace_id;
+        let auth = Arc::new(Mutex::new(RemoteAuth::new(Arc::clone(&metadata))));
+        let registry = Arc::new(crate::window_owner::WindowOwnerRegistry::default());
+        let host = HostServer::start_with_session_root(
+            public,
+            NativePiManager::new(8),
+            auth,
+            metadata,
+            None,
+        )
+        .await
+        .expect("host server starts");
+        let (owner, capability) = registry
+            .create_owner_with_workspace(
+                "subagents-ws-window".into(),
+                workspace.clone(),
+                0,
+                host.origin().into(),
+                Some(workspace_id.clone()),
+                crate::window_owner::TemporaryKind::DefaultStartup,
+            )
+            .unwrap();
+        host.set_owner_registry(registry.clone());
+        host.set_agent_root_for_tests(agent_root.clone());
+        host.runtime_started().expect("generation advances");
+        let generation = registry
+            .current_workspace_generation(&owner)
+            .expect("generation present");
+        let (mut socket, _) = tokio_tungstenite::connect_async(
+            host.origin().replacen("http://", "ws://", 1) + "/v2/ws",
+        )
+        .await
+        .unwrap();
+        socket
+            .send(Message::Text(
+                json!({
+                    "type": "hello", "protocolVersion": 2, "clientType": "desktop",
+                    "clientId": "subagents-ws-client", "desktopCapability": capability
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        let ack: Value =
+            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(ack["type"], "hello_ack");
+
+        async fn roundtrip(
+            socket: &mut tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+            body: Value,
+        ) -> Value {
+            socket.send(Message::Text(body.to_string())).await.unwrap();
+            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap()
+        }
+
+        // Global scope from the bound desktop owner: agent-root entries only.
+        let global = roundtrip(
+            &mut socket,
+            json!({
+                "type": "host_request", "requestId": "sub-global",
+                "operation": "subagents_inventory", "args": {"scope": "global"}
+            }),
+        )
+        .await;
+        assert_eq!(global["type"], "host_response", "{global}");
+        assert_eq!(global["response"]["workspaceRoot"], Value::Null);
+        let entries = global["response"]["entries"].as_array().unwrap();
+        assert!(entries
+            .iter()
+            .any(|entry| entry["runtimeName"] == "global-agent"));
+        assert!(!global.to_string().contains("PROJECT_PROMPT"));
+
+        // Project identity smuggled onto global scope is refused.
+        let forged_global = roundtrip(
+            &mut socket,
+            json!({
+                "type": "host_request", "requestId": "sub-forged-global",
+                "operation": "subagents_inventory",
+                "args": {"scope": "global", "workspaceId": workspace_id}
+            }),
+        )
+        .await;
+        assert_eq!(forged_global["type"], "error");
+        assert_eq!(forged_global["error"]["code"], "unauthorized_target");
+
+        // Forged wid on project scope: no project paths leak.
+        let forged_wid = roundtrip(&mut socket, json!({
+            "type": "host_request", "requestId": "sub-forged-wid",
+            "operation": "subagents_inventory",
+            "args": {"scope": "project", "workspaceId": "forged", "workspaceGeneration": generation}
+        }))
+        .await;
+        assert_eq!(forged_wid["type"], "error");
+        assert_eq!(forged_wid["error"]["code"], "unauthorized_target");
+        assert!(!forged_wid
+            .to_string()
+            .contains(&workspace.display().to_string()));
+
+        // Correct binding: project scope returns the trusted project root.
+        let project = roundtrip(&mut socket, json!({
+            "type": "host_request", "requestId": "sub-project",
+            "operation": "subagents_inventory",
+            "args": {"scope": "project", "workspaceId": workspace_id, "workspaceGeneration": generation}
+        }))
+        .await;
+        assert_eq!(project["type"], "host_response", "{project}");
+        let project_entries = project["response"]["entries"].as_array().unwrap();
+        assert!(project_entries
+            .iter()
+            .any(|entry| entry["runtimeName"] == "project-agent"));
+
+        // Detail over the wire: forged candidate IDs fail closed.
+        let forged_detail = roundtrip(
+            &mut socket,
+            json!({
+                "type": "host_request", "requestId": "sub-detail",
+                "operation": "subagents_get_detail",
+                "args": {"scope": "global", "candidateId": "0".repeat(64)}
+            }),
+        )
+        .await;
+        assert_eq!(forged_detail["type"], "error");
+        assert_eq!(forged_detail["error"]["code"], "candidate_stale");
+
+        // Write control dispatches but the write-qualification gate refuses.
+        let real_candidate = project_entries
+            .iter()
+            .find(|entry| entry["runtimeName"] == "project-agent")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let refused = roundtrip(&mut socket, json!({
+            "type": "host_request", "requestId": "sub-override",
+            "operation": "subagents_set_override",
+            "args": {
+                "scope": "project", "workspaceId": workspace_id, "workspaceGeneration": generation,
+                "candidateId": real_candidate, "runtimeName": "project-agent",
+                "model": {"op": "keep"}, "thinking": {"op": "keep"}
+            }
+        }))
+        .await;
+        assert_eq!(refused["type"], "error");
+        assert_eq!(refused["error"]["code"], "write_eligibility_unknown");
+
+        let _ = socket.close(None).await;
+        host.stop();
+        let _ = fs::remove_dir_all(temp);
     }
 }

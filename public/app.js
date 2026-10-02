@@ -108,6 +108,7 @@ import { setupSettingsConfig } from "./settings/settings-config.js";
 import { setupSkillsInstallTab } from "./settings/skills-install-tab.js";
 import { setupSkillsPage } from "./settings/skills-page.js";
 import { setupSkillsTabShell } from "./settings/skills-tab-shell.js";
+import { setupSubagentsTab } from "./settings/subagents-tab.js";
 import {
   applyShowThinking,
   renderThinkingEffort,
@@ -7228,9 +7229,21 @@ let loadAppendSystemMdEditor = async () => {};
 let modelsPage = { activate: async () => {} };
 let extensionsTabs = null;
 let packageManager = null;
+const subagentsPage = setupSubagentsTab({
+  container: document.getElementById("settings-subagents"),
+  transport,
+  t,
+  getWorkspaceIdentity: () => {
+    const workspaceId = wsClient.getRuntimeTarget()?.workspaceId;
+    return workspaceId && gitClient.generation != null
+      ? { workspaceId, workspaceGeneration: gitClient.generation }
+      : null;
+  },
+});
 
 function selectSettingsTab(tabKey = "general") {
   const targetTabKey = tabKey === "auth" ? "configuration" : tabKey;
+  if (targetTabKey !== "subagents" && !subagentsPage.leave()) return false;
   // The MCP nav item stays hidden until the pi-mcp-adapter package is
   // detected; refreshAvailability caches after the first check.
   void mcpPage.refreshAvailability();
@@ -7261,6 +7274,7 @@ function selectSettingsTab(tabKey = "general") {
   if (targetTabKey === "mcp") {
     void mcpPage.activate();
   }
+  if (targetTabKey === "subagents") void subagentsPage.activate();
   if (targetTabKey === "usage") {
     void document.getElementById("settings-cost-dashboard")?.ensureLoaded();
     // The quota panel loads once at boot; re-request on every entry so a
@@ -7269,6 +7283,7 @@ function selectSettingsTab(tabKey = "general") {
     // serves the 5-minute cache instantly when warm.
     void settingsQuotaPanel?.loadReports();
   }
+  return true;
 }
 
 function formatPiVersionError(err, fallback = "unknown error") {
@@ -7832,12 +7847,12 @@ function clearSettingsHash() {
 
 async function openSettings(tabKey = "general", options = {}) {
   const targetTabKey = normalizeSettingsTabKey(tabKey);
+  if (!selectSettingsTab(targetTabKey)) return;
   if (options.updateHash !== false) updateSettingsHash(targetTabKey);
   settingsPanel.classList.remove("hidden");
   messagesContainer.style.display = "none";
   document.querySelector(".input-area").style.display = "none";
   document.querySelector(".mode-link:first-child")?.classList.remove("active");
-  selectSettingsTab(targetTabKey);
   buildThemeGrid();
   buildLanguageSelector();
   buildTerminalThemeSelector();
@@ -7894,6 +7909,7 @@ async function openSettings(tabKey = "general", options = {}) {
 }
 
 function closeSettings(options = {}) {
+  if (!subagentsPage.leave()) return;
   if (options.clearHash !== false) clearSettingsHash();
   settingsPanel.classList.add("hidden");
   messagesContainer.style.display = "";
@@ -7930,8 +7946,7 @@ settingsOverlay?.addEventListener("click", closeSettings);
 settingsNavItems.forEach((item) => {
   item.addEventListener("click", () => {
     const tabKey = item.dataset.settingsTab || "general";
-    selectSettingsTab(tabKey);
-    updateSettingsHash(tabKey);
+    if (selectSettingsTab(tabKey)) updateSettingsHash(tabKey);
   });
 });
 

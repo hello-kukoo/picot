@@ -4,6 +4,13 @@
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
+test("landing exposes only Global subagents without workspace identity", () => {
+  const source = readFileSync("public/landing.js", "utf8");
+  expect(source).toContain('"subagents",');
+  expect(source).toContain("landingOnly: true");
+  expect(source).toContain('if (target === "subagents")');
+});
+
 const landingSource = readFileSync("public/landing.js", "utf8");
 const landingCodeOnly = landingSource
   .replace(/\/\*[\s\S]*?\*\//g, "")
@@ -228,6 +235,7 @@ function installDom() {
       <button data-skills-page-tab="install">Install</button>
       <button data-skills-page-tab="packages">Packages</button>
       <div id="settings-skills"></div>
+      <div id="settings-subagents"></div>
       <div id="settings-install-skills"></div>
       <div id="settings-package-skills"></div>
       <button data-extensions-tab="installed">Installed</button>

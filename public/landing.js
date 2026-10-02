@@ -61,6 +61,7 @@ import { setupSettingsConfig } from "./settings/settings-config.js";
 import { setupSkillsInstallTab } from "./settings/skills-install-tab.js";
 import { setupSkillsPage } from "./settings/skills-page.js";
 import { setupSkillsTabShell } from "./settings/skills-tab-shell.js";
+import { setupSubagentsTab } from "./settings/subagents-tab.js";
 import { renderThinkingEffort } from "./settings/toggles.js";
 import { setupUsageTabs } from "./settings/usage-tabs.js";
 import { FOCUS_WORKSPACE_PARAM } from "./sidebar/focus-state.js";
@@ -333,6 +334,7 @@ const LANDING_FUNCTIONAL_SETTINGS_TABS = new Set([
   "appearance",
   "usage",
   "skills",
+  "subagents",
   "extensions",
   "models",
   "mcp",
@@ -441,6 +443,14 @@ const mobileAccessCard = setupMobileAccess({
   restartHint: document.getElementById("mobile-restart-hint"),
 });
 
+const landingSubagents = setupSubagentsTab({
+  container: document.getElementById("settings-subagents"),
+  transport,
+  t,
+  getWorkspaceIdentity: () => null,
+  landingOnly: true,
+});
+
 function selectLandingSettingsTab(tabKey) {
   const target = LANDING_FUNCTIONAL_SETTINGS_TABS.has(tabKey) ? tabKey : "general";
   document.querySelectorAll(".settings-nav-item[data-settings-tab]").forEach((item) => {
@@ -451,6 +461,11 @@ function selectLandingSettingsTab(tabKey) {
   document.querySelectorAll(".settings-tab[data-settings-panel]").forEach((tab) => {
     tab.classList.toggle("active", tab.dataset.settingsPanel === target);
   });
+  if (target === "subagents") {
+    void landingSubagents.activate();
+  } else {
+    landingSubagents.leave();
+  }
   if (target === "usage") {
     // Same lazy-load contract as the workspace shell: the dashboard fetches
     // only when its tab is first opened.
@@ -476,6 +491,7 @@ function selectLandingSettingsTab(tabKey) {
   }
 }
 
+landingSubagents.leave();
 function closeLandingSettings() {
   document.getElementById("settings-panel")?.classList.add("hidden");
   void refreshLandingCredentialCard();

@@ -56,6 +56,8 @@ mod runtime_coordinator;
 mod session_ui_profile_store;
 mod skill_install;
 mod skill_source_registry;
+mod subagents_inventory;
+mod subagents_settings;
 mod telemetry;
 #[allow(dead_code)]
 mod temp_resources;
