@@ -444,6 +444,7 @@ const landingSubagents = setupSubagentsTab({
   t,
   getWorkspaceIdentity: () => null,
   landingOnly: true,
+  loadModels: () => modelsPage.getVisibleModels(),
 });
 
 function selectLandingSettingsTab(tabKey) {

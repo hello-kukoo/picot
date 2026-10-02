@@ -870,7 +870,8 @@
         "builtinExtension": "pi-subagents built-in extension (read-only)"
       },
       "status": {
-        "candidate": "Disk candidate — runtime winner unverified"
+        "candidate": "Disk candidate — runtime winner unverified",
+        "disabledOverride": "Disabled (override)"
       },
       "diskOnlyMode": "Disk candidates only: effectiveness and collisions are unverified.",
       "state": {
@@ -889,6 +890,11 @@
         "savedOverride": "Saved override",
         "model": "Model",
         "thinking": "Thinking",
+        "advertise": "Show in parent agent directory",
+        "disabled": "Disable",
+        "inheritDefinition": "Unset (inherit definition)",
+        "booleanOn": "On (true)",
+        "booleanOff": "Off (false)",
         "none": "None",
         "inferred": "Inferred",
         "save": "Save",

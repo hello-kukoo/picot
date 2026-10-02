@@ -72,6 +72,7 @@ export function setupModelsPage({
   const apiKeysContainer = document.getElementById("settings-api-keys");
   const providerExpansionState = new Map();
   let catalogProviders = [];
+  let catalogLoaded = false;
 
   async function loadApiKeysPanel(options = {}) {
     if (!apiKeysContainer) return;
@@ -148,6 +149,7 @@ export function setupModelsPage({
 
   function renderApiKeysPanel(providers) {
     catalogProviders = providers;
+    catalogLoaded = true;
     apiKeysContainer.replaceChildren();
     const configuredProviders = providers
       .filter((provider) => provider.configured)
@@ -1510,5 +1512,22 @@ export function setupModelsPage({
     renderApiKeysPanel(catalogProviders);
   }
 
-  return { activate, loadApiKeysPanel, loadInlineModelsEditor, loadOAuthCapability };
+  return {
+    activate,
+    loadApiKeysPanel,
+    loadInlineModelsEditor,
+    loadOAuthCapability,
+    getVisibleModels: () =>
+      catalogLoaded
+        ? catalogProviders.flatMap((provider) =>
+            (provider.models || [])
+              .filter((model) => model.available && model.visible === true)
+              .map((model) => ({
+                provider: model.provider || provider.provider,
+                id: model.id,
+                name: model.name,
+              })),
+          )
+        : null,
+  };
 }
