@@ -275,15 +275,15 @@ Settings → Models/Configuration 的 catalog、API key、models.json、OAuth �
 
 Settings → 已安装扩展详情页的 pi-fff 配置渲染器（同文件 fff 条目）走 **host 控制面 op** 而非 bridge：`get_fff_config`/`set_fff_config`（`src-tauri/src/fff_config.rs`，main.rs 控制分发，Desktop+owner 门禁接受 landing owner）读写 `~/.pi/agent/pi-fff.json`（尊重 `PI_CODING_AGENT_DIR`）。get 计算逐字段 env > file > default 有效链与 shadow 集（host 进程 env 即内嵌 Pi 继承的 env；flag 检测放弃——内嵌 Pi 的 argv 从不含 `--fff-*`，终端 pi 逐实例不可观测，`flagShadowed` 恒空保持载荷形状），set 为单键 save-on-change：宽松读入后重建 schema 干净文件（additionalProperties:false，未知键丢弃、永不写出 invalid 文件），`reset` 写仅含 `$schema` 的最小文件，写经 `host_config::write_json`（proper-lockfile + tmp+rename + 0600）。走 host 意味着 landing 页（无 Pi 进程）也能配置 fff；文件编辑需重启 Picot 生效（fff 在模块加载时读一次配置）。
 
-### Settings → Subagents（候选盘点，写入禁用）
+### Settings → Subagents（候选盘点与受限名字级覆盖）
 
 `public/settings/subagents-tab.js` 经 `WsTransport` 调用四个专用 v2 host op：`subagents_inventory`、`subagents_get_detail`、`subagents_create`、`subagents_set_override`。控制帧仅允许当前认证的 desktop owner；项目请求必须附当前 Registered owner 的 `workspaceId` 与 `workspaceGeneration`，host 在阻塞扫描前后重新检查 owner 绑定并核验项目信任。Landing 只展示全局页，不提供项目身份。前端不传任意路径；host 从 `pi_launch::resolve_pi_agent_root()` 解析全局根，从 owner 注册表取 canonical workspace root。
 
 `subagents_inventory.rs` 将全局、项目、安装包与可用内置定义整理成同一磁盘候选快照，列表只返回有限元数据；详情通过 host 发行的 candidate ID 重新扫描后限量读取本页范围内的原始 `.md`。`.agents/`、`agentScanDirs`、环境扫描目录和运行时注册代理等范围外来源只列来源与诊断，不读取或返回 prompt。扩展解析的 project root 与工作区根不同则禁止项目创建和覆盖。
 
-当前 `scripts/subagents-parity-spike.mjs` 对内嵌 Pi 的 `/run` 与 `/subagents-models` 不能取得足够的运行时证据，结论是 `disk-candidates-only`；host 不声称磁盘候选即生效代理，`writeQualified` 始终为 false，创建与 model/thinking 覆盖均拒绝 `write_eligibility_unknown`。**设置页目前仅可盘点、查看定义和填写内存草稿，不能保存。**不得把禁用控件、原型交互或 Rust 单元测试解释为真实写入已开放。若未来验证了同名胜出、alias 与范围外占用，才可重新审查写资格门。
+当前 `scripts/subagents-parity-spike.mjs` 对内嵌 Pi 的 `/run` 与 `/subagents-models` 不能取得足够的运行时证据，结论是 `disk-candidates-only`：host 不声称磁盘候选即生效代理，不显示 winner/推算值。**受限名字级覆盖已开放（2026-10-02）**：自定义/扩展包/builtin 三类候选统一写 `subagents.agentOverrides.<runtimeName>`（全局层 `~/.pi/agent/settings.json`、项目层 `<cwd>/.pi/settings.json`，不修改任何 `.md`）；资格门为「本作用域快照内无已知 runtimeName/alias 冲突（含 alias↔alias）且 runner 为 native」——`writeQualified` 只表示快照内允许保存，**不证明 live winner**；范围内扫描不完整继续拒写，仅范围外未知占用（`.agents/`、运行时注册等）降为警告。已知被遮蔽者、external/未知 runner 不可保存；`.md` 新建的独立拒写门维持关闭。保存仍受 owner/trust/root/revision 校验与单锁原子事务保护。
 
-写入实现位于 `subagents_settings.rs` 与 `host_config.rs`：覆盖限定 scope 的 `settings.json`、锁内按文件 revision 读-比-改-原子替换并保存私有备份；新建限定 agents 目录，用同目录私有临时文件与 hard-link 排他发布，并在确认及发布前复验 inventory revision、同名候选集合。外部不遵循本锁的写者仍存在最终比对到 rename 间的竞态；父目录 symlink 竞态与 Windows/Linux hard-link 行为仍需平台实测。当前写资格门阻止这些事务从 UI 到达。
+写入实现位于 `subagents_settings.rs` 与 `host_config.rs`：覆盖限定 scope 的 `settings.json`、按写入层投影回显、锁内按文件 revision 读-比-改-原子替换并保存私有备份；新建限定 agents 目录（当前禁用），用同目录私有临时文件与 hard-link 排他发布，并在确认及发布前复验 inventory revision、同名候选集合。外部不遵循本锁的写者仍存在最终比对到 rename 间的竞态；父目录 symlink 竞态与 Windows/Linux hard-link 行为仍需平台实测。与 pi-subagents 0.74 的已知差异：host 额外接受裸 `ssh://` 包源。
 
 ### Settings → Skills → Packages
 

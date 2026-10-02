@@ -13,7 +13,7 @@
 
 ## 2. 核实依据与偏差
 
-下列结论只基于本机安装的 `~/.pi/agent/npm/node_modules/pi-subagents/package.json:4` **0.73.1**、该包源码/文档、仓库代码与 Pi 随仓文档，不代表将来的兼容承诺。
+下列结论基于本机安装的 `~/.pi/agent/npm/node_modules/pi-subagents/package.json:4`（初稿核实于 **0.73.1**；2026-10-02 架构狮审查已按当前安装 **0.74.0** 复核 `/run` both 语义、来源优先级与包扫描的引用）、该包源码/文档、仓库代码与 Pi 随仓文档，不代表将来的兼容承诺。
 
 | 依据 | 对本设计的影响 |
 | --- | --- |
@@ -31,8 +31,8 @@ Pi 的资源过滤由 Pi 管，扩展另有其扫描规则：`node_modules/@eare
 ## 3. 页面契约
 
 1. 沿现有 Settings 导航新增入口，原型的独立侧栏只是布局示意；沿用 Picot 主题、i18n、焦点及移动宽度适配。作用域顺序为「Global / Current project」，默认 Global；项目级入口仍可用。左 master 按来源列条目，右 detail 对本页范围内的文件展示 **实际文件原文**、解析出的名称/描述、来源作用域、路径、只读提示、适用时的覆盖编辑器；无选择、读取/解析失败、有未保存更改、保存冲突均提供可见状态。原型目前仍用 `baseModel: Inherit parent` 等示例值拼出伪 YAML；实施不得这样展示，原型须另行修订，不把当前演示视为已修复。
-2. 当前项目 tab：展示所绑定工作区 `<cwd>/.pi/agents` 及本项目安装包的候选；「新建」只写该 `.pi/agents/`，覆盖只写该 `.pi/settings.json`。全局 tab：展示 `~/.pi/agent/agents` 与全局包；「新建」只写该 `agents/`，覆盖只写 `~/.pi/agent/settings.json`。路径用主机解析出的 Pi agent root（尊重 `PI_CODING_AGENT_DIR`），不要把 WebView 中的 `~` 当真实路径。两个 tab 不复制、移动另一作用域的文件；包条目始终只读，覆盖只改 settings。共享包根出现于两种配置时注明双来源，避免重复假装两个不同文件。
-3. builtin 不属于项目/全局 `.md` 或用户安装包。为避免漏列默认可运行代理，在全局 tab 增独立「扩展内置 · 只读」组，源路径与 bundled 名称如实显示；项目 tab 可以在状态说明中引用 builtin 作为被遮蔽来源，不把它混作项目文件。若已安装版本内置目录不存在、被 `disableBuiltins` 禁用或与用户定义冲突，按诊断展示，不硬编码 0.73.1 名单。跨页签同名条目继续分开列、以物理文件路径/包身份识别；标「当前工作区生效」「被 X 遮蔽」「禁用」「不可用/待验证」，并指出胜出者路径（无文件的来源给出身份）。被遮蔽条目仅展示只读详情，不提供跳转或 model/thinking 保存入口；名字级覆盖会影响胜出者，不能暗示只修改被遮蔽文件。全局 tab 的状态依赖当前工作区；无工作区时只标「全局候选，无法判断当前项目最终生效」。
+2. 当前项目 tab：展示所绑定工作区 `<cwd>/.pi/agents` 及本项目安装包的候选；「新建」只写该 `.pi/agents/`，覆盖只写该 `.pi/settings.json`。全局 tab：展示 `~/.pi/agent/agents` 与全局包；「新建」只写该 `agents/`，覆盖只写 `~/.pi/agent/settings.json`。路径用主机解析出的 Pi agent root（尊重 `PI_CODING_AGENT_DIR`），不要把 WebView 中的 `~` 当真实路径。两个 tab 不复制、移动另一作用域的文件；包条目始终只读，覆盖只改 settings。共享包根出现于两种配置时注明双来源，避免重复假装两个不同文件。**浏览分类（2026-10-02 拍板；同日按 builtin 归位复核）**：每个作用域 tab 内分两个子页签——「自定义」（该作用域 agents 目录的候选，只剩 user/project）与「扩展包」（该作用域的包来源候选，按包身份分组、行显示包身份）。子页签是纯前端投影：host 请求仍只带 global/project 作用域，同一次盘点内切换子页签不重新请求；作用域切换时子页签重置为「自定义」。「另见于」徽标按当前视图相对计算（排除自身作用域），不得自指。
+3. builtin 不属于项目/全局 `.md` 或用户安装包。为避免漏列默认可运行代理，在全局的扩展包子页增独立「pi-subagents 扩展内置（只读）」组，源路径与 bundled 名称如实显示；项目 tab 可以在状态说明中引用 builtin 作为被遮蔽来源，不把它混作项目文件。若已安装版本内置目录不存在、被 `disableBuiltins` 禁用或与用户定义冲突，按诊断展示，不硬编码 0.73.1 名单。跨页签同名条目继续分开列、以物理文件路径/包身份识别；标「当前工作区生效」「被 X 遮蔽」「禁用」「不可用/待验证」，并指出胜出者路径（无文件的来源给出身份）。被遮蔽条目仅展示只读详情，不提供跳转或 model/thinking 保存入口；名字级覆盖会影响胜出者，不能暗示只修改被遮蔽文件。全局 tab 的状态依赖当前工作区；无工作区时只标「全局候选，无法判断当前项目最终生效」。
 4. 对胜出且支持原生 Pi 覆盖的代理，展示两个明确值：**本作用域已保存覆盖**（可编辑）与**当前工作区推算值**（带覆盖来源）。前者留空表示「删除本层字段」，不是强制写入 `"inherit"`；custom/package 清空项目字段后可由 user 同字段补位，builtin 若仍有项目覆盖条目则选择该项目条目，不会对被清空字段逐字段回退 user；两个字段都清空而项目条目还有其他字段时亦然。后者可由 global/project 覆盖、frontmatter、扩展默认、parent model、按 provider 覆盖及本次 `/run` 选项决定。builtin 与 custom 合并细节如上，仍须用运行结果核对。未掌握 live parent/provider/模型注册表时，只写「需运行时确认」，不得声称固定「生效模型」；保存后提示外部文件已更新、现有 Pi 会话可能仍用旧快照，需 `/reload` 或新会话并用 `/subagents-models`/`/run` 核实（`pi-subagents/docs/agents.md:246-250`、`docs/models.md:154-163`）。
 5. 覆盖按 **胜出者解析出的 runtime name** 写 `subagents.agentOverrides[name]`，不按文件 basename、显示昵称或 package 的本地名写。每项允许无覆盖 / 合法 Pi 模型 ID / thinking 档位；`thinking: false` 和 `model: "inherit"` 若已有需可读、可保留，不可在用户仅改另一字段时误删。选项取 Pi live model registry 与模型支持档位，或提供可校验 ID 的文本输入；没有 live catalog 时不伪造原型中的两个模型。仅保存 model/thinking，不动同一条目既有 description/tools/disabled 等未知字段。覆盖同名时 settings 是**名字级**而非文件级：两个定义共用同一运行时名时，不可能只覆盖其中某个包文件；被遮蔽详情只读，不提供跳转或针对该文件的保存入口。runner 为 `external-cli`/`external-job` 等外部执行器、不支持原生 Pi model/thinking 覆盖时，禁用对应控件，标「外部 runner 不支持原生 Pi 模型/思考覆盖」，不显示虚构的生效值；未知 runner 能力按不可编辑处理并给诊断（`agents.js:1763-1770`；`src/runs/foreground/subagent-executor.js:2733-2738`）。
 6. 新建表单至少收集 name、description、**非空 prompt 正文**；修订后的原型已演示 prompt 输入、非空校验及同名来源确认，但创建仍只更新页面内存。实际实现须存标准 YAML frontmatter + 正文；新建后详情仍只读。校验扩展可解析的名字及描述、唯一目标文件名、碰撞/别名提示；有同名全局/包/builtin 时明确「新文件将遮蔽 X」，要求确认，不能静默声称新名字不可用。拒绝空正文、路径分隔符、`.`/`..`、控制字符、超长输入或不合法 YAML；文件名不必等于解析名的旧文件要按内容检测名称冲突。新建失败不遗留半文件。原型的同名判断只用模拟记录，真实来源与遮蔽关系仍需运行时验证。
@@ -76,3 +76,12 @@ Pi 的资源过滤由 Pi 管，扩展另有其扫描规则：`node_modules/@eare
 5. 被遮蔽条目只读且不跳转；范围外来源只显示来源与诊断，不读 prompt。原型虽演示非空 prompt 与同名来源确认，仍只操作模拟记录；还存在被遮蔽条目可保存、拼伪 YAML、切 tab 丢新建草稿，须单独修订原型；Global 顺序和默认选中已与最新方向对齐。实际创建的 YAML 序列化、真实同名遮蔽判断及确认流程需实现并验证；跨平台原子重命名、symlink 竞态与多写者锁兼容也须用真实文件夹验证。
 
 **取舍：** Global 优先并默认选中，仍保留项目写入页签；状态以实际 `both` 解析为准；保留只读包定义，用名字级 settings 覆盖，不复制包文件；被遮蔽条目只读、不跳转；范围外只列诊断；项目根不一致时禁写；新建仅有限 frontmatter 与 prompt，不建设通用 YAML 编辑器。这样不会让设置页成为另一套与 Nico 执行语义分叉的子代理管理系统。
+
+6. **host 待办（2026-10-02 更新）**：① `savedOverride/settingsRevision` 写入层投影已随统一覆盖实施落地（原待办解除）；② Global 页签请求仍不带项目身份，host 以 `workspace=None` 扫描，页面状态注记（如遮蔽关系）缺少当前工作区上下文，不满足 §4 的 both 快照目标——写资格已按「快照内冲突」标准放宽，此缺口现为准确性限制而非安全阻断；③ 与 0.74 的已知差异：host 额外接受裸 `ssh://` 包源（0.74 resolver 拒绝），不声称 live parity。
+
+### §3.4/§3.5 实施状态修订（2026-10-02 统一覆盖拍板后）
+
+- **统一写入路径**：自定义（user/project 来源）、扩展包、builtin 三类候选一律走 `subagents.agentOverrides.<runtimeName>` 名字级覆盖——全局层写 `~/.pi/agent/settings.json`、项目层写 `<cwd>/.pi/settings.json`（与页签一致）；**不直改任何 `.md`**（0.74 已证实三类来源均接受该覆盖，custom/package user→project 逐字段叠加、builtin 项目条目整条选择；alias/localName 仅参与调用解析，不参与查键）。
+- **编辑资格**：本作用域磁盘快照内无已知同名/alias 冲突（runtimeName↔runtimeName、runtimeName↔alias、alias↔alias 任一相交即拒，含被遮蔽者）且 runner 为 native 的候选可编辑保存；`writeQualified` 只表示「此快照内允许名字级保存」，不证明 live winner。范围内扫描不完整（settings 解析失败/超预算/不可读）时受影响名字继续拒写；仅范围外未知占用（`.agents/`、运行时注册等）降为警告。
+- **控件与载荷**：model 优先真实 catalog 下拉（无 catalog 退化带校验文本输入，多段 provider/id 放行），已存 `"inherit"`/目录外 ID 以「保留当前」选项呈现不静默清空；thinking 为 空/false(JSON 布尔)/off…max 枚举；未触碰字段 keep、选空 clear；`expectedRevision` 取目标层 revision。编辑器只回显目标写入层已保存覆盖（空占位起步，不回显 frontmatter、不回显另一层），并显示「写入层：{scope} · 名字级覆盖 {runtimeName} · 不修改定义文件」提示。
+- **仍禁写**：`.md` 新建（create 独立拒写门不动）、external/未知 runner、被遮蔽条目、项目根分歧、范围外来源 prompt 读取。
