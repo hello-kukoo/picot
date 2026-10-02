@@ -307,11 +307,6 @@ wsClient.addEventListener("hostCapabilities", () => {
   // authenticated hello first.
   document.getElementById("quick-chat-btn")?.classList.remove("hidden");
   void sidebar.refresh();
-  // The MCP nav reveal needs the same authenticated hello: its capability
-  // check is false before `hello_ack`, so the module-load attempt alone
-  // leaves the tab hidden forever (found 2026-09-21 with the adapter
-  // installed).
-  void revealLandingMcpNav();
 });
 // App-global registry changed in another window — stay in sync. The
 // initiating window is already navigating when it launched the change.
@@ -455,7 +450,6 @@ function selectLandingSettingsTab(tabKey) {
   const target = LANDING_FUNCTIONAL_SETTINGS_TABS.has(tabKey) ? tabKey : "general";
   document.querySelectorAll(".settings-nav-item[data-settings-tab]").forEach((item) => {
     const tab = item.dataset.settingsTab;
-    // MCP stays hidden until the installed-package check reveals it.
     item.classList.toggle("active", tab === target);
   });
   document.querySelectorAll(".settings-tab[data-settings-panel]").forEach((tab) => {
@@ -1070,27 +1064,8 @@ landingTaskNotificationsToggle?.addEventListener("click", () => {
   });
 });
 
-// MCP nav reveal from installed packages — host data only, so the check
-// never spawns the config runtime (mcpPage.refreshAvailability would).
-async function revealLandingMcpNav() {
-  const navItem = document.querySelector('[data-settings-tab="mcp"]');
-  if (!navItem || !transport.capabilities.native) return;
-  try {
-    const packages = await transport.listPiPackages();
-    const list = Array.isArray(packages) ? packages : (packages?.packages ?? []);
-    // `pi list` yields plain source strings or objects; match both shapes.
-    const installed = list.some((entry) =>
-      String(
-        typeof entry === "string"
-          ? entry
-          : (entry?.source ?? entry?.packageName ?? entry?.name ?? ""),
-      ).includes("pi-mcp-adapter"),
-    );
-    navItem.classList.toggle("hidden", !installed);
-  } catch {
-    navItem.classList.add("hidden");
-  }
-}
+// The MCP nav is statically visible: native MCP ships with every Pi 0.99+
+// runtime, so there is no adapter-detection gate anymore.
 
 // ── Zero-credential first-run card ───────────────────────────────────────────
 const landingCredentialCard = document.getElementById("landing-credential-card");
@@ -1109,7 +1084,6 @@ landingCredentialCard?.addEventListener("click", () => {
   openLandingSettings("models");
 });
 
-void revealLandingMcpNav();
 void refreshLandingCredentialCard();
 
 // ── Extensions page (host control ops; global-only at landing) ──

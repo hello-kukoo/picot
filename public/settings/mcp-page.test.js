@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-// ABOUTME: Verifies the MCP settings page: three layer tabs, per-entry readonly/editable,
-// ABOUTME: source display, array-command round-trip, disable toggle payload, nav availability.
+// ABOUTME: Verifies the MCP settings page: two native layer tabs, per-entry toggle payloads,
+// ABOUTME: array-command round-trip, adapter/shared migration banners, gateway error surfacing.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setMessages } from "../i18n.js";
@@ -11,7 +11,7 @@ setMessages({
   settings: {
     mcp: {
       title: "MCP",
-      groups: { sharedGlobal: "Shared (global)", piGlobal: "Pi (global)", project: "Project" },
+      groups: { piGlobal: "User (global)", project: "Project" },
       readOnlyBadge: "read-only",
       disabledBadge: "disabled",
       effectHint: "hint",
@@ -24,8 +24,8 @@ setMessages({
       enable: "Enable",
       disable: "Disable",
       saved: "Saved.",
-      legacyNotice: "legacy mcp.json found",
-      legacyMigrate: "Migrate",
+      migrateNotice: "Old config {file} has {count} server(s) native Pi does not read.",
+      migrate: "Migrate",
       migrationFailed: "Migration failed.",
       form: {
         name: "Name",
@@ -51,57 +51,43 @@ function makeGateway(result) {
 const LIST = {
   ok: true,
   data: {
-    installed: true,
     groups: {
-      sharedGlobal: [
-        {
-          name: "grep",
-          entry: { url: "https://mcp.grep.app", directTools: true },
-          sourceFile: "/home/u/.config/mcp/mcp.json",
-          editable: false,
-          ownDisabled: false,
-          effectiveDisabled: false,
-        },
-      ],
       piGlobal: [
         {
           name: "context7",
           // biome-ignore lint/suspicious/noTemplateCurlyInString: MCP ${VAR} placeholder data
           entry: { command: "npx", args: ["-y", "@upstash/context7-mcp"], env: { K: "${V}" } },
-          sourceFile: "/home/u/.pi/agent/mcp-adapter.json",
+          sourceFile: "/home/u/.pi/agent/mcp.json",
           editable: true,
-          ownDisabled: false,
-          effectiveDisabled: false,
+          enabled: true,
         },
         {
           name: "chrome-devtools",
-          entry: { command: ["npx", "-y", "chrome-devtools-mcp"], lifecycle: "lazy" },
-          sourceFile: "/home/u/.pi/agent/mcp-adapter.json",
+          entry: { command: ["npx", "-y", "chrome-devtools-mcp"], futureField: { a: 1 } },
+          sourceFile: "/home/u/.pi/agent/mcp.json",
           editable: true,
-          ownDisabled: false,
-          effectiveDisabled: false,
+          enabled: true,
+        },
+        {
+          name: "paused",
+          entry: { url: "https://paused.example", enabled: false },
+          sourceFile: "/home/u/.pi/agent/mcp.json",
+          editable: true,
+          enabled: false,
         },
       ],
       project: [
         {
           name: "repoTool",
           entry: { command: "run repo" },
-          sourceFile: "/ws/repo/.mcp.json",
-          editable: false,
-          ownDisabled: false,
-          effectiveDisabled: false,
-        },
-        {
-          name: "local",
-          entry: { command: "run local" },
-          sourceFile: "/ws/repo/.pi/mcp-adapter.json",
+          sourceFile: "/ws/repo/.pi/mcp.json",
           editable: true,
-          ownDisabled: false,
-          effectiveDisabled: false,
+          enabled: true,
         },
       ],
     },
     groupErrors: {},
+    migrations: [],
   },
 };
 
@@ -109,7 +95,7 @@ function mount(gateway) {
   const masterEl = document.createElement("div");
   const detailEl = document.createElement("div");
   const tabs = document.createElement("div");
-  for (const key of ["sharedGlobal", "piGlobal", "project"]) {
+  for (const key of ["piGlobal", "project"]) {
     const btn = document.createElement("button");
     btn.dataset.mcpTab = key;
     tabs.appendChild(btn);
@@ -146,66 +132,41 @@ describe("mcp-page", () => {
   it("auto-selects the first master row on load and on tab switch", async () => {
     const { page, detailEl, masterEl, tabs } = mount(makeGateway(LIST));
     await page.activate();
-    // Default tab auto-selects its first entry without any click.
-    expect(detailEl.textContent).toContain("grep");
+    // Default tab (user) auto-selects its first entry without any click.
+    expect(detailEl.textContent).toContain("context7");
     expect(
       masterEl.querySelector(".pkg-manager-sidebar-row").classList.contains("is-selected"),
     ).toBe(true);
 
-    clickTab(tabs, "piGlobal");
-    expect(detailEl.textContent).toContain("context7"); // first pi-global entry
     clickTab(tabs, "project");
-    expect(detailEl.textContent).toContain("repoTool"); // first project entry
+    expect(detailEl.textContent).toContain("repoTool");
   });
 
-  it("renders three tabs, switches active tab, and unhides nav when installed", async () => {
+  it("renders two tabs, both with an add button; availability is always true", async () => {
     const { page, masterEl, tabs, navItem } = mount(makeGateway(LIST));
     await page.activate();
-    await page.refreshAvailability();
+    expect(await page.refreshAvailability()).toBe(true);
     const tabButtons = Array.from(tabs.querySelectorAll("[data-mcp-tab]"));
-    expect(tabButtons.map((b) => b.getAttribute("aria-selected"))).toEqual([
-      "true",
-      "false",
-      "false",
-    ]);
-    expect(masterEl.textContent).toContain("grep"); // sharedGlobal default tab
-    expect(navItem.classList.contains("hidden")).toBe(false);
-
-    clickTab(tabs, "piGlobal");
-    expect(masterEl.textContent).toContain("context7");
-    expect(tabs.querySelector('[data-mcp-tab="piGlobal"]').getAttribute("aria-selected")).toBe(
-      "true",
-    );
+    expect(tabButtons.map((b) => b.getAttribute("aria-selected"))).toEqual(["true", "false"]);
+    expect(masterEl.querySelector(".models-provider-add")).not.toBeNull(); // user tab
+    clickTab(tabs, "project");
+    expect(masterEl.querySelector(".models-provider-add")).not.toBeNull(); // project tab
+    expect(navItem.className).toBe("hidden"); // page never touches the nav anymore
   });
 
-  it("keeps the nav hidden when the adapter is not installed", async () => {
-    const { page, navItem } = mount(
-      makeGateway({ ok: true, data: { installed: false, groups: {}, groupErrors: {} } }),
-    );
-    await page.refreshAvailability();
-    expect(navItem.classList.contains("hidden")).toBe(true);
-  });
-
-  it("shared tab: read-only detail with source path, no add button", async () => {
-    const { page, masterEl, detailEl } = mount(makeGateway(LIST));
+  it("disabled entry shows the badge; enabled entries do not", async () => {
+    const { page, masterEl } = mount(makeGateway(LIST));
     await page.activate();
-    expect(masterEl.querySelector(".models-provider-add")).toBeNull();
-    clickRow(masterEl, "grep");
-    expect(detailEl.textContent).toContain("read-only");
-    expect(detailEl.textContent).toContain("/home/u/.config/mcp/mcp.json");
-    expect(detailEl.querySelector(".mcp-entry-raw").textContent).toContain("mcp.grep.app");
-    expect(detailEl.querySelector(".mcp-form")).toBeNull();
+    clickRow(masterEl, "paused");
+    expect(masterEl.textContent).toContain("disabled");
+    clickRow(masterEl, "context7");
+    expect(masterEl.querySelectorAll(".mcp-badge, [data-disabled-badge]").length).toBe(0);
   });
 
-  it("pi-global tab: add button at the master bottom; editable form saves normalized entry", async () => {
+  it("user tab: editable form saves a normalized entry with the piGlobal scope", async () => {
     const gateway = makeGateway(LIST);
-    const { page, masterEl, detailEl, tabs } = mount(gateway);
+    const { page, masterEl, detailEl } = mount(gateway);
     await page.activate();
-    clickTab(tabs, "piGlobal");
-    const add = masterEl.querySelector(".models-provider-add");
-    expect(add).not.toBeNull();
-    expect(add.textContent).toBe("+ Add MCP");
-    expect(masterEl.lastElementChild).toBe(add); // bottom of the list
     clickRow(masterEl, "context7");
     const form = detailEl.querySelector(".mcp-form");
     expect(form).not.toBeNull();
@@ -227,9 +188,8 @@ describe("mcp-page", () => {
 
   it("array command: joined display, unmodified save passes the original array through", async () => {
     const gateway = makeGateway(LIST);
-    const { page, masterEl, detailEl, tabs } = mount(gateway);
+    const { page, masterEl, detailEl } = mount(gateway);
     await page.activate();
-    clickTab(tabs, "piGlobal");
     clickRow(masterEl, "chrome-devtools");
     const form = detailEl.querySelector(".mcp-form");
     const command = form.querySelector('input[placeholder="npx"]');
@@ -240,91 +200,100 @@ describe("mcp-page", () => {
     );
     const payload = gateway.call.mock.calls.find((c) => c[0] === "mcp_save_server")[1];
     expect(payload.entry.command).toEqual(["npx", "-y", "chrome-devtools-mcp"]); // verbatim array
-    expect(payload.entry.lifecycle).toBe("lazy"); // unknown keys preserved
+    expect(payload.entry.futureField).toEqual({ a: 1 }); // unknown keys preserved
   });
 
-  it("project tab: .mcp.json entry read-only, .pi/mcp-adapter.json entry editable", async () => {
-    const { page, masterEl, detailEl, tabs } = mount(makeGateway(LIST));
-    await page.activate();
-    clickTab(tabs, "project");
-    clickRow(masterEl, "repoTool");
-    expect(detailEl.textContent).toContain("read-only");
-    expect(detailEl.textContent).toContain("/ws/repo/.mcp.json");
-    clickRow(masterEl, "local");
-    expect(detailEl.querySelector(".mcp-form")).not.toBeNull();
-    expect(detailEl.textContent).toContain("/ws/repo/.pi/mcp-adapter.json");
-  });
-
-  it("detail: exactly one switch at the top; clicking sends the toggle payload", async () => {
+  it("detail: exactly one switch at the top; clicking sends scope+name+disable", async () => {
     const gateway = makeGateway(LIST);
     const { page, masterEl, detailEl } = mount(gateway);
     await page.activate();
-    clickRow(masterEl, "grep");
+    clickRow(masterEl, "context7");
     expect(detailEl.querySelectorAll('[role="switch"]').length).toBe(1); // no duplicate
     const toggle = detailEl.querySelector('.mcp-entry [role="switch"]');
     expect(toggle.getAttribute("aria-checked")).toBe("true"); // enabled
-    expect(
-      detailEl.querySelector(".mcp-entry").firstElementChild.classList.contains("mcp-toggle-row"),
-    ).toBe(true);
     toggle.click();
     await vi.waitFor(() =>
       expect(gateway.call).toHaveBeenCalledWith("mcp_toggle_server", expect.anything()),
     );
     const payload = gateway.call.mock.calls.find((c) => c[0] === "mcp_toggle_server")[1];
-    expect(payload).toEqual({ name: "grep", disable: true });
+    expect(payload).toEqual({ scope: "piGlobal", name: "context7", disable: true });
   });
 
-  it("save and delete share one action row in the edit form", async () => {
-    const { page, masterEl, detailEl, tabs } = mount(makeGateway(LIST));
+  it("project tab entry carries the project scope in its toggle payload", async () => {
+    const gateway = makeGateway(LIST);
+    const { page, masterEl, detailEl, tabs } = mount(gateway);
     await page.activate();
-    clickTab(tabs, "piGlobal");
+    clickTab(tabs, "project");
+    clickRow(masterEl, "repoTool");
+    detailEl.querySelector('.mcp-entry [role="switch"]').click();
+    await vi.waitFor(() =>
+      expect(gateway.call).toHaveBeenCalledWith("mcp_toggle_server", expect.anything()),
+    );
+    const payload = gateway.call.mock.calls.find((c) => c[0] === "mcp_toggle_server")[1];
+    expect(payload.scope).toBe("project");
+  });
+
+  it("migration banners: one per available target, click migrates then reloads", async () => {
+    const withMigrations = {
+      ok: true,
+      data: {
+        ...LIST.data,
+        migrations: [
+          {
+            id: "adapterGlobal",
+            sourceFile: "/home/u/.pi/agent/mcp-adapter.json",
+            missing: ["zread"],
+          },
+          {
+            id: "sharedGlobal",
+            sourceFile: "/home/u/.agents/mcp.json",
+            missing: ["grep", "first"],
+          },
+        ],
+      },
+    };
+    const afterMigrate = { ok: true, data: { ...LIST.data, migrations: [] } };
+    const call = vi
+      .fn()
+      .mockResolvedValueOnce(withMigrations) // activate() load
+      .mockResolvedValueOnce({ ok: true, data: { migrated: ["zread"], skipped: [], lossy: [] } })
+      .mockResolvedValueOnce(afterMigrate); // reload after migrate
+    const { page, masterEl } = mount({ call });
+
+    await page.activate();
+    const banners = masterEl.querySelectorAll(".mcp-legacy-notice");
+    expect(banners.length).toBe(2);
+    expect(banners[0].textContent).toContain("mcp-adapter.json");
+    expect(banners[0].textContent).toContain("1"); // missing count
+    expect(banners[1].textContent).toContain(".agents/mcp.json");
+    expect(banners[1].textContent).toContain("2");
+
+    banners[0].querySelector(".mcp-legacy-migrate").click();
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(call.mock.calls.map((c) => c[0])).toEqual([
+      "mcp_list_servers",
+      "mcp_migrate_adapter_config",
+      "mcp_list_servers",
+    ]);
+    expect(call.mock.calls[1][1]).toEqual({ target: "adapterGlobal" });
+    expect(masterEl.querySelectorAll(".mcp-legacy-notice").length).toBe(0);
+  });
+
+  it("save and delete share one action row in the edit form; add has no delete", async () => {
+    const { page, masterEl, detailEl } = mount(makeGateway(LIST));
+    await page.activate();
     clickRow(masterEl, "context7");
     const actions = detailEl.querySelector(".mcp-form-actions");
-    expect(actions).not.toBeNull();
     expect(actions.textContent).toContain("Save");
     expect(actions.textContent).toContain("Delete");
 
     const add2 = mount(makeGateway(LIST));
     await add2.page.activate();
-    clickTab(add2.tabs, "piGlobal");
     add2.masterEl.querySelector(".models-provider-add").click();
     const addActions = add2.detailEl.querySelector(".mcp-form-actions");
     expect(addActions.textContent).toContain("Save");
     expect(addActions.textContent).not.toContain("Delete");
-  });
-
-  it("legacy banner: shown when available, migrate op copies then reloads", async () => {
-    const withLegacy = {
-      ok: true,
-      data: { ...LIST.data, legacyMigration: { available: true } },
-    };
-    const afterMigrate = {
-      ok: true,
-      data: { ...LIST.data, legacyMigration: { available: false } },
-    };
-    const call = vi
-      .fn()
-      .mockResolvedValueOnce(withLegacy) // activate() load
-      .mockResolvedValueOnce({ ok: true, data: { migrated: true } }) // migrate op
-      .mockResolvedValueOnce(afterMigrate); // reload after migrate
-    const { page, masterEl } = mount({ call });
-
-    await page.activate();
-    const banner = masterEl.querySelector(".mcp-legacy-notice");
-    expect(banner).not.toBeNull();
-    expect(banner.textContent).toContain("legacy mcp.json found");
-
-    const migrateBtn = banner.querySelector(".mcp-legacy-migrate");
-    migrateBtn.click();
-    expect(migrateBtn.disabled).toBe(true); // no double-fire
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
-    expect(call.mock.calls.map((c) => c[0])).toEqual([
-      "mcp_list_servers",
-      "mcp_migrate_legacy_config",
-      "mcp_list_servers",
-    ]);
-    expect(masterEl.querySelector(".mcp-legacy-notice")).toBeNull();
   });
 
   it("gateway rejection surfaces as an error status instead of an unhandled rejection", async () => {

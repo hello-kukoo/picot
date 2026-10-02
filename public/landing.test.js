@@ -394,14 +394,15 @@ test("landing settings: all tabs functional; MCP reveal follows installed packag
   const hidden = (tab) =>
     navItems.find((item) => item.dataset.settingsTab === tab).classList.contains("hidden");
   // Everything visible at landing works; bridge tabs (models/configuration)
-  // run on the lazily spawned config runtime; MCP follows adapter presence.
+  // run on the lazily spawned config runtime. MCP is statically visible:
+  // native MCP ships with every Pi 0.99+ runtime, no adapter gate.
   expect(hidden("general")).toBe(false);
   expect(hidden("appearance")).toBe(false);
   expect(hidden("usage")).toBe(false);
   expect(hidden("skills")).toBe(false);
   expect(hidden("extensions")).toBe(false);
   expect(hidden("models")).toBe(false);
-  expect(hidden("mcp")).toBe(true);
+  expect(hidden("mcp")).toBe(false);
   expect(hidden("configuration")).toBe(false);
   // Usage activates and lazy-loads the cost dashboard element.
   const ensureLoaded = vi.fn();
@@ -567,71 +568,4 @@ test("errors render into the landing notice, never a chat renderer", async () =>
   const notice = document.getElementById("landing-notice");
   expect(notice.classList.contains("hidden")).toBe(false);
   expect(notice.textContent).toContain("spawn failed");
-});
-test("MCP nav reveals on hello_ack even though the module-load attempt ran first", async () => {
-  installDom();
-  document.body.insertAdjacentHTML(
-    "beforeend",
-    `
-<div class="settings-nav">
-<button class="settings-nav-item hidden" data-settings-tab="mcp">MCP</button>
-</div>`,
-  );
-  harness.transport = makeTransportStub();
-  // Before `hello_ack` the transport reports no native capability — exactly
-  // the moment the module-load reveal runs, so its check bails and the entry
-  // keeps index.html's hidden default (2026-09-21: tab missing with the
-  // adapter installed).
-  harness.transport.capabilities.native = false;
-  harness.transport.listPiPackages = async () => [{ source: "npm:pi-mcp-adapter" }];
-  document.cookie = "picot-language=en; Max-Age=600; path=/";
-  const realFetch = globalThis.fetch.bind(globalThis);
-  vi.stubGlobal("fetch", async (input) => {
-    const match = String(input).match(/locales\/([a-z]{2})\.json/);
-    if (match) {
-      return {
-        ok: true,
-        json: async () => JSON.parse(readFileSync(`public/locales/${match[1]}.json`, "utf8")),
-      };
-    }
-    return realFetch(input);
-  });
-  await import("./landing.js");
-
-  const navItem = document.querySelector('[data-settings-tab="mcp"]');
-  expect(navItem.classList.contains("hidden")).toBe(true);
-  harness.transport.capabilities.native = true;
-  harness.wsClient.dispatchEvent(new Event("hostCapabilities"));
-  await vi.waitFor(() => expect(navItem.classList.contains("hidden")).toBe(false));
-});
-
-test("MCP nav stays hidden when the adapter is absent", async () => {
-  installDom();
-  document.body.insertAdjacentHTML(
-    "beforeend",
-    `
-<div class="settings-nav">
-<button class="settings-nav-item hidden" data-settings-tab="mcp">MCP</button>
-</div>`,
-  );
-  harness.transport = makeTransportStub();
-  harness.transport.listPiPackages = async () => [{ source: "npm:pi-fff" }];
-  document.cookie = "picot-language=en; Max-Age=600; path=/";
-  const realFetch = globalThis.fetch.bind(globalThis);
-  vi.stubGlobal("fetch", async (input) => {
-    const match = String(input).match(/locales\/([a-z]{2})\.json/);
-    if (match) {
-      return {
-        ok: true,
-        json: async () => JSON.parse(readFileSync(`public/locales/${match[1]}.json`, "utf8")),
-      };
-    }
-    return realFetch(input);
-  });
-  await import("./landing.js");
-  harness.wsClient.dispatchEvent(new Event("hostCapabilities"));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  expect(document.querySelector('[data-settings-tab="mcp"]').classList.contains("hidden")).toBe(
-    true,
-  );
 });

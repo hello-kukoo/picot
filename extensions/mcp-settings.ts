@@ -1,5 +1,5 @@
-// ABOUTME: MCP server inventory and mutation ops over pi-mcp-adapter's layered config files.
-// ABOUTME: Reads four adapter sources (shared-global, pi-global, shared-project, pi-project); writes only pi-owned mcp-adapter.json layers.
+// ABOUTME: MCP server inventory and mutation ops over Pi 0.99+ native config files.
+// ABOUTME: Manages the two native layers (user ~/.pi/agent/mcp.json + project .pi/mcp.json); migrates orphaned adapter/shared layers.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -10,14 +10,19 @@ export type McpWriteScope = "piGlobal" | "project";
 export interface McpListEntry {
   name: string;
   entry: Record<string, unknown>;
-  /** Absolute path of the file this entry was last defined in. */
+  /** Absolute path of the file this entry is defined in. */
   sourceFile: string;
-  /** True only for pi-owned sources: the pi-global and pi-project mcp-adapter.json files. */
-  editable: boolean;
-  /** The entry's own `disabled` flag in its source file. */
-  ownDisabled: boolean;
-  /** Disabled state after the adapter's full later-wins merge across all sources. */
-  effectiveDisabled: boolean;
+  /** Native files are always pi-owned and editable. */
+  editable: true;
+  /** Native enabled state: false only when the entry carries `enabled: false`. */
+  enabled: boolean;
+}
+
+export interface McpMigrationTarget {
+  id: "adapterGlobal" | "adapterProject" | "sharedGlobal" | "sharedProject";
+  sourceFile: string;
+  /** Entry names present in the source but missing from the native target file. */
+  missing: string[];
 }
 
 interface McpLayerRead {
@@ -26,16 +31,18 @@ interface McpLayerRead {
   error?: string;
 }
 
+/** Native server names: letters, digits, `_`, `-` (docs/mcp.md configuration rules). */
+const SERVER_NAME_RE = /^[A-Za-z0-9_-]+$/;
+const EXPOSURE_VALUES = new Set(["direct", "codemode", "codemode-deferred", "deferred", "hidden"]);
+const ENTRY_STRING_KEYS = new Set(["url", "cwd", "description"]);
+const ENTRY_OBJECT_KEYS = new Set(["env", "headers", "toolExposure"]);
+const ADAPTER_DROP_FIELDS = ["directTools", "inheritEnv", "lifecycle", "disabled"] as const;
+
 const SHARED_GLOBAL_FILENAMES = [
   path.join(".config", "mcp", "mcp.json"),
   path.join(".agents", "mcp.json"),
   path.join(".agents", "mcp", "mcp.json"),
 ] as const;
-
-const SERVER_NAME_RE = /^[\w.-]+$/;
-const ENTRY_STRING_KEYS = new Set(["url", "cwd", "lifecycle"]);
-const ENTRY_OBJECT_KEYS = new Set(["env", "headers"]);
-const ENTRY_BOOL_KEYS = new Set(["directTools", "inheritEnv", "disabled"]);
 
 function homeDir(): string {
   // Mirrors picot-config.ts's resolveHomeDir precedence: env override first,
@@ -46,11 +53,8 @@ function homeDir(): string {
   return os.homedir();
 }
 
-/**
- * Port of the adapter's parseJsonWithComments tolerance: strips // and
- * block comments plus trailing commas, string-aware so `//` inside a value
- * survives.
- */
+/** JSONC tolerance shared with the adapter era: strips // and block comments
+ * plus trailing commas, string-aware so `//` inside a value survives. */
 export function stripJsonComments(raw: string): string {
   let out = "";
   let i = 0;
@@ -88,7 +92,6 @@ export function stripJsonComments(raw: string): string {
     out += ch;
     i += 1;
   }
-  // Trailing commas: a comma followed only by whitespace and a closer.
   return out.replace(/,(\s*[}\]])/g, "$1");
 }
 
@@ -101,7 +104,6 @@ function readMcpLayer(filePath: string): McpLayerRead {
   }
   try {
     const parsed = JSON.parse(stripJsonComments(raw)) as Record<string, unknown>;
-    // Adapter compatibility: read either key, write back under the same one.
     const serverKey =
       parsed.mcpServers !== undefined
         ? "mcpServers"
@@ -125,7 +127,7 @@ function readMcpLayer(filePath: string): McpLayerRead {
   }
 }
 
-/** Adapter write format: 2-space JSON + trailing newline, atomic tmp+rename. */
+/** Native write format: 2-space JSON + trailing newline, atomic tmp+rename. */
 function writeMcpLayer(filePath: string, doc: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.tmp`);
@@ -135,86 +137,12 @@ function writeMcpLayer(filePath: string, doc: Record<string, unknown>): void {
   fs.renameSync(tmp, filePath);
 }
 
-function sharedGlobalPaths(): string[] {
-  return SHARED_GLOBAL_FILENAMES.map((rel) => path.join(homeDir(), rel));
-}
-
-function piGlobalPath(agentDir: string): string {
-  // pi-mcp-adapter 3.x owns mcp-adapter.json; mcp.json now belongs to Pi's
-  // built-in MCP support and is ignored by the adapter (see its CHANGELOG 3.0.0).
-  return path.join(agentDir, "mcp-adapter.json");
-}
-
-/** Pre-3.0 adapter config location. Read-only migration source, never written. */
-function legacyPiGlobalPath(agentDir: string): string {
+function userPath(agentDir: string): string {
   return path.join(agentDir, "mcp.json");
 }
 
-/**
- * Detection for the settings page: a pre-3.0 `<agent dir>/mcp.json` exists
- * that the adapter no longer reads. Read-only — the copy itself runs only
- * through the explicit `mcp_migrate_legacy_config` op after the user confirms.
- */
-function legacyMigrationStatus(
-  agentDir: string,
-  installed: boolean,
-): { available: boolean; error?: string } {
-  const target = piGlobalPath(agentDir);
-  if (fs.existsSync(target)) return { available: false };
-  const source = legacyPiGlobalPath(agentDir);
-  const legacy = readMcpLayer(source);
-  if (!legacy.doc) {
-    if (!legacy.error || !installed) return { available: false };
-    return {
-      available: false,
-      error: `${source} could not be migrated to ${target}: ${legacy.error}`,
-    };
-  }
-  return { available: installed && Object.keys(serversOf(legacy)).length > 0 };
-}
-
-/**
- * The user-confirmed copy: pre-3.0 `<agent dir>/mcp.json` → `mcp-adapter.json`.
- * Runs only when the adapter is installed, the target is absent, and the
- * source parses with at least one server; the source file always stays.
- */
-export function migrateLegacyPiGlobalConfig(agentDir: string): {
-  migrated: boolean;
-  error?: string;
-} {
-  const status = legacyMigrationStatus(agentDir, isAdapterInstalled(agentDir));
-  if (status.error) return { migrated: false, error: status.error };
-  if (!status.available) return { migrated: false };
-  const legacy = readMcpLayer(legacyPiGlobalPath(agentDir));
-  // The availability check above just parsed this file; a failure here means
-  // it changed between the two reads, and refusing is the safe answer.
-  if (!legacy.doc) return { migrated: false, error: "legacy config changed while migrating" };
-  // Same race on the target: the check saw it absent, but the adapter or the
-  // user may have created mcp-adapter.json since — a migration must never
-  // overwrite config that appeared after the user confirmed.
-  if (fs.existsSync(piGlobalPath(agentDir))) {
-    return {
-      migrated: false,
-      error: "mcp-adapter.json appeared during migration; not overwritten",
-    };
-  }
-  try {
-    writeMcpLayer(piGlobalPath(agentDir), legacy.doc);
-  } catch (error) {
-    return {
-      migrated: false,
-      error: `${legacyPiGlobalPath(agentDir)} could not be migrated to ${piGlobalPath(agentDir)}: ${error instanceof Error ? error.message : String(error)}`,
-    };
-  }
-  return { migrated: true };
-}
-
-function sharedProjectPath(cwd: string): string {
-  return path.join(cwd, ".mcp.json");
-}
-
-function piProjectPath(cwd: string): string {
-  return path.join(cwd, ".pi", "mcp-adapter.json");
+function projectPath(cwd: string): string {
+  return path.join(cwd, ".pi", "mcp.json");
 }
 
 function serversOf(layer: McpLayerRead): Record<string, Record<string, unknown>> {
@@ -225,138 +153,102 @@ function serversOf(layer: McpLayerRead): Record<string, Record<string, unknown>>
     : {};
 }
 
-interface MergedEntry {
-  entry: Record<string, unknown>;
-  sourceFile: string;
-}
-
-/** Later-wins merge that remembers which file each surviving entry came from. */
-function mergeLayers(
-  layers: { filePath: string; layer: McpLayerRead }[],
-): Map<string, MergedEntry> {
-  const merged = new Map<string, MergedEntry>();
-  for (const { filePath, layer } of layers) {
-    for (const [name, entry] of Object.entries(serversOf(layer))) {
-      merged.set(name, { entry, sourceFile: filePath });
-    }
-  }
-  return merged;
-}
-
-function isAdapterInstalled(agentDir: string): boolean {
-  const { doc } = readMcpLayer(path.join(agentDir, "settings.json"));
-  if (!doc || !Array.isArray(doc.packages)) return false;
-
-  return doc.packages.some((spec) => {
-    const source =
-      typeof spec === "string"
-        ? spec
-        : spec && typeof spec === "object" && typeof spec.source === "string"
-          ? spec.source
-          : undefined;
-    if (!source) return false;
-
-    const isAdapterSource =
-      source === "npm:pi-mcp-adapter" ||
-      source.startsWith("npm:pi-mcp-adapter@") ||
-      source.replace(/\.git$/, "").endsWith("/pi-mcp-adapter");
-    if (!isAdapterSource) return false;
-
-    // An empty resource filter keeps the package installed but disables this
-    // extension, so the MCP settings page has no runtime adapter to manage.
-    return !(
-      spec &&
-      typeof spec === "object" &&
-      Array.isArray(spec.extensions) &&
-      spec.extensions.length === 0
-    );
-  });
-}
-
-function toListEntries(
-  merged: Map<string, MergedEntry>,
-  effective: Map<string, Record<string, unknown>>,
-  editableFile: (filePath: string) => boolean,
-): McpListEntry[] {
-  const entries: McpListEntry[] = [];
-  for (const [name, { entry, sourceFile }] of merged) {
-    entries.push({
-      name,
-      entry,
-      sourceFile,
-      editable: editableFile(sourceFile),
-      ownDisabled: entry.disabled === true,
-      effectiveDisabled: effective.get(name)?.disabled === true,
+/** Migration sources, in stable order. Each is read-only forever: the
+ * migration is a user-confirmed copy of missing entries, never a move. */
+function migrationSources(
+  agentDir: string,
+  cwd: string,
+): { id: McpMigrationTarget["id"]; files: string[]; target: "user" | "project" }[] {
+  const sources: { id: McpMigrationTarget["id"]; files: string[]; target: "user" | "project" }[] = [
+    { id: "adapterGlobal", files: [path.join(agentDir, "mcp-adapter.json")], target: "user" },
+  ];
+  if (cwd && cwd !== homeDir()) {
+    sources.push({
+      id: "adapterProject",
+      files: [path.join(cwd, ".pi", "mcp-adapter.json")],
+      target: "project",
     });
+    sources.push({ id: "sharedProject", files: [path.join(cwd, ".mcp.json")], target: "project" });
   }
-  return entries;
+  sources.push({
+    id: "sharedGlobal",
+    files: SHARED_GLOBAL_FILENAMES.map((rel) => path.join(homeDir(), rel)),
+    target: "user",
+  });
+  return sources;
 }
 
-/**
- * Inventory across the adapter's non-exclusive layer order:
- * shared-global (3 files) → pi-global → shared-project (.mcp.json) → pi-project (.pi/mcp-adapter.json).
- * Same-name entries: later layers win; the project group shows the winning
- * entry only (a shadowed .mcp.json definition is not listed separately).
- */
+/** Merge the source files' entries later-wins, like the adapter used to. */
+function mergeFiles(files: string[]): {
+  merged: Map<string, Record<string, unknown>>;
+  error?: string;
+} {
+  const merged = new Map<string, Record<string, unknown>>();
+  let error: string | undefined;
+  for (const file of files) {
+    const layer = readMcpLayer(file);
+    if (layer.error) error ??= layer.error;
+    for (const [name, entry] of Object.entries(serversOf(layer))) merged.set(name, entry);
+  }
+  return { merged, error };
+}
+
+function toListEntries(layer: McpLayerRead, filePath: string): McpListEntry[] {
+  return Object.entries(serversOf(layer)).map(([name, entry]) => ({
+    name,
+    entry,
+    sourceFile: filePath,
+    editable: true as const,
+    enabled: entry.enabled !== false,
+  }));
+}
+
+/** Inventory across the two native files, plus available one-shot migrations
+ * from orphaned adapter/shared layers that native Pi never reads. */
 export function listMcpServers(
   agentDir: string,
   cwd: string,
 ): {
-  installed: boolean;
-  legacyMigration: { available: boolean };
-  groups: { sharedGlobal: McpListEntry[]; piGlobal: McpListEntry[]; project: McpListEntry[] };
-  groupErrors: { sharedGlobal?: string; piGlobal?: string; project?: string };
+  groups: { piGlobal: McpListEntry[]; project: McpListEntry[] };
+  groupErrors: { piGlobal?: string; project?: string };
+  migrations: McpMigrationTarget[];
 } {
-  const sharedLayers = sharedGlobalPaths().map((filePath) => ({
-    filePath,
-    layer: readMcpLayer(filePath),
-  }));
-  // The page exists only to manage the adapter, so a missing adapter means no
-  // migration: never create adapter config for a package the user does not run.
-  const installed = isAdapterInstalled(agentDir);
-  const legacy = legacyMigrationStatus(agentDir, installed);
-  const piLayer = { filePath: piGlobalPath(agentDir), layer: readMcpLayer(piGlobalPath(agentDir)) };
-  const projectLayers =
+  const userLayer = { filePath: userPath(agentDir), layer: readMcpLayer(userPath(agentDir)) };
+  const projectLayer =
     cwd && cwd !== homeDir()
-      ? [
-          { filePath: sharedProjectPath(cwd), layer: readMcpLayer(sharedProjectPath(cwd)) },
-          { filePath: piProjectPath(cwd), layer: readMcpLayer(piProjectPath(cwd)) },
-        ]
-      : [];
+      ? { filePath: projectPath(cwd), layer: readMcpLayer(projectPath(cwd)) }
+      : null;
 
-  const sharedMerged = mergeLayers(sharedLayers);
-  const piMerged = mergeLayers([piLayer]);
-  const projectMerged = mergeLayers(projectLayers);
-
-  const effective = new Map<string, Record<string, unknown>>();
-  for (const source of [sharedMerged, piMerged, projectMerged]) {
-    for (const [name, { entry }] of source) effective.set(name, entry);
+  const migrations: McpMigrationTarget[] = [];
+  for (const source of migrationSources(agentDir, cwd)) {
+    const targetLayer = source.target === "user" ? userLayer : projectLayer;
+    if (!targetLayer) continue;
+    const existing = new Set(Object.keys(serversOf(targetLayer.layer)));
+    const { merged } = mergeFiles(source.files);
+    const missing = [...merged.keys()].filter((name) => !existing.has(name));
+    if (missing.length > 0) {
+      const sourceFile = source.files.find((f) => fs.existsSync(f)) ?? source.files[0];
+      migrations.push({ id: source.id, sourceFile, missing });
+    }
   }
 
   return {
-    installed,
-    legacyMigration: { available: legacy.available },
     groups: {
-      sharedGlobal: toListEntries(sharedMerged, effective, () => false),
-      piGlobal: toListEntries(piMerged, effective, () => true),
-      project: toListEntries(
-        projectMerged,
-        effective,
-        (filePath) => filePath === (cwd ? piProjectPath(cwd) : ""),
-      ),
+      piGlobal: toListEntries(userLayer.layer, userLayer.filePath),
+      project: projectLayer ? toListEntries(projectLayer.layer, projectLayer.filePath) : [],
     },
     groupErrors: {
-      sharedGlobal: sharedLayers.map((l) => l.layer.error).find(Boolean),
-      piGlobal: piLayer.layer.error ?? legacy.error,
-      project: projectLayers.map((l) => l.layer.error).find(Boolean),
+      piGlobal: userLayer.layer.error,
+      project: projectLayer?.layer.error,
     },
+    migrations,
   };
 }
 
 function writeScopeTarget(scope: McpWriteScope, agentDir: string, cwd: string): string {
-  if (scope === "piGlobal") return piGlobalPath(agentDir);
+  if (scope === "piGlobal") return userPath(agentDir);
   if (!cwd) throw new Error("No active project for project-scoped MCP writes");
-  return piProjectPath(cwd);
+  return projectPath(cwd);
 }
 
 function parseWriteScope(value: unknown): McpWriteScope {
@@ -364,16 +256,41 @@ function parseWriteScope(value: unknown): McpWriteScope {
   throw new Error("scope must be piGlobal or project");
 }
 
-function validateServerName(name: unknown): string {
+/** Native rule: `-` and `_` are the same separator, so dev-radius and
+ * dev_radius collide and the second one is rejected. */
+function nameKey(name: string): string {
+  return name.replace(/[-_]/g, "_");
+}
+
+function validateServerName(name: unknown, existingNames: string[]): string {
   if (typeof name !== "string" || !SERVER_NAME_RE.test(name)) {
-    throw new Error("Server name must match [A-Za-z0-9_.-]");
+    throw new Error("Server name may contain only letters, digits, _ and -");
+  }
+  const key = nameKey(name);
+  const collision = existingNames.find(
+    (existing) => existing !== name && nameKey(existing) === key,
+  );
+  if (collision) {
+    throw new Error(
+      `Server names that differ only in - and _ count as the same server (conflicts with ${collision})`,
+    );
   }
   return name;
 }
 
+function asStringMap(value: unknown, key: string, validateValues?: (v: string) => void) {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof v !== "string") throw new Error(`${key}.${k} must be a string`);
+    if (validateValues) validateValues.call(null, v);
+    out[k] = v;
+  }
+  return out;
+}
+
 /**
- * Keeps only known-good entry fields from `entry`, preserving unknown keys
- * already present in `existing` (adapter may grow fields Picot doesn't know).
+ * Keeps only native-known entry fields from `entry`, preserving unknown keys
+ * already present in `existing` (Pi may grow fields Picot doesn't know).
  */
 function normalizeEntry(
   entry: unknown,
@@ -421,7 +338,11 @@ function normalizeEntry(
   }
 
   for (const key of ENTRY_STRING_KEYS) {
-    if (source[key] === null || source[key] === undefined) continue;
+    if (source[key] === null || source[key] === "") {
+      delete merged[key];
+      continue;
+    }
+    if (source[key] === undefined) continue;
     if (typeof source[key] !== "string") throw new Error(`${key} must be a string`);
     merged[key] = source[key];
   }
@@ -432,19 +353,54 @@ function normalizeEntry(
     }
     if (source[key] === undefined) continue;
     const value = source[key];
-    if (typeof value !== "object" || Array.isArray(value))
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
       throw new Error(`${key} must be an object`);
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (typeof v !== "string") throw new Error(`${key}.${k} must be a string`);
     }
-    merged[key] = value;
-  }
-  for (const key of ENTRY_BOOL_KEYS) {
-    if (source[key] === undefined || source[key] === null) continue;
-    if (typeof source[key] !== "boolean") throw new Error(`${key} must be a boolean`);
-    merged[key] = source[key];
+    if (key === "toolExposure") {
+      merged[key] = asStringMap(value, key, (v) => {
+        if (!EXPOSURE_VALUES.has(v))
+          throw new Error(`toolExposure value must be an exposure: ${v}`);
+      });
+    } else {
+      merged[key] = asStringMap(value, key);
+    }
   }
 
+  if (source.exposure !== undefined && source.exposure !== null) {
+    if (typeof source.exposure !== "string" || !EXPOSURE_VALUES.has(source.exposure)) {
+      throw new Error(`exposure must be one of ${[...EXPOSURE_VALUES].join(", ")}`);
+    }
+    merged.exposure = source.exposure;
+  } else if (source.exposure === null) {
+    delete merged.exposure;
+  }
+
+  if (source.timeout !== undefined && source.timeout !== null) {
+    if (typeof source.timeout !== "number" || !(source.timeout > 0)) {
+      throw new Error("timeout must be a positive number of seconds");
+    }
+    merged.timeout = source.timeout;
+  } else if (source.timeout === null) {
+    delete merged.timeout;
+  }
+
+  if (source.enabled !== undefined && source.enabled !== null) {
+    if (typeof source.enabled !== "boolean") throw new Error("enabled must be a boolean");
+    merged.enabled = source.enabled;
+  } else if (source.enabled === null) {
+    delete merged.enabled;
+  }
+
+  // Final transport arbitration: whichever transport is present wins and the
+  // other transport's fields are dropped — regardless of the order the form
+  // sent them in.
+  if (merged.url !== undefined) {
+    delete merged.command;
+    delete merged.args;
+  } else if (merged.command !== undefined) {
+    delete merged.url;
+    delete merged.headers;
+  }
   if (merged.command === undefined && merged.url === undefined) {
     throw new Error("Server entry needs a command (stdio) or a url (remote)");
   }
@@ -459,11 +415,11 @@ export function saveMcpServer(
   // ponytail: read-modify-write with no lock — two rapid saves can lose one
   // update. Single-user settings UI, acceptable; add a queue if it bites.
   const scope = parseWriteScope(params.scope);
-  const name = validateServerName(params.name);
   const filePath = writeScopeTarget(scope, agentDir, cwd);
   const layer = readMcpLayer(filePath);
   const doc: Record<string, unknown> = layer.doc ?? {};
   const servers = serversOf(layer);
+  const name = validateServerName(params.name, Object.keys(servers));
   servers[name] = normalizeEntry(params.entry, servers[name]);
   doc[layer.serverKey] = servers;
   writeMcpLayer(filePath, doc);
@@ -476,7 +432,8 @@ export function deleteMcpServer(
   cwd: string,
 ): { scope: McpWriteScope; name: string; path: string } {
   const scope = parseWriteScope(params.scope);
-  const name = validateServerName(params.name);
+  const name = params.name;
+  if (typeof name !== "string") throw new Error("name must be a string");
   const filePath = writeScopeTarget(scope, agentDir, cwd);
   const layer = readMcpLayer(filePath);
   if (!layer.doc || !(name in serversOf(layer))) return { scope, name, path: filePath }; // Idempotent delete.
@@ -488,53 +445,98 @@ export function deleteMcpServer(
 }
 
 /**
- * TUI-aligned disable (writeProjectServerDisabledOverride): persists only
- * the `disabled` field into the pi-project layer, under the file's original
- * server key. Enable consults every lower source (shared-global, pi-global,
- * shared-project) to decide between writing `disabled: false` and removing
- * the flag; empty results delete the entry; no-op changes skip the write.
- *
- * ponytail: adapter's expandImports (host-config imports declared in
- * pi-owned files) is not expanded here — a server imported that way with
- * disabled:true will read as enabled after an enable click until imports
- * support lands. Update lowerLayers with expandImports when needed.
+ * Native disable semantics: the `enabled` flag lives on the entry in the
+ * file that defines it. Disabling sets `enabled: false`; enabling removes
+ * the flag so the default (enabled) applies.
  */
 export function toggleMcpServer(
   params: Record<string, unknown>,
   agentDir: string,
   cwd: string,
-): { name: string; disabled: boolean | null; changed: boolean } {
-  const name = validateServerName(params.name);
+): { name: string; enabled: boolean; changed: boolean } {
+  const scope = parseWriteScope(params.scope);
   const disable = params.disable === true;
-  if (!cwd) throw new Error("No active project for MCP enable/disable");
-  const filePath = piProjectPath(cwd);
+  const filePath = writeScopeTarget(scope, agentDir, cwd);
   const layer = readMcpLayer(filePath);
-  const doc: Record<string, unknown> = layer.doc ?? {};
   const servers = serversOf(layer);
+  const name = typeof params.name === "string" ? params.name : "";
+  if (!layer.doc) throw new Error(`Unknown MCP server in ${filePath}: ${name || "(none)"}`);
   const existing = servers[name] as Record<string, unknown> | undefined;
+  if (!existing) throw new Error(`Unknown MCP server in ${filePath}: ${name || "(none)"}`);
 
   let next: Record<string, unknown>;
   if (disable) {
-    next = { ...(existing ?? {}), disabled: true };
+    next = { ...existing, enabled: false };
   } else {
-    next = Object.fromEntries(Object.entries(existing ?? {}).filter(([key]) => key !== "disabled"));
-    const lowerLayers = mergeLayers([
-      ...sharedGlobalPaths().map((p) => ({ filePath: p, layer: readMcpLayer(p) })),
-      { filePath: piGlobalPath(agentDir), layer: readMcpLayer(piGlobalPath(agentDir)) },
-      { filePath: sharedProjectPath(cwd), layer: readMcpLayer(sharedProjectPath(cwd)) },
-    ]);
-    if (lowerLayers.get(name)?.entry.disabled === true) next.disabled = false;
+    next = Object.fromEntries(Object.entries(existing).filter(([key]) => key !== "enabled"));
+  }
+  const changed = JSON.stringify(existing) !== JSON.stringify(next);
+  if (changed) {
+    servers[name] = next;
+    layer.doc[layer.serverKey] = servers;
+    writeMcpLayer(filePath, layer.doc);
+  }
+  return { name, enabled: !disable, changed };
+}
+
+/** Adapter→native field mapping for the migration copy. Returns the mapped
+ * entry plus whether adapter-only fields had to be dropped. */
+function mapAdapterEntry(raw: Record<string, unknown>): {
+  entry: Record<string, unknown>;
+  lossy: boolean;
+} {
+  const entry: Record<string, unknown> = { ...raw };
+  let lossy = false;
+  if (entry.disabled === true) entry.enabled = false;
+  if (entry.directTools === true) entry.exposure = "direct";
+  for (const field of ADAPTER_DROP_FIELDS) {
+    if (field in entry) {
+      delete entry[field];
+      if (field === "inheritEnv" || field === "lifecycle") lossy = true;
+    }
+  }
+  return { entry, lossy };
+}
+
+/**
+ * User-confirmed one-shot copy from an orphaned adapter/shared layer into the
+ * matching native file. Only names missing from the target are merged; the
+ * source file is always left in place.
+ */
+export function migrateAdapterConfig(
+  params: Record<string, unknown>,
+  agentDir: string,
+  cwd: string,
+): { migrated: string[]; skipped: string[]; lossy: string[] } {
+  const target = params.target;
+  const source = migrationSources(agentDir, cwd).find((s) => s.id === target);
+  if (!source) throw new Error(`Unknown migration target: ${String(target)}`);
+  if (source.target === "project" && !(cwd && cwd !== homeDir())) {
+    throw new Error("No active project for project-scoped MCP migration");
   }
 
-  const unchanged =
-    (!existing && Object.keys(next).length === 0) ||
-    JSON.stringify(existing) === JSON.stringify(next);
-  const nextDisabled = next.disabled === true ? true : next.disabled === false ? false : null;
-  if (unchanged) return { name, disabled: disable ? true : nextDisabled, changed: false };
+  const filePath = source.target === "user" ? userPath(agentDir) : projectPath(cwd);
+  const layer = readMcpLayer(filePath);
+  const doc: Record<string, unknown> = layer.doc ?? {};
+  const servers = serversOf(layer);
+  const { merged } = mergeFiles(source.files);
 
-  if (Object.keys(next).length === 0) delete servers[name];
-  else servers[name] = next;
-  doc[layer.serverKey] = servers;
-  writeMcpLayer(filePath, doc);
-  return { name, disabled: disable ? true : nextDisabled, changed: true };
+  const migrated: string[] = [];
+  const skipped: string[] = [];
+  const lossy: string[] = [];
+  for (const [name, raw] of merged) {
+    if (name in servers) {
+      skipped.push(name);
+      continue;
+    }
+    const mapped = mapAdapterEntry(raw);
+    servers[name] = mapped.entry;
+    migrated.push(name);
+    if (mapped.lossy) lossy.push(name);
+  }
+  if (migrated.length > 0) {
+    doc[layer.serverKey] = servers;
+    writeMcpLayer(filePath, doc);
+  }
+  return { migrated, skipped, lossy };
 }

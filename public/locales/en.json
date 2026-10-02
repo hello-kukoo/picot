@@ -789,8 +789,7 @@
     "mcp": {
       "title": "MCP",
       "groups": {
-        "sharedGlobal": "Shared (global)",
-        "piGlobal": "Pi (global)",
+        "piGlobal": "User (global)",
         "project": "Project"
       },
       "readOnlyBadge": "read-only",
@@ -819,8 +818,8 @@
       "sourceLabel": "Source",
       "sectionsAriaLabel": "MCP layers",
       "addMcp": "+ Add MCP",
-      "legacyNotice": "A pre-3.0 adapter config (mcp.json) was found. Migrate it to mcp-adapter.json?",
-      "legacyMigrate": "Migrate",
+      "migrateNotice": "Old config {file} holds {count} server(s) native Pi does not read.",
+      "migrate": "Migrate",
       "migrationFailed": "Migration failed."
     },
     "usage": "Usage",
@@ -830,6 +829,58 @@
     "backToChat": "Back",
     "appearance": "Appearance",
     "agent": "Agent",
+    "subagents": {
+      "title": "Subagents",
+      "scopes": {
+        "global": "Global",
+        "project": "Current project"
+      },
+      "groups": {
+        "user": "Your definitions",
+        "project": "Project definitions",
+        "package": "Packages",
+        "builtin": "Built-in (read-only)"
+      },
+      "status": {
+        "candidate": "Disk candidate — runtime winner unverified"
+      },
+      "diskOnlyMode": "Disk candidates only: effectiveness and collisions are unverified.",
+      "state": {
+        "loading": "Loading…",
+        "empty": "No agent definitions in this scope.",
+        "error": "Failed to load subagents. Retry.",
+        "conflict": "Workspace or inventory changed. Refresh and retry."
+      },
+      "retry": "Retry",
+      "detail": {
+        "runtimeName": "Runtime name",
+        "source": "Source",
+        "path": "File",
+        "noFile": "No definition file (built-in)",
+        "scope": "Scope",
+        "savedOverride": "Saved override",
+        "model": "Model",
+        "thinking": "Thinking",
+        "none": "None",
+        "inferred": "Inferred",
+        "save": "Save",
+        "reloadNotice": "Changes are saved on disk. Existing sessions may need /reload or a new session; verify with /subagents-models or /run.",
+        "rawLoading": "Loading definition…",
+        "rawUnavailable": "Definition unavailable.",
+        "invalidModel": "Use a provider/model ID.",
+        "saved": "Saved to disk. Reload or start a new session; verify with /subagents-models or /run."
+      },
+      "create": {
+        "title": "New agent .md",
+        "name": "Name",
+        "description": "Description",
+        "prompt": "Prompt",
+        "submit": "Create",
+        "disabled": "Creation unavailable: runtime identity unverified.",
+        "invalid": "Enter a name, description, and nonempty prompt."
+      },
+      "alsoIn": "Also available in: {scopes}"
+    },
     "updates": "Updates",
     "autoCompaction": "Auto-compaction",
     "codemode": "Code mode",

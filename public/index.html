@@ -1048,7 +1048,15 @@
           Skills
         </button>
         <button
-          class="settings-nav-item hidden"
+          class="settings-nav-item"
+          data-settings-tab="subagents"
+          data-i18n="settings.subagents.title"
+          type="button"
+        >
+          Subagents
+        </button>
+        <button
+          class="settings-nav-item"
           data-settings-tab="mcp"
           data-i18n="settings.mcp.title"
         >
@@ -1885,6 +1893,11 @@
           </div>
         </div>
 
+        <div class="settings-tab" data-settings-panel="subagents">
+          <div class="settings-header"><h3 data-i18n="settings.subagents.title">Subagents</h3></div>
+          <div class="settings-body" id="settings-subagents"></div>
+        </div>
+
         <div class="settings-tab" data-settings-panel="mcp">
           <div class="settings-header">
             <h3 data-i18n="settings.mcp.title">MCP</h3>
@@ -1900,21 +1913,11 @@
                 type="button"
                 class="extensions-page-tab"
                 role="tab"
-                data-mcp-tab="sharedGlobal"
-                aria-selected="true"
-                data-i18n="settings.mcp.groups.sharedGlobal"
-              >
-                Shared (global)
-              </button>
-              <button
-                type="button"
-                class="extensions-page-tab"
-                role="tab"
                 data-mcp-tab="piGlobal"
-                aria-selected="false"
+                aria-selected="true"
                 data-i18n="settings.mcp.groups.piGlobal"
               >
-                Pi (global)
+                User (global)
               </button>
               <button
                 type="button"

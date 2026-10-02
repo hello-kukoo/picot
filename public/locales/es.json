@@ -789,8 +789,7 @@
     "mcp": {
       "title": "MCP",
       "groups": {
-        "sharedGlobal": "Compartido (global)",
-        "piGlobal": "Pi (global)",
+        "piGlobal": "Usuario (global)",
         "project": "Proyecto"
       },
       "readOnlyBadge": "solo lectura",
@@ -819,8 +818,8 @@
       "sourceLabel": "Origen",
       "sectionsAriaLabel": "Capas MCP",
       "addMcp": "+ Añadir MCP",
-      "legacyNotice": "Se encontró una configuración de adaptador anterior (mcp.json). ¿Migrarla a mcp-adapter.json?",
-      "legacyMigrate": "Migrar",
+      "migrateNotice": "La configuración antigua {file} contiene {count} servidor(es) que Pi nativo no lee.",
+      "migrate": "Migrar",
       "migrationFailed": "La migración falló."
     },
     "usage": "Uso",
@@ -830,6 +829,58 @@
     "backToChat": "Volver",
     "appearance": "Apariencia",
     "agent": "Agente",
+    "subagents": {
+      "title": "Subagentes",
+      "scopes": {
+        "global": "Global",
+        "project": "Proyecto actual"
+      },
+      "groups": {
+        "user": "Definiciones personales",
+        "project": "Definiciones del proyecto",
+        "package": "Paquetes",
+        "builtin": "Integrados (solo lectura)"
+      },
+      "status": {
+        "candidate": "Candidato en disco; resultado de ejecución sin verificar"
+      },
+      "diskOnlyMode": "Solo candidatos en disco: no se ha verificado la vigencia ni las colisiones.",
+      "state": {
+        "loading": "Cargando…",
+        "empty": "No hay definiciones en este ámbito.",
+        "error": "No se pudieron cargar los subagentes. Reintenta.",
+        "conflict": "El espacio de trabajo o el inventario cambió. Actualiza y reintenta."
+      },
+      "retry": "Reintentar",
+      "detail": {
+        "runtimeName": "Nombre de ejecución",
+        "source": "Origen",
+        "path": "Archivo",
+        "noFile": "Sin archivo de definición (integrado)",
+        "scope": "Ámbito",
+        "savedOverride": "Ajustes guardados",
+        "model": "Modelo",
+        "thinking": "Nivel de razonamiento",
+        "none": "Ninguno",
+        "inferred": "Valor inferido",
+        "save": "Guardar",
+        "reloadNotice": "Se guarda en disco. Las sesiones actuales pueden necesitar /reload o una sesión nueva; verifica con /subagents-models o /run.",
+        "rawLoading": "Cargando definición…",
+        "rawUnavailable": "Definición no disponible.",
+        "invalidModel": "Introduce un ID con formato provider/model.",
+        "saved": "Guardado en disco. Verifica con /subagents-models o /run tras recargar o iniciar otra sesión."
+      },
+      "create": {
+        "title": "Nuevo agente .md",
+        "name": "Nombre",
+        "description": "Descripción",
+        "prompt": "Texto del prompt",
+        "submit": "Crear",
+        "disabled": "No disponible: identidad de ejecución sin verificar.",
+        "invalid": "Introduce nombre, descripción y un prompt no vacío."
+      },
+      "alsoIn": "También en: {scopes}"
+    },
     "updates": "Actualizaciones",
     "autoCompaction": "Compactación automática",
     "codemode": "Modo código",

@@ -789,8 +789,7 @@
     "mcp": {
       "title": "MCP",
       "groups": {
-        "sharedGlobal": "共有（グローバル）",
-        "piGlobal": "Pi（グローバル）",
+        "piGlobal": "ユーザー（グローバル）",
         "project": "プロジェクト"
       },
       "readOnlyBadge": "読み取り専用",
@@ -819,8 +818,8 @@
       "sourceLabel": "ソース",
       "sectionsAriaLabel": "MCP レイヤー",
       "addMcp": "+ MCPを追加",
-      "legacyNotice": "旧バージョンのアダプター設定（mcp.json）が見つかりました。mcp-adapter.json へ移行しますか？",
-      "legacyMigrate": "移行",
+      "migrateNotice": "旧設定 {file} にネイティブ Pi が読まないサーバーが {count} 件あります。",
+      "migrate": "移行",
       "migrationFailed": "移行に失敗しました。"
     },
     "usage": "使用量",
@@ -830,6 +829,58 @@
     "backToChat": "戻る",
     "appearance": "外観",
     "agent": "エージェント",
+    "subagents": {
+      "title": "サブエージェント",
+      "scopes": {
+        "global": "グローバル",
+        "project": "現在のプロジェクト"
+      },
+      "groups": {
+        "user": "ユーザー定義",
+        "project": "プロジェクト定義",
+        "package": "パッケージ",
+        "builtin": "組み込み（読み取り専用）"
+      },
+      "status": {
+        "candidate": "ディスク上の候補：有効な定義は未確認"
+      },
+      "diskOnlyMode": "ディスク上の候補のみ表示。有効性と同名の衝突は未確認です。",
+      "state": {
+        "loading": "読み込み中…",
+        "empty": "この範囲に定義はありません。",
+        "error": "読み込みに失敗しました。再試行してください。",
+        "conflict": "ワークスペースまたは一覧が変更されました。再読み込みして再試行してください。"
+      },
+      "retry": "再試行",
+      "detail": {
+        "runtimeName": "実行時名",
+        "source": "ソース",
+        "path": "ファイル",
+        "noFile": "定義ファイルなし（組み込み）",
+        "scope": "スコープ",
+        "savedOverride": "保存済みの設定",
+        "model": "モデル",
+        "thinking": "思考レベル",
+        "none": "なし",
+        "inferred": "推定値",
+        "save": "保存",
+        "reloadNotice": "ディスクに保存します。既存のセッションには /reload または新しいセッションが必要な場合があります。/subagents-models または /run で確認してください。",
+        "rawLoading": "定義を読み込み中…",
+        "rawUnavailable": "定義を表示できません。",
+        "invalidModel": "provider/model 形式の ID を入力してください。",
+        "saved": "ディスクに保存しました。/subagents-models または /run で確認してください。"
+      },
+      "create": {
+        "title": "新しいエージェント .md",
+        "name": "名前",
+        "description": "説明",
+        "prompt": "プロンプト",
+        "submit": "作成",
+        "disabled": "作成不可：実行時の識別情報が未確認です。",
+        "invalid": "名前、説明、空でないプロンプトを入力してください。"
+      },
+      "alsoIn": "次にもあります：{scopes}"
+    },
     "updates": "アップデート",
     "autoCompaction": "自動コンパクト",
     "codemode": "コードモード",

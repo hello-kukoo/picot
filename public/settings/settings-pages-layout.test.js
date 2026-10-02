@@ -126,15 +126,18 @@ describe("settings page split", () => {
       "models",
       "extensions",
       "skills",
+      "subagents",
       "mcp",
       "configuration",
       "usage",
     ]);
 
-    // The MCP entry ships hidden: pi-mcp-adapter detection unhides it at
-    // runtime, so the static DOM must carry the hidden class by default.
+    expect(document.querySelector('[data-settings-panel="subagents"]')).not.toBeNull();
+    expect(appJs).toContain('if (targetTabKey === "subagents")');
+    // Native MCP (Pi 0.99+) ships with the runtime: the nav entry is
+    // statically visible, no adapter-detection gate.
     const mcpItem = document.querySelector('[data-settings-tab="mcp"]');
-    expect(mcpItem?.classList.contains("hidden")).toBe(true);
+    expect(mcpItem?.classList.contains("hidden")).toBe(false);
 
     // The Super Agent / Agent Inbox surface was removed with its runtime scope:
     // a disabled placeholder tab is still a dead control, so it must be gone.

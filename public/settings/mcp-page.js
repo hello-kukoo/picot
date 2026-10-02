@@ -1,22 +1,22 @@
-// ABOUTME: Settings → MCP page — three layer tabs, each a master/detail view over the adapter's MCP config layers.
-// ABOUTME: Pi-owned sources are editable; shared sources render read-only; disable toggles the pi-project layer.
+// ABOUTME: Settings → MCP page — two native layer tabs (user + project mcp.json), each a master/detail view.
+// ABOUTME: Orphaned adapter/shared config layers surface as one-click migration banners into the native files.
 
 import { onLocaleChange, t } from "../i18n.js";
 
 /**
- * @typedef {{name:string, entry:Object, sourceFile:string, editable:boolean, ownDisabled:boolean, effectiveDisabled:boolean}} McpListEntry
- * @typedef {{installed: boolean, legacyMigration?: {available: boolean}, groups: Record<string, McpListEntry[]>, groupErrors: Record<string, string|undefined>}} McpListData
+ * @typedef {{name:string, entry:Object, sourceFile:string, editable:true, enabled:boolean}} McpListEntry
+ * @typedef {{id:string, sourceFile:string, missing:string[]}} McpMigrationTarget
+ * @typedef {{groups: Record<string, McpListEntry[]>, groupErrors: Record<string, string|undefined>, migrations: McpMigrationTarget[]}} McpListData
  */
 
-export function setupMcpPage({ masterEl, detailEl, tabs, navItem, configGateway }) {
+export function setupMcpPage({ masterEl, detailEl, tabs, navItem: _navItem, configGateway }) {
   /** @type {McpListData | null} */
   let data = null;
-  let activeTab = "sharedGlobal";
+  let activeTab = "piGlobal";
   /** @type {Map<string, {name: string}>} per-tab selection */
   const selections = new Map();
   let mode = "view"; // view | add
   let loadSeq = 0;
-  let availabilityCache = null;
   let statusText = "";
 
   const unsubscribeLocale = onLocaleChange(() => render());
@@ -51,28 +51,23 @@ export function setupMcpPage({ masterEl, detailEl, tabs, navItem, configGateway 
     await load();
   }
 
-  /** The pre-3.0 mcp.json copy runs only after the user clicks the banner's
-   * migrate action; the list op detects but never writes. */
-  async function migrateLegacy() {
-    const result = await call("mcp_migrate_legacy_config");
+  /** The adapter/shared copy runs only after the user clicks a migration
+   * banner's action; the list op detects but never writes. */
+  async function migrate(target) {
+    const result = await call("mcp_migrate_adapter_config", { target });
+    const migrated = result.ok ? (result.data?.migrated ?? []) : [];
     setStatus(
-      result.ok && result.data?.migrated
+      result.ok && migrated.length > 0
         ? t("settings.mcp.saved")
         : String(result.data?.error ?? result.error ?? t("settings.mcp.migrationFailed")),
     );
     await load();
   }
 
+  /** Native MCP ships with every Pi 0.99+ runtime, so the page is always
+   * available; kept as an async method for the landing nav wiring. */
   async function refreshAvailability() {
-    if (availabilityCache !== null) return availabilityCache;
-    try {
-      const result = await call("mcp_list_servers");
-      availabilityCache = result.ok ? Boolean(result.data?.installed) : false;
-    } catch {
-      availabilityCache = false;
-    }
-    navItem?.classList.toggle("hidden", !availabilityCache);
-    return availabilityCache;
+    return true;
   }
 
   /** Gateway rejects (timeout / no target / transport failure) normalize to
@@ -127,20 +122,24 @@ export function setupMcpPage({ masterEl, detailEl, tabs, navItem, configGateway 
     if (!data) return;
     const entries = groupEntries();
 
-    if (data.legacyMigration?.available) {
+    for (const target of data.migrations ?? []) {
       const notice = document.createElement("div");
       notice.className = "mcp-legacy-notice";
       const text = document.createElement("span");
-      text.textContent = t("settings.mcp.legacyNotice");
+      // Full path, not basename: adapter, shared, and native files all end
+      // in mcp.json / mcp-adapter.json, so the directory is the identifier.
+      text.textContent = t("settings.mcp.migrateNotice")
+        .replace("{file}", target.sourceFile)
+        .replace("{count}", String(target.missing.length));
       const action = document.createElement("button");
       action.type = "button";
       action.className = "mcp-legacy-migrate";
-      action.textContent = t("settings.mcp.legacyMigrate");
+      action.textContent = t("settings.mcp.migrate");
       // Disable on first click: the op is fast, but a double-fire would run
       // twice; the re-render after load() replaces this button anyway.
       action.addEventListener("click", () => {
         action.disabled = true;
-        void migrateLegacy();
+        void migrate(target.id);
       });
       notice.append(text, action);
       masterEl.appendChild(notice);
@@ -179,13 +178,13 @@ export function setupMcpPage({ masterEl, detailEl, tabs, navItem, configGateway 
       const meta = document.createElement("div");
       meta.className = "pkg-manager-sidebar-meta";
       const dot = document.createElement("span");
-      dot.className = `pkg-manager-status-dot ${item.effectiveDisabled ? "is-disabled" : "is-loaded"}`;
+      dot.className = `pkg-manager-status-dot ${item.enabled ? "is-loaded" : "is-disabled"}`;
       meta.appendChild(dot);
       const src = document.createElement("span");
       src.textContent = basename(item.sourceFile);
       src.title = item.sourceFile;
       meta.appendChild(src);
-      if (item.effectiveDisabled) {
+      if (!item.enabled) {
         const badge = document.createElement("span");
         badge.textContent = t("settings.mcp.disabledBadge");
         meta.appendChild(badge);
@@ -201,17 +200,15 @@ export function setupMcpPage({ masterEl, detailEl, tabs, navItem, configGateway 
 
     // Add affordance sits at the bottom of the master list (dashed, same
     // pattern as the Models page's provider add button) — pi-owned tabs only.
-    if (activeTab !== "sharedGlobal") {
-      const add = document.createElement("button");
-      add.type = "button";
-      add.className = "models-provider-add";
-      add.textContent = t("settings.mcp.addMcp");
-      add.addEventListener("click", () => {
-        mode = "add";
-        render();
-      });
-      masterEl.appendChild(add);
-    }
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "models-provider-add";
+    add.textContent = t("settings.mcp.addMcp");
+    add.addEventListener("click", () => {
+      mode = "add";
+      render();
+    });
+    masterEl.appendChild(add);
   }
 
   function basename(filePath) {
@@ -293,15 +290,16 @@ export function setupMcpPage({ masterEl, detailEl, tabs, navItem, configGateway 
     label.textContent = t("settings.mcp.enable");
     const toggle = document.createElement("button");
     toggle.type = "button";
-    toggle.className = `pkg-manager-toggle${item.effectiveDisabled ? "" : " is-on"}`;
+    toggle.className = `pkg-manager-toggle${item.enabled ? " is-on" : ""}`;
     toggle.setAttribute("role", "switch");
-    toggle.setAttribute("aria-checked", String(!item.effectiveDisabled));
+    toggle.setAttribute("aria-checked", String(item.enabled));
     toggle.setAttribute("aria-label", t("settings.mcp.enable"));
     toggle.appendChild(document.createElement("span"));
     toggle.addEventListener("click", async () => {
       const result = await call("mcp_toggle_server", {
+        scope: activeTab,
         name: item.name,
-        disable: !item.effectiveDisabled,
+        disable: item.enabled,
       });
       if (result.ok) {
         setStatus(t("settings.mcp.saved"));
@@ -469,7 +467,6 @@ export function setupMcpPage({ masterEl, detailEl, tabs, navItem, configGateway 
       if (result.ok) {
         selections.set(activeTab, { name: targetName });
         mode = "view";
-        availabilityCache = null;
         setStatus(t("settings.mcp.saved"));
         await load();
       } else setStatus(String(result.error ?? "save failed"));

@@ -46,7 +46,7 @@ import {
 import {
   deleteMcpServer,
   listMcpServers,
-  migrateLegacyPiGlobalConfig,
+  migrateAdapterConfig,
   saveMcpServer,
   toggleMcpServer,
 } from "./mcp-settings";
@@ -1642,8 +1642,11 @@ export async function handlePicotConfig(
 
       // User-confirmed legacy mcp.json → mcp-adapter.json copy (the list op
       // only detects; it never writes).
-      case "mcp_migrate_legacy_config":
-        return { ok: true, data: migrateLegacyPiGlobalConfig(PI_AGENT_ROOT) };
+      case "mcp_migrate_adapter_config":
+        return {
+          ok: true,
+          data: migrateAdapterConfig(params, PI_AGENT_ROOT, mcpCwd(ctx)),
+        };
 
       case "advisor.config.get":
         return { ok: true, data: await advisorConfigGet(requireRegistry()) };

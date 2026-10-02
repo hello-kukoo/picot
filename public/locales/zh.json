@@ -789,8 +789,7 @@
     "mcp": {
       "title": "MCP",
       "groups": {
-        "sharedGlobal": "共享（全局）",
-        "piGlobal": "Pi（全局）",
+        "piGlobal": "用户级（全局）",
         "project": "项目"
       },
       "readOnlyBadge": "只读",
@@ -819,8 +818,8 @@
       "sourceLabel": "来源",
       "sectionsAriaLabel": "MCP 层",
       "addMcp": "+ 添加MCP",
-      "legacyNotice": "检测到旧版适配器配置（mcp.json）。要迁移到 mcp-adapter.json 吗？",
-      "legacyMigrate": "迁移",
+      "migrateNotice": "旧配置 {file} 中有 {count} 个 server 未迁入原生 mcp.json（原生 Pi 不读该文件）。",
+      "migrate": "迁移",
       "migrationFailed": "迁移失败。"
     },
     "usage": "使用量",
@@ -830,6 +829,58 @@
     "backToChat": "返回",
     "appearance": "外观",
     "agent": "智能体",
+    "subagents": {
+      "title": "子代理",
+      "scopes": {
+        "global": "全局",
+        "project": "当前项目"
+      },
+      "groups": {
+        "user": "个人定义",
+        "project": "项目定义",
+        "package": "安装包",
+        "builtin": "扩展内置（只读）"
+      },
+      "status": {
+        "candidate": "磁盘候选，运行时胜出者尚未核实"
+      },
+      "diskOnlyMode": "仅显示磁盘候选：无法确认当前生效代理及同名遮蔽。",
+      "state": {
+        "loading": "加载中…",
+        "empty": "此范围内没有子代理定义。",
+        "error": "加载子代理失败，请重试。",
+        "conflict": "工作区或盘点已变化，请刷新后重试。"
+      },
+      "retry": "重试",
+      "detail": {
+        "runtimeName": "运行时名称",
+        "source": "来源",
+        "path": "文件",
+        "noFile": "无定义文件（内置）",
+        "scope": "归属",
+        "savedOverride": "本层已保存覆盖",
+        "model": "模型",
+        "thinking": "思考级别",
+        "none": "无",
+        "inferred": "推算值",
+        "save": "保存",
+        "reloadNotice": "只写入磁盘。已有会话可能需要 /reload 或新会话；用 /subagents-models 或 /run 核对。",
+        "rawLoading": "正在读取定义…",
+        "rawUnavailable": "定义不可用。",
+        "invalidModel": "请输入 provider/model 格式的 ID。",
+        "saved": "已写入磁盘；重载或新建会话后用 /subagents-models 或 /run 核对。"
+      },
+      "create": {
+        "title": "新建代理 .md",
+        "name": "名称",
+        "description": "描述",
+        "prompt": "Prompt 正文",
+        "submit": "创建",
+        "disabled": "无法创建：运行时身份尚未核实。",
+        "invalid": "请填写名称、描述及非空 prompt。"
+      },
+      "alsoIn": "另见于：{scopes}"
+    },
     "updates": "更新",
     "autoCompaction": "自动压缩",
     "codemode": "代码模式",
