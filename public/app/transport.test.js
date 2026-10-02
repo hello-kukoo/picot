@@ -68,6 +68,54 @@ describe("WsTransport", () => {
     expect(ws.sendControl).toHaveBeenCalledWith("mobile_pairing_create", {}, {});
   });
 
+  test("mcp sign-in ops use the host control plane with spawn-grade timeouts", async () => {
+    const ws = fakeWsClient();
+    const transport = new WsTransport(ws, {});
+
+    await transport.mcpLoginStart("sentry");
+    await transport.mcpLoginCancel("op-1");
+    await transport.mcpLoginStatus("op-1");
+    await transport.mcpLogout("sentry");
+    await transport.mcpServerStatus();
+
+    expect(ws.sendControl).toHaveBeenCalledWith(
+      "mcp_login_start",
+      { name: "sentry" },
+      { timeoutMs: 60000 },
+    );
+    expect(ws.sendControl).toHaveBeenCalledWith("mcp_login_cancel", { operationId: "op-1" }, {});
+    expect(ws.sendControl).toHaveBeenCalledWith("mcp_login_status", { operationId: "op-1" }, {});
+    expect(ws.sendControl).toHaveBeenCalledWith(
+      "mcp_logout",
+      { name: "sentry" },
+      { timeoutMs: 60000 },
+    );
+    expect(ws.sendControl).toHaveBeenCalledWith("mcp_server_status", {}, { timeoutMs: 60000 });
+  });
+
+  test("onMcpLoginUpdate forwards only the frame payload and unsubscribes", () => {
+    const listeners = new Map();
+    const ws = {
+      ...fakeWsClient(),
+      addEventListener: (type, handler) => listeners.set(type, handler),
+      removeEventListener: (type) => listeners.delete(type),
+    };
+    const transport = new WsTransport(ws, {});
+    const seen = [];
+    const unsubscribe = transport.onMcpLoginUpdate((payload) => seen.push(payload));
+
+    listeners.get("mcpLoginUpdate")({
+      detail: { type: "mcpLoginUpdate", payload: { operationId: "op-1", status: "pending" } },
+    });
+    expect(seen).toEqual([{ operationId: "op-1", status: "pending" }]);
+    // A frame without a payload must not throw into the WS dispatch loop.
+    listeners.get("mcpLoginUpdate")({ detail: {} });
+    expect(seen.at(-1)).toBeNull();
+
+    unsubscribe();
+    expect(listeners.has("mcpLoginUpdate")).toBe(false);
+  });
+
   test("fork sends a canonical runtime request without a port", async () => {
     const ws = fakeWsClient();
     const transport = new WsTransport(ws, {});

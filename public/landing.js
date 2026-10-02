@@ -44,7 +44,7 @@ import {
 import { renderPreviewThemeOptions } from "./preview-themes.js";
 import { QuickChatDialog } from "./quick-chat-dialog.js";
 import { setupExtensionsTabShell } from "./settings/extensions-tab-shell.js";
-import { setupMcpPage } from "./settings/mcp-page.js";
+import { createMcpHostOps, setupMcpPage } from "./settings/mcp-page.js";
 import { setupMobileAccess } from "./settings/mobile-access.js";
 import { setupModelsPage } from "./settings/models-page.js";
 import { setupPackageBrowse } from "./settings/package-browse.js";
@@ -912,6 +912,10 @@ const mcpPage = setupMcpPage({
   tabs: document.querySelectorAll("[data-mcp-tab]"),
   navItem: document.querySelector('[data-settings-tab="mcp"]'),
   configGateway: landingConfig.configGateway,
+  // Sign-in rides the host control plane (the Rust host spawns `pi mcp`), not
+  // the session runtime the config gateway needs.
+  mcpLogin: createMcpHostOps(transport),
+  openExternal: (url) => transport.openExternal(url),
 });
 
 // Configuration page: three global file editors + the agent controls. The

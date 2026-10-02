@@ -32,10 +32,15 @@ impl OAuthError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OAuthStatus {
     Pending,
-    /// Only the Pi device-code bridge (deferred to the CP7 runtime
-    /// integration) transitions an operation to Succeeded.
+    /// Pi device-code bridge and MCP login runner can complete operations.
     Succeeded,
     Cancelled,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OAuthOutcome {
+    Succeeded,
     Failed,
 }
 
@@ -122,6 +127,36 @@ impl OAuthManager {
             return Ok(OAuthStatus::Failed);
         }
         Ok(operation.status.clone())
+    }
+    /// Complete a pending operation only for its original desktop owner and generation.
+    pub fn complete(
+        &mut self,
+        owner_id: &str,
+        generation: u64,
+        id: &str,
+        outcome: OAuthOutcome,
+    ) -> Result<(), OAuthError> {
+        let operation = self
+            .operations
+            .get_mut(id)
+            .ok_or(OAuthError::OperationNotFound)?;
+        if operation.owner_id != owner_id {
+            return Err(OAuthError::OperationNotFound);
+        }
+        if operation.generation != generation || generation != self.generation {
+            return Err(OAuthError::StaleGeneration);
+        }
+        if Instant::now() >= operation.expires_at {
+            self.operations.remove(id);
+            return Err(OAuthError::OperationNotFound);
+        }
+        if matches!(operation.status, OAuthStatus::Pending) {
+            operation.status = match outcome {
+                OAuthOutcome::Succeeded => OAuthStatus::Succeeded,
+                OAuthOutcome::Failed => OAuthStatus::Failed,
+            };
+        }
+        Ok(())
     }
     pub fn cancel(
         &mut self,
@@ -220,6 +255,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn completion_is_owner_and_generation_bound_and_terminal() {
+        let mut manager = OAuthManager::default();
+        let generation = manager.runtime_started();
+        manager
+            .start(OAuthClient::Desktop, "owner", "op", Duration::from_secs(60))
+            .unwrap();
+        assert_eq!(
+            manager.complete("other", generation, "op", OAuthOutcome::Succeeded),
+            Err(OAuthError::OperationNotFound)
+        );
+        assert_eq!(
+            manager.complete("owner", generation + 1, "op", OAuthOutcome::Succeeded),
+            Err(OAuthError::StaleGeneration)
+        );
+        manager
+            .complete("owner", generation, "op", OAuthOutcome::Succeeded)
+            .unwrap();
+        manager
+            .complete("owner", generation, "op", OAuthOutcome::Failed)
+            .unwrap();
+        assert_eq!(
+            manager.status("owner", generation, "op"),
+            Ok(OAuthStatus::Succeeded)
+        );
+        manager
+            .start(
+                OAuthClient::Desktop,
+                "owner",
+                "cancelled",
+                Duration::from_secs(60),
+            )
+            .unwrap();
+        manager.cancel("owner", generation, "cancelled").unwrap();
+        manager
+            .complete("owner", generation, "cancelled", OAuthOutcome::Succeeded)
+            .unwrap();
+        assert_eq!(
+            manager.status("owner", generation, "cancelled"),
+            Ok(OAuthStatus::Cancelled)
+        );
+    }
     #[test]
     fn sweeps_expired_on_start_and_enforces_operation_limit() {
         let mut manager = OAuthManager::default();

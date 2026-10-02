@@ -90,7 +90,7 @@ import { SessionUiStateStore } from "./session-ui-state.js";
 import { ConfigGateway, consumeConfigResponseFrame } from "./settings/config-gateway.js";
 import { createConfigReadiness } from "./settings/config-readiness.js";
 import { setupExtensionsTabShell } from "./settings/extensions-tab-shell.js";
-import { setupMcpPage } from "./settings/mcp-page.js";
+import { createMcpHostOps, setupMcpPage } from "./settings/mcp-page.js";
 import { setupMobileAccess } from "./settings/mobile-access.js";
 import { setupModelsPage } from "./settings/models-page.js";
 import { createOauthGateway } from "./settings/oauth-gateway.js";
@@ -8080,6 +8080,10 @@ const mcpPage = setupMcpPage({
   tabs: document.querySelectorAll("[data-mcp-tab]"),
   navItem: document.querySelector('[data-settings-tab="mcp"]'),
   configGateway,
+  // Sign-in rides the host control plane (the Rust host spawns `pi mcp`), not
+  // the session runtime the config gateway needs.
+  mcpLogin: createMcpHostOps(transport),
+  openExternal: (url) => transport.openExternal(url),
 });
 packageManager = setupPackageManager({
   root: document,

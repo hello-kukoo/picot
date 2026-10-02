@@ -154,7 +154,8 @@ struct HostState {
     host_events: HostEventSink,
     ephemeral_hub: Mutex<Option<crate::host_ephemeral::SharedEphemeralHub>>,
     terminal_manager: Mutex<Option<Arc<crate::terminal_manager::TerminalManager>>>,
-    oauth: Mutex<crate::oauth_manager::OAuthManager>,
+    oauth: Arc<Mutex<crate::oauth_manager::OAuthManager>>,
+    mcp_login: crate::mcp_login_runner::McpLoginRunner,
     /// P4-d: one-shot TTL'd export tokens backing `session_export`.
     session_exports: crate::host_data::SessionExportRegistry,
     /// D8: anonymous client-class hit counts for the retired `/api/rpc`
@@ -199,6 +200,7 @@ fn notification_bundle_identifier() -> &'static str {
 impl HostServer {
     /// Advance OAuth generation when native runtime is created.
     pub fn runtime_started(&self) -> Result<u64, String> {
+        self.state.mcp_login.abort_all();
         self.state
             .oauth
             .lock()
@@ -208,6 +210,7 @@ impl HostServer {
 
     /// Revoke OAuth operations when native runtime stops.
     pub fn runtime_stopped(&self) -> Result<(), String> {
+        self.state.mcp_login.abort_all();
         self.state
             .oauth
             .lock()
@@ -247,6 +250,9 @@ impl HostServer {
         }
         let (host_event_tx, _) = tokio::sync::broadcast::channel(256);
         let host_events = HostEventSink::new(host_event_tx);
+        let oauth = Arc::new(Mutex::new(crate::oauth_manager::OAuthManager::default()));
+        let mcp_login =
+            crate::mcp_login_runner::McpLoginRunner::new(oauth.clone(), host_events.clone());
         let state = Arc::new(HostState {
             router: Mutex::new(HostRouter::new()),
             static_dir: static_dir.clone(),
@@ -265,7 +271,8 @@ impl HostServer {
             host_events: host_events.clone(),
             ephemeral_hub: Mutex::new(None),
             terminal_manager: Mutex::new(None),
-            oauth: Mutex::new(crate::oauth_manager::OAuthManager::default()),
+            oauth,
+            mcp_login,
             session_exports: crate::host_data::SessionExportRegistry::new(
                 8,
                 std::time::Duration::from_secs(300),
@@ -603,6 +610,7 @@ impl HostServer {
 
 impl Drop for HostServer {
     fn drop(&mut self) {
+        self.state.mcp_login.abort_all();
         let _ = self
             .state
             .oauth
@@ -2634,6 +2642,105 @@ async fn dispatch(
                 "unauthorized_target",
                 "Registered desktop owner required".into(),
             ))?;
+            if matches!(
+                operation.as_str(),
+                "mcp_login_start"
+                    | "mcp_login_cancel"
+                    | "mcp_login_status"
+                    | "mcp_logout"
+                    | "mcp_server_status"
+            ) {
+                let workspace_id = context
+                    .workspace_id
+                    .as_deref()
+                    .ok_or(("not_registered", "Registered workspace required".to_owned()))?;
+                let registry = state
+                    .owner_registry
+                    .lock()
+                    .map_err(|_| ("auth_unavailable", "Owner registry unavailable".to_owned()))?
+                    .clone()
+                    .ok_or(("auth_unavailable", "Owner registry unavailable".to_owned()))?;
+                if !matches!(registry.owner_current_workspace(&owner), crate::window_owner::OwnerWorkspaceSnapshot::Registered { wid, generation, .. } if wid == workspace_id && Some(generation) == context.workspace_generation)
+                {
+                    return Err(("stale_generation", "Desktop workspace changed".into()));
+                }
+                let cwd = state
+                    .data
+                    .workspace_root(workspace_id)
+                    .map_err(host_data_error)?;
+                let args = frame.get("args").unwrap_or(&Value::Null);
+                let runner = state.mcp_login.clone();
+                let response = match operation.as_str() {
+                    "mcp_login_status" | "mcp_login_cancel" => {
+                        let id = args
+                            .get("operationId")
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.is_empty())
+                            .ok_or(("invalid_operation", "operationId is required".into()))?;
+                        if operation == "mcp_login_cancel" {
+                            runner
+                                .cancel(&owner, id)
+                                .map(|()| json!({ "ok": true, "cancelled": true }))
+                        } else {
+                            runner.status(&owner, id)
+                        }
+                    }
+                    "mcp_login_start" => {
+                        let result = args
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .filter(|name| {
+                                !name.is_empty()
+                                    && name.len() <= 256
+                                    && !name.chars().any(char::is_control)
+                            })
+                            .ok_or_else(|| "Valid MCP server name is required".to_owned())
+                            .and_then(|name| {
+                                crate::pi_launch::resolve_bundled_pi(&state.static_dir)
+                                    .and_then(|binary| runner.start(&binary, &cwd, name, &owner))
+                            });
+                        Ok(match result {
+                            Ok(id) => json!({ "ok": true, "operationId": id }),
+                            Err(error) => json!({ "ok": false, "error": error }),
+                        })
+                    }
+                    "mcp_logout" => {
+                        let name = args
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .filter(|name| {
+                                !name.is_empty()
+                                    && name.len() <= 256
+                                    && !name.chars().any(char::is_control)
+                            })
+                            .ok_or((
+                                "invalid_mcp_name",
+                                "Valid MCP server name is required".into(),
+                            ))?;
+                        let binary = crate::pi_launch::resolve_bundled_pi(&state.static_dir)
+                            .map_err(|error| ("mcp_unavailable", error))?;
+                        let name = name.to_owned();
+                        tokio::task::spawn_blocking(move || runner.logout(&binary, &cwd, &name))
+                            .await
+                            .map_err(|e| e.to_string())
+                            .and_then(|result| result.map(|()| json!({ "ok": true })))
+                    }
+                    "mcp_server_status" => {
+                        let binary = crate::pi_launch::resolve_bundled_pi(&state.static_dir)
+                            .map_err(|error| ("mcp_unavailable", error))?;
+                        tokio::task::spawn_blocking(move || runner.list(&binary, &cwd))
+                            .await
+                            .map_err(|e| e.to_string())
+                            .and_then(|result| {
+                                result.map(|servers| json!({ "ok": true, "servers": servers }))
+                            })
+                    }
+                    _ => unreachable!(),
+                };
+                return Ok(
+                    json!({ "type": "host_response", "requestId": request_id, "operation": operation, "response": response.map_err(|error| ("mcp_operation_failed", error))? }),
+                );
+            }
             // D4 mobile entry: the desktop mints pairing tokens for phones on
             // the same LAN. Gated on the same preference that drove the bind
             // decision, so a loopback-only host never mints tokens.

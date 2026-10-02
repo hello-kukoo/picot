@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { resolveWebSocketUrl, WebSocketClient } from "./websocket-client.js";
 
 describe("resolveWebSocketUrl", () => {
@@ -229,6 +229,27 @@ describe("WebSocketClient control commands", () => {
     expect(acknowledgements).toEqual([
       { type: "git_command_ack", requestId: "git-7", workspaceGeneration: 4 },
     ]);
+  });
+
+  test("mcpLoginUpdate frames dispatch an owner-scoped event instead of logging as unknown", () => {
+    const client = new WebSocketClient("ws://127.0.0.1:49000/v2/ws");
+    const updates = [];
+    client.addEventListener("mcpLoginUpdate", (event) => updates.push(event.detail));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    client.handleMessage({
+      type: "mcpLoginUpdate",
+      payload: { operationId: "op-1", status: "pending", authUrl: "https://auth.test/x" },
+    });
+
+    expect(updates).toEqual([
+      {
+        type: "mcpLoginUpdate",
+        payload: { operationId: "op-1", status: "pending", authUrl: "https://auth.test/x" },
+      },
+    ]);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
 

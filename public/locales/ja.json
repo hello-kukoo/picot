@@ -820,7 +820,30 @@
       "addMcp": "+ MCPを追加",
       "migrateNotice": "旧設定 {file} にネイティブ Pi が読まないサーバーが {count} 件あります。",
       "migrate": "移行",
-      "migrationFailed": "移行に失敗しました。"
+      "migrationFailed": "移行に失敗しました。",
+      "signIn": "サインイン",
+      "signOut": "サインアウト",
+      "signedIn": "サインインしました。",
+      "projectUntrusted": "プロジェクトが信頼されていません",
+      "status": {
+        "connected": "接続済み · ツール {count} 個",
+        "connectedNoTools": "接続済み",
+        "needsAuth": "サインインが必要",
+        "disabled": "無効",
+        "error": "エラー",
+        "unknown": "状態不明",
+        "unavailable": "MCP のライブ状態を取得できません。"
+      },
+      "login": {
+        "title": "{name} にサインイン",
+        "preparing": "サインインを開始しています…",
+        "waiting": "ブラウザで認証を完了してください。",
+        "openBrowser": "ブラウザを開く",
+        "cancel": "キャンセル",
+        "retry": "再試行",
+        "failed": "サインインに失敗しました。",
+        "cancelled": "サインインをキャンセルしました。"
+      }
     },
     "usage": "使用量",
     "quota": "クォータ",

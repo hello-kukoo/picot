@@ -21,6 +21,7 @@ mod host_data;
 mod host_files;
 mod host_router;
 mod host_server;
+mod mcp_login_runner;
 mod metadata_store;
 mod mutation_types;
 mod native_pi_manager;

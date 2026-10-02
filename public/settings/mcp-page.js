@@ -1,15 +1,48 @@
 // ABOUTME: Settings → MCP page — two native layer tabs (user + project mcp.json), each a master/detail view.
 // ABOUTME: Orphaned adapter/shared config layers surface as one-click migration banners into the native files.
+// ABOUTME: Live connection state, browser sign-in, and sign-out come from the host `pi mcp` ops.
 
 import { onLocaleChange, t } from "../i18n.js";
+import { createMcpLoginDialog } from "./mcp-login-dialog.js";
 
 /**
  * @typedef {{name:string, entry:Object, sourceFile:string, editable:true, enabled:boolean}} McpListEntry
  * @typedef {{id:string, sourceFile:string, missing:string[]}} McpMigrationTarget
+ * @typedef {{name:string, scope?:string, state:string, transport?:string, tools?:unknown[], error?:string}} McpServerStatus
  * @typedef {{groups: Record<string, McpListEntry[]>, groupErrors: Record<string, string|undefined>, migrations: McpMigrationTarget[]}} McpListData
  */
 
-export function setupMcpPage({ masterEl, detailEl, tabs, navItem: _navItem, configGateway }) {
+// Long master-row error text is summarized; the full message stays on `title`.
+const ERROR_SUMMARY_CHARS = 48;
+
+/**
+ * Binds the host transport (`WsTransport` control ops) to the login surface this
+ * page consumes. Kept here so every host entry (landing + workspace shell)
+ * wires MCP sign-in identically, and so the page stays testable with a stub.
+ */
+export function createMcpHostOps(transport) {
+  return {
+    start: (name) => transport.mcpLoginStart(name),
+    cancel: (operationId) => transport.mcpLoginCancel(operationId),
+    status: (operationId) => transport.mcpLoginStatus(operationId),
+    logout: (name) => transport.mcpLogout(name),
+    serverStatus: () => transport.mcpServerStatus(),
+    subscribe: (listener) => transport.onMcpLoginUpdate(listener),
+  };
+}
+
+export function setupMcpPage({
+  masterEl,
+  detailEl,
+  tabs,
+  navItem: _navItem,
+  configGateway,
+  // Host-plane MCP login surface (WS host_request → `pi mcp login|logout|list`).
+  // Absent on transports without the host ops: the page then degrades to the
+  // plain config list (no badges, no sign-in buttons).
+  mcpLogin = null,
+  openExternal = null,
+}) {
   /** @type {McpListData | null} */
   let data = null;
   let activeTab = "piGlobal";
@@ -18,6 +51,10 @@ export function setupMcpPage({ masterEl, detailEl, tabs, navItem: _navItem, conf
   let mode = "view"; // view | add
   let loadSeq = 0;
   let statusText = "";
+  /** @type {{byScope: Map<string, McpServerStatus>, byName: Map<string, McpServerStatus>} | null} */
+  let statuses = null;
+  let statusError = "";
+  let loginDialog = null;
 
   const unsubscribeLocale = onLocaleChange(() => render());
 
@@ -49,6 +86,64 @@ export function setupMcpPage({ masterEl, detailEl, tabs, navItem: _navItem, conf
 
   async function activate() {
     await load();
+    await loadStatus();
+  }
+
+  /**
+   * Live per-server state from the host (`pi mcp list --json`, 60s host-side
+   * TTL). Queried on page activation and after every sign-in/sign-out — never
+   * polled: an in-flight login polls through `mcp_login_status` instead.
+   */
+  async function loadStatus() {
+    if (!mcpLogin) return;
+    const result = await Promise.resolve()
+      .then(() => mcpLogin.serverStatus())
+      .catch((error) => ({ ok: false, error: error?.message ?? String(error) }));
+    if (result?.ok) {
+      statuses = indexStatus(result.servers);
+      statusError = "";
+    } else {
+      statuses = null;
+      statusError = String(result?.error ?? "mcp_server_status failed");
+    }
+    render();
+  }
+
+  function indexStatus(servers) {
+    const byScope = new Map();
+    const byName = new Map();
+    for (const server of Array.isArray(servers) ? servers : []) {
+      if (!server || typeof server.name !== "string") continue;
+      const scope = server.scope ? scopeOf(server.scope) : "";
+      if (scope) byScope.set(`${scope}:${server.name}`, server);
+      if (!byName.has(server.name)) byName.set(server.name, server);
+    }
+    return { byScope, byName };
+  }
+
+  function scopeOf(scope) {
+    return String(scope).toLowerCase().includes("project") ? "project" : "piGlobal";
+  }
+
+  /**
+   * pi's report scopes are not guaranteed to be present or uniformly spelled,
+   * so a tab-scoped match wins and the bare name match is a fallback for
+   * reports without scope. A scoped report never lends a same-named server
+   * from the other scope a status — that is what gates untrusted projects.
+   */
+  function statusFor(name, scope) {
+    const scoped = statuses?.byScope.get(`${scope}:${name}`);
+    if (scoped) return scoped;
+    const named = statuses?.byName.get(name);
+    if (!named || named.scope) return null;
+    return named;
+  }
+
+  function transportOf(item, status) {
+    if (status?.transport) return String(status.transport);
+    // pi 0.99 has no legacy SSE transport: a configured `url` is HTTP, and
+    // everything else is a local stdio command.
+    return typeof item.entry?.url === "string" && item.entry.url ? "http" : "stdio";
   }
 
   /** The adapter/shared copy runs only after the user clicks a migration
@@ -153,6 +248,14 @@ export function setupMcpPage({ masterEl, detailEl, tabs, navItem: _navItem, conf
     head.appendChild(count);
     masterEl.appendChild(head);
 
+    if (statusError) {
+      const note = document.createElement("div");
+      note.className = "mcp-group-error mcp-status-error";
+      note.textContent = t("settings.mcp.status.unavailable");
+      note.title = statusError;
+      masterEl.appendChild(note);
+    }
+
     if (data.groupErrors?.[activeTab]) {
       const err = document.createElement("div");
       err.className = "mcp-group-error";
@@ -177,14 +280,19 @@ export function setupMcpPage({ masterEl, detailEl, tabs, navItem: _navItem, conf
       row.appendChild(name);
       const meta = document.createElement("div");
       meta.className = "pkg-manager-sidebar-meta";
+      const live = statusFor(item.name, activeTab);
       const dot = document.createElement("span");
-      dot.className = `pkg-manager-status-dot ${item.enabled ? "is-loaded" : "is-disabled"}`;
+      dot.className = `pkg-manager-status-dot ${dotClassFor(item, live)}`;
       meta.appendChild(dot);
       const src = document.createElement("span");
       src.textContent = basename(item.sourceFile);
       src.title = item.sourceFile;
       meta.appendChild(src);
-      if (!item.enabled) {
+      const statusBadge = renderStatusBadge(live);
+      if (statusBadge) meta.appendChild(statusBadge);
+      // With live state known the badge is authoritative; the config-level
+      // "disabled" chip would only repeat it (or contradict it).
+      if (!item.enabled && !statusBadge) {
         const badge = document.createElement("span");
         badge.textContent = t("settings.mcp.disabledBadge");
         meta.appendChild(badge);
@@ -214,6 +322,166 @@ export function setupMcpPage({ masterEl, detailEl, tabs, navItem: _navItem, conf
   function basename(filePath) {
     const idx = filePath.lastIndexOf("/");
     return idx === -1 ? filePath : filePath.slice(idx + 1);
+  }
+
+  /** Master-row dot: live state wins over the config `enabled` flag. */
+  function dotClassFor(item, live) {
+    switch (live?.state) {
+      case "connected":
+        return "is-loaded";
+      case "needs-auth":
+        return "is-installed";
+      // A failed server must not keep the accent "healthy" dot just because
+      // its config entry is enabled; the badge text carries the detail.
+      case "error":
+        return "is-disabled";
+      default:
+        return item.enabled ? "is-loaded" : "is-disabled";
+    }
+  }
+
+  function stateClass(state) {
+    return String(state ?? "unknown").replace(/[^a-z-]/gi, "") || "unknown";
+  }
+
+  /** Compact per-row state chip from `mcp_server_status`. */
+  function renderStatusBadge(status) {
+    if (!status) return null;
+    const state = String(status.state ?? "");
+    const badge = document.createElement("span");
+    badge.className = `mcp-badge mcp-status-badge is-${stateClass(state)}`;
+    if (state === "connected") {
+      const count = Array.isArray(status.tools) ? status.tools.length : 0;
+      badge.textContent =
+        count > 0
+          ? t("settings.mcp.status.connected", { count })
+          : t("settings.mcp.status.connectedNoTools");
+    } else if (state === "needs-auth") {
+      badge.textContent = t("settings.mcp.status.needsAuth");
+    } else if (state === "disabled") {
+      badge.textContent = t("settings.mcp.status.disabled");
+    } else if (state === "error") {
+      // Summary in the chip, full text on `title` (never rendered raw).
+      const detail = String(status.error ?? "");
+      badge.textContent = summarize(detail) || t("settings.mcp.status.error");
+      badge.title = detail;
+    } else {
+      badge.textContent = state || t("settings.mcp.status.unknown");
+    }
+    return badge;
+  }
+
+  function summarize(text) {
+    const collapsed = text.replace(/\s+/g, " ").trim();
+    return collapsed.length > ERROR_SUMMARY_CHARS
+      ? `${collapsed.slice(0, ERROR_SUMMARY_CHARS - 1)}…`
+      : collapsed;
+  }
+
+  /**
+   * Sign-in / sign-out affordances for the selected row. Sign-out needs a live
+   * connected HTTP server; sign-in is offered to every other authorization-
+   * capable HTTP server. A project row pi does not report at all means the
+   * project is not trusted (pi omits it), so the button is disabled with an
+   * explicit reason instead of surfacing pi's raw trust error.
+   */
+  function renderOAuthRow(item) {
+    if (!mcpLogin) return null;
+    const live = statusFor(item.name, activeTab);
+    const isHttp = /http/i.test(transportOf(item, live));
+    const state = live?.state ?? null;
+    const untrustedProject = activeTab === "project" && !live;
+    const canSignOut = isHttp && state === "connected";
+    const canSignIn = isHttp && item.enabled && state !== "connected" && state !== "disabled";
+    if (!canSignIn && !canSignOut) return null;
+
+    const row = document.createElement("div");
+    row.className = "mcp-toggle-row";
+    const badge = renderStatusBadge(live);
+    if (badge) row.appendChild(badge);
+
+    if (canSignIn) {
+      const signIn = actionButton("mcp-login", t("settings.mcp.signIn"), "mcp-btn mcp-btn-primary");
+      if (untrustedProject) {
+        signIn.disabled = true;
+        signIn.title = t("settings.mcp.projectUntrusted");
+        const hint = document.createElement("span");
+        hint.className = "mcp-toggle-label";
+        hint.textContent = t("settings.mcp.projectUntrusted");
+        row.append(signIn, hint);
+      } else {
+        signIn.addEventListener("click", () => startLogin(item.name));
+        row.appendChild(signIn);
+      }
+    }
+    if (canSignOut) {
+      const signOut = actionButton(
+        "mcp-logout",
+        t("settings.mcp.signOut"),
+        "mcp-btn mcp-btn-danger",
+      );
+      signOut.addEventListener("click", () => {
+        signOut.disabled = true;
+        void signOutServer(item.name);
+      });
+      row.appendChild(signOut);
+    }
+    return row;
+  }
+
+  function actionButton(action, label, className) {
+    const node = document.createElement("button");
+    node.type = "button";
+    node.className = className;
+    node.dataset.action = action;
+    node.textContent = label;
+    return node;
+  }
+
+  function startLogin(name) {
+    if (!mcpLogin) return;
+    loginDialog?.destroy();
+    loginDialog = createMcpLoginDialog({
+      name,
+      start: () => mcpLogin.start(name),
+      cancel: (operationId) => mcpLogin.cancel(operationId),
+      status: (operationId) => mcpLogin.status(operationId),
+      subscribe: (listener) => mcpLogin.subscribe(listener),
+      openExternal: (url) => openAuthUrl(url),
+      // The dialog closes itself on success; the badge turns connected, so a
+      // fresh status + list read is the confirmation.
+      onSuccess: async () => {
+        setStatus(t("settings.mcp.signedIn"));
+        await loadStatus();
+        await load();
+      },
+    });
+    void loginDialog.start();
+  }
+
+  async function signOutServer(name) {
+    if (!mcpLogin) return;
+    const result = await Promise.resolve()
+      .then(() => mcpLogin.logout(name))
+      .catch((error) => ({ ok: false, error: error?.message ?? String(error) }));
+    if (!result?.ok) {
+      setStatus(String(result?.error ?? "logout failed"));
+      render();
+      return;
+    }
+    setStatus(t("settings.mcp.saved"));
+    await loadStatus();
+    await load();
+  }
+
+  /** Same host opener the other native pages use; a non-native client has no
+   * opener, so the URL shown in the dialog stays the fallback. */
+  function openAuthUrl(url) {
+    if (!url) return;
+    if (!openExternal) return;
+    Promise.resolve(openExternal(url)).catch((error) => {
+      console.error("[mcp] failed to open authorization URL:", error);
+    });
   }
 
   function renderDetail() {
@@ -267,6 +535,9 @@ export function setupMcpPage({ masterEl, detailEl, tabs, navItem: _navItem, conf
     source.className = "mcp-source";
     source.textContent = `${t("settings.mcp.sourceLabel")}: ${item.sourceFile}`;
     wrap.appendChild(source);
+
+    const oauthRow = renderOAuthRow(item);
+    if (oauthRow) wrap.appendChild(oauthRow);
 
     if (item.editable) {
       const form = renderForm(activeTab, item.name);
@@ -513,6 +784,8 @@ export function setupMcpPage({ masterEl, detailEl, tabs, navItem: _navItem, conf
   }
 
   function destroy() {
+    loginDialog?.destroy();
+    loginDialog = null;
     unsubscribeLocale();
   }
 

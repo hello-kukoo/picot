@@ -820,7 +820,30 @@
       "addMcp": "+ 添加MCP",
       "migrateNotice": "旧配置 {file} 中有 {count} 个 server 未迁入原生 mcp.json（原生 Pi 不读该文件）。",
       "migrate": "迁移",
-      "migrationFailed": "迁移失败。"
+      "migrationFailed": "迁移失败。",
+      "signIn": "登录",
+      "signOut": "退出登录",
+      "signedIn": "已登录。",
+      "projectUntrusted": "项目未信任",
+      "status": {
+        "connected": "已连接 · {count} 个工具",
+        "connectedNoTools": "已连接",
+        "needsAuth": "需要登录",
+        "disabled": "已禁用",
+        "error": "错误",
+        "unknown": "状态未知",
+        "unavailable": "无法获取实时 MCP 状态。"
+      },
+      "login": {
+        "title": "登录到 {name}",
+        "preparing": "正在启动登录…",
+        "waiting": "请在浏览器中完成授权。",
+        "openBrowser": "打开浏览器",
+        "cancel": "取消",
+        "retry": "重试",
+        "failed": "登录失败。",
+        "cancelled": "登录已取消。"
+      }
     },
     "usage": "使用量",
     "quota": "配额",

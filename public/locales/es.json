@@ -820,7 +820,30 @@
       "addMcp": "+ Añadir MCP",
       "migrateNotice": "La configuración antigua {file} contiene {count} servidor(es) que Pi nativo no lee.",
       "migrate": "Migrar",
-      "migrationFailed": "La migración falló."
+      "migrationFailed": "La migración falló.",
+      "signIn": "Iniciar sesión",
+      "signOut": "Cerrar sesión",
+      "signedIn": "Sesión iniciada.",
+      "projectUntrusted": "Proyecto no confiable",
+      "status": {
+        "connected": "Conectado · {count} herramientas",
+        "connectedNoTools": "Conectado",
+        "needsAuth": "Requiere inicio de sesión",
+        "disabled": "Deshabilitado",
+        "error": "Error",
+        "unknown": "Estado desconocido",
+        "unavailable": "El estado MCP en vivo no está disponible."
+      },
+      "login": {
+        "title": "Iniciar sesión en {name}",
+        "preparing": "Iniciando el inicio de sesión…",
+        "waiting": "Completa la autorización en tu navegador.",
+        "openBrowser": "Abrir navegador",
+        "cancel": "Cancelar",
+        "retry": "Reintentar",
+        "failed": "Error al iniciar sesión.",
+        "cancelled": "Inicio de sesión cancelado."
+      }
     },
     "usage": "Uso",
     "quota": "Cuota",

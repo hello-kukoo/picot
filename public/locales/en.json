@@ -820,7 +820,30 @@
       "addMcp": "+ Add MCP",
       "migrateNotice": "Old config {file} holds {count} server(s) native Pi does not read.",
       "migrate": "Migrate",
-      "migrationFailed": "Migration failed."
+      "migrationFailed": "Migration failed.",
+      "signIn": "Sign in",
+      "signOut": "Sign out",
+      "signedIn": "Signed in.",
+      "projectUntrusted": "Project not trusted",
+      "status": {
+        "connected": "Connected · {count} tools",
+        "connectedNoTools": "Connected",
+        "needsAuth": "Sign in required",
+        "disabled": "Disabled",
+        "error": "Error",
+        "unknown": "Unknown state",
+        "unavailable": "Live MCP status unavailable."
+      },
+      "login": {
+        "title": "Sign in to {name}",
+        "preparing": "Starting sign-in…",
+        "waiting": "Complete authorization in your browser.",
+        "openBrowser": "Open browser",
+        "cancel": "Cancel",
+        "retry": "Try again",
+        "failed": "Sign-in failed.",
+        "cancelled": "Sign-in cancelled."
+      }
     },
     "usage": "Usage",
     "quota": "Quota",

@@ -753,6 +753,13 @@ export class WebSocketClient extends EventTarget {
       return;
     }
 
+    // Owner-scoped MCP sign-in progress from the host's `pi mcp login` runner.
+    // Non-secret by construction: operation id, status, authorization URL.
+    if (message.type === "mcpLoginUpdate") {
+      this.dispatchEvent(new CustomEvent("mcpLoginUpdate", { detail: message }));
+      return;
+    }
+
     if (message.type === "git_status" || message.type === "git_diff") {
       this.dispatchEvent(
         new CustomEvent(message.type === "git_status" ? "gitStatus" : "gitDiff", {

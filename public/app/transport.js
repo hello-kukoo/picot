@@ -279,6 +279,46 @@ export class WsTransport {
     return this._control("git_turn_stats", { paths });
   }
 
+  // ── MCP sign-in / sign-out (host-spawned `pi mcp`, no session runtime) ────
+  // The Rust host runs the embedded `pi mcp login|logout|list` itself, so these
+  // ride the control plane like pi_path_status — never a Pi runtime target.
+
+  mcpLoginStart(name) {
+    return this._control("mcp_login_start", { name }, { timeoutMs: SPAWN_TIMEOUT_MS });
+  }
+
+  mcpLoginCancel(operationId) {
+    return this._control("mcp_login_cancel", { operationId });
+  }
+
+  mcpLoginStatus(operationId) {
+    return this._control("mcp_login_status", { operationId });
+  }
+
+  // `pi mcp logout` spawns a process (and the host invalidates its report
+  // cache), so it gets the same headroom as a spawn rather than the 30s default.
+  mcpLogout(name) {
+    return this._control("mcp_logout", { name }, { timeoutMs: SPAWN_TIMEOUT_MS });
+  }
+
+  // `pi mcp list --json` really connects to each server; the host caches the
+  // result for 60s, so this is a page-activation cost, not a poll.
+  mcpServerStatus() {
+    return this._control("mcp_server_status", {}, { timeoutMs: SPAWN_TIMEOUT_MS });
+  }
+
+  /**
+   * Owner-scoped `mcpLoginUpdate` frames (`{ operationId, status, authUrl?,
+   * error? }`) from the host login runner. Returns an unsubscribe function; a
+   * listener only ever sees non-secret progress for the caller's operations.
+   */
+  onMcpLoginUpdate(listener) {
+    if (!this.wsClient) return () => {};
+    const handler = (event) => listener(event?.detail?.payload ?? null);
+    this.wsClient.addEventListener("mcpLoginUpdate", handler);
+    return () => this.wsClient.removeEventListener("mcpLoginUpdate", handler);
+  }
+
   // ── Host data plane (v2 `data_request`) ──────────────────────────────────────
   // Paths are workspace-relative; `workspaceId` is carried by the envelope from
   // the client's own authoritative route. `file_read`/`file_write`/`file_raw`
