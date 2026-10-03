@@ -513,7 +513,6 @@ describe("subagents tab", () => {
     });
     const { page } = setup(transport);
     await page.activate();
-    expect(container.textContent).toContain("Disk candidates only");
     container.querySelector(".subagents-row").click();
     await flush();
     const save = container.querySelector(".subagents-save");
@@ -1062,7 +1061,6 @@ describe("subagents name-level override editing", () => {
     const { page } = setup(transport);
     await page.activate();
     // The parity notice stays: no winner is claimed, only a name-level write.
-    expect(container.textContent).toContain("Disk candidates only");
     await openRow();
     const model = container.querySelector('[aria-label="Model"]');
     expect(model.disabled).toBe(false);
@@ -1082,7 +1080,6 @@ describe("subagents name-level override editing", () => {
       }),
     );
     expect(container.textContent).toContain("Saved to disk");
-    expect(container.textContent).toContain("Disk candidates only");
   });
 
   it("still refuses external runners and unqualified names with zero host writes", async () => {

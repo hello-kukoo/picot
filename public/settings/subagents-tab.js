@@ -347,8 +347,6 @@ export function setupSubagentsTab({
     }
     frame.append(subTabRow);
     if (notice) frame.append(text("p", "subagents-feedback", notice));
-    if (inventory?.resolutionContext?.mode === "disk-candidates-only")
-      frame.append(text("p", "subagents-notice", label("settings.subagents.diskOnlyMode")));
     // Master/detail reuses the Extensions package-manager shell (page tabs,
     // master card, detail card) so Subagents reads like its sibling Settings
     // pages. Loading/error/empty live inside the master card, the way the
