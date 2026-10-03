@@ -376,7 +376,6 @@ export function setupSubagentsTab({
         );
       }
       const appendRow = (entry) => {
-        const wrap = text("div", "subagents-row-wrap", "");
         const row = text("button", "subagents-row pkg-manager-sidebar-row", "");
         row.type = "button";
         row.dataset.candidateId = entry.id;
@@ -401,28 +400,7 @@ export function setupSubagentsTab({
         row.addEventListener("click", () => {
           void select(entry);
         });
-        // One-click 停用: writes the name-level disabled override immediately,
-        // mirroring the MCP/Skill row switches. Inert for names the host
-        // refuses to write.
-        const disabledOn = entry.savedOverride?.disabled === true;
-        const toggle = text(
-          "button",
-          `settings-toggle subagents-row-toggle${disabledOn ? " on" : ""}`,
-          "",
-        );
-        toggle.type = "button";
-        toggle.setAttribute(
-          "aria-label",
-          `${entry.runtimeName}: ${label("settings.subagents.detail.disabled")}`,
-        );
-        toggle.setAttribute("aria-pressed", String(disabledOn));
-        const rowEditable = Boolean(entry.writeQualified && entry.nativeOverrideSupported);
-        toggle.disabled = !rowEditable;
-        toggle.addEventListener("click", () => {
-          void writeDisabled(entry, !disabledOn);
-        });
-        wrap.append(row, toggle);
-        master.append(wrap);
+        master.append(row);
       };
       const appendGroup = (caption, members) => {
         if (!members.length) return;
@@ -510,7 +488,28 @@ export function setupSubagentsTab({
           );
       } else if (selected) {
         const header = text("div", "subagents-detail-header pkg-manager-detail-header", "");
-        header.append(text("h4", "subagents-name", selected.runtimeName));
+        // The enable/disable switch lives on the detail name row, right-aligned,
+        // matching where the MCP and Skills pages put their toggles.
+        const nameRow = text("div", "subagents-name-row", "");
+        nameRow.append(text("h4", "subagents-name", selected.runtimeName));
+        const disabledOn = selected.savedOverride?.disabled === true;
+        const toggle = text(
+          "button",
+          `settings-toggle subagents-detail-toggle${disabledOn ? " on" : ""}`,
+          "",
+        );
+        toggle.type = "button";
+        toggle.setAttribute(
+          "aria-label",
+          `${selected.runtimeName}: ${label("settings.subagents.detail.disabled")}`,
+        );
+        toggle.setAttribute("aria-pressed", String(disabledOn));
+        toggle.disabled = !(selected.writeQualified && selected.nativeOverrideSupported);
+        toggle.addEventListener("click", () => {
+          void writeDisabled(selected, !disabledOn);
+        });
+        nameRow.append(toggle);
+        header.append(nameRow);
         detail.append(header);
         const grid = text("div", "pkg-manager-status-grid", "");
         for (const [field, value, wrap] of [

@@ -816,7 +816,7 @@ describe("subagents row disabled switch", () => {
       ),
       overrides,
     );
-  it("renders one right-side switch per row reflecting the saved layer", async () => {
+  it("renders the disable switch on the detail name row, right-aligned", async () => {
     const transport = makeTransport();
     transport.listSubagents.mockResolvedValue(
       qualifiedRow([
@@ -825,23 +825,25 @@ describe("subagents row disabled switch", () => {
           runtimeName: "on-agent",
           savedOverride: { model: null, thinking: null, advertise: null, disabled: true },
         },
-        {
-          id: "c-off",
-          runtimeName: "off-agent",
-          savedOverride: { model: null, thinking: null, advertise: null, disabled: null },
-        },
       ]),
     );
+    transport.getSubagentDetail.mockResolvedValue({
+      candidateId: "c-on",
+      rawDefinition: "---\nname: on-agent\n---\nx",
+    });
     const { page } = setup(transport);
     await page.activate();
-    const wraps = [...container.querySelectorAll(".subagents-row-wrap")];
-    expect(wraps).toHaveLength(2);
-    const [onWrap, offWrap] = wraps;
-    expect(onWrap.querySelector(".subagents-row-toggle").classList.contains("on")).toBe(true);
-    expect(onWrap.querySelector(".subagents-row-toggle").getAttribute("aria-pressed")).toBe("true");
-    expect(offWrap.querySelector(".subagents-row-toggle").classList.contains("on")).toBe(false);
-    // The switch sits beside the row, and the row still selects on click.
-    expect(onWrap.lastElementChild.classList.contains("subagents-row-toggle")).toBe(true);
+    // Master rows carry no switch; selecting a row reveals it on the name line.
+    expect(container.querySelector(".subagents-row .settings-toggle")).toBeNull();
+    container.querySelector(".subagents-row").click();
+    await flush();
+    const nameRow = container.querySelector(".subagents-name-row");
+    expect(nameRow).not.toBeNull();
+    const toggle = nameRow.querySelector(".subagents-detail-toggle");
+    expect(toggle.classList.contains("on")).toBe(true);
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    // Right-aligned: the switch is the last child of the name row.
+    expect(nameRow.lastElementChild).toBe(toggle);
   });
 
   it("toggling writes immediately with keeps and refreshes the saved state", async () => {
@@ -854,7 +856,9 @@ describe("subagents row disabled switch", () => {
     transport.setSubagentOverride.mockResolvedValueOnce({ inventory: withDisabled(true) });
     const { page } = setup(transport);
     await page.activate();
-    container.querySelector(".subagents-row-toggle").click();
+    container.querySelector(".subagents-row").click();
+    await flush();
+    container.querySelector(".subagents-detail-toggle").click();
     await flush();
     expect(transport.setSubagentOverride).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -867,10 +871,10 @@ describe("subagents row disabled switch", () => {
         expectedRevision: "rev-1",
       }),
     );
-    expect(container.querySelector(".subagents-row-toggle").classList.contains("on")).toBe(true);
+    expect(container.querySelector(".subagents-detail-toggle").classList.contains("on")).toBe(true);
     // Toggling back clears the override instead of writing false.
     transport.setSubagentOverride.mockResolvedValueOnce({ inventory: withDisabled(null) });
-    container.querySelector(".subagents-row-toggle").click();
+    container.querySelector(".subagents-detail-toggle").click();
     await flush();
     expect(transport.setSubagentOverride.mock.calls[1][0].disabled).toEqual({ op: "clear" });
   });
@@ -882,7 +886,9 @@ describe("subagents row disabled switch", () => {
     );
     const { page } = setup(transport);
     await page.activate();
-    const toggle = container.querySelector(".subagents-row-toggle");
+    container.querySelector(".subagents-row").click();
+    await flush();
+    const toggle = container.querySelector(".subagents-detail-toggle");
     expect(toggle.disabled).toBe(true);
     toggle.click();
     await flush();

@@ -2506,16 +2506,19 @@ body.landing-mode #landing {
 
 /* "Also available in: …" must wrap inside the package-manager meta row
    instead of being clipped to an ellipsis. */
-.subagents-row-wrap {
+.subagents-name-row {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
-}
-.subagents-row-wrap .subagents-row {
-  flex: 1;
+  justify-content: space-between;
+  gap: var(--space-2);
   min-width: 0;
 }
-.subagents-row-toggle {
+.subagents-name-row .subagents-name {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.subagents-detail-toggle {
   flex-shrink: 0;
 }
 .subagents-view .subagents-badge {
