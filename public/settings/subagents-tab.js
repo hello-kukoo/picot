@@ -380,7 +380,7 @@ export function setupSubagentsTab({
           String(entries.length),
         );
       }
-      frame.append(text("p", "subagents-count", countLine));
+      frame.append(text("p", "settings-help", countLine));
     }
     if (notice) frame.append(text("p", "subagents-feedback", notice));
     // Master/detail reuses the Extensions package-manager shell (page tabs,

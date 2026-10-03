@@ -2506,11 +2506,6 @@ body.landing-mode #landing {
 
 /* "Also available in: …" must wrap inside the package-manager meta row
    instead of being clipped to an ellipsis. */
-.subagents-count {
-  margin: 0 0 var(--space-2);
-  color: var(--text-dim);
-  font-size: var(--text-meta);
-}
 .subagents-name-row {
   display: flex;
   align-items: center;
