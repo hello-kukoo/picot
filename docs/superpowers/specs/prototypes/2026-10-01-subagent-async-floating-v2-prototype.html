@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="night">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Picot · 后台任务悬浮面板 v2（设计原型）</title>
+  <style>
+    /* Prototype-only subset of Picot style-theme.css; never loaded by product. */
+    :root {
+      color-scheme: dark;
+      --font-size-sm: 12px; --font-size-md: 14px;
+      --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-6: 24px;
+      --radius-sm: 6px; --radius-md: 10px; --duration: .18s; --ease: cubic-bezier(.4,0,.2,1);
+      --bg-solid: #212121; --bg-glass: rgba(255,255,255,.04); --bg-glass-hover: rgba(255,255,255,.06);
+      --bg-frosted: rgba(33,33,33,.85); --text-primary: rgba(255,255,255,.88);
+      --text-secondary: rgba(255,255,255,.5); --accent: #a0a0a0; --accent-text: #c0c0c0;
+      --border: rgba(255,255,255,.06); --border-hover: rgba(255,255,255,.1);
+      --success: #34d399; --error: #f87171; --warning: #fbbf24;
+      --sa-error: var(--error); --sa-warning: var(--warning);
+    }
+    :root[data-theme="terracotta"] {
+      color-scheme: light;
+      --bg-solid: #f4f1ec; --bg-glass: rgba(244,241,236,.6); --bg-glass-hover: rgba(0,0,0,.06);
+      --bg-frosted: rgba(244,241,236,.8); --text-primary: rgba(0,0,0,.92);
+      --text-secondary: rgba(0,0,0,.62); --accent: #b06a48; --accent-text: #a05e3e;
+      --border: rgba(0,0,0,.06); --border-hover: rgba(0,0,0,.1);
+      --success: #1a8a5a; --error: #b63f3f; --warning: #946000;
+      --sa-error: #b63f3f; --sa-warning: #946000;
+    }
+    * { box-sizing: border-box; }
+    html { font-size: 16px; }
+    body { margin: 0; background: var(--bg-solid); color: var(--text-primary); font: .875rem/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; }
+    button, textarea { font: inherit; }
+    button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+    .review-bar { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); flex-wrap: wrap; min-height: 3.25rem; padding: var(--space-2) var(--space-4); border-bottom: 1px solid var(--border-hover); }
+    .review-bar__label { font-size: .75rem; color: var(--text-secondary); }
+    .review-bar__controls { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+    .review-bar button { cursor: pointer; padding: .35rem .7rem; color: var(--text-primary); background: var(--bg-glass); border: 1px solid var(--border-hover); border-radius: var(--radius-sm); }
+    .review-bar button:hover, .review-bar button[aria-pressed="true"] { background: var(--bg-glass-hover); border-color: var(--accent); }
+    .app-layout { display: grid; grid-template-columns: 14rem minmax(0,1fr); height: calc(100dvh - 3.25rem); min-height: 28rem; }
+    .sidebar { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-4); border-right: 1px solid var(--border); color: var(--text-secondary); }
+    .sidebar__brand { font-size: 1rem; font-weight: 650; color: var(--text-primary); }
+    .sidebar__section { padding: var(--space-2) 0; border-top: 1px solid var(--border); font-size: .75rem; }
+    .sidebar__item { padding: var(--space-2); border-radius: var(--radius-sm); color: var(--text-primary); background: var(--bg-glass-hover); }
+    .main { position: relative; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+    .main__header { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border); font-weight: 600; }
+    .messages { flex: 1; min-height: 0; overflow: auto; padding: var(--space-6) var(--space-4) var(--space-2); scroll-padding-bottom: 6rem; }
+    .messages__inner { max-width: 60rem; min-height: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: var(--space-6); }
+    .message { max-width: 38rem; line-height: 1.6; }
+    .message__by { margin-bottom: var(--space-1); color: var(--text-secondary); font-size: .75rem; }
+    .message p { margin: 0; }
+    .message--self { align-self: end; padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-glass-hover); }
+    .message--last { margin-top: auto; padding-bottom: var(--space-3); }
+    .input-area { position: relative; z-index: 1; flex: none; background: var(--bg-solid); padding: var(--space-2) max(var(--space-4), calc((100% - 960px)/2)) var(--space-4); }
+    .composer-card { border: 1px solid var(--border-hover); border-radius: var(--radius-md); background: var(--bg-glass); }
+    .composer-card textarea { display: block; width: 100%; min-height: 4rem; padding: var(--space-3); resize: none; border: 0; background: none; color: var(--text-primary); }
+    .composer-card textarea::placeholder { color: var(--text-secondary); }
+    .composer-card__toolbar { display: flex; justify-content: space-between; padding: 0 var(--space-3) var(--space-2); font-size: .75rem; color: var(--text-secondary); }
+    /* Floating rail is anchored to input-area, above composer and over the message viewport. */
+    .floating-rail { position: absolute; z-index: 12; bottom: calc(100% + var(--space-2)); left: max(var(--space-4), calc((100% - 960px)/2)); right: max(var(--space-4), calc((100% - 960px)/2)); display: grid; grid-template-columns: minmax(0,1fr) minmax(0,420px); gap: var(--space-3); align-items: end; pointer-events: none; }
+    .subagent-panel, .todo-panel { min-width: 0; pointer-events: auto; border: 1px solid var(--border-hover); border-radius: var(--radius-md); background: var(--bg-frosted); box-shadow: 0 4px 16px rgba(0,0,0,.18); color: var(--text-primary); }
+    .subagent-panel[hidden], .subagent-panel__more[hidden] { display: none; }
+    .subagent-panel { width: 100%; padding: var(--space-2) var(--space-3); }
+    .subagent-panel__header { display: flex; align-items: center; gap: var(--space-2); min-height: 2rem; }
+    .subagent-panel__glyph { flex: none; width: 1rem; text-align: center; color: var(--accent-text); }
+    .subagent-panel__glyph.is-live, .subagent-panel__jobGlyph.is-live { animation: breathe 2.4s ease-in-out infinite; }
+    .subagent-panel__summary { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: var(--font-size-sm); line-height: 1.5; }
+    .subagent-panel__summary strong { color: var(--text-primary); font-weight: 650; }
+    .subagent-panel__names { color: var(--text-secondary); }
+    .subagent-panel__toggle { flex: none; cursor: pointer; min-width: 2.75rem; min-height: 2.75rem; padding: 0 var(--space-2); border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--accent-text); font-size: var(--font-size-sm); }
+    .subagent-panel__toggle:hover { background: var(--bg-glass-hover); border-color: var(--border-hover); }
+    .subagent-panel__detailWrap { display: grid; grid-template-rows: 0fr; transition: grid-template-rows var(--duration) var(--ease); }
+    .subagent-panel.is-expanded .subagent-panel__detailWrap { grid-template-rows: 1fr; }
+    .subagent-panel__detailInner { min-height: 0; overflow: hidden; visibility: hidden; }
+    .subagent-panel.is-expanded .subagent-panel__detailInner { visibility: visible; }
+    .subagent-panel__scroll { overflow-y: auto; max-height: min(19rem, 40dvh); }
+    .subagent-panel__list { margin: var(--space-1) 0 0; padding: 0; list-style: none; }
+    .subagent-panel__job { position: relative; min-width: 0; padding: var(--space-2) var(--space-1) var(--space-2) var(--space-3); border-top: 1px solid var(--border); }
+    .subagent-panel__job::before { position: absolute; left: 0; top: var(--space-3); bottom: var(--space-3); width: 2px; border-radius: 2px; background: var(--job-accent, var(--accent)); content: ""; }
+    .subagent-panel__job[data-state="running"] { --job-accent: var(--accent-text); }
+    .subagent-panel__job[data-state="complete"] { --job-accent: var(--success); }
+    .subagent-panel__job[data-state="failed"] { --job-accent: var(--sa-error); }
+    .subagent-panel__job[data-state="queued"] { --job-accent: var(--text-secondary); }
+    .subagent-panel__jobMain { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+    .subagent-panel__jobGlyph { flex: none; width: 1rem; color: var(--job-accent, var(--accent)); text-align: center; }
+    .subagent-panel__name { flex: 1; min-width: 0; overflow: hidden; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
+    .subagent-panel__state { flex: none; font-size: var(--font-size-sm); }
+    .subagent-panel__attention { flex: none; padding: 0 var(--space-1); border: 1px solid var(--sa-warning); border-radius: var(--radius-sm); color: var(--sa-warning); font-size: var(--font-size-sm); white-space: nowrap; }
+    .subagent-panel__meta { display: flex; flex-wrap: wrap; column-gap: var(--space-2); margin-left: calc(1rem + var(--space-2)); color: var(--text-secondary); font-size: var(--font-size-sm); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; user-select: text; }
+    .subagent-panel__meta span + span::before { content: "·"; margin-right: var(--space-2); }
+    .subagent-panel__more { padding: var(--space-2) var(--space-1); border-top: 1px solid var(--border); color: var(--text-secondary); font-size: var(--font-size-sm); }
+    .todo-panel { padding: var(--space-2) var(--space-3); font-size: var(--font-size-sm); }
+    .todo-panel__header { display: flex; justify-content: space-between; gap: var(--space-2); font-weight: 650; }
+    .todo-panel__header span:last-child { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+    .todo-panel__items { margin: var(--space-2) 0 0; padding: 0; list-style: none; color: var(--text-secondary); }
+    .todo-panel__items li { display: flex; gap: var(--space-2); padding: 2px 0; }
+    .todo-panel__items li span { color: var(--text-primary); }
+    @keyframes breathe { 50% { opacity: .55; } }
+    @media (max-width: 980px) { .floating-rail { grid-template-columns: minmax(0,1fr) minmax(0,38%); } }
+    @media (max-width: 700px) {
+      .app-layout { display: block; height: calc(100dvh - 5rem); }
+      .sidebar { display: none; }
+      .main { height: 100%; }
+      .floating-rail { grid-template-columns: minmax(0,1fr); gap: var(--space-2); }
+      .subagent-panel { grid-row: 2; }
+      .todo-panel { grid-row: 1; }
+      .subagent-panel__scroll { max-height: min(12rem, 28dvh); }
+      .todo-panel__items { display: none; }
+    }
+    @media (max-height: 570px) { .subagent-panel__scroll { max-height: 25dvh; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+  </style>
+</head>
+<body>
+  <header class="review-bar">
+    <span class="review-bar__label">设计原型 · 假数据 · 顶部控件仅供评审；todo 为静态占位</span>
+    <div class="review-bar__controls" role="toolbar" aria-label="评审场景">
+      <button type="button" data-scene="many" aria-pressed="true">多任务</button>
+      <button type="button" data-scene="single" aria-pressed="false">单任务</button>
+      <button type="button" data-scene="empty" aria-pressed="false">空态</button>
+      <button type="button" id="theme-switch" aria-label="切换明暗主题">切换主题</button>
+    </div>
+  </header>
+  <div class="app-layout">
+    <aside class="sidebar" aria-hidden="true"><div class="sidebar__brand">Picot</div><div class="sidebar__section">最近会话</div><div class="sidebar__item">后台任务</div><div class="sidebar__section">项目工作区</div></aside>
+    <main class="main">
+      <header class="main__header">后台任务</header>
+      <div class="messages" id="messages"><div class="messages__inner">
+        <div class="message message--self"><div class="message__by">你</div><p>请并行核对后台任务显示与 todo 进度。</p></div>
+        <div class="message"><div class="message__by">Pi</div><p>已派出几位子代理。你可以继续阅读消息或输入下一条指令；任务汇总悬浮在消息区底部，不占输入框布局高度。</p></div>
+        <div class="message message--last"><div class="message__by">Pi · 最新消息</div><p>侦察兵正在查找引用；程序猿的任务失败，产品经理需要关注。滚动至底部时，最后一条消息可能从磨砂面板后方经过。</p></div>
+      </div></div>
+      <div class="input-area">
+        <div class="floating-rail" aria-label="悬浮状态面板区">
+          <section class="subagent-panel" id="panel" aria-label="后台任务" aria-live="off">
+            <div class="subagent-panel__header">
+              <span class="subagent-panel__glyph is-live" id="summary-glyph" aria-hidden="true">◐</span>
+              <div class="subagent-panel__summary"><strong id="summary-count"></strong><span class="subagent-panel__names" id="summary-names"></span></div>
+              <button class="subagent-panel__toggle" id="toggle" type="button" aria-controls="details" aria-expanded="false">展开详情 ▾</button>
+            </div>
+            <div class="subagent-panel__detailWrap" id="details"><div class="subagent-panel__detailInner"><div class="subagent-panel__scroll">
+              <ol class="subagent-panel__list" id="jobs"></ol><div class="subagent-panel__more" id="more" hidden></div>
+            </div></div></div>
+          </section>
+          <section class="todo-panel" aria-label="待办事项（原型占位）"><div class="todo-panel__header"><span>● 待办事项</span><span>1 / 3</span></div><ol class="todo-panel__items"><li>✓ <span>确认目标与范围</span></li><li>◐ <span>核对状态面板</span></li><li>○ <span>整理验收结果</span></li></ol></section>
+        </div>
+        <div class="composer-card"><textarea aria-label="消息输入（原型，不发送）" placeholder="Message… Type / for commands, @ for files"></textarea><div class="composer-card__toolbar"><span>原型展示，不发送消息</span><span>Enter ↵</span></div></div>
+      </div>
+    </main>
+  </div>
+  <script>
+    // Mock flat task rows; source-side workflow decomposition is outside this prototype.
+    const now = Date.now();
+    const run = (id, name, state, age, extra = {}) => ({ id, name, state, startedAt: now - age * 1000, ...extra });
+    const scenes = {
+      many: { runs: [
+        run('a', '侦察兵', 'running', 114, { tool: 'grep', toolStartedAt: now - 12500, turns: 6, tools: 14 }),
+        run('b', '架构狮', 'complete', 260, { endedAt: now - 8000, turns: 10, tools: 21 }),
+        run('c', '程序猿', 'failed', 191, { endedAt: now - 33000, turns: 4, tools: 7 }),
+        run('d', '产品经理', 'running', 73, { attention: true, turns: 3, tools: 5 }),
+        run('e', '测试员', 'queued', 0), run('f', '文档员', 'paused', 440, { endedAt: now - 45000 }),
+      ], omitted: 2 },
+      single: { runs: [run('one', '侦察兵', 'running', 52, { tool: 'read', toolStartedAt: now - 7900, turns: 2, tools: 4 })], omitted: 0 },
+      empty: { runs: [], omitted: 0 },
+    };
+    const status = { running: ['◐','运行中'], complete: ['✓','已完成'], failed: ['×','失败'], queued: ['○','排队中'], partial: ['◑','部分完成'], paused: ['Ⅱ','已暂停'], stopped: ['■','已停止'], rejected: ['×','已拒绝'] };
+    const panel = document.getElementById('panel'), jobs = document.getElementById('jobs'), more = document.getElementById('more');
+    const toggle = document.getElementById('toggle'), details = document.getElementById('details');
+    let scene = 'many', expanded = false;
+    const seconds = ms => `${Math.max(0, Math.floor(ms / 1000))} 秒`;
+    function setExpanded(value) {
+      expanded = value;
+      panel.classList.toggle('is-expanded', value);
+      toggle.setAttribute('aria-expanded', String(value));
+      toggle.textContent = value ? '收起详情 ▴' : '展开详情 ▾';
+      details.inert = !value;
+    }
+    function draw() {
+      const { runs, omitted } = scenes[scene];
+      panel.hidden = runs.length === 0 && omitted === 0;
+      if (panel.hidden) { jobs.replaceChildren(); setExpanded(false); return; }
+      const total = runs.length + omitted;
+      document.getElementById('summary-count').textContent = `${total} 个后台任务`;
+      const names = runs.map(item => item.name);
+      document.getElementById('summary-names').textContent = names.length ? ` · ${names.join('、')}${omitted ? `、另 ${omitted} 个未提供名称` : ''}` : ' · 详情不可用';
+      document.getElementById('summary-glyph').classList.toggle('is-live', runs.some(item => item.state === 'running'));
+      const snapshotAt = Date.now();
+      jobs.replaceChildren(...runs.slice(0, 4).map(item => {
+        const li = document.createElement('li'); li.className = 'subagent-panel__job'; li.dataset.state = item.state;
+        const main = document.createElement('div'); main.className = 'subagent-panel__jobMain';
+        const glyph = document.createElement('span'); glyph.className = `subagent-panel__jobGlyph${item.state === 'running' ? ' is-live' : ''}`; glyph.setAttribute('aria-hidden', 'true'); glyph.textContent = status[item.state][0];
+        const name = document.createElement('span'); name.className = 'subagent-panel__name'; name.textContent = item.name; name.title = item.name;
+        const state = document.createElement('span'); state.className = 'subagent-panel__state'; state.textContent = status[item.state][1];
+        main.append(glyph, name, state);
+        if (item.attention) { const badge = document.createElement('span'); badge.className = 'subagent-panel__attention'; badge.textContent = '⚠ 需关注'; main.append(badge); }
+        li.append(main);
+        const meta = document.createElement('div'); meta.className = 'subagent-panel__meta';
+        const parts = [];
+        if (item.tool) parts.push(`工具 ${item.tool}`);
+        if (item.toolStartedAt) parts.push(`工具已运行 ${seconds(snapshotAt - item.toolStartedAt)}`);
+        if (item.turns !== undefined) parts.push(`${item.turns} 轮`);
+        if (item.tools !== undefined) parts.push(`${item.tools} 次工具`);
+        if (item.startedAt) parts.push(`耗时 ${seconds((item.endedAt || snapshotAt) - item.startedAt)}`);
+        parts.forEach(text => { const span = document.createElement('span'); span.textContent = text; meta.append(span); });
+        if (parts.length) li.append(meta);
+        return li;
+      }));
+      const hidden = Math.max(0, runs.length - 4) + omitted;
+      more.hidden = hidden === 0; more.textContent = hidden ? `+${hidden} 个后台任务（详情未展示）` : '';
+    }
+    toggle.addEventListener('click', () => setExpanded(!expanded));
+    document.querySelectorAll('[data-scene]').forEach(button => button.addEventListener('click', () => {
+      scene = button.dataset.scene;
+      document.querySelectorAll('[data-scene]').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+      draw();
+    }));
+    document.getElementById('theme-switch').addEventListener('click', () => {
+      document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'night' ? 'terracotta' : 'night';
+    });
+    setExpanded(false); draw();
+  </script>
+</body>
+</html>
