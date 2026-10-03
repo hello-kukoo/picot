@@ -788,6 +788,7 @@
     },
     "mcp": {
       "title": "MCP",
+      "description": "Manage servers for all workspaces or just this one. Their settings are stored on your computer or in this workspace, respectively.",
       "groups": {
         "piGlobal": "Global",
         "project": "Current project"

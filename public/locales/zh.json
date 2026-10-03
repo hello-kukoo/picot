@@ -788,6 +788,7 @@
     },
     "mcp": {
       "title": "MCP",
+      "description": "管理供所有工作区或仅供此工作区使用的服务器；设置分别保存在本机和工作区内。",
       "groups": {
         "piGlobal": "全局",
         "project": "当前项目"

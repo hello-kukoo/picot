@@ -355,11 +355,7 @@ export function setupSubagentsTab({
     }
     // Scope description (PM copy) above the sub-tab segmented control.
     frame.append(
-      text(
-        "p",
-        "subagents-scope-description",
-        label(`settings.subagents.scopeDescription.${active}`),
-      ),
+      text("p", "settings-help", label(`settings.subagents.scopeDescription.${active}`)),
     );
     frame.append(subTabRow);
     // Counter line between the sub-tab row and the master/detail layout,

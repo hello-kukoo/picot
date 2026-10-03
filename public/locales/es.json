@@ -788,6 +788,7 @@
     },
     "mcp": {
       "title": "MCP",
+      "description": "Gestiona servidores para todos los espacios de trabajo o solo para este. Sus ajustes se guardan en tu equipo o en este espacio de trabajo, respectivamente.",
       "groups": {
         "piGlobal": "Global",
         "project": "Proyecto actual"
