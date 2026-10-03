@@ -911,7 +911,8 @@
         "writeLayerGlobal": "全局 ~/.pi/agent/settings.json",
         "writeLayerProject": "当前项目 {root}/.pi/settings.json",
         "writeLayerProjectUnknown": "当前项目 .pi/settings.json",
-        "enable": "启用"
+        "enable": "启用",
+        "notSet": "不设置（继承父代理）"
       },
       "diagnostics": {
         "scanBudget": "发现预算已用尽。",

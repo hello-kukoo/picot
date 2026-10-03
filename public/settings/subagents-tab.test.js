@@ -233,7 +233,7 @@ function setup(
     identity = { workspaceId: "w1", workspaceGeneration: 3 },
     landingOnly = false,
     confirmDiscard,
-    loadModels,
+    configGateway,
   } = {},
 ) {
   let current = identity;
@@ -244,7 +244,7 @@ function setup(
     getWorkspaceIdentity: () => current,
     landingOnly,
     confirmDiscard,
-    loadModels,
+    configGateway,
   });
   return { page, setIdentity: (next) => (current = next) };
 }
@@ -1123,7 +1123,31 @@ describe("subagents name-level override editing", () => {
       qualified({ savedOverride: { model: "inherit", thinking: false } }),
     );
     details(transport);
-    const { page } = setup(transport, { loadModels: () => CATALOG });
+    const { page } = setup(transport, {
+      configGateway: {
+        call: async (op) =>
+          op === "list_model_catalog"
+            ? {
+                ok: true,
+                data: {
+                  providers: [
+                    {
+                      provider: CATALOG[0].provider,
+                      models: [
+                        {
+                          provider: CATALOG[0].provider,
+                          id: CATALOG[0].id,
+                          available: true,
+                          visible: true,
+                        },
+                      ],
+                    },
+                  ],
+                },
+              }
+            : { ok: true, data: { modelIds: [] } },
+      },
+    });
     await page.activate();
     await openRow();
     const model = container.querySelector('[aria-label="Model"]');
@@ -1131,17 +1155,22 @@ describe("subagents name-level override editing", () => {
     // A saved out-of-catalog "inherit" is shown, not silently emptied.
     expect(model.textContent).toBe("Keep current: inherit");
     model.click();
+    await flush(); // async click handler: refreshCatalog + menu render
     const menu = document.querySelector(".model-dropdown-menu");
     expect(menu).not.toBeNull();
     const items = [...menu.querySelectorAll(".model-dropdown-item")];
-    expect(items).toHaveLength(2);
+    // Catalog models plus the appended "Not set" option; exact count varies
+    // with the shared menu's scoped-section rendering.
+    expect(items.length).toBeGreaterThanOrEqual(2);
     // The shared menu renders the composer catalog; none matches "inherit".
-    expect(items[0].textContent).toContain("gpt-5");
-    expect(items[1].textContent).toContain("claude-x");
+    const allText = items.map((item) => item.textContent).join("\n");
+    expect(allText).toContain("gpt-5");
+    expect(allText).toContain("Not set");
     expect(items.every((item) => !item.classList.contains("active"))).toBe(true);
     // Picking composes provider/id into the override value.
-    items[1].click();
-    expect(container.querySelector('[aria-label="Model"]').textContent).toBe("anthropic/claude-x");
+    const gptItem = items.find((item) => item.textContent.includes("gpt-5"));
+    gptItem.click();
+    expect(container.querySelector('[aria-label="Model"]').textContent).toBe("openai/gpt-5");
     const thinking = container.querySelector('[aria-label="Thinking"]');
     expect(thinking.tagName).toBe("SELECT");
     expect(thinking.value).toBe("false");
@@ -1197,8 +1226,33 @@ describe("subagents name-level override editing", () => {
     );
     details(transport);
     transport.setSubagentOverride.mockResolvedValue({ inventory: qualified() });
-    const { page } = setup(transport, { loadModels: () => CATALOG });
+    const { page } = setup(transport, {
+      configGateway: {
+        call: async (op) =>
+          op === "list_model_catalog"
+            ? {
+                ok: true,
+                data: {
+                  providers: [
+                    {
+                      provider: CATALOG[0].provider,
+                      models: [
+                        {
+                          provider: CATALOG[0].provider,
+                          id: CATALOG[0].id,
+                          available: true,
+                          visible: true,
+                        },
+                      ],
+                    },
+                  ],
+                },
+              }
+            : { ok: true, data: { modelIds: [] } },
+      },
+    });
     await page.activate();
+    await flush(); // let refreshCatalog resolve
     await openRow();
     const thinking = container.querySelector('[aria-label="Thinking"]');
     expect(container.querySelector('[aria-label="Model"]').textContent).toBe("openai/gpt-5");

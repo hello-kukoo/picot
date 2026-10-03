@@ -7233,7 +7233,7 @@ const subagentsPage = setupSubagentsTab({
   container: document.getElementById("settings-subagents"),
   transport,
   t,
-  loadModels: () => visibleModels,
+  configGateway,
   getWorkspaceIdentity: () => {
     const workspaceId = wsClient.getRuntimeTarget()?.workspaceId;
     return workspaceId && gitClient.generation != null

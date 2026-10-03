@@ -911,7 +911,8 @@
         "writeLayerGlobal": "Global ~/.pi/agent/settings.json",
         "writeLayerProject": "Proyecto actual {root}/.pi/settings.json",
         "writeLayerProjectUnknown": "Proyecto actual .pi/settings.json",
-        "enable": "Activar"
+        "enable": "Activar",
+        "notSet": "Sin configurar (heredar del padre)"
       },
       "diagnostics": {
         "scanBudget": "Se agotó el presupuesto de exploración.",

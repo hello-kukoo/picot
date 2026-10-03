@@ -911,7 +911,8 @@
         "writeLayerGlobal": "Global ~/.pi/agent/settings.json",
         "writeLayerProject": "Current project {root}/.pi/settings.json",
         "writeLayerProjectUnknown": "Current project .pi/settings.json",
-        "enable": "Enable"
+        "enable": "Enable",
+        "notSet": "Not set (inherit parent)"
       },
       "diagnostics": {
         "scanBudget": "Discovery budget exhausted.",

@@ -911,7 +911,8 @@
         "writeLayerGlobal": "グローバル ~/.pi/agent/settings.json",
         "writeLayerProject": "現在のプロジェクト {root}/.pi/settings.json",
         "writeLayerProjectUnknown": "現在のプロジェクト .pi/settings.json",
-        "enable": "有効"
+        "enable": "有効",
+        "notSet": "未設定（親を継承）"
       },
       "diagnostics": {
         "scanBudget": "探索の上限に達しました。",

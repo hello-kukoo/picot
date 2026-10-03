@@ -2,6 +2,7 @@
 // ABOUTME: Keeps scope and workspace requests isolated without asserting unverified runtime winners.
 
 import { openModelDropdownMenu } from "../models/model-dropdown.js";
+import { loadModelChoices } from "./package-extension-settings.js";
 
 const COPY = {
   "settings.subagents.scopes.global": "Global",
@@ -46,6 +47,7 @@ const COPY = {
   "settings.subagents.create.disabled": "Creation unavailable: runtime identity unverified.",
   "settings.subagents.detail.invalidModel": "Use a provider/model ID.",
   "settings.subagents.detail.noLayerOverride": "No override in this layer",
+  "settings.subagents.detail.notSet": "Not set (inherit parent)",
   "settings.subagents.detail.keepCurrent": "Keep current: {value}",
   "settings.subagents.detail.thinkingFalse": "Off (false)",
   "settings.subagents.detail.thinkingHint":
@@ -173,7 +175,7 @@ export function setupSubagentsTab({
   transport,
   t,
   getWorkspaceIdentity,
-  loadModels,
+  configGateway,
   landingOnly = false,
   confirmDiscard = () => globalThis.confirm?.("Discard unsaved subagent changes?") ?? false,
 }) {
@@ -184,10 +186,14 @@ export function setupSubagentsTab({
   };
   // An injected model catalog ({id}) turns the model control into a picker of
   // real ids; without one it degrades to a validated text input. A catalog
-  // that cannot name the saved value never silently empties it.
-  const catalog = () => {
-    const models = loadModels?.();
-    return Array.isArray(models) ? models : null;
+  // Cached model choices from the shared bridge loader (the same source the
+  // rpiv-advisor picker and the composer use: catalog + scoped models).
+  let cachedModels = null;
+  const catalog = () => cachedModels;
+  const refreshCatalog = async () => {
+    if (!configGateway) return;
+    const choices = await loadModelChoices(configGateway);
+    cachedModels = choices.models.length > 0 ? choices.models : null;
   };
   const modelOverrideId = (model) =>
     model?.provider ? `${model.provider}/${model.id}` : model?.id;
@@ -634,18 +640,22 @@ export function setupSubagentsTab({
             button.disabled = !canEdit;
             const clear = text("button", "subagents-model-clear settings-value-btn", "×");
             clear.type = "button";
-            clear.setAttribute("aria-label", label("settings.subagents.detail.noLayerOverride"));
+            clear.setAttribute("aria-label", label("settings.subagents.detail.notSet"));
             clear.disabled = !canEdit || !current;
             clear.addEventListener("click", () => {
               commit(field)("");
               render();
             });
-            button.addEventListener("click", () => {
+            button.addEventListener("click", async () => {
               if (dropdown.classList.contains("open")) {
                 closeModelMenu();
                 return;
               }
               closeModelMenu();
+              // Refresh the catalog on every open: it arrives via the shared
+              // bridge loader (same as rpiv-advisor/composer) and may not be
+              // cached yet on landing's lazy config runtime.
+              await refreshCatalog();
               // Portal to the panel: the detail card and settings content both
               // scroll/clip descendants, but the panel itself does not.
               const panel = container.closest(".settings-panel") || document.body;
@@ -674,11 +684,12 @@ export function setupSubagentsTab({
               document.addEventListener("pointerdown", outside);
               document.addEventListener("keydown", onKey);
               document.addEventListener("scroll", close, true);
+              const liveModels = catalog();
               openModelDropdownMenu({
                 doc: document,
                 dropdown,
                 menu,
-                loadModels: () => models,
+                loadModels: () => liveModels ?? [],
                 isSelected: (model) => modelOverrideId(model) === current,
                 onPick: (model) => {
                   commit(field)(modelOverrideId(model));
@@ -687,6 +698,25 @@ export function setupSubagentsTab({
                 close,
                 t,
               });
+              // Append a "Not set" item after the model list so the user can
+              // clear the override from inside the dropdown.
+              const items = menu.querySelector(".model-dropdown-items");
+              if (items) {
+                const unset = text(
+                  "button",
+                  `model-dropdown-item${current ? "" : " active"}`,
+                  label("settings.subagents.detail.notSet"),
+                );
+                unset.type = "button";
+                unset.style.cssText =
+                  "width:100%;border:0;background:none;text-align:left;cursor:pointer;padding:8px 12px;color:var(--text-dim);border-top:1px solid var(--border-subtle)";
+                unset.addEventListener("click", () => {
+                  commit(field)("");
+                  close();
+                  render();
+                });
+                items.append(unset);
+              }
             });
             dropdown.append(button);
             row.append(dropdown, clear);
@@ -964,6 +994,13 @@ export function setupSubagentsTab({
         notice = "";
       }
       visible = true;
+      // Kick off the shared bridge loader so the model dropdown has items
+      // by the time the user reaches a detail view; re-render on arrival.
+      void refreshCatalog()
+        .then(() => {
+          if (visible) render();
+        })
+        .catch(() => {});
       await load();
     },
     leave() {

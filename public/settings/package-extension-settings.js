@@ -10,7 +10,7 @@ import { filterModelsByCatalogVisibility, splitModelsByScope } from "../models/s
  * Both surfaces read them over the bridge — workspace runtime or landing
  * config runtime — so a picker here and the composer cannot drift apart.
  */
-async function loadModelChoices(configGateway) {
+export async function loadModelChoices(configGateway) {
   if (!configGateway) return { models: [], scopedIds: [] };
   const [catalog, scoped] = await Promise.all([
     configGateway.call("list_model_catalog").catch(() => null),
