@@ -233,7 +233,7 @@ function setup(
     identity = { workspaceId: "w1", workspaceGeneration: 3 },
     landingOnly = false,
     confirmDiscard,
-    getModels,
+    loadModels,
   } = {},
 ) {
   let current = identity;
@@ -244,7 +244,7 @@ function setup(
     getWorkspaceIdentity: () => current,
     landingOnly,
     confirmDiscard,
-    getModels,
+    loadModels,
   });
   return { page, setIdentity: (next) => (current = next) };
 }
@@ -1123,7 +1123,7 @@ describe("subagents name-level override editing", () => {
       qualified({ savedOverride: { model: "inherit", thinking: false } }),
     );
     details(transport);
-    const { page } = setup(transport, { getModels: () => CATALOG });
+    const { page } = setup(transport, { loadModels: () => CATALOG });
     await page.activate();
     await openRow();
     const model = container.querySelector('[aria-label="Model"]');
@@ -1197,7 +1197,7 @@ describe("subagents name-level override editing", () => {
     );
     details(transport);
     transport.setSubagentOverride.mockResolvedValue({ inventory: qualified() });
-    const { page } = setup(transport, { getModels: () => CATALOG });
+    const { page } = setup(transport, { loadModels: () => CATALOG });
     await page.activate();
     await openRow();
     const thinking = container.querySelector('[aria-label="Thinking"]');

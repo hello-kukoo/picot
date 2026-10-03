@@ -173,7 +173,7 @@ export function setupSubagentsTab({
   transport,
   t,
   getWorkspaceIdentity,
-  getModels,
+  loadModels,
   landingOnly = false,
   confirmDiscard = () => globalThis.confirm?.("Discard unsaved subagent changes?") ?? false,
 }) {
@@ -186,7 +186,7 @@ export function setupSubagentsTab({
   // real ids; without one it degrades to a validated text input. A catalog
   // that cannot name the saved value never silently empties it.
   const catalog = () => {
-    const models = getModels?.();
+    const models = loadModels?.();
     return Array.isArray(models) ? models : null;
   };
   const modelOverrideId = (model) =>
