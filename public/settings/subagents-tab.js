@@ -247,7 +247,7 @@ export function setupSubagentsTab({
     if (key === STATUS_CANDIDATE_KEY) return null;
     return key ? label(key) : `${diagnostic.source}: ${diagnostic.message}`;
   };
-  const diagnosticText = (diagnostic) => {
+  const _diagnosticText = (diagnostic) => {
     const key = diagnosticKey(diagnostic.message);
     return key && key !== STATUS_CANDIDATE_KEY
       ? `${diagnostic.source}: ${label(key)}`
@@ -792,12 +792,9 @@ export function setupSubagentsTab({
     }
     layout.append(master, detail);
     frame.append(layout);
-    if (inventory?.diagnostics?.length) {
-      const diagnostics = text("div", "subagents-diagnostics", "");
-      for (const diagnostic of inventory.diagnostics)
-        diagnostics.append(text("p", "subagents-diagnostic", diagnosticText(diagnostic)));
-      frame.append(diagnostics);
-    }
+    // Page-level inventory diagnostics stay host-side only: the five
+    // out-of-scope notices repeat on every render and carry no action for
+    // the user. Per-agent write diagnostics in the detail view remain.
     container.append(frame);
     const masterNode = frame.querySelector(".subagents-master");
     if (masterNode) masterNode.scrollTop = previousScroll;

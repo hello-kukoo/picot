@@ -685,11 +685,8 @@ describe("subagents tab", () => {
     transport.listSubagents.mockResolvedValue(inventory([candidate()]));
     const { page } = setup(transport);
     await page.activate();
-    const diagnostics = container.querySelector(".subagents-diagnostics");
-    expect(diagnostics).not.toBeNull();
-    expect(diagnostics.textContent).toContain(".agents/");
-    expect(diagnostics.textContent).toContain("no definition body read");
-    expect(diagnostics.querySelectorAll("button")).toHaveLength(0);
+    // Page-level diagnostics are no longer rendered; they carry no user action.
+    expect(container.querySelector(".subagents-diagnostics")).toBeNull();
   });
 });
 
@@ -1792,11 +1789,7 @@ describe("subagents diagnostics and wording", () => {
     );
     const { page } = setup(transport);
     await page.activate();
-    const diagnostics = container.querySelector(".subagents-diagnostics");
-    expect(diagnostics.textContent).toContain("符号链接来源已忽略");
-    expect(diagnostics.textContent).not.toContain("symlink source omitted");
-    // Unknown text stays verbatim instead of being swallowed.
-    expect(diagnostics.textContent).toContain("custom: undocumented host note");
+    expect(container.querySelector(".subagents-diagnostics")).toBeNull();
 
     container.querySelector(".subagents-row").click();
     await flush();
