@@ -795,12 +795,12 @@ setupUsageTabs({
   },
 });
 
-// ── Skills page (discovered + install; packages sub-tab is bridge-bound) ──
+// ── Skills page (custom + inline install; packages sub-tab is bridge-bound) ──
 // Discovered-skills inventory rides host control ops, so the tab works at
 // landing. The "packages" sub-tab (扩展中的技能) stays bridge-bound — its
 // inventory/mutation carries project-delta semantics only the bridge
-// implements — and is excluded from the landing tab shell entirely (no
-// click, no keyboard nav).
+// implements — but it is a regular shell tab here (clickable, keyboard nav),
+// fed through landingBridgeRpcCommand below.
 
 function landingSkillRpc(cmd) {
   const handlers = {
@@ -830,17 +830,34 @@ const skillsPage = setupSkillsPage({
   // landing instead of rendering an entry that errors on click.
   scopes: ["global"],
   ...skillsSaveFeedback,
+  onInstallRequest: (scope, trigger) => {
+    if (skillsInstallPage.open(scope, { trigger })) syncSkillsInstallArea();
+  },
 });
 
+const skillsInstallPanelEl = document.getElementById("settings-install-skills");
 const skillsInstallPage = setupSkillsInstallTab({
-  container: document.getElementById("settings-install-skills"),
+  container: skillsInstallPanelEl,
   transport,
   isProjectTrusted: () => skillsPage.isProjectTrusted(),
   // Landing has no workspace: global installs work, the project target is
   // disabled with an explicit note (Dr. Lin 2026-09-22).
   hasWorkspace: () => false,
   ...skillsSaveFeedback,
+  onStateChange: () => syncSkillsInstallArea(),
+  onClose: () => syncSkillsInstallArea(),
 });
+
+// Same arrangement as the workspace shell: the custom tab's install entry
+// opens the install area below the custom list, locked to the scope being
+// displayed. Landing only ever offers the global entry.
+let skillsCustomTabActive = true;
+function syncSkillsInstallArea() {
+  skillsPage.setInstallLocked(skillsInstallPage.isOpen());
+  if (skillsCustomTabActive) {
+    skillsInstallPanelEl.classList.toggle("hidden", !skillsInstallPage.isOpen());
+  }
+}
 
 // The packages sub-tab rides the landing config runtime (bridge-bound,
 // global-only inventory — same op semantics as the workspace page).
@@ -854,13 +871,19 @@ setupSkillsTabShell({
   tabs: document.querySelectorAll("[data-skills-page-tab]"),
   panels: {
     discovered: document.getElementById("settings-skills"),
-    install: document.getElementById("settings-install-skills"),
     packages: document.getElementById("settings-package-skills"),
   },
   activate: (name) => {
-    if (name === "discovered") return skillsPage.activate();
-    if (name === "install") return skillsInstallPage.activate();
-    if (name === "packages") return packageSkillsPage.activate();
+    if (name === "discovered") {
+      skillsCustomTabActive = true;
+      syncSkillsInstallArea();
+      return skillsPage.activate();
+    }
+    if (name === "packages") {
+      skillsCustomTabActive = false;
+      skillsInstallPanelEl.classList.add("hidden");
+      return packageSkillsPage.activate();
+    }
     return Promise.resolve();
   },
 });

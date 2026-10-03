@@ -304,9 +304,17 @@ Picot 设置页 UI 目前暴露 `model`/`thinking`/`advertise`/`disabled` 四字
 
 当前生产用法（2026-10-03）：Dr. Lin 的 24 agent 团队定义全部在 git 源包 `datarx-agents-team`（`agents/{research,software,writing}/` 递归子目录），`.md` 不含 model/thinking；每角色分工经 `~/.pi/agent/settings.json` 的 agentOverrides 配置（23 条，与 Paseo agentProfiles 字节一致），小工按设计不配（继承调用方模型）。
 
-### Settings → Skills → Packages
+### Settings → Skills（自定义 / 扩展包两页签）
 
-### Settings → Skills → Packages
+技能页一级页签为「自定义」与「扩展包」（原三页签「已发现/安装/扩展包」已于 2026-10-03 收敛）。
+
+**自定义页签**：内部保留 Global / Project scope 切换，按 scope 请求 host 控制面 `list_skill_inventory` 并按 `roots[].scope` 过滤展示；启停经 `set_skill_enabled`。「已发现」→「自定义」是浏览分类改名，语义不变（含自动发现目录与 customRules，非仅手写技能）。
+
+**内联安装**：安装入口是 scope 行右端的「安装新技能」按钮（标准按钮样式），代表「安装到当前显示的 scope」（global → 用户级、project → 项目级；安装 payload 恒用 `global|project`，绝不写 inventory 的 `user`）。点击直接弹出原生目录选择器（无中间 idle 步骤），取消即收起安装区。安装区（pick→scan→select→confirm→install，`public/settings/skills-install-tab.js`）不是页签：app.js / landing.js 将其作为独立面板挂在自定义列表下方，`open(scope)` 固定目标并立即触发 picker；打开期间自定义页锁定（scope 页签/重扫/启停禁用），切换到扩展包页签仅隐藏面板、安装会话保留；「重新选择目录」只在 scan 落地（selecting）或失败（error）后出现。候选只传 opaque `{kind,id}`；host freshness 校验要求源变化重扫后再次确认。Landing 仅全局入口（无项目安装按钮）。安装成功后按安装 scope 刷新 `list_skill_inventory`，刷新失败不改变安装成功结论；runtime 不热重载 skills，须新建 session 或重启 Pi 生效。
+
+**分组头控件**（2026-10-03 恢复）：自定义页 group 行 = 右对齐「{n}/{N} 已启用」徽章（span.skills-group-status）+ 三态开关（input.skills-switch；all-on 勾选、all-off 空、mixed 停中间 indeterminate），点击开关整组启停。b359730 曾把两页合并为单文字按钮，自定义页已改回旧形态；扩展包页维持合并按钮（其数据本就无 mixed 态）。
+
+#### Packages（扩展包技能配置契约）
 
 Pi 的 package skill 配置属于 `settings.json` 的 `packages[]` entry，而非独立的 skill enabled 表。entry 可为 source 字符串，或带 resource filter 的对象：
 

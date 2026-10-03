@@ -1,9 +1,8 @@
-// ABOUTME: Renders the Discovered tab from the server-authoritative Pi skill inventory.
-// ABOUTME: Owns skill toggle/tree behavior; adding directories is handled by the Install tab.
+// ABOUTME: Renders the Custom tab from the server-authoritative Pi skill inventory.
+// ABOUTME: Owns skill toggle/tree behavior plus the per-scope inline install entry.
 
 import { onLocaleChange, t } from "../i18n.js";
 import { createIcon } from "../icons.js";
-import { renderGroupStatusControl } from "./skills-group-status-control.js";
 import { manageModalDialog } from "./skills-modal.js";
 
 /**
@@ -78,10 +77,26 @@ function countItems(inventory, scope) {
   return rootsForScope(inventory, scope).reduce((n, r) => n + flatLeaves(r).length, 0);
 }
 
+/** Right-aligned "{enabled}/{total} 已启用" pill next to the group switch. */
+function stateBadge(state, enabled, total) {
+  const label =
+    state === "all-on"
+      ? t("settings.skills.allEnabled")
+      : state === "all-off"
+        ? t("settings.skills.allDisabled")
+        : t("settings.skills.enabledCount", { enabled, total });
+  return el("span", {
+    class: `skills-group-status ${state}`,
+    text: label,
+    dataset: { skillGroupState: state },
+  });
+}
+
 function el(tag, props = {}, children = []) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(props)) {
     if (key === "class") node.className = value;
+    else if (key === "checked" || key === "disabled") node[key] = Boolean(value);
     else if (key === "text") node.textContent = value;
     else if (key === "dataset") {
       for (const [dk, dv] of Object.entries(value)) node.dataset[dk] = dv;
@@ -109,18 +124,27 @@ function el(tag, props = {}, children = []) {
  * @param {Array<"global"|"project">} [opts.scopes] Rendered scope tabs;
  *   the landing page passes `["global"]` — project-scoped skills need a
  *   registered workspace, so the tab is absent there instead of erroring.
+ * @param {(scope:"global"|"project", trigger:HTMLElement)=>void} [opts.onInstallRequest]
+ *   Fired by the install entry button; the composition layer maps it to
+ *   `installer.open(scope, { trigger })`.
  */
 export function setupDiscoveredSkillsTab({
   container,
   rpcCommand,
   showSuccess,
   showError,
+  onInstallRequest,
   scopes = ["global", "project"],
 }) {
   let scope = scopes.includes("global") ? "global" : scopes[0];
   /** @type {SkillInventory|null} */
   let inventory = null;
   let hasActivated = false;
+  let loading = false;
+  /** True while the inline install area is open: scope, rescan and every
+   * enable toggle are frozen (design rule 3), independent of install busyness. */
+  let installLocked = false;
+  let destroyed = false;
   /** @type {Record<string, number>} */
   const scopeCounts = {};
   // Groups start collapsed; a user expands one by adding its id here.
@@ -130,47 +154,32 @@ export function setupDiscoveredSkillsTab({
   let errorMessage = null;
   const unsubscribeLocale = onLocaleChange(() => render());
 
-  function renderLoading() {
-    container.replaceChildren(
-      el("div", { class: "skills-loading", text: t("settings.skills.loading") }),
-    );
-  }
-
-  function renderError(message) {
-    errorMessage = message || t("settings.skills.loadFailed");
-    container.replaceChildren(
-      el("div", { class: "skills-error" }, [
-        el("span", { text: errorMessage }),
-        el("button", {
-          type: "button",
-          class: "skills-rescan",
-          text: t("settings.skills.rescan"),
-          onClick: () => void load(scope),
-        }),
-      ]),
-    );
-  }
-
   async function load(nextScope = scope) {
     scope = nextScope;
     errorMessage = null;
+    loading = true;
     const seq = ++loadSeq;
-    renderLoading();
+    render();
     let response;
     try {
       response = await rpcCommand({ type: "list_skill_inventory", scope });
     } catch (e) {
       if (seq !== loadSeq) return;
       inventory = null;
-      renderError(e instanceof Error ? e.message : t("settings.skills.loadFailed"));
+      loading = false;
+      errorMessage = e instanceof Error ? e.message : t("settings.skills.loadFailed");
+      render();
       return;
     }
     if (seq !== loadSeq) return;
     if (!response?.success) {
       inventory = null;
-      renderError(response?.error);
+      loading = false;
+      errorMessage = response?.error || t("settings.skills.loadFailed");
+      render();
       return;
     }
+    loading = false;
     inventory = response.data;
     scopeCounts[scope] = countItems(inventory, scope);
     const other = scope === "global" ? "project" : "global";
@@ -237,8 +246,10 @@ export function setupDiscoveredSkillsTab({
             class: `skills-scope-tab${active ? " active" : ""}`,
             "aria-pressed": String(active),
             dataset: { scope: s },
+            disabled: installLocked,
             onClick: () => {
-              if (s !== scope) void load(s);
+              if (installLocked || s === scope) return;
+              void load(s);
             },
           },
           [
@@ -249,6 +260,30 @@ export function setupDiscoveredSkillsTab({
       );
     }
     return tabs;
+  }
+
+  // The scope toolbar pairs the scope tabs with one install entry that always
+  // targets the scope currently displayed (design rules 3/7): one button, not
+  // one per scope. The composition layer maps onInstallRequest to
+  // `installer.open(scope, { trigger })`.
+  function renderScopeToolbar() {
+    const untrustedScope = scope === "project" && !inventory.trusted;
+    const installDisabled = installLocked || loading || untrustedScope;
+    const entry = el("button", {
+      type: "button",
+      class: "skills-rescan skills-install-entry",
+      disabled: installDisabled,
+      "aria-label": `${t("settings.skills.install")} — ${t(`settings.skills.${scope}`)}`,
+      text: t("settings.skills.install"),
+      onClick: () => {
+        if (installDisabled) return;
+        onInstallRequest?.(scope, entry);
+      },
+    });
+    const toolbar = el("div", { class: "skills-scope-toolbar" });
+    toolbar.appendChild(renderScopeTabs());
+    toolbar.appendChild(entry);
+    return toolbar;
   }
 
   function renderSwitch(checked, disabled, indeterminate, ariaLabel, onChange) {
@@ -337,7 +372,7 @@ export function setupDiscoveredSkillsTab({
     const leaves = flatLeaves(group);
     const enabled = leaves.filter((i) => i.status === "enabled").length;
     const groupPending = pendingTargets.has(group.id);
-    const groupDisabled = parentDisabled || group.ambiguous || groupPending;
+    const groupDisabled = parentDisabled || group.ambiguous || groupPending || installLocked;
 
     const header = el("div", { class: "skills-group-header" }, [
       el(
@@ -362,15 +397,14 @@ export function setupDiscoveredSkillsTab({
         el("div", { class: "skills-group-name", text: group.name }),
         el("div", { class: "skills-group-source", text: group.ruleBaseRelativePath }),
       ]),
-      renderGroupStatusControl({
-        state: group.state,
-        enabled,
-        total: leaves.length,
-        disabled: groupDisabled,
-        dataset: { skillGroupState: group.state },
-        ariaLabel: `${t("settings.skills.enableGroup")}: ${group.ruleBaseRelativePath}`,
-        onToggle: (next) => void setEnabled({ kind: "group", id: group.id }, next),
-      }),
+      stateBadge(group.state, enabled, leaves.length),
+      renderSwitch(
+        group.state === "all-on",
+        groupDisabled,
+        group.state === "mixed",
+        `${t("settings.skills.enableGroup")}: ${group.ruleBaseRelativePath}`,
+        (checked) => void setEnabled({ kind: "group", id: group.id }, checked),
+      ),
     ]);
 
     if (group.ambiguous) {
@@ -400,7 +434,8 @@ export function setupDiscoveredSkillsTab({
 
   function renderSkillRow(item, parentDisabled = false) {
     const shadowed = item.status === "shadowed";
-    const rowDisabled = item.ambiguous || shadowed || pendingTargets.has(item.id) || parentDisabled;
+    const rowDisabled =
+      item.ambiguous || shadowed || pendingTargets.has(item.id) || parentDisabled || installLocked;
     return el(
       "div",
       { class: "skills-skill-row", dataset: { skillRow: item.name, skillToggle: item.name } },
@@ -426,12 +461,38 @@ export function setupDiscoveredSkillsTab({
     );
   }
 
+  function setInstallLocked(locked) {
+    const next = Boolean(locked);
+    if (installLocked === next) return;
+    installLocked = next;
+    render();
+  }
+
   function render() {
+    if (destroyed) return;
     const scrollTop = container.scrollTop;
 
     if (!inventory) {
-      if (errorMessage) renderError(errorMessage);
-      else renderLoading();
+      if (errorMessage) {
+        container.replaceChildren(
+          el("div", { class: "skills-error" }, [
+            el("span", { text: errorMessage }),
+            el("button", {
+              type: "button",
+              class: "skills-rescan",
+              disabled: installLocked,
+              text: t("settings.skills.rescan"),
+              onClick: () => {
+                if (!installLocked) rescan();
+              },
+            }),
+          ]),
+        );
+      } else {
+        container.replaceChildren(
+          el("div", { class: "skills-loading", text: t("settings.skills.loading") }),
+        );
+      }
       return;
     }
 
@@ -452,13 +513,16 @@ export function setupDiscoveredSkillsTab({
         el("button", {
           type: "button",
           class: "skills-rescan",
+          disabled: installLocked,
           text: t("settings.skills.rescan"),
-          onClick: rescan,
+          onClick: () => {
+            if (!installLocked) rescan();
+          },
         }),
       ]),
     );
 
-    fragment.appendChild(renderScopeTabs());
+    fragment.appendChild(renderScopeToolbar());
 
     if (untrusted) {
       fragment.appendChild(
@@ -499,6 +563,7 @@ export function setupDiscoveredSkillsTab({
   }
 
   function destroy() {
+    destroyed = true;
     unsubscribeLocale?.();
     container.replaceChildren();
   }
@@ -507,6 +572,7 @@ export function setupDiscoveredSkillsTab({
     activate,
     load,
     destroy,
+    setInstallLocked,
     isProjectTrusted: () => Boolean(inventory?.trusted),
   };
 }

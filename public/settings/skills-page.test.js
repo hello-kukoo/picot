@@ -189,23 +189,19 @@ describe("skills-page tree renderer", () => {
     ).toBe("/root/a/skills");
     expect(container.querySelector(`[data-skill-group="${BAOYU_GROUP_ID}"]`)).not.toBeNull();
     expect(container.querySelector('[data-skill-group-state="mixed"]').textContent).toBe("1/3");
-    // Group-level control is one labelled tag (全部启用/全部禁用/{x}/{X} 已启用),
-    // not a status badge plus a separate switch.
-    const groupToggle = container.querySelector(
-      `[data-skill-group="${BAOYU_GROUP_ID}"] .skills-group-enable-all button.skills-group-status`,
+    // Group-level control is a status badge plus a separate three-state
+    // switch; a mixed group parks the switch in the middle.
+    const groupSwitch = container.querySelector(
+      `[data-skill-group="${BAOYU_GROUP_ID}"] .skills-group-header .skills-switch`,
     );
-    expect(groupToggle).not.toBeNull();
-    expect(groupToggle.getAttribute("aria-pressed")).toBe("false");
-    expect(
-      container.querySelector(
-        `[data-skill-group="${BAOYU_GROUP_ID}"] .skills-group-header .skills-switch`,
-      ),
-    ).toBeNull();
+    expect(groupSwitch).not.toBeNull();
+    expect(groupSwitch.checked).toBe(false);
+    expect(groupSwitch.indeterminate).toBe(true);
     // Groups start collapsed: skill rows are not rendered until the group is expanded.
     expect(container.querySelectorAll("[data-skill-row]").length).toBe(0);
     container.querySelector(`[data-skill-group="${BAOYU_GROUP_ID}"] .skills-expand`).click();
     expect(container.querySelectorAll("[data-skill-row]").length).toBe(3);
-    expect(container.querySelectorAll(".skills-switch").length).toBe(3);
+    expect(container.querySelectorAll("[data-skill-row] .skills-switch").length).toBe(3);
   });
 
   it("wraps top-level single-skills in one card titled with the root basename", async () => {
@@ -322,8 +318,8 @@ describe("skills-page tree renderer", () => {
     const page = setupSkillsPage({ container, rpcCommand: mockRpc(inventory) });
     await page.load("project");
     expect(container.querySelector(".skills-notice")).not.toBeNull();
-    // Both the merged group control and the skill-row switches lock down.
-    expect(container.querySelector("button.skills-group-status").disabled).toBe(true);
+    // Both the group switch and the skill-row switches lock down.
+    expect(container.querySelector(".skills-group-header input.skills-switch").disabled).toBe(true);
     // Groups start collapsed, so the row switches only exist once expanded.
     container.querySelector(".skills-expand").click();
     expect(container.querySelector(".skills-switch").disabled).toBe(true);

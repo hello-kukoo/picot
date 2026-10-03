@@ -8048,6 +8048,9 @@ const skillsPage = setupSkillsPage({
   rpcCommand,
   showSuccess: (msg) => showSettingsSaveSuccess(skillsSaveMessageEl, msg),
   showError: (msg) => showSettingsSaveError(skillsSaveMessageEl, msg),
+  onInstallRequest: (scope, trigger) => {
+    if (skillsInstallPage.open(scope, { trigger })) syncSkillsInstallArea();
+  },
 });
 const packageSkillsPage = setupPackageSkillsTab({
   container: document.getElementById("settings-package-skills"),
@@ -8055,14 +8058,29 @@ const packageSkillsPage = setupPackageSkillsTab({
   showSuccess: (msg) => showSettingsSaveSuccess(skillsSaveMessageEl, msg),
   showError: (msg) => showSettingsSaveError(skillsSaveMessageEl, msg),
 });
+const skillsInstallPanelEl = document.getElementById("settings-install-skills");
 const skillsInstallPage = setupSkillsInstallTab({
-  container: document.getElementById("settings-install-skills"),
+  container: skillsInstallPanelEl,
   transport,
   isProjectTrusted: () => skillsPage.isProjectTrusted(),
   hasWorkspace: () => true,
   showSuccess: (msg) => showSettingsSaveSuccess(skillsSaveMessageEl, msg),
   showError: (msg) => showSettingsSaveError(skillsSaveMessageEl, msg),
+  onStateChange: () => syncSkillsInstallArea(),
+  onClose: () => syncSkillsInstallArea(),
 });
+
+// The install area is not a tab: the custom tab's install entry opens it
+// below the custom list for the scope being displayed. While it is open the
+// custom tab locks its own controls; switching to the packages tab hides the
+// panel but keeps the install session alive.
+let skillsCustomTabActive = true;
+function syncSkillsInstallArea() {
+  skillsPage.setInstallLocked(skillsInstallPage.isOpen());
+  if (skillsCustomTabActive) {
+    skillsInstallPanelEl.classList.toggle("hidden", !skillsInstallPage.isOpen());
+  }
+}
 
 const packageBrowse = setupPackageBrowse({
   root: document,
@@ -8122,13 +8140,19 @@ setupSkillsTabShell({
   tabs: document.querySelectorAll("[data-skills-page-tab]"),
   panels: {
     discovered: document.getElementById("settings-skills"),
-    install: document.getElementById("settings-install-skills"),
     packages: document.getElementById("settings-package-skills"),
   },
   activate: (name) => {
-    if (name === "discovered") return skillsPage.activate();
-    if (name === "install") return skillsInstallPage.activate();
-    if (name === "packages") return packageSkillsPage.activate();
+    if (name === "discovered") {
+      skillsCustomTabActive = true;
+      syncSkillsInstallArea();
+      return skillsPage.activate();
+    }
+    if (name === "packages") {
+      skillsCustomTabActive = false;
+      skillsInstallPanelEl.classList.add("hidden");
+      return packageSkillsPage.activate();
+    }
   },
 });
 

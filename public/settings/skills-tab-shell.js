@@ -1,4 +1,4 @@
-// ABOUTME: Composes the three Settings > Skills tabs with accessible keyboard navigation.
+// ABOUTME: Composes the two Settings > Skills tabs (Custom, Packages) with accessible keyboard navigation.
 // ABOUTME: Keeps child tab state alive while lazy-activating a selected child exactly once.
 
 export function setupSkillsTabShell({ tabs, panels, activate }) {

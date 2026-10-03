@@ -148,6 +148,9 @@ function makeTransportStub() {
     mobileAccessInfo: async () => ({ enabled: false, lanUrls: [] }),
     listSkillInventory: async () => ({ skills: [] }),
     setSkillEnabled: async () => ({}),
+    // The install entry opens straight into the native picker; a forever-
+    // pending pick keeps the area deterministically in the scanning state.
+    pickSkillSource: () => new Promise(() => {}),
     getPreference: async () => ({ value: true }),
     listPiPackages: async () => ({ packages: [] }),
     hasAnyCredentials: async () => true,
@@ -231,8 +234,7 @@ function installDom() {
         <div class="landing-notice hidden" id="landing-notice" role="status"></div>
       </div>
       <div id="settings-skills-save-message"></div>
-      <button data-skills-page-tab="discovered">Discovered</button>
-      <button data-skills-page-tab="install">Install</button>
+      <button data-skills-page-tab="discovered">Custom</button>
       <button data-skills-page-tab="packages">Packages</button>
       <div id="settings-skills"></div>
       <div id="settings-subagents"></div>
@@ -434,6 +436,21 @@ test("landing settings: all tabs functional; MCP reveal follows installed packag
       throw new Error("package skills inventory not rendered");
     }
   });
+  // The custom tab's install entry opens the install area below the custom
+  // list for the displayed scope and locks the custom controls while open.
+  discoveredTab.click();
+  await vi.waitFor(() => {
+    if (!document.querySelector("#settings-skills .skills-install-entry")) {
+      throw new Error("custom tab install entry not rendered");
+    }
+  });
+  document.querySelector("#settings-skills .skills-install-entry").click();
+  const installPanel = document.getElementById("settings-install-skills");
+  expect(installPanel.classList.contains("hidden")).toBe(false);
+  expect(document.querySelector("#settings-skills .skills-scope-tab").disabled).toBe(true);
+  installPanel.querySelector(".skills-install-close").click();
+  expect(installPanel.classList.contains("hidden")).toBe(true);
+  expect(document.querySelector("#settings-skills .skills-scope-tab").disabled).toBe(false);
   // Appearance stays fully functional.
   navItems.find((item) => item.dataset.settingsTab === "appearance").click();
   expect(
