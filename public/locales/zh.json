@@ -950,6 +950,14 @@
       "subtabs": {
         "definitions": "自定义",
         "packages": "扩展包"
+      },
+      "count": {
+        "definitions": "{count} 个子代理",
+        "packages": "{agents} 个子代理 · {packages} 个扩展包"
+      },
+      "scopeDescription": {
+        "global": "管理全局自定义子代理，以及从全局扩展包发现的子代理。自定义定义文件位于 ~/.pi/agent/agents；配置覆盖写入 ~/.pi/agent/settings.json。",
+        "project": "管理当前项目的自定义子代理，以及从项目扩展包发现的子代理。自定义定义文件位于 <cwd>/.pi/agents；配置覆盖写入 <cwd>/.pi/settings.json。"
       }
     },
     "updates": "更新",
@@ -1055,15 +1063,15 @@
     "skills": {
       "title": "技能",
       "sectionsAriaLabel": "技能页面分区",
-      "discovered": "已发现",
-      "install": "安装",
+      "custom": "自定义",
+      "install": "安装新技能",
       "packages": "扩展包",
-      "description": "管理 Pi 为当前工作区发现的技能。更改会写入对应的 settings.json，并且只有在新建会话或重启 Pi 后才会生效。",
+      "description": "管理本地配置的技能以及 Pi 为当前工作区自动发现的技能。更改会写入对应的 settings.json，并且只有在新建会话或重启 Pi 后才会生效。",
       "rescan": "重新扫描",
       "global": "全局",
       "project": "当前项目",
       "loading": "正在加载技能…",
-      "empty": "此范围内未发现技能。",
+      "empty": "此范围内没有本地配置或自动发现的技能。",
       "projectUntrusted": "当前项目尚未受信任。Pi 不会加载项目技能，在受信任前开关保持禁用。",
       "allEnabled": "全部启用",
       "allDisabled": "全部禁用",
@@ -1096,6 +1104,8 @@
       "confirm": "安装已选技能",
       "cancel": "取消",
       "installing": "正在安装…",
+      "close": "收起",
+      "done": "完成",
       "installFailed": "安装已选技能失败。",
       "complete": "已安装 {added} 项；{skipped} 项已配置。",
       "restartRequired": "已保存。新建会话或重启 Pi 后生效。",

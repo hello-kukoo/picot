@@ -950,6 +950,14 @@
       "subtabs": {
         "definitions": "Custom",
         "packages": "Packages"
+      },
+      "count": {
+        "definitions": "{count} sub-agents",
+        "packages": "{agents} sub-agents · {packages} packages"
+      },
+      "scopeDescription": {
+        "global": "Manage global custom subagents and subagents discovered from global extension packages. Custom definitions live in ~/.pi/agent/agents; configuration overrides are saved to ~/.pi/agent/settings.json.",
+        "project": "Manage custom subagents for the current project and subagents discovered from project extension packages. Custom definitions live in <cwd>/.pi/agents; configuration overrides are saved to <cwd>/.pi/settings.json."
       }
     },
     "updates": "Updates",
@@ -1055,15 +1063,15 @@
     "skills": {
       "title": "Skills",
       "sectionsAriaLabel": "Skills sections",
-      "discovered": "Discovered",
-      "install": "Install",
+      "custom": "Custom",
+      "install": "Install new skills",
       "packages": "Extension packages",
-      "description": "Manage skills Pi discovers for this workspace. Changes are written to the matching settings.json and apply only after a new session or Pi-process restart.",
+      "description": "Manage locally configured skills and the skills Pi discovers for this workspace. Changes are written to the matching settings.json and apply only after a new session or Pi-process restart.",
       "rescan": "Rescan",
       "global": "Global",
       "project": "Current project",
       "loading": "Loading skills…",
-      "empty": "No skills discovered in this scope.",
+      "empty": "No locally configured or auto-discovered skills in this scope.",
       "projectUntrusted": "This project is not trusted yet. Pi will not load project skills, and switches stay disabled until it is trusted.",
       "allEnabled": "All enabled",
       "allDisabled": "All disabled",
@@ -1096,6 +1104,8 @@
       "confirm": "Install selected skills",
       "cancel": "Cancel",
       "installing": "Installing…",
+      "close": "Close",
+      "done": "Done",
       "installFailed": "Failed to install selected skills.",
       "complete": "Installed {added} entries; {skipped} already configured.",
       "restartRequired": "Saved. Start a new session or restart Pi for the change to take effect.",

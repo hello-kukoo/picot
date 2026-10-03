@@ -2506,6 +2506,11 @@ body.landing-mode #landing {
 
 /* "Also available in: …" must wrap inside the package-manager meta row
    instead of being clipped to an ellipsis. */
+.subagents-count {
+  margin: 0 0 var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--text-meta);
+}
 .subagents-name-row {
   display: flex;
   align-items: center;
@@ -11012,7 +11017,6 @@ body.file-preview-resizing {
 }
 
 .skills-install-header,
-.skills-install-scope,
 .skills-install-node,
 .skills-install-result,
 .skills-install-error {
@@ -11024,11 +11028,6 @@ body.file-preview-resizing {
 .skills-install-header {
   justify-content: space-between;
   margin-bottom: 0.75rem;
-}
-
-.skills-install-scope {
-  flex-wrap: wrap;
-  margin: 0.75rem 0;
 }
 
 .skills-install-tree {
@@ -11119,6 +11118,15 @@ body.file-preview-resizing {
 .skills-scope-tab small {
   margin-left: var(--space-1);
   color: var(--text-dim);
+}
+.skills-scope-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* design-token-ignore: pinned right on the scope row like the header rescan */
+.skills-scope-toolbar .skills-install-entry {
+  margin-left: auto;
 }
 .skills-notice {
   display: flex;

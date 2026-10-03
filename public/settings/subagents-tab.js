@@ -47,6 +47,12 @@ const COPY = {
   "settings.subagents.detail.invalidModel": "Use a provider/model ID.",
   "settings.subagents.detail.noLayerOverride": "No override in this layer",
   "settings.subagents.detail.notSet": "Not set (inherit parent)",
+  "settings.subagents.scopeDescription.global":
+    "Manage global custom subagents and subagents discovered from global extension packages. Custom definitions live in ~/.pi/agent/agents; configuration overrides are saved to ~/.pi/agent/settings.json.",
+  "settings.subagents.scopeDescription.project":
+    "Manage custom subagents for the current project and subagents discovered from project extension packages. Custom definitions live in <cwd>/.pi/agents; configuration overrides are saved to <cwd>/.pi/settings.json.",
+  "settings.subagents.count.definitions": "{count} sub-agents",
+  "settings.subagents.count.packages": "{agents} sub-agents · {packages} packages",
   "settings.subagents.detail.keepCurrent": "Keep current: {value}",
   "settings.subagents.detail.thinkingFalse": "Off (false)",
   "settings.subagents.detail.thinkingHint":
@@ -347,7 +353,35 @@ export function setupSubagentsTab({
       );
       subTabRow.append(button);
     }
+    // Scope description (PM copy) above the sub-tab segmented control.
+    frame.append(
+      text(
+        "p",
+        "subagents-scope-description",
+        label(`settings.subagents.scopeDescription.${active}`),
+      ),
+    );
     frame.append(subTabRow);
+    // Counter line between the sub-tab row and the master/detail layout,
+    // mirroring the Skills page's list-count placement.
+    if (inventory && !error) {
+      const entries = visibleEntries();
+      let countLine;
+      if (subtab === "packages") {
+        const pkgs = new Set(
+          entries.filter((e) => e.source === "package").map((e) => e.packageIdentity || ""),
+        ).size;
+        countLine = label("settings.subagents.count.packages")
+          .replace("{agents}", String(entries.length))
+          .replace("{packages}", String(pkgs));
+      } else {
+        countLine = label("settings.subagents.count.definitions").replace(
+          "{count}",
+          String(entries.length),
+        );
+      }
+      frame.append(text("p", "subagents-count", countLine));
+    }
     if (notice) frame.append(text("p", "subagents-feedback", notice));
     // Master/detail reuses the Extensions package-manager shell (page tabs,
     // master card, detail card) so Subagents reads like its sibling Settings

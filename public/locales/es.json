@@ -950,6 +950,14 @@
       "subtabs": {
         "definitions": "Personalizados",
         "packages": "Paquetes"
+      },
+      "count": {
+        "definitions": "{count} subagentes",
+        "packages": "{agents} subagentes · {packages} paquetes"
+      },
+      "scopeDescription": {
+        "global": "Gestiona subagentes personalizados globales y subagentes descubiertos desde paquetes de extensión globales. Las definiciones personalizadas están en ~/.pi/agent/agents; las anulaciones de configuración se guardan en ~/.pi/agent/settings.json.",
+        "project": "Gestiona subagentes personalizados del proyecto actual y subagentes descubiertos desde paquetes de extensión del proyecto. Las definiciones personalizadas están en <cwd>/.pi/agents; las anulaciones se guardan en <cwd>/.pi/settings.json."
       }
     },
     "updates": "Actualizaciones",
@@ -1054,12 +1062,12 @@
     },
     "skills": {
       "title": "Habilidades",
-      "description": "Gestiona las habilidades descubiertas. Los cambios se aplican después de una nueva sesión o reinicio de Pi.",
+      "description": "Gestiona las habilidades configuradas localmente y las que Pi detecta automáticamente en este espacio de trabajo. Los cambios se escriben en el settings.json correspondiente y se aplican solo tras una nueva sesión o reiniciar Pi.",
       "rescan": "Reescanear",
       "global": "Global",
       "project": "Proyecto actual",
       "loading": "Cargando habilidades…",
-      "empty": "No hay habilidades en este ámbito.",
+      "empty": "No hay habilidades configuradas localmente ni detectadas automáticamente en este ámbito.",
       "projectUntrusted": "Las habilidades de proyecto están deshabilitadas hasta que se confíe en este proyecto.",
       "allEnabled": "Todas habilitadas",
       "allDisabled": "Todas deshabilitadas",
@@ -1075,19 +1083,21 @@
       "rescanFailed": "Error al reescanear habilidades.",
       "ambiguousRuleTarget": "Este objetivo corresponde a múltiples raíces; edita settings.json manualmente para cambiarlo.",
       "scopeSummary": "{total} habilidades · {groups} grupos",
-      "discovered": "Descubiertas",
-      "install": "Instalar",
+      "custom": "Personalizadas",
+      "install": "Instalar nuevas habilidades",
       "packages": "Paquetes de extensión",
       "sectionsAriaLabel": "Secciones de habilidades"
     },
     "installSkills": {
       "cancel": "Cancelar",
       "chooseFolder": "Elegir carpeta",
+      "close": "Cerrar",
       "complete": "Se instalaron {added} entradas; {skipped} ya configuradas.",
       "confirm": "Instalar habilidades seleccionadas",
       "confirmation": "¿Instalar {count} habilidades seleccionadas en {scope}?",
       "confirmationHeading": "Confirmar instalación de habilidades",
       "description": "Enlaza habilidades desde una carpeta local. No se copian ni modifican archivos.",
+      "done": "Listo",
       "global": "Global",
       "group": "Grupo",
       "installFailed": "No se pudieron instalar las habilidades seleccionadas.",

@@ -950,6 +950,14 @@
       "subtabs": {
         "definitions": "カスタム",
         "packages": "パッケージ"
+      },
+      "count": {
+        "definitions": "{count} 個のサブエージェント",
+        "packages": "{agents} 個のサブエージェント · {packages} 個のパッケージ"
+      },
+      "scopeDescription": {
+        "global": "グローバルのカスタムサブエージェントと、グローバル拡張パッケージから検出されたサブエージェントを管理します。カスタム定義は ~/.pi/agent/agents に、設定のオーバーライドは ~/.pi/agent/settings.json に保存されます。",
+        "project": "現在のプロジェクトのカスタムサブエージェントと、プロジェクト拡張パッケージから検出されたサブエージェントを管理します。カスタム定義は <cwd>/.pi/agents に、設定のオーバーライドは <cwd>/.pi/settings.json に保存されます。"
       }
     },
     "updates": "アップデート",
@@ -1054,12 +1062,12 @@
     },
     "skills": {
       "title": "スキル",
-      "description": "発見されたスキルを管理します。変更は新しいセッションまたはPiの再起動後に適用されます。",
+      "description": "ローカルで設定したスキルと、このワークスペースで自動検出されたスキルを管理します。変更は該当する settings.json に書き込まれ、新しいセッションまたは Pi の再起動後にのみ適用されます。",
       "rescan": "再スキャン",
       "global": "グローバル",
       "project": "現在のプロジェクト",
       "loading": "スキルを読み込み中…",
-      "empty": "このスコープにスキルがありません。",
+      "empty": "このスコープにローカル設定または自動検出されたスキルはありません。",
       "projectUntrusted": "プロジェクトが信頼されるまでプロジェクトスキルは無効です。",
       "allEnabled": "すべて有効",
       "allDisabled": "すべて無効",
@@ -1075,19 +1083,21 @@
       "rescanFailed": "スキルの再スキャンに失敗しました。",
       "ambiguousRuleTarget": "このターゲットは複数のルートにマップされます。settings.jsonを手動で編集して変更してください。",
       "scopeSummary": "{total}個のスキル · {groups}個のグループ",
-      "discovered": "検出済み",
-      "install": "インストール",
+      "custom": "カスタム",
+      "install": "新しいスキルをインストール",
       "packages": "拡張パッケージ",
       "sectionsAriaLabel": "スキルセクション"
     },
     "installSkills": {
       "cancel": "キャンセル",
       "chooseFolder": "フォルダを選択",
+      "close": "閉じる",
       "complete": "{added} 件をインストールしました；{skipped} 件は設定済みです。",
       "confirm": "選択したスキルをインストール",
       "confirmation": "{count} 個の選択したスキルを {scope} にインストールしますか？",
       "confirmationHeading": "スキルインストールの確認",
       "description": "ローカルフォルダからスキルをリンクします。ファイルはコピーも変更もされません。",
+      "done": "完了",
       "global": "グローバル",
       "group": "グループ",
       "installFailed": "選択したスキルのインストールに失敗しました。",
