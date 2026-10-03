@@ -458,6 +458,15 @@ function selectLandingSettingsTab(tabKey) {
   });
   if (target === "subagents") {
     void landingSubagents.activate();
+    // The model dropdown needs the catalog; on landing it arrives via the
+    // config gateway's lazy runtime, the same bridge the Models page uses.
+    // Kick off the load on first visit, then re-render the tab once ready.
+    if (!modelsPage.getVisibleModels()) {
+      void modelsPage
+        .activate()
+        .then(() => landingSubagents.activate())
+        .catch(() => {});
+    }
   } else {
     landingSubagents.leave();
   }
