@@ -438,6 +438,27 @@ describe("picot config models operations", () => {
       providers: { local: { models: [{ id: "qwen" }] } },
     });
   });
+  it("reads models.json for the settings editor", async () => {
+    const { home, handlePicotConfig } = await loadConfigWithTempHome();
+    const modelsPath = join(home, ".pi", "agent", "models.json");
+    mkdirSync(dirname(modelsPath), { recursive: true });
+    writeFileSync(
+      modelsPath,
+      JSON.stringify({ providers: { OpenCodex: { baseUrl: "http://localhost:10100/v1" } } }),
+      "utf8",
+    );
+
+    const result = await handlePicotConfig("read_models_config", {}, {});
+    expect(result).toEqual({
+      ok: true,
+      data: {
+        path: modelsPath,
+        content: JSON.stringify({
+          providers: { OpenCodex: { baseUrl: "http://localhost:10100/v1" } },
+        }),
+      },
+    });
+  });
 });
 
 describe("picot config agent text file operations", () => {

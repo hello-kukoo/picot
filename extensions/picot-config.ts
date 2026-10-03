@@ -1678,6 +1678,9 @@ export async function handlePicotConfig(
           data: await setDefaultAutoCompaction(params.enabled, params.scope, ctx),
         };
 
+      case "read_models_config":
+        return { ok: true, data: readConfigFile(MODELS_CONFIG_PATH, '{\n  "providers": {}\n}\n') };
+
       case "set_default_codemode":
         return { ok: true, data: await setDefaultCodemode(params.enabled) };
 
