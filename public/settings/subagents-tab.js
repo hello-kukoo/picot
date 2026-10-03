@@ -324,13 +324,16 @@ export function setupSubagentsTab({
     // Custom and Packages are two projections of the loaded scope, so the
     // sub-tab row re-renders from the cached inventory and never refetches. It
     // reuses the Skills page-tab classes so both pages share one tab style.
-    const subTabRow = text("div", "skills-page-tabs", "");
+    const subTabRow = text("div", "skills-scope-tabs", "");
     subTabRow.setAttribute("role", "tablist");
     for (const name of SUBTABS) {
-      const button = text("button", "skills-page-tab", label(`settings.subagents.subtabs.${name}`));
+      const button = text(
+        "button",
+        `skills-scope-tab${subtab === name ? " active" : ""}`,
+        label(`settings.subagents.subtabs.${name}`),
+      );
       button.type = "button";
       button.dataset.subagentsSubtab = name;
-      button.classList.toggle("active", subtab === name);
       button.setAttribute("role", "tab");
       button.setAttribute("aria-selected", String(subtab === name));
       button.tabIndex = subtab === name ? 0 : -1;

@@ -1541,7 +1541,7 @@ describe("subagents sub-tabs", () => {
     transport.listSubagents.mockResolvedValue(inventory([candidate(), PACKAGE]));
     const { page } = setup(transport);
     await page.activate();
-    const row = container.querySelector(".skills-page-tabs");
+    const row = container.querySelector(".skills-scope-tabs");
     expect(row.getAttribute("role")).toBe("tablist");
     expect(subtabLabels()).toEqual(["definitions", "packages"]);
     expect(selectedSubtab()).toBe("definitions");
