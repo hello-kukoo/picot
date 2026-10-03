@@ -911,7 +911,8 @@
         "writeLayer": "Capa de escritura: {scope} · ajuste por nombre {runtimeName} · no modifica los archivos de definición",
         "writeLayerGlobal": "Global ~/.pi/agent/settings.json",
         "writeLayerProject": "Proyecto actual {root}/.pi/settings.json",
-        "writeLayerProjectUnknown": "Proyecto actual .pi/settings.json"
+        "writeLayerProjectUnknown": "Proyecto actual .pi/settings.json",
+        "enable": "Activar"
       },
       "diagnostics": {
         "scanBudget": "Se agotó el presupuesto de exploración.",
@@ -931,7 +932,10 @@
         "unterminatedFrontmatter": "Frontmatter sin cerrar.",
         "invalidPackageName": "Nombre de paquete no válido.",
         "nameCollision": "Nombre de ejecución o alias duplicado; resultado de ejecución sin verificar.",
-        "parityUnverified": "Sin instantánea en vivo; solo candidatos en disco."
+        "parityUnverified": "Sin instantánea en vivo; solo candidatos en disco.",
+        "externalRunner": "Runner externo (invoca un CLI externo); las anulaciones nativas de modelo/razonamiento de Pi no se aplican",
+        "shadowed": "Ocultado por una definición de mayor prioridad (builtin < package < user < project)",
+        "sameLevelDuplicate": "Nombre duplicado del mismo nivel; el ganador por orden de escaneo no es verificable, ambos rechazados"
       },
       "create": {
         "title": "Nuevo agente .md",

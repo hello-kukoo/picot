@@ -911,7 +911,8 @@
         "writeLayer": "書き込み先: {scope} · 名前単位の上書き {runtimeName} · 定義ファイルは変更しません",
         "writeLayerGlobal": "グローバル ~/.pi/agent/settings.json",
         "writeLayerProject": "現在のプロジェクト {root}/.pi/settings.json",
-        "writeLayerProjectUnknown": "現在のプロジェクト .pi/settings.json"
+        "writeLayerProjectUnknown": "現在のプロジェクト .pi/settings.json",
+        "enable": "有効"
       },
       "diagnostics": {
         "scanBudget": "探索の上限に達しました。",
@@ -931,7 +932,10 @@
         "unterminatedFrontmatter": "frontmatter が閉じられていません。",
         "invalidPackageName": "パッケージ名が無効です。",
         "nameCollision": "実行時名または別名が重複しています。有効な定義は未確認です。",
-        "parityUnverified": "ライブスナップショットがないため、ディスク上の候補のみです。"
+        "parityUnverified": "ライブスナップショットがないため、ディスク上の候補のみです。",
+        "externalRunner": "外部ランナー（外部 CLI を起動）；Pi ネイティブのモデル/思考オーバーライドは適用されません",
+        "shadowed": "より優先度の高い定義によりシャドウ（builtin < package < user < project）",
+        "sameLevelDuplicate": "同レベル重複名；スキャン順序の勝者を検証できないため両方拒否"
       },
       "create": {
         "title": "新しいエージェント .md",

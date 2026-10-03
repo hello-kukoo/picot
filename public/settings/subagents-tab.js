@@ -56,6 +56,13 @@ const COPY = {
   "settings.subagents.detail.writeLayerGlobal": "Global ~/.pi/agent/settings.json",
   "settings.subagents.detail.writeLayerProject": "Current project {root}/.pi/settings.json",
   "settings.subagents.detail.writeLayerProjectUnknown": "Current project .pi/settings.json",
+  "settings.subagents.detail.enable": "Enable",
+  "settings.subagents.diagnostics.externalRunner":
+    "External runner (invokes an external CLI); native Pi model/thinking overrides do not apply",
+  "settings.subagents.diagnostics.shadowed":
+    "Shadowed by a higher-precedence definition (builtin < package < user < project)",
+  "settings.subagents.diagnostics.sameLevelDuplicate":
+    "Same-level duplicate name; scan-order winner unverifiable, both refused",
   "settings.subagents.detail.saved":
     "Saved to disk. Reload or start a new session; verify with /subagents-models or /run.",
   "settings.subagents.detail.reloadNotice":
@@ -128,6 +135,9 @@ const KNOWN_DIAGNOSTICS = {
   "duplicate runtime name or alias; runtime winner unverified": "diagnostics.nameCollision",
   "live snapshot not supplied; disk candidates only": "diagnostics.parityUnverified",
   "winner or out-of-scope occupancy unverified": "status.candidate",
+  "external or unknown runner": "diagnostics.externalRunner",
+  "shadowed by a higher-precedence definition": "diagnostics.shadowed",
+  "same-level duplicate name; scan-order winner unverifiable": "diagnostics.sameLevelDuplicate",
 };
 
 const diagnosticKey = (message) => {
@@ -492,21 +502,23 @@ export function setupSubagentsTab({
         // matching where the MCP and Skills pages put their toggles.
         const nameRow = text("div", "subagents-name-row", "");
         nameRow.append(text("h4", "subagents-name", selected.runtimeName));
-        const disabledOn = selected.savedOverride?.disabled === true;
+        // Enable semantics like the MCP/Skill switches: agents default to
+        // enabled, so the switch is ON unless a disabled override exists.
+        const isEnabled = selected.savedOverride?.disabled !== true;
         const toggle = text(
           "button",
-          `settings-toggle subagents-detail-toggle${disabledOn ? " on" : ""}`,
+          `settings-toggle subagents-detail-toggle${isEnabled ? " on" : ""}`,
           "",
         );
         toggle.type = "button";
         toggle.setAttribute(
           "aria-label",
-          `${selected.runtimeName}: ${label("settings.subagents.detail.disabled")}`,
+          `${selected.runtimeName}: ${label("settings.subagents.detail.enable")}`,
         );
-        toggle.setAttribute("aria-pressed", String(disabledOn));
+        toggle.setAttribute("aria-pressed", String(isEnabled));
         toggle.disabled = !(selected.writeQualified && selected.nativeOverrideSupported);
         toggle.addEventListener("click", () => {
-          void writeDisabled(selected, !disabledOn);
+          void writeDisabled(selected, isEnabled);
         });
         nameRow.append(toggle);
         header.append(nameRow);

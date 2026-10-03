@@ -911,7 +911,8 @@
         "writeLayer": "Write layer: {scope} · name-level override {runtimeName} · definition files are unchanged",
         "writeLayerGlobal": "Global ~/.pi/agent/settings.json",
         "writeLayerProject": "Current project {root}/.pi/settings.json",
-        "writeLayerProjectUnknown": "Current project .pi/settings.json"
+        "writeLayerProjectUnknown": "Current project .pi/settings.json",
+        "enable": "Enable"
       },
       "diagnostics": {
         "scanBudget": "Discovery budget exhausted.",
@@ -931,7 +932,10 @@
         "unterminatedFrontmatter": "Unterminated frontmatter.",
         "invalidPackageName": "Invalid package name.",
         "nameCollision": "Duplicate runtime name or alias; runtime winner unverified.",
-        "parityUnverified": "No live snapshot supplied; disk candidates only."
+        "parityUnverified": "No live snapshot supplied; disk candidates only.",
+        "externalRunner": "External runner (invokes an external CLI); native Pi model/thinking overrides do not apply",
+        "shadowed": "Shadowed by a higher-precedence definition (builtin < package < user < project)",
+        "sameLevelDuplicate": "Same-level duplicate name; scan-order winner unverifiable, both refused"
       },
       "create": {
         "title": "New agent .md",

@@ -911,7 +911,8 @@
         "writeLayer": "写入层：{scope} · 名字级覆盖 {runtimeName} · 不修改定义文件",
         "writeLayerGlobal": "全局 ~/.pi/agent/settings.json",
         "writeLayerProject": "当前项目 {root}/.pi/settings.json",
-        "writeLayerProjectUnknown": "当前项目 .pi/settings.json"
+        "writeLayerProjectUnknown": "当前项目 .pi/settings.json",
+        "enable": "启用"
       },
       "diagnostics": {
         "scanBudget": "发现预算已用尽。",
@@ -931,7 +932,10 @@
         "unterminatedFrontmatter": "frontmatter 未闭合。",
         "invalidPackageName": "包名无效。",
         "nameCollision": "运行时名称或别名重复，运行时胜出者未核实。",
-        "parityUnverified": "未提供实时快照，仅磁盘候选。"
+        "parityUnverified": "未提供实时快照，仅磁盘候选。",
+        "externalRunner": "外部 runner（调用外部 CLI），不支持原生 Pi 模型/思考覆盖",
+        "shadowed": "被更高优先级定义遮蔽（builtin < 扩展包 < 个人 < 项目）",
+        "sameLevelDuplicate": "同层级重名；扫描次序胜者不可证实，双拒"
       },
       "create": {
         "title": "新建代理 .md",

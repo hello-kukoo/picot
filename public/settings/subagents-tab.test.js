@@ -816,14 +816,14 @@ describe("subagents row disabled switch", () => {
       ),
       overrides,
     );
-  it("renders the disable switch on the detail name row, right-aligned", async () => {
+  it("renders the enable switch on the detail name row, defaulting to on", async () => {
     const transport = makeTransport();
     transport.listSubagents.mockResolvedValue(
       qualifiedRow([
         {
           id: "c-on",
           runtimeName: "on-agent",
-          savedOverride: { model: null, thinking: null, advertise: null, disabled: true },
+          savedOverride: { model: null, thinking: null, advertise: null, disabled: null },
         },
       ]),
     );
@@ -871,7 +871,10 @@ describe("subagents row disabled switch", () => {
         expectedRevision: "rev-1",
       }),
     );
-    expect(container.querySelector(".subagents-detail-toggle").classList.contains("on")).toBe(true);
+    // After disabling, the enable switch reads off.
+    expect(container.querySelector(".subagents-detail-toggle").classList.contains("on")).toBe(
+      false,
+    );
     // Toggling back clears the override instead of writing false.
     transport.setSubagentOverride.mockResolvedValueOnce({ inventory: withDisabled(null) });
     container.querySelector(".subagents-detail-toggle").click();
