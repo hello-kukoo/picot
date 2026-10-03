@@ -1827,29 +1827,20 @@
               data-i18n-aria-label="settings.skills.sectionsAriaLabel"
               aria-label="Skills sections"
             >
+              <!-- Label is "Custom"; the panel key stays "discovered" as the
+                   internal shell key (renaming it would churn app.js,
+                   landing.js and fixtures for no behavior change). -->
               <button
                 type="button"
-                id="skills-page-tab-discovered"
+                id="skills-page-tab-custom"
                 class="skills-page-tab active"
                 role="tab"
                 aria-selected="true"
                 aria-controls="settings-skills"
                 data-skills-page-tab="discovered"
-                data-i18n="settings.skills.discovered"
+                data-i18n="settings.skills.custom"
               >
-                Discovered
-              </button>
-              <button
-                type="button"
-                id="skills-page-tab-install"
-                class="skills-page-tab"
-                role="tab"
-                aria-selected="false"
-                aria-controls="settings-install-skills"
-                data-skills-page-tab="install"
-                data-i18n="settings.skills.install"
-              >
-                Install
+                Custom
               </button>
               <button
                 type="button"
@@ -1868,14 +1859,16 @@
               id="settings-skills"
               class="settings-section skills-page"
               role="tabpanel"
-              aria-labelledby="skills-page-tab-discovered"
+              aria-labelledby="skills-page-tab-custom"
               aria-live="polite"
             ></section>
+            <!-- Install area: not a tab target. The custom tab's install
+                 entry shows it below the custom list while an install flow is
+                 open; visibility is managed by app.js/landing.js wiring. -->
             <section
               id="settings-install-skills"
               class="settings-section skills-install-page hidden"
               role="tabpanel"
-              aria-labelledby="skills-page-tab-install"
               aria-live="polite"
             ></section>
             <section
@@ -1917,7 +1910,7 @@
                 aria-selected="true"
                 data-i18n="settings.mcp.groups.piGlobal"
               >
-                User (global)
+                Global
               </button>
               <button
                 type="button"
@@ -1927,7 +1920,7 @@
                 aria-selected="false"
                 data-i18n="settings.mcp.groups.project"
               >
-                Project
+                Current project
               </button>
             </div>
             <p class="settings-help" id="mcp-tab-caption" aria-live="polite"></p>

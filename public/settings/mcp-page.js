@@ -9,7 +9,7 @@ import { createMcpLoginDialog } from "./mcp-login-dialog.js";
  * @typedef {{name:string, entry:Object, sourceFile:string, editable:true, enabled:boolean}} McpListEntry
  * @typedef {{id:string, sourceFile:string, missing:string[]}} McpMigrationTarget
  * @typedef {{name:string, scope?:string, state:string, transport?:string, tools?:unknown[], error?:string}} McpServerStatus
- * @typedef {{groups: Record<string, McpListEntry[]>, groupErrors: Record<string, string|undefined>, migrations: McpMigrationTarget[]}} McpListData
+ * @typedef {{groups: Record<string, McpListEntry[]>, groupErrors: Record<string, string|undefined>, migrations: McpMigrationTarget[], projectAvailable?: boolean}} McpListData
  */
 
 // Long master-row error text is summarized; the full message stays on `title`.
@@ -216,10 +216,15 @@ export function setupMcpPage({
   }
 
   function renderTabs() {
+    // No active workspace → no project layer at all: hide the project tab
+    // instead of showing an always-empty list (landing cold start).
+    const projectAvailable = data?.projectAvailable !== false;
+    if (!projectAvailable && activeTab === "project") activeTab = "piGlobal";
     for (const btn of tabs) {
       const isActive = btn.dataset.mcpTab === activeTab;
       btn.classList.toggle("extensions-page-tab", true);
       btn.setAttribute("aria-selected", isActive ? "true" : "false");
+      btn.classList.toggle("hidden", btn.dataset.mcpTab === "project" && !projectAvailable);
     }
   }
 

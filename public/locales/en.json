@@ -789,8 +789,8 @@
     "mcp": {
       "title": "MCP",
       "groups": {
-        "piGlobal": "User (global)",
-        "project": "Project"
+        "piGlobal": "Global",
+        "project": "Current project"
       },
       "readOnlyBadge": "read-only",
       "disabledBadge": "disabled",

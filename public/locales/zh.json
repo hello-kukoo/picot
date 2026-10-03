@@ -789,8 +789,8 @@
     "mcp": {
       "title": "MCP",
       "groups": {
-        "piGlobal": "用户级（全局）",
-        "project": "项目"
+        "piGlobal": "全局",
+        "project": "当前项目"
       },
       "readOnlyBadge": "只读",
       "disabledBadge": "已禁用",

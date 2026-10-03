@@ -212,6 +212,9 @@ export function listMcpServers(
   groups: { piGlobal: McpListEntry[]; project: McpListEntry[] };
   groupErrors: { piGlobal?: string; project?: string };
   migrations: McpMigrationTarget[];
+  /** False when no workspace is active (cwd empty/home): the project layer
+   *  does not exist, so the UI hides the project tab entirely. */
+  projectAvailable: boolean;
 } {
   const userLayer = { filePath: userPath(agentDir), layer: readMcpLayer(userPath(agentDir)) };
   const projectLayer =
@@ -242,6 +245,7 @@ export function listMcpServers(
       project: projectLayer?.layer.error,
     },
     migrations,
+    projectAvailable: projectLayer !== null,
   };
 }
 

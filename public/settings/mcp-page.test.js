@@ -12,7 +12,7 @@ setMessages({
   settings: {
     mcp: {
       title: "MCP",
-      groups: { piGlobal: "User (global)", project: "Project" },
+      groups: { piGlobal: "Global", project: "Current project" },
       readOnlyBadge: "read-only",
       disabledBadge: "disabled",
       effectHint: "hint",
@@ -117,6 +117,7 @@ const LIST = {
     },
     groupErrors: {},
     migrations: [],
+    projectAvailable: true,
   },
 };
 
@@ -236,6 +237,7 @@ const LIST_OAUTH = {
     },
     groupErrors: {},
     migrations: [],
+    projectAvailable: true,
   },
 };
 
@@ -276,6 +278,31 @@ describe("mcp-page", () => {
 
     clickTab(tabs, "project");
     expect(detailEl.textContent).toContain("repoTool");
+  });
+
+  it("hides the project tab entirely when no workspace is active", async () => {
+    const landing = {
+      ok: true,
+      data: {
+        ...LIST.data,
+        groups: { piGlobal: LIST.data.groups.piGlobal, project: [] },
+        projectAvailable: false,
+      },
+    };
+    const { page, tabs, captionEl } = mount(makeGateway(landing));
+    await page.activate();
+    const projectBtn = tabs.querySelector('[data-mcp-tab="project"]');
+    expect(projectBtn.classList.contains("hidden")).toBe(true);
+    expect(tabs.querySelector('[data-mcp-tab="piGlobal"]').classList.contains("hidden")).toBe(
+      false,
+    );
+    // A hidden tab cannot become active even if clicked programmatically.
+    projectBtn.click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(tabs.querySelector('[data-mcp-tab="piGlobal"]').getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(captionEl.textContent).toBe(`Global · ${LIST.data.groups.piGlobal.length}`);
   });
 
   it("renders two tabs, both with an add button; availability is always true", async () => {
@@ -542,13 +569,15 @@ describe("mcp-page", () => {
     it("renders the tab caption outside the master list and follows tab switches", async () => {
       const { masterEl, captionEl, tabs } = await mountWithStatus();
       const groupCount = LIST_OAUTH.data.groups.piGlobal.length;
-      expect(captionEl.textContent).toBe(`User (global) · ${groupCount}`);
+      expect(captionEl.textContent).toBe(`Global · ${groupCount}`);
       // The caption lives outside the master list; the list itself starts
       // with a row, not the scope header.
-      expect(masterEl.textContent).not.toContain(`User (global) · ${groupCount}`);
+      expect(masterEl.textContent).not.toContain(`Global · ${groupCount}`);
 
       clickTab(tabs, "project");
-      expect(captionEl.textContent).toBe(`Project · ${LIST_OAUTH.data.groups.project.length}`);
+      expect(captionEl.textContent).toBe(
+        `Current project · ${LIST_OAUTH.data.groups.project.length}`,
+      );
     });
 
     it("offers sign-out only for connected http rows", async () => {
