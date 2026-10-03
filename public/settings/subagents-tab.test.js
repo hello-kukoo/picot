@@ -1111,7 +1111,7 @@ describe("subagents name-level override editing", () => {
     expect(transport.setSubagentOverride).not.toHaveBeenCalled();
   });
 
-  it("offers the composer dropdown and keeps an out-of-catalog saved value", async () => {
+  it("renders the rpiv-advisor select with scoped groups and Not set", async () => {
     const transport = makeTransport();
     transport.listSubagents.mockResolvedValue(
       qualified({ savedOverride: { model: "inherit", thinking: false } }),
@@ -1124,47 +1124,32 @@ describe("subagents name-level override editing", () => {
             ? {
                 ok: true,
                 data: {
-                  providers: [
-                    {
-                      provider: CATALOG[0].provider,
-                      models: [
-                        {
-                          provider: CATALOG[0].provider,
-                          id: CATALOG[0].id,
-                          available: true,
-                          visible: true,
-                        },
-                      ],
-                    },
-                  ],
+                  providers: CATALOG.map((c) => ({
+                    provider: c.provider,
+                    models: [{ provider: c.provider, id: c.id, available: true, visible: true }],
+                  })),
                 },
               }
             : { ok: true, data: { modelIds: [] } },
       },
     });
     await page.activate();
+    await flush(); // let refreshCatalog resolve
     await openRow();
     const model = container.querySelector('[aria-label="Model"]');
-    expect(model.tagName).toBe("BUTTON");
-    // A saved out-of-catalog "inherit" is shown, not silently emptied.
-    expect(model.textContent).toBe("Keep current: inherit");
-    model.click();
-    await flush(); // async click handler: refreshCatalog + menu render
-    const menu = document.querySelector(".model-dropdown-menu");
-    expect(menu).not.toBeNull();
-    const items = [...menu.querySelectorAll(".model-dropdown-item")];
-    // Catalog models plus the appended "Not set" option; exact count varies
-    // with the shared menu's scoped-section rendering.
-    expect(items.length).toBeGreaterThanOrEqual(2);
-    // The shared menu renders the composer catalog; none matches "inherit".
-    const allText = items.map((item) => item.textContent).join("\n");
-    expect(allText).toContain("gpt-5");
-    expect(allText).toContain("Not set");
-    expect(items.every((item) => !item.classList.contains("active"))).toBe(true);
-    // Picking composes provider/id into the override value.
-    const gptItem = items.find((item) => item.textContent.includes("gpt-5"));
-    gptItem.click();
-    expect(container.querySelector('[aria-label="Model"]').textContent).toBe("openai/gpt-5");
+    expect(model.tagName).toBe("SELECT");
+    // "Not set" is the first option; catalog models are present.
+    expect(model.options[0].textContent).toBe("Not set (inherit parent)");
+    expect(model.textContent).toContain("gpt-5");
+    // A saved out-of-catalog "inherit" is preserved as a selectable option.
+    expect(model.value).toBe("inherit");
+    expect([...model.options].some((o) => o.textContent.includes("Keep current: inherit"))).toBe(
+      true,
+    );
+    // Selecting a catalog model commits the composed provider/id.
+    model.value = "openai/gpt-5";
+    model.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(model.value).toBe("openai/gpt-5");
     const thinking = container.querySelector('[aria-label="Thinking"]');
     expect(thinking.tagName).toBe("SELECT");
     expect(thinking.value).toBe("false");
@@ -1179,7 +1164,6 @@ describe("subagents name-level override editing", () => {
       "xhigh",
       "max",
     ]);
-    // Levels are not validated against the model; the hint names the authority.
     expect(container.querySelector(".subagents-thinking-hint").textContent).toContain(
       "/subagents-models",
     );
@@ -1249,9 +1233,12 @@ describe("subagents name-level override editing", () => {
     await flush(); // let refreshCatalog resolve
     await openRow();
     const thinking = container.querySelector('[aria-label="Thinking"]');
-    expect(container.querySelector('[aria-label="Model"]').textContent).toBe("openai/gpt-5");
+    expect(container.querySelector('[aria-label="Model"]').value).toBe("openai/gpt-5");
     expect(thinking.value).toBe("high");
-    container.querySelector(".subagents-model-clear").click();
+    // Clear = select "Not set" (the first option with value "")
+    const modelSelect = container.querySelector('[aria-label="Model"]');
+    modelSelect.value = "";
+    modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
     thinking.value = "false";
     thinking.dispatchEvent(new Event("change", { bubbles: true }));
     container.querySelector(".subagents-save").click();

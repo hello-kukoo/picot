@@ -42,7 +42,7 @@ function modelDisplayName(model) {
 }
 
 /** Composer parity: scoped models first, then every other enabled model. */
-function appendModelOptions(select, { models, scopedIds }) {
+export function appendModelOptions(select, { models, scopedIds }) {
   const { scoped, remaining } = splitModelsByScope(models, scopedIds);
   for (const [label, group] of [
     [t("models.scoped"), scoped],

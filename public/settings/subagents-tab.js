@@ -1,8 +1,7 @@
 // ABOUTME: Displays host-owned subagent disk candidates and restricted read-only definitions.
 // ABOUTME: Keeps scope and workspace requests isolated without asserting unverified runtime winners.
 
-import { openModelDropdownMenu } from "../models/model-dropdown.js";
-import { loadModelChoices } from "./package-extension-settings.js";
+import { appendModelOptions, loadModelChoices } from "./package-extension-settings.js";
 
 const COPY = {
   "settings.subagents.scopes.global": "Global",
@@ -189,11 +188,13 @@ export function setupSubagentsTab({
   // Cached model choices from the shared bridge loader (the same source the
   // rpiv-advisor picker and the composer use: catalog + scoped models).
   let cachedModels = null;
+  let cachedScopedIds = null;
   const catalog = () => cachedModels;
   const refreshCatalog = async () => {
     if (!configGateway) return;
     const choices = await loadModelChoices(configGateway);
     cachedModels = choices.models.length > 0 ? choices.models : null;
+    cachedScopedIds = choices.scopedIds;
   };
   const modelOverrideId = (model) =>
     model?.provider ? `${model.provider}/${model.id}` : model?.id;
@@ -216,7 +217,6 @@ export function setupSubagentsTab({
   let mode = "detail";
   let notice = "";
   let saving = false;
-  let closeModelMenu = () => {};
   const drafts = new Map();
   const draftKey = (id) => `${identityKey}:${active}:${id}`;
   const getDraft = (id) => drafts.get(draftKey(id)) || {};
@@ -281,7 +281,6 @@ export function setupSubagentsTab({
   }
 
   function render() {
-    closeModelMenu();
     // Rebuilding the DOM would otherwise snap the master list back to the top
     // on every selection render; carry the scroll offset across.
     const previousScroll = container.querySelector(".subagents-master")?.scrollTop ?? 0;
@@ -619,106 +618,32 @@ export function setupSubagentsTab({
             text("span", "subagents-field-label", label(`settings.subagents.detail.${field}`)),
           );
           if (field === "model" && models) {
-            const dropdown = text("div", "model-dropdown subagents-model-dropdown", "");
-            const row = text("div", "subagents-model-row", "");
-            let buttonCaption = label("settings.subagents.detail.noLayerOverride");
+            // rpiv-advisor picker pattern: a native <select> with scoped ★
+            // and all-enabled optgroups, plus "Not set" as the first option.
+            const select = text("select", "subagents-override-input", "");
+            select.setAttribute("aria-label", label("settings.subagents.detail.model"));
+            select.disabled = !canEdit;
+            const option = (value, textContent) => {
+              const node = document.createElement("option");
+              node.value = value;
+              node.textContent = textContent;
+              select.append(node);
+            };
+            option("", label("settings.subagents.detail.notSet"));
+            appendModelOptions(select, { models, scopedIds: cachedScopedIds ?? [] });
             if (current) {
-              buttonCaption = models.some((model) => modelOverrideId(model) === current)
-                ? current
-                : keepCurrent(current);
+              const known = models.some((model) => modelOverrideId(model) === current);
+              if (known) {
+                select.value = current;
+              } else {
+                option(current, keepCurrent(current));
+                select.value = current;
+              }
             }
-            const button = text(
-              "button",
-              "model-dropdown-btn subagents-override-input",
-              buttonCaption,
-            );
-            button.type = "button";
-            button.setAttribute("aria-label", label("settings.subagents.detail.model"));
-            button.setAttribute("aria-haspopup", "listbox");
-            button.disabled = !canEdit;
-            const clear = text("button", "subagents-model-clear settings-value-btn", "×");
-            clear.type = "button";
-            clear.setAttribute("aria-label", label("settings.subagents.detail.notSet"));
-            clear.disabled = !canEdit || !current;
-            clear.addEventListener("click", () => {
-              commit(field)("");
-              render();
+            select.addEventListener("change", () => {
+              commit(field)(select.value);
             });
-            button.addEventListener("click", async () => {
-              if (dropdown.classList.contains("open")) {
-                closeModelMenu();
-                return;
-              }
-              closeModelMenu();
-              // Refresh the catalog on every open: it arrives via the shared
-              // bridge loader (same as rpiv-advisor/composer) and may not be
-              // cached yet on landing's lazy config runtime.
-              await refreshCatalog();
-              // Portal to the panel: the detail card and settings content both
-              // scroll/clip descendants, but the panel itself does not.
-              const panel = container.closest(".settings-panel") || document.body;
-              const menu = text("div", "model-dropdown-menu hidden", "");
-              const bounds = panel.getBoundingClientRect();
-              const anchor = button.getBoundingClientRect();
-              menu.style.left = `${anchor.left - bounds.left}px`;
-              menu.style.top = `${anchor.bottom - bounds.top + 4}px`;
-              menu.style.maxWidth = `calc(100vw - ${Math.max(0, anchor.left)}px - 16px)`;
-              panel.append(menu);
-              const close = () => {
-                dropdown.classList.remove("open");
-                menu.remove();
-                document.removeEventListener("pointerdown", outside);
-                document.removeEventListener("keydown", onKey);
-                document.removeEventListener("scroll", close, true);
-                closeModelMenu = () => {};
-              };
-              const outside = (event) => {
-                if (!menu.contains(event.target) && !dropdown.contains(event.target)) close();
-              };
-              const onKey = (event) => {
-                if (event.key === "Escape") close();
-              };
-              closeModelMenu = close;
-              document.addEventListener("pointerdown", outside);
-              document.addEventListener("keydown", onKey);
-              document.addEventListener("scroll", close, true);
-              const liveModels = catalog();
-              openModelDropdownMenu({
-                doc: document,
-                dropdown,
-                menu,
-                loadModels: () => liveModels ?? [],
-                isSelected: (model) => modelOverrideId(model) === current,
-                onPick: (model) => {
-                  commit(field)(modelOverrideId(model));
-                  render();
-                },
-                close,
-                t,
-              });
-              // Append a "Not set" item after the model list so the user can
-              // clear the override from inside the dropdown.
-              const items = menu.querySelector(".model-dropdown-items");
-              if (items) {
-                const unset = text(
-                  "button",
-                  `model-dropdown-item${current ? "" : " active"}`,
-                  label("settings.subagents.detail.notSet"),
-                );
-                unset.type = "button";
-                unset.style.cssText =
-                  "width:100%;border:0;background:none;text-align:left;cursor:pointer;padding:8px 12px;color:var(--text-dim);border-top:1px solid var(--border-subtle)";
-                unset.addEventListener("click", () => {
-                  commit(field)("");
-                  close();
-                  render();
-                });
-                items.append(unset);
-              }
-            });
-            dropdown.append(button);
-            row.append(dropdown, clear);
-            caption.append(row);
+            caption.append(select);
             form.append(caption);
             continue;
           }
@@ -1008,7 +933,6 @@ export function setupSubagentsTab({
         for (const key of drafts.keys()) if (key.includes(":project:")) drafts.delete(key);
       }
       visible = false;
-      closeModelMenu();
       ++token;
       return true;
     },
