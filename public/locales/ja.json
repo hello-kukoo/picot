@@ -891,7 +891,6 @@
         "model": "モデル",
         "thinking": "思考レベル",
         "advertise": "親エージェントの一覧に表示",
-        "disabled": "無効化",
         "inheritDefinition": "未設定（定義を継承）",
         "booleanOn": "オン(true)",
         "booleanOff": "オフ(false)",

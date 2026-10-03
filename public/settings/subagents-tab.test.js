@@ -30,7 +30,7 @@ const REQUIRED_COPY = [
   "detail.thinkingFalse",
   "detail.thinkingHint",
   "detail.advertise",
-  "detail.disabled",
+  "detail.enable",
   "detail.inheritDefinition",
   "detail.booleanOn",
   "detail.booleanOff",
@@ -965,19 +965,16 @@ describe("subagents name-level override editing", () => {
       ".subagents-detail .subagents-subheading + .pkg-manager-status-grid",
     );
     expect(saved.textContent).toContain("Show in parent agent directory: false");
-    expect(saved.textContent).toContain("Disable: true");
     expect(saved.querySelectorAll(".pkg-manager-status-row")).toHaveLength(4);
-    for (const [name, expected] of [
-      ["Show in parent agent directory", "false"],
-      ["Disable", "true"],
-    ]) {
-      const select = container.querySelector(`[aria-label="${name}"]`);
-      expect(select.tagName).toBe("SELECT");
-      expect([...select.options].map((item) => item.value)).toEqual(["", "true", "false"]);
-      expect(select.options[0].textContent).toBe("Unset (inherit definition)");
-      expect(select.value).toBe(expected);
-      expect(select.disabled).toBe(false);
-    }
+    // The disabled dropdown is gone from the form; only advertise keeps a
+    // three-state select. The name-row toggle owns enable/disable.
+    expect(container.querySelector('[aria-label="Disable"]')).toBeNull();
+    const select = container.querySelector('[aria-label="Show in parent agent directory"]');
+    expect(select.tagName).toBe("SELECT");
+    expect([...select.options].map((item) => item.value)).toEqual(["", "true", "false"]);
+    expect(select.options[0].textContent).toBe("Unset (inherit definition)");
+    expect(select.value).toBe("false");
+    expect(select.disabled).toBe(false);
     expect(container.querySelector(".subagents-save").disabled).toBe(true);
   });
 
@@ -991,6 +988,7 @@ describe("subagents name-level override editing", () => {
     await openRow();
     const change = (name, value, event = "change") => {
       const control = container.querySelector(`[aria-label="${name}"]`);
+      if (!control) return; // disabled select removed; toggle owns it
       control.value = value;
       control.dispatchEvent(new Event(event, { bubbles: true }));
     };
@@ -1006,12 +1004,12 @@ describe("subagents name-level override editing", () => {
         model: { op: "set", value: "openai/gpt-5" },
         thinking: { op: "set", value: "high" },
         advertise: { op: "set", value: true },
-        disabled: { op: "set", value: false },
+        disabled: { op: "keep" },
       }),
     );
     const payload = transport.setSubagentOverride.mock.calls[0][0];
     expect(payload.advertise.value).toBe(true);
-    expect(payload.disabled.value).toBe(false);
+    expect(payload.disabled).toEqual({ op: "keep" });
   });
 
   it("clears saved booleans when returned to unset and keeps untouched fields", async () => {
@@ -1026,7 +1024,7 @@ describe("subagents name-level override editing", () => {
     const { page } = setup(transport);
     await page.activate();
     await openRow();
-    for (const name of ["Show in parent agent directory", "Disable"]) {
+    for (const name of ["Show in parent agent directory"]) {
       const control = container.querySelector(`[aria-label="${name}"]`);
       control.value = "";
       control.dispatchEvent(new Event("change", { bubbles: true }));
@@ -1038,7 +1036,7 @@ describe("subagents name-level override editing", () => {
         model: { op: "keep" },
         thinking: { op: "keep" },
         advertise: { op: "clear" },
-        disabled: { op: "clear" },
+        disabled: { op: "keep" },
       }),
     );
   });
@@ -1055,7 +1053,7 @@ describe("subagents name-level override editing", () => {
       ".subagents-detail .subagents-subheading + .pkg-manager-status-grid",
     );
     expect(saved.querySelectorAll(".pkg-manager-status-row")).toHaveLength(2);
-    for (const name of ["Show in parent agent directory", "Disable"])
+    for (const name of ["Show in parent agent directory"])
       expect(container.querySelector(`[aria-label="${name}"]`).value).toBe("");
   });
 
@@ -1466,7 +1464,7 @@ describe("subagents layout structure", () => {
     await page.activate();
     container.querySelector(".subagents-row").click();
     await flush();
-    for (const field of ["Model", "Thinking", "Show in parent agent directory", "Disable"]) {
+    for (const field of ["Model", "Thinking", "Show in parent agent directory"]) {
       const input = container.querySelector(`[aria-label="${field}"]`);
       expect(input.classList.contains("subagents-override-input")).toBe(true);
       const caption = input.closest("label");
@@ -1686,7 +1684,7 @@ describe("subagents diagnostics and wording", () => {
     expect(zh.thinkingFalse).toBe("关闭(false)");
     expect(zh.thinkingHint).toContain("/subagents-models");
     expect(zh.advertise).toBe("在父代理目录中展示");
-    expect(zh.disabled).toBe("停用");
+    expect(zh.enable).toBe("启用");
     expect(zh.inheritDefinition).toBe("未设置（继承定义）");
     expect(zh.booleanOn).toBe("开(true)");
     expect(zh.booleanOff).toBe("关(false)");

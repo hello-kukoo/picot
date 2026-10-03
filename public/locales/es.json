@@ -891,7 +891,6 @@
         "model": "Modelo",
         "thinking": "Nivel de razonamiento",
         "advertise": "Mostrar en el directorio del agente principal",
-        "disabled": "Deshabilitar",
         "inheritDefinition": "Sin definir (heredar definición)",
         "booleanOn": "Activado (true)",
         "booleanOff": "Desactivado (false)",

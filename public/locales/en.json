@@ -891,7 +891,6 @@
         "model": "Model",
         "thinking": "Thinking",
         "advertise": "Show in parent agent directory",
-        "disabled": "Disable",
         "inheritDefinition": "Unset (inherit definition)",
         "booleanOn": "On (true)",
         "booleanOff": "Off (false)",

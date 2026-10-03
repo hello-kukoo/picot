@@ -30,7 +30,6 @@ const COPY = {
   "settings.subagents.detail.model": "Model",
   "settings.subagents.detail.thinking": "Thinking",
   "settings.subagents.detail.advertise": "Show in parent agent directory",
-  "settings.subagents.detail.disabled": "Disable",
   "settings.subagents.detail.inheritDefinition": "Unset (inherit definition)",
   "settings.subagents.detail.booleanOn": "On (true)",
   "settings.subagents.detail.booleanOff": "Off (false)",
@@ -606,10 +605,10 @@ export function setupSubagentsTab({
           ),
         );
         const form = text("div", "subagents-overrides", "");
-        for (const field of ["model", "thinking", "advertise", "disabled"]) {
+        for (const field of ["model", "thinking", "advertise"]) {
           const saved = selected.savedOverride?.[field];
           const current = controlValue(draft[field] === undefined ? saved : draft[field]);
-          const isBoolean = field === "advertise" || field === "disabled";
+          const isBoolean = field === "advertise";
           const isSelect = isBoolean || field === "thinking";
           const caption = text("label", "subagents-field", "");
           caption.append(

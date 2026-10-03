@@ -891,7 +891,6 @@
         "model": "模型",
         "thinking": "思考级别",
         "advertise": "在父代理目录中展示",
-        "disabled": "停用",
         "inheritDefinition": "未设置（继承定义）",
         "booleanOn": "开(true)",
         "booleanOff": "关(false)",
