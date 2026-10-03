@@ -285,6 +285,25 @@ Settings → 已安装扩展详情页的 pi-fff 配置渲染器（同文件 fff 
 
 写入实现位于 `subagents_settings.rs` 与 `host_config.rs`：覆盖限定 scope 的 `settings.json`、按写入层投影回显、锁内按文件 revision 读-比-改-原子替换并保存私有备份；新建限定 agents 目录（当前禁用），用同目录私有临时文件与 hard-link 排他发布，并在确认及发布前复验 inventory revision、同名候选集合。外部不遵循本锁的写者仍存在最终比对到 rename 间的竞态；父目录 symlink 竞态与 Windows/Linux hard-link 行为仍需平台实测。与 pi-subagents 0.74 的已知差异：host 额外接受裸 `ssh://` 包源。
 
+#### pi-subagents 的来源优先级（0.75.0 源码实证）
+
+静态定义在 `agentScope: "both"` 下按 **builtin < package < user < project** 合并（Map 覆盖序实现，`agent-selection.js:1-21`）：跨层同名有确定性胜者，低层被过滤出 effective 列表（`/subagents` 管理界面仍列全部来源层）。**同层**同名（两个 user 文件、两个包）胜者取决于扫描次序——0.75.0 未承诺稳定次序，Picot 对此维持双方拒写。alias 不参与覆盖查键（查键只有完整 runtimeName），但参与调用解析（canonical → localName → alias）；不同 runtimeName 共享 alias 在 `/run` 调用时报 ambiguous。runtime 注册代理参与发现但不参与 settings 覆盖，同名注册在合并时抛错。
+
+#### 覆盖字段面（settings.json `subagents.agentOverrides.<runtimeName>`）
+
+对 builtin/package/user/project 四类静态定义全部生效（custom/package user→project 逐字段叠加、project 胜出；builtin 项目条目整条替换 user 条目，且有效显式条目可绕过同层 `disableBuiltins`）。settings 覆盖 **替换** frontmatter 同名字段，优先级链为 settings > frontmatter > 默认值（provider 定向覆盖与单次 `/run` 参数更高）。runtime 注册代理的覆盖面收窄为 model/provider/fast/thinking 四项。
+
+可覆盖字段（`parseBuiltinOverrideEntry`，`agents.js:700-873`）：`model`（默认继承父会话）、`thinking`（默认模型缺省；枚举 off/minimal/low/medium/high/xhigh/max/false）、`advertise`（默认 false；true 时 name+description 注入父 system prompt 的 agent 目录，上限 16 个/12KB）、`disabled`（默认未设=启用）、`description`、`tools`/`excludeTools`（子代理工具白/黑名单）、`systemPrompt`/`systemPromptMode`（默认 replace）、`inheritProjectContext`（默认 true）/`inheritGlobalContext`（默认 false，仅前者为 true 时有意义）/`inheritSkills`（默认 true）、`defaultContext`（默认 fresh；fork=携带父会话副本，仅一致性守门角色如军师/老法师使用）、`output`/`outputMode`/`defaultReads`、`machine`、`skills`、`extensions`/`subagentOnlyExtensions`、`allowNestedSubagents`/`allowedAgents`、`acceptance`/`acceptanceRole`、`fast`/`defaultProvider`、`mutationTools`/`toolBudget`。不可覆盖：`aliases`/`package`（身份字段）、`async`/`timeoutMs`/`skillPath`/`memory`（仅 frontmatter/调用层）。
+
+Picot 设置页 UI 目前暴露 `model`/`thinking`/`advertise`/`disabled` 四字段（高频调优与运营开关）；其余字段属定义/契约性质（安全边界、人格、环境装配），留定义文件层。
+
+#### 设置页的两个正交维度
+
+- **scope 页签（Global / Current project）= 文件归属与写入目标**，不是运行范围：全局写 `~/.pi/agent/settings.json`、项目写 `<cwd>/.pi/settings.json`；`/run` 始终按 `both` 合并发现，页签归属不改变生效范围。项目层可覆盖全局定义（user→project 叠加）。
+- **子页签（自定义 / 扩展包）= 纯前端浏览分类**：自定义 = 该 scope 的 agents 目录候选（全局含 builtin 只读组于扩展包子页）；扩展包 = 该 scope 的包来源候选按包身份分组。子页签切换不重新请求（同一盘点快照投影）；host 请求只带 global/project。
+
+当前生产用法（2026-10-03）：Dr. Lin 的 24 agent 团队定义全部在 git 源包 `datarx-agents-team`（`agents/{research,software,writing}/` 递归子目录），`.md` 不含 model/thinking；每角色分工经 `~/.pi/agent/settings.json` 的 agentOverrides 配置（23 条，与 Paseo agentProfiles 字节一致），小工按设计不配（继承调用方模型）。
+
 ### Settings → Skills → Packages
 
 ### Settings → Skills → Packages
