@@ -803,6 +803,113 @@ describe("subagents creation safety", () => {
 // Name-level writes are allowed under disk-candidates-only parity: the controls
 // gate on the candidate's own snapshot qualification, never on a verified
 // runtime winner, and the model control is a picker of real catalog ids.
+describe("subagents row disabled switch", () => {
+  const qualifiedRow = (entries, overrides = {}) =>
+    inventory(
+      (Array.isArray(entries) ? entries : [entries]).map((entry) =>
+        candidate({
+          writeQualified: true,
+          writeDiagnostic: null,
+          savedOverride: { model: null, thinking: null, advertise: null, disabled: null },
+          ...entry,
+        }),
+      ),
+      overrides,
+    );
+  it("renders one right-side switch per row reflecting the saved layer", async () => {
+    const transport = makeTransport();
+    transport.listSubagents.mockResolvedValue(
+      qualifiedRow([
+        {
+          id: "c-on",
+          runtimeName: "on-agent",
+          savedOverride: { model: null, thinking: null, advertise: null, disabled: true },
+        },
+        {
+          id: "c-off",
+          runtimeName: "off-agent",
+          savedOverride: { model: null, thinking: null, advertise: null, disabled: null },
+        },
+      ]),
+    );
+    const { page } = setup(transport);
+    await page.activate();
+    const wraps = [...container.querySelectorAll(".subagents-row-wrap")];
+    expect(wraps).toHaveLength(2);
+    const [onWrap, offWrap] = wraps;
+    expect(onWrap.querySelector(".subagents-row-toggle").classList.contains("on")).toBe(true);
+    expect(onWrap.querySelector(".subagents-row-toggle").getAttribute("aria-pressed")).toBe("true");
+    expect(offWrap.querySelector(".subagents-row-toggle").classList.contains("on")).toBe(false);
+    // The switch sits beside the row, and the row still selects on click.
+    expect(onWrap.lastElementChild.classList.contains("subagents-row-toggle")).toBe(true);
+  });
+
+  it("toggling writes immediately with keeps and refreshes the saved state", async () => {
+    const transport = makeTransport();
+    const withDisabled = (value) =>
+      qualifiedRow({
+        savedOverride: { model: null, thinking: null, advertise: null, disabled: value },
+      });
+    transport.listSubagents.mockResolvedValueOnce(withDisabled(null));
+    transport.setSubagentOverride.mockResolvedValueOnce({ inventory: withDisabled(true) });
+    const { page } = setup(transport);
+    await page.activate();
+    container.querySelector(".subagents-row-toggle").click();
+    await flush();
+    expect(transport.setSubagentOverride).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "global",
+        candidateId: expect.any(String),
+        model: { op: "keep" },
+        thinking: { op: "keep" },
+        advertise: { op: "keep" },
+        disabled: { op: "set", value: true },
+        expectedRevision: "rev-1",
+      }),
+    );
+    expect(container.querySelector(".subagents-row-toggle").classList.contains("on")).toBe(true);
+    // Toggling back clears the override instead of writing false.
+    transport.setSubagentOverride.mockResolvedValueOnce({ inventory: withDisabled(null) });
+    container.querySelector(".subagents-row-toggle").click();
+    await flush();
+    expect(transport.setSubagentOverride.mock.calls[1][0].disabled).toEqual({ op: "clear" });
+  });
+
+  it("keeps the switch inert for names the host refuses to write", async () => {
+    const transport = makeTransport();
+    transport.listSubagents.mockResolvedValue(
+      inventory([candidate({ id: "c-no", runtimeName: "nope", writeQualified: false })]),
+    );
+    const { page } = setup(transport);
+    await page.activate();
+    const toggle = container.querySelector(".subagents-row-toggle");
+    expect(toggle.disabled).toBe(true);
+    toggle.click();
+    await flush();
+    expect(transport.setSubagentOverride).not.toHaveBeenCalled();
+  });
+
+  it("keeps the master scroll position across selection renders", async () => {
+    const transport = makeTransport();
+    transport.listSubagents.mockResolvedValue(
+      qualifiedRow([
+        { id: "c-1", runtimeName: "a1" },
+        { id: "c-2", runtimeName: "a2" },
+      ]),
+    );
+    transport.getSubagentDetail.mockResolvedValue({
+      candidateId: "c-1",
+      rawDefinition: "---\nname: a1\n---\nx",
+    });
+    const { page } = setup(transport);
+    await page.activate();
+    container.querySelector(".subagents-master").scrollTop = 120;
+    container.querySelector(".subagents-row").click();
+    await flush();
+    expect(container.querySelector(".subagents-master").scrollTop).toBe(120);
+  });
+});
+
 describe("subagents name-level override editing", () => {
   // Composer-native shape: bare ids plus a provider; the page composes
   // `${provider}/${id}` when writing the override.

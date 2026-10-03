@@ -137,7 +137,11 @@ const diagnosticKey = (message) => {
 
 // Selects speak strings; saved JSON booleans read back as their string
 // options and are converted back to booleans on save.
-const controlValue = (value) => (value === false ? "false" : value == null ? "" : String(value));
+const controlValue = (value) => {
+  if (value === false) return "false";
+  if (value == null) return "";
+  return String(value);
+};
 
 // Levels the host accepts as a thinking override. The catalog carries no
 // per-model capability data, so they are all offered and the hint says so.
@@ -263,6 +267,9 @@ export function setupSubagentsTab({
 
   function render() {
     closeModelMenu();
+    // Rebuilding the DOM would otherwise snap the master list back to the top
+    // on every selection render; carry the scroll offset across.
+    const previousScroll = container.querySelector(".subagents-master")?.scrollTop ?? 0;
     container.replaceChildren();
     const frame = text("div", "subagents-view settings-section", "");
     const scopeTabs = text("div", "subagents-scopes extensions-page-tabs", "");
@@ -369,6 +376,7 @@ export function setupSubagentsTab({
         );
       }
       const appendRow = (entry) => {
+        const wrap = text("div", "subagents-row-wrap", "");
         const row = text("button", "subagents-row pkg-manager-sidebar-row", "");
         row.type = "button";
         row.dataset.candidateId = entry.id;
@@ -393,7 +401,28 @@ export function setupSubagentsTab({
         row.addEventListener("click", () => {
           void select(entry);
         });
-        master.append(row);
+        // One-click 停用: writes the name-level disabled override immediately,
+        // mirroring the MCP/Skill row switches. Inert for names the host
+        // refuses to write.
+        const disabledOn = entry.savedOverride?.disabled === true;
+        const toggle = text(
+          "button",
+          `settings-toggle subagents-row-toggle${disabledOn ? " on" : ""}`,
+          "",
+        );
+        toggle.type = "button";
+        toggle.setAttribute(
+          "aria-label",
+          `${entry.runtimeName}: ${label("settings.subagents.detail.disabled")}`,
+        );
+        toggle.setAttribute("aria-pressed", String(disabledOn));
+        const rowEditable = Boolean(entry.writeQualified && entry.nativeOverrideSupported);
+        toggle.disabled = !rowEditable;
+        toggle.addEventListener("click", () => {
+          void writeDisabled(entry, !disabledOn);
+        });
+        wrap.append(row, toggle);
+        master.append(wrap);
       };
       const appendGroup = (caption, members) => {
         if (!members.length) return;
@@ -550,12 +579,12 @@ export function setupSubagentsTab({
         // The write target is the active scope's settings file, never the
         // definition file the row points at.
         const layerPath = inventory.workspaceRoot || inventory.projectRoot;
-        const layerScope =
-          active === "project"
-            ? layerPath
-              ? label("settings.subagents.detail.writeLayerProject").replace("{root}", layerPath)
-              : label("settings.subagents.detail.writeLayerProjectUnknown")
-            : label("settings.subagents.detail.writeLayerGlobal");
+        let layerScope = label("settings.subagents.detail.writeLayerGlobal");
+        if (active === "project") {
+          layerScope = layerPath
+            ? label("settings.subagents.detail.writeLayerProject").replace("{root}", layerPath)
+            : label("settings.subagents.detail.writeLayerProjectUnknown");
+        }
         detail.append(
           text(
             "p",
@@ -578,14 +607,16 @@ export function setupSubagentsTab({
           if (field === "model" && models) {
             const dropdown = text("div", "model-dropdown subagents-model-dropdown", "");
             const row = text("div", "subagents-model-row", "");
+            let buttonCaption = label("settings.subagents.detail.noLayerOverride");
+            if (current) {
+              buttonCaption = models.some((model) => modelOverrideId(model) === current)
+                ? current
+                : keepCurrent(current);
+            }
             const button = text(
               "button",
               "model-dropdown-btn subagents-override-input",
-              current
-                ? models.some((model) => modelOverrideId(model) === current)
-                  ? current
-                  : keepCurrent(current)
-                : label("settings.subagents.detail.noLayerOverride"),
+              buttonCaption,
             );
             button.type = "button";
             button.setAttribute("aria-label", label("settings.subagents.detail.model"));
@@ -728,8 +759,44 @@ export function setupSubagentsTab({
       frame.append(diagnostics);
     }
     container.append(frame);
+    const masterNode = frame.querySelector(".subagents-master");
+    if (masterNode) masterNode.scrollTop = previousScroll;
   }
 
+  // Row-switch write path: toggling disabled never touches the detail form's
+  // drafts; the other three fields are explicit keeps.
+  async function writeDisabled(entry, nextDisabled) {
+    if (saving) return;
+    if (!entry.writeQualified || !entry.nativeOverrideSupported) return;
+    saving = true;
+    render();
+    const request = token;
+    try {
+      const payload = {
+        scope: active,
+        candidateId: entry.id,
+        runtimeName: entry.runtimeName,
+        expectedRevision: inventory.settingsRevisions[active],
+        model: { op: "keep" },
+        thinking: { op: "keep" },
+        advertise: { op: "keep" },
+        disabled: nextDisabled ? { op: "set", value: true } : { op: "clear" },
+      };
+      if (active === "project") Object.assign(payload, identity());
+      const result = await transport.setSubagentOverride(payload);
+      if (request !== token || !visible) return;
+      inventory = result.inventory;
+      notice = label("settings.subagents.detail.saved");
+    } catch (failure) {
+      if (request !== token || !visible) return;
+      notice = CONFLICT_CODES.has(failure.code)
+        ? label("settings.subagents.state.conflict")
+        : String(failure.message || failure);
+    } finally {
+      saving = false;
+      if (visible) render();
+    }
+  }
   async function saveOverride(entry) {
     // A pending save blocks a second one: double-clicking must not write twice.
     if (saving) return;
@@ -751,21 +818,18 @@ export function setupSubagentsTab({
       if (changes[field] === undefined) return { op: "keep" };
       if (changes[field] === "") return { op: "clear" };
       // Boolean selects speak strings; the host accepts JSON booleans only.
-      const value =
-        field === "advertise" || field === "disabled"
-          ? changes[field] === "true"
-          : field === "thinking" && changes[field] === "false"
-            ? false
-            : changes[field];
+      if (field === "advertise" || field === "disabled") {
+        return { op: "set", value: changes[field] === "true" };
+      }
+      const value = field === "thinking" && changes[field] === "false" ? false : changes[field];
       return { op: "set", value };
     };
     saving = true;
     render();
     const request = token;
     try {
-      const result = await transport.setSubagentOverride({
+      const payload = {
         scope: active,
-        ...(active === "project" ? identity() : {}),
         candidateId: entry.id,
         runtimeName: entry.runtimeName,
         expectedRevision: inventory.settingsRevisions[active],
@@ -773,7 +837,9 @@ export function setupSubagentsTab({
         thinking: action("thinking"),
         advertise: action("advertise"),
         disabled: action("disabled"),
-      });
+      };
+      if (active === "project") Object.assign(payload, identity());
+      const result = await transport.setSubagentOverride(payload);
       if (request !== token || !visible) return;
       drafts.delete(draftKey(entry.id));
       inventory = result.inventory;
@@ -800,14 +866,15 @@ export function setupSubagentsTab({
     }
     const request = token;
     try {
-      const result = await transport.createSubagent({
+      const payload = {
         scope: active,
-        ...(active === "project" ? identity() : {}),
         ...fields,
         expectedInventoryRevision: inventory.inventoryRevision,
         expectedRevision: inventory.settingsRevisions[active],
         confirmShadowedIds: [],
-      });
+      };
+      if (active === "project") Object.assign(payload, identity());
+      const result = await transport.createSubagent(payload);
       if (request !== token || !visible) return;
       drafts.delete(draftKey("new"));
       inventory = result.inventory;
