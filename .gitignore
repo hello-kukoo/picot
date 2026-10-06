@@ -1,5 +1,6 @@
 node_modules/
 coverage/
+.vitest/
 .npm-cache/
 .worktrees/
 # npm lock file (this project uses bun exclusively; see AGENTS.md)

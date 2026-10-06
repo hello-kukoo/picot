@@ -220,10 +220,38 @@ Cross-subdir import conventions:
 
 ## Bumping the embedded pi version
 
-1. Edit `scripts/pi-version.json` → `version`.
-2. `bun run fetch:pi` (re-downloads the platform tarball, replaces `src-tauri/resources/pi/`).
-3. Smoke test: `./src-tauri/resources/pi/pi --version` and `bun run dev`.
-4. Commit `scripts/pi-version.json`. Do **not** commit `src-tauri/resources/pi/`; it is gitignored.
+1. Edit `scripts/pi-version.json`: `version` **and** the per-platform `sha256`
+   pins. Take them from that release's official `SHA256SUMS` asset — `fetch:pi`
+   verifies every pinned asset and aborts on mismatch (an unpinned asset only
+   warns, so new platform assets must be pinned in the same change).
+2. Keep the npm SDK pin in lockstep: set the `package.json` devDependency
+   `@earendil-works/pi-coding-agent` to the same version, then `bun install`.
+   Drift would silently disable the real-runtime OAuth seam asserts
+   (`extensions/oauth-login-smoke.test.ts`); `scripts/pi-version-lock.test.js`
+   fails the suite instead. `tsconfig.json` already maps this package's types to
+   `src-tauri/resources/pi/dist/index.d.ts`, so type checking follows the
+   embedded version automatically.
+3. `bun run fetch:pi` (downloads, verifies sha256, re-extracts
+   `src-tauri/resources/pi/`).
+4. `./src-tauri/resources/pi/pi --version`, then regenerate the RPC contract
+   fixture: `bun run smoke:pi-rpc --update`. **Review the fixture diff before
+   keeping it** — RPC contract drift is the real risk surface of an upgrade, and
+   `scripts/smoke-pi-rpc.test.js` only enforces that a fixture exists for the pin.
+5. Verify the extension runtime end to end (a fixture plus unit tests do not
+   prove the bridge still loads):
+
+   ```bash
+   ./src-tauri/resources/pi/pi --mode rpc --no-session -ne \
+     --extension extensions/dist/picot-bridge.mjs
+   ```
+
+   then send a read-only `/picot-config` prompt (e.g. `get_default_thinking_level`)
+   and confirm an `ok: true` notify payload. `-ne` keeps this machine's global
+   user extensions out of the way; they can collide with bridge tool names.
+6. Gate: `bun run test`, `bun run check`, `bun run check:rust`, then smoke-test
+   `bun run dev`. Commit `scripts/pi-version.json`, `package.json`, `bun.lock`,
+   `tests/fixtures/pi-rpc/<version>/` and the upgrade impact record. Do **not**
+   commit `src-tauri/resources/pi/`; it is gitignored.
 
 ## Embedded pi: how it ends up inside the .app
 
