@@ -31,6 +31,23 @@ export function setupSettingsToggles({ configGateway, onError } = {}) {
       },
     },
     {
+      id: "toggle-codemode",
+      key: "codemode",
+      defaultValue: false,
+      persist: "config",
+      load: async () => {
+        if (!configGateway) return undefined;
+        const response = await configGateway.call("get_default_codemode", {});
+        if (!response?.ok) throw new Error(response?.error || "Failed to load code mode");
+        return response.data?.enabled;
+      },
+      save: async (enabled) => {
+        if (!configGateway) return;
+        const response = await configGateway.call("set_default_codemode", { enabled });
+        if (!response?.ok) throw new Error(response?.error || "Failed to save code mode");
+      },
+    },
+    {
       id: "toggle-show-thinking",
       key: "show-thinking",
       defaultValue: true,

@@ -658,6 +658,15 @@
     "agent": "エージェント",
     "updates": "アップデート",
     "autoCompaction": "自動コンパクト",
+    "codemode": "コードモード",
+    "codemodeDescription": "新しいセッションでツール呼び出しをサンドボックスの JavaScript として実行します。",
+    "piPath": {
+      "title": "内蔵 Pi",
+      "enable": "内蔵 Pi を PATH に追加",
+      "description": "新しく開いたターミナルで pi を直接実行できます。新しいターミナルのみ有効です。",
+      "devOnly": "開発ビルドでは利用できません。",
+      "unsupportedShell": "既定のシェル（{shell}）は未対応です。zsh と bash のみ対応しています。"
+    },
     "thinkingEffort": "思考の深さ",
     "reasoningDepth": "推論の深さ",
     "showThinking": "思考を表示",

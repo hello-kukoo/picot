@@ -658,6 +658,15 @@
     "agent": "Agent",
     "updates": "Updates",
     "autoCompaction": "Auto-compaction",
+    "codemode": "Code mode",
+    "codemodeDescription": "Run tool calls as sandboxed JavaScript in new sessions.",
+    "piPath": {
+      "title": "Embedded Pi",
+      "enable": "Add embedded Pi to PATH",
+      "description": "New terminals can run `pi` directly. Takes effect in newly opened terminals only.",
+      "devOnly": "Unavailable in development builds.",
+      "unsupportedShell": "The default shell ({shell}) is not supported; only zsh and bash are."
+    },
     "thinkingEffort": "Thinking effort",
     "reasoningDepth": "Reasoning depth",
     "showThinking": "Show thinking",

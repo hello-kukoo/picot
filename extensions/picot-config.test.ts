@@ -198,6 +198,79 @@ describe("picot config default settings operations", () => {
     });
   });
 
+  it("reports the codemode default from the settings.json defaultTools tokens", async () => {
+    const { home, handlePicotConfig } = await loadConfigWithTempHome();
+    const settingsPath = join(home, ".pi", "agent", "settings.json");
+    mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+
+    await expect(handlePicotConfig("get_default_codemode", {}, {})).resolves.toEqual({
+      ok: true,
+      data: { enabled: false, source: "pi_default", path: settingsPath },
+    });
+
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({ defaultTools: ["+tool_search", "+codemode"] }),
+      "utf8",
+    );
+    await expect(handlePicotConfig("get_default_codemode", {}, {})).resolves.toEqual({
+      ok: true,
+      data: { enabled: true, source: "global", path: settingsPath },
+    });
+  });
+
+  it("enables codemode by merging the token without replacing other default tools", async () => {
+    const { home, handlePicotConfig } = await loadConfigWithTempHome();
+    const settingsPath = join(home, ".pi", "agent", "settings.json");
+    mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({ defaultTools: ["+tool_search"], unknown: 1 }),
+      "utf8",
+    );
+
+    await expect(handlePicotConfig("set_default_codemode", { enabled: true }, {})).resolves.toEqual(
+      { ok: true, data: { enabled: true, path: settingsPath } },
+    );
+
+    expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toEqual({
+      defaultTools: ["+tool_search", "+codemode"],
+      unknown: 1,
+    });
+  });
+
+  it("disables codemode by stripping every codemode token and dropping an empty key", async () => {
+    const { home, handlePicotConfig } = await loadConfigWithTempHome();
+    const settingsPath = join(home, ".pi", "agent", "settings.json");
+    mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({ defaultTools: ["+codemode", "codemode", "-codemode", "+tool_search"] }),
+      "utf8",
+    );
+
+    await expect(
+      handlePicotConfig("set_default_codemode", { enabled: false }, {}),
+    ).resolves.toEqual({ ok: true, data: { enabled: false, path: settingsPath } });
+    expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toEqual({
+      defaultTools: ["+tool_search"],
+    });
+
+    // Turning it off with no other default tools must remove the key entirely
+    // rather than leave an empty array behind.
+    writeFileSync(settingsPath, JSON.stringify({ defaultTools: ["+codemode"] }), "utf8");
+    await handlePicotConfig("set_default_codemode", { enabled: false }, {});
+    expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toEqual({});
+  });
+
+  it("rejects a non-boolean codemode value", async () => {
+    const { handlePicotConfig } = await loadConfigWithTempHome();
+
+    await expect(
+      handlePicotConfig("set_default_codemode", { enabled: "yes" }, {}),
+    ).resolves.toEqual({ ok: false, error: "enabled must be a boolean" });
+  });
+
   it("updates scoped models atomically while preserving unrelated settings", async () => {
     const { home, handlePicotConfig } = await loadConfigWithTempHome();
     const settingsPath = join(home, ".pi", "agent", "settings.json");

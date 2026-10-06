@@ -50,6 +50,15 @@ export class HostControlGateway {
     // Only packages with an actual update are reported (source/scope/available).
     return Array.isArray(frame?.updates) ? frame.updates : [];
   }
+  // Settings → General: the embedded `pi` on the user's PATH. The host owns the
+  // rc marker block / registry write; this only reads state and requests a flip.
+  async piPathStatus() {
+    return this.#request("pi_path_status");
+  }
+
+  async piPathConfigure(enabled) {
+    return this.#request("pi_path_configure", { enabled });
+  }
 
   async installPiPackage(source, { local = false } = {}) {
     await this.#request("install_pi_package", { source, local });

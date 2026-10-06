@@ -53,6 +53,7 @@ import {
   mutateSkillEnabled,
   type SkillScope,
   type SkillTarget,
+  withSettingsLock,
 } from "./skill-inventory";
 import {
   assertSshRemoteSettingsValid,
@@ -848,6 +849,42 @@ function setDefaultAutoCompaction(enabled: unknown, scope: unknown, ctx: ConfigC
   return { enabled, scope: target.scope, path: target.path };
 }
 
+// pi 0.99+ enables codemode through the `defaultTools` setting with `+name`
+// merge tokens (`docs/cli.md` "Enable codemode"). The toggle manages the global
+// default only, merge-style: it never replaces the rest of the list.
+const CODEMODE_TOKENS = new Set(["codemode", "+codemode", "-codemode"]);
+
+function getDefaultCodemode() {
+  const settings = readSettingsObject(AGENT_CONFIG_PATH);
+  const list = settings.defaultTools;
+  if (!Array.isArray(list)) {
+    return { enabled: false, source: "pi_default", path: AGENT_CONFIG_PATH };
+  }
+  const tokens = list.filter((token): token is string => typeof token === "string");
+  return {
+    enabled: tokens.includes("+codemode") || tokens.includes("codemode"),
+    source: "global",
+    path: AGENT_CONFIG_PATH,
+  };
+}
+
+async function setDefaultCodemode(enabled: unknown) {
+  if (typeof enabled !== "boolean") throw new Error("enabled must be a boolean");
+  // Same lock as the skills page: another window or Pi process may hold the
+  // settings lock, and a bare read-modify-write would drop its concurrent edit.
+  await withSettingsLock(AGENT_CONFIG_PATH, () => {
+    const settings = readSettingsObject(AGENT_CONFIG_PATH);
+    const current = Array.isArray(settings.defaultTools)
+      ? settings.defaultTools.filter((token): token is string => typeof token === "string")
+      : [];
+    const withoutCodemode = current.filter((token) => !CODEMODE_TOKENS.has(token));
+    const next = enabled ? [...withoutCodemode, "+codemode"] : withoutCodemode;
+    if (next.length > 0) settings.defaultTools = next;
+    else delete settings.defaultTools;
+    writeSettingsObject(AGENT_CONFIG_PATH, settings);
+  });
+  return { enabled, path: AGENT_CONFIG_PATH };
+}
 function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -1337,6 +1374,11 @@ export async function handlePicotConfig(
 
       case "set_default_auto_compaction":
         return { ok: true, data: setDefaultAutoCompaction(params.enabled, params.scope, ctx) };
+      case "get_default_codemode":
+        return { ok: true, data: getDefaultCodemode() };
+
+      case "set_default_codemode":
+        return { ok: true, data: await setDefaultCodemode(params.enabled) };
 
       // Remote workspace binding (Settings → Remote Workspace): which host this
       // ONE project runs on, so it stays in the project's own settings.json.

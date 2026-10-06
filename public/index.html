@@ -1779,6 +1779,15 @@
                   id="toggle-auto-compact"
                 ></button>
               </div>
+              <div class="settings-row" id="setting-codemode">
+                <span class="settings-label settings-label-stack">
+                  <span class="settings-label-main" data-i18n="settings.codemode">Code mode</span>
+                  <span class="settings-label-sub" data-i18n="settings.codemodeDescription"
+                    >Run tool calls as sandboxed JavaScript in new sessions.</span
+                  >
+                </span>
+                <button class="settings-toggle" id="toggle-codemode"></button>
+              </div>
               <div class="settings-row" id="setting-thinking">
                 <span class="settings-label settings-label-stack">
                   <span
@@ -1906,6 +1915,20 @@
                   aria-label="Task completion notifications"
                   data-i18n-aria-label="settings.taskNotifications"
                 ></button>
+              </div>
+            </div>
+            <div class="settings-section" id="setting-pi-path-section">
+              <div class="settings-section-title" data-i18n="settings.piPath.title">
+                Embedded Pi
+              </div>
+              <div class="settings-row" id="setting-pi-path">
+                <span class="settings-label settings-label-stack">
+                  <span class="settings-label-main" data-i18n="settings.piPath.enable"
+                    >Add embedded Pi to PATH</span
+                  >
+                  <span class="settings-label-sub" id="pi-path-note"></span>
+                </span>
+                <button class="settings-toggle" id="toggle-pi-path"></button>
               </div>
             </div>
             <div class="settings-section" id="setting-updater-section">

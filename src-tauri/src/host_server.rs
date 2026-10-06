@@ -1904,6 +1904,28 @@ fn dispatch_preference_operation(
     }
 }
 
+/// Host operations that reach outside Picot's own state — writing the user's
+/// shell rc or the HKCU Path value — are desktop-only: a remote browser client
+/// must not be able to edit the machine it is merely viewing.
+fn ensure_desktop_client(
+    state: &HostState,
+    client_id: &str,
+    operation: &str,
+) -> Result<(), (&'static str, String)> {
+    let kind = state
+        .router
+        .lock()
+        .map_err(|_| ("host_operation_failed", "Host router unavailable".into()))?
+        .client_kind(client_id);
+    if kind != Some(ClientKind::Desktop) {
+        return Err((
+            "host_operation_forbidden",
+            format!("{operation} is available to desktop clients only"),
+        ));
+    }
+    Ok(())
+}
+
 async fn dispatch_host_operation(
     state: &HostState,
     client_id: &str,
@@ -1914,6 +1936,114 @@ async fn dispatch_host_operation(
     match operation {
         "get_preference" | "set_preference" | "remove_preference" => {
             dispatch_preference_operation(state, request_id, operation, frame)
+        }
+        "pi_path_status" => {
+            ensure_desktop_client(state, client_id, "pi_path_status")?;
+            #[cfg(target_os = "windows")]
+            let (shell_supported, shell) = (true, None::<String>);
+            #[cfg(not(target_os = "windows"))]
+            let shell = std::env::var("SHELL").unwrap_or_default();
+            #[cfg(not(target_os = "windows"))]
+            let shell_supported = crate::pi_path::rc_filename_for_shell(&shell).is_some();
+            let enabled = state
+                .metadata
+                .as_ref()
+                .ok_or((
+                    "host_operation_failed",
+                    "Preference store is not available".into(),
+                ))?
+                .lock()
+                .map_err(|_| {
+                    (
+                        "host_operation_failed",
+                        "Preference store is poisoned".into(),
+                    )
+                })?
+                .preference_get(crate::pi_path::PREF_KEY)
+                .ok()
+                .flatten()
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            Ok(json!({
+                "type": "host_response",
+                "requestId": request_id,
+                "operation": "pi_path_status",
+                "dev": cfg!(debug_assertions),
+                "shellSupported": shell_supported,
+                "shell": shell,
+                "enabled": enabled,
+            }))
+        }
+        "pi_path_configure" => {
+            ensure_desktop_client(state, client_id, "pi_path_configure")?;
+            // The dev binary lives in target/debug; putting that on the user's
+            // PATH would outlive the build, so the toggle is release-only.
+            if cfg!(debug_assertions) {
+                return Err((
+                    "pi_path_release_only",
+                    "The embedded-pi PATH toggle is release-only".into(),
+                ));
+            }
+            let enabled = frame
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .ok_or(("invalid_pi_path", "enabled is required".into()))?;
+            let pi_binary = state
+                .pi_launch
+                .bundled_pi_path()
+                .map_err(|message| ("pi_path_failed", message))?;
+            let pi_dir = pi_binary
+                .parent()
+                .ok_or((
+                    "pi_path_failed",
+                    "embedded pi has no parent directory".into(),
+                ))?
+                .to_path_buf();
+            let message = if enabled {
+                #[cfg(target_os = "windows")]
+                let outcome = crate::pi_path::apply_windows(&pi_dir.to_string_lossy());
+                #[cfg(not(target_os = "windows"))]
+                let outcome = {
+                    let shell = std::env::var("SHELL").unwrap_or_default();
+                    let home = dirs::home_dir()
+                        .ok_or(("pi_path_failed", "cannot resolve the home directory".into()))?;
+                    crate::pi_path::apply_posix(&home, &shell, &pi_dir.to_string_lossy())
+                };
+                outcome.map_err(|message| ("pi_path_failed", message))?
+            } else {
+                #[cfg(target_os = "windows")]
+                let outcome = crate::pi_path::remove_windows(&pi_dir.to_string_lossy());
+                #[cfg(not(target_os = "windows"))]
+                let outcome = {
+                    let shell = std::env::var("SHELL").unwrap_or_default();
+                    let home = dirs::home_dir()
+                        .ok_or(("pi_path_failed", "cannot resolve the home directory".into()))?;
+                    crate::pi_path::remove_posix(&home, &shell)
+                };
+                outcome.map_err(|message| ("pi_path_failed", message))?
+            };
+            state
+                .metadata
+                .as_ref()
+                .ok_or((
+                    "host_operation_failed",
+                    "Preference store is not available".into(),
+                ))?
+                .lock()
+                .map_err(|_| {
+                    (
+                        "host_operation_failed",
+                        "Preference store is poisoned".into(),
+                    )
+                })?
+                .preference_set(crate::pi_path::PREF_KEY, &Value::Bool(enabled))
+                .map_err(|message| ("pi_path_failed", message))?;
+            Ok(json!({
+                "type": "host_response",
+                "requestId": request_id,
+                "operation": "pi_path_configure",
+                "message": message,
+            }))
         }
         "list_pi_packages" => {
             let resolver = state.pi_launch.clone();

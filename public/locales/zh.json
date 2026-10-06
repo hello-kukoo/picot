@@ -658,6 +658,15 @@
     "agent": "智能体",
     "updates": "更新",
     "autoCompaction": "自动压缩",
+    "codemode": "代码模式",
+    "codemodeDescription": "新会话中通过沙箱脚本调用工具。",
+    "piPath": {
+      "title": "内置 Pi",
+      "enable": "将内置 Pi 加入 PATH",
+      "description": "新开的终端可直接运行 pi。仅对新终端生效。",
+      "devOnly": "开发构建下不可用。",
+      "unsupportedShell": "默认 shell（{shell}）不受支持，仅支持 zsh 与 bash。"
+    },
     "thinkingEffort": "思考深度",
     "reasoningDepth": "推理深度",
     "showThinking": "显示思考",

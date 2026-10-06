@@ -16,6 +16,7 @@ mod model_health;
 mod native_pi_manager;
 mod package_updates;
 mod pi_launch;
+mod pi_path;
 mod pi_rpc_bridge;
 mod pi_tls;
 mod remote_auth;
@@ -896,6 +897,42 @@ fn setup_native_runtime(app: &AppHandle, static_dir: PathBuf) -> Result<(), Stri
         .map_err(|error| format!("Cannot resolve Picot app data directory: {error}"))?
         .join("picot.sqlite3");
     let metadata = Arc::new(Mutex::new(MetadataStore::open(&metadata_path)?));
+    // PATH-toggle self-heal: when the preference is on, re-verify the managed
+    // marker after an upgrade or an app move and refresh a stale path. Advisory
+    // and release-only: a failure logs and never blocks startup.
+    {
+        let heal_metadata: Arc<Mutex<MetadataStore>> = Arc::clone(&metadata);
+        let heal_static_dir = static_dir.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let enabled = heal_metadata
+                .lock()
+                .ok()
+                .and_then(|store| store.preference_get(pi_path::PREF_KEY).ok().flatten())
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            if !enabled || cfg!(debug_assertions) {
+                return;
+            }
+            match pi_path::bundled_pi_dir(&heal_static_dir) {
+                Ok(pi_dir) => {
+                    #[cfg(target_os = "windows")]
+                    let outcome = pi_path::apply_windows(&pi_dir.to_string_lossy());
+                    #[cfg(not(target_os = "windows"))]
+                    let outcome = std::env::var("SHELL")
+                        .ok()
+                        .and_then(|shell| dirs::home_dir().map(|home| (home, shell)))
+                        .map(|(home, shell)| {
+                            pi_path::apply_posix(&home, &shell, &pi_dir.to_string_lossy())
+                        })
+                        .unwrap_or_else(|| Err("SHELL or home directory unavailable".into()));
+                    if let Err(message) = outcome {
+                        log::warn!("pi path self-heal skipped: {message}");
+                    }
+                }
+                Err(message) => log::warn!("pi path self-heal skipped: {message}"),
+            }
+        });
+    }
     let workspace_id = metadata
         .lock()
         .map_err(|_| "Picot metadata store is unavailable".to_string())?

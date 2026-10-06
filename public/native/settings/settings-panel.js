@@ -10,6 +10,7 @@ import { setupModelsPage } from "./models-page.js";
 import { setupPackageBrowse } from "./package-browse.js";
 import { setupPackageManager } from "./package-manager.js";
 import { setupPackageSkillsTab } from "./package-skills-tab.js";
+import { setupPiPathToggle } from "./pi-path-toggle.js";
 import { setupRemoteAccessPanel } from "./remote-access.js";
 import { setupSettingsConfig } from "./settings-config.js";
 import { setupSettingsToggles } from "./settings-toggles.js";
@@ -169,6 +170,11 @@ export function setupSettingsPanel({
   };
   setupLanguageSelector();
   setupSettingsToggles({ configGateway, onError });
+  const piPathToggle = document.getElementById("toggle-pi-path");
+  const piPathNote = document.getElementById("pi-path-note");
+  if (piPathToggle && piPathNote) {
+    setupPiPathToggle({ control, toggle: piPathToggle, note: piPathNote });
+  }
   // Appearance owns the theme grid's page placement and every display
   // preference; a missing preference gateway (tests, remote setups) leaves
   // the page functional in cookie-only mode.

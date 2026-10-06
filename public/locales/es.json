@@ -658,6 +658,15 @@
     "agent": "Agente",
     "updates": "Actualizaciones",
     "autoCompaction": "Compactación automática",
+    "codemode": "Modo código",
+    "codemodeDescription": "Ejecuta llamadas de herramientas como JavaScript en sandbox en nuevas sesiones.",
+    "piPath": {
+      "title": "Pi integrado",
+      "enable": "Añadir Pi integrado al PATH",
+      "description": "Las terminales nuevas pueden ejecutar `pi` directamente. Solo surte efecto en terminales recién abiertas.",
+      "devOnly": "No disponible en compilaciones de desarrollo.",
+      "unsupportedShell": "El shell predeterminado ({shell}) no es compatible; solo zsh y bash."
+    },
     "thinkingEffort": "Esfuerzo de razonamiento",
     "reasoningDepth": "Profundidad de razonamiento",
     "showThinking": "Mostrar razonamiento",
