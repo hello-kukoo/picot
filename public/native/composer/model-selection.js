@@ -16,6 +16,28 @@ export function isSelectedModel(model, selection) {
  * order; ids that no longer resolve to a visible model are dropped so hidden
  * or unavailable stars never render.
  */
+/** Keep only models the user has explicitly enabled in the Picot catalog.
+ *
+ * Visibility is opt-in. A catalog that cannot be read must not silently fall
+ * back to "everything available" — that would undo the user's curation exactly
+ * when the bridge is least trustworthy. Fail closed instead; the next
+ * successful refresh repopulates the picker.
+ */
+export function filterModelsByCatalogVisibility(models, catalog) {
+  if (!Array.isArray(models)) return [];
+  if (!catalog?.ok || !Array.isArray(catalog.data?.providers)) return [];
+
+  const visibleKeys = new Set();
+  for (const provider of catalog.data.providers) {
+    for (const model of provider.models ?? []) {
+      if (model.available && model.visible === true) {
+        visibleKeys.add(`${model.provider || provider.provider}/${model.id}`);
+      }
+    }
+  }
+  return models.filter((model) => visibleKeys.has(`${model.provider}/${model.id}`));
+}
+
 export function splitModelsByScope(models, scopedModelIds) {
   if (!Array.isArray(models)) return { scoped: [], remaining: [] };
   const byId = new Map(models.map((model) => [`${model.provider}/${model.id}`, model]));

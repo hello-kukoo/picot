@@ -926,6 +926,51 @@ fn pi_extension_npm_bin_dir(home: &Path) -> PathBuf {
         .join(".bin")
 }
 
+/// Resolve Pi's agent root (`~/.pi/agent` by default) for host-owned config
+/// files such as `pi-fff.json`.
+///
+/// An explicit non-empty `PI_CODING_AGENT_DIR` takes precedence. Otherwise the
+/// user's home directory is used as the parent of `.pi/agent`. The directory
+/// is created before canonicalization so callers always receive a stable,
+/// existing absolute path.
+pub(crate) fn resolve_pi_agent_root() -> Result<PathBuf, String> {
+    let root = match std::env::var("PI_CODING_AGENT_DIR") {
+        Ok(path) if !path.trim().is_empty() => PathBuf::from(path),
+        _ => {
+            let home = std::env::var("HOME")
+                .ok()
+                .filter(|path| !path.is_empty())
+                .or_else(|| {
+                    std::env::var("USERPROFILE")
+                        .ok()
+                        .filter(|path| !path.is_empty())
+                })
+                .ok_or_else(|| {
+                    "cannot resolve Pi agent root: HOME and USERPROFILE are unset".to_string()
+                })?;
+            PathBuf::from(home).join(".pi").join("agent")
+        }
+    };
+
+    std::fs::create_dir_all(&root)
+        .map_err(|error| format!("failed to create Pi agent root {}: {error}", root.display()))?;
+    let canonicalized = root.canonicalize().map_err(|error| {
+        format!(
+            "failed to canonicalize Pi agent root {}: {error}",
+            root.display()
+        )
+    })?;
+    // `canonicalize` on Windows returns a `\\?\`-prefixed extended-length path.
+    // Bun (the bundled Pi runtime) cannot resolve modules from such a path, so
+    // every package extension fails with
+    // `Cannot find module '\\?\C:\...\node_modules\<pkg>\dist\index.js'`, which
+    // presents as a health-check timeout with no window. Strip the prefix so pi
+    // receives the plain `C:\...` form, matching macOS/Linux.
+    Ok(PathBuf::from(strip_verbatim_prefix(
+        &canonicalized.to_string_lossy(),
+    )))
+}
+
 fn strip_verbatim_prefix(path: &str) -> String {
     if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
         format!(r"\\{}", rest)

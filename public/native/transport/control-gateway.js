@@ -59,6 +59,78 @@ export class HostControlGateway {
   async piPathConfigure(enabled) {
     return this.#request("pi_path_configure", { enabled });
   }
+  // Per-package extension settings ride the same host plane: the Rust host owns
+  // the config file, the renderer only reads state and requests a change.
+  async getFffConfig() {
+    return this.#request("get_fff_config");
+  }
+
+  async setFffConfig(payload) {
+    return this.#request("set_fff_config", payload);
+  }
+  async getTodoConfig() {
+    return this.#request("get_todo_config");
+  }
+
+  async setTodoConfig(payload) {
+    return this.#request("set_todo_config", payload);
+  }
+
+  async getAskUserConfig() {
+    return this.#request("get_askuser_config");
+  }
+
+  async setAskUserConfig(payload) {
+    return this.#request("set_askuser_config", payload);
+  }
+
+  async getPonytailConfig() {
+    return this.#request("get_ponytail_config");
+  }
+
+  async setPonytailConfig(payload) {
+    return this.#request("set_ponytail_config", payload);
+  }
+
+  async getVccConfig() {
+    return this.#request("get_vcc_config");
+  }
+
+  async setVccConfig(payload) {
+    return this.#request("set_vcc_config", payload);
+  }
+
+  async getGoalConfig() {
+    return this.#request("get_goal_config");
+  }
+
+  async setGoalConfig(payload) {
+    return this.#request("set_goal_config", payload);
+  }
+
+  async getCavemanConfig() {
+    return this.#request("get_caveman_config");
+  }
+
+  async setCavemanConfig(payload) {
+    return this.#request("set_caveman_config", payload);
+  }
+
+  async getCacheOptimizerConfig() {
+    return this.#request("get_cache_optimizer_config");
+  }
+
+  async setCacheOptimizerConfig(payload) {
+    return this.#request("set_cache_optimizer_config", payload);
+  }
+
+  async getLensConfig(cwd = null) {
+    return this.#request("get_lens_config", { cwd });
+  }
+
+  async setLensConfig(payload) {
+    return this.#request("set_lens_config", payload);
+  }
 
   async installPiPackage(source, { local = false } = {}) {
     await this.#request("install_pi_package", { source, local });

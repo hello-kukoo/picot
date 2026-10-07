@@ -15,6 +15,7 @@
 
 import { t } from "../../i18n.js";
 import { getPackageInstallFailure } from "../../packages/install-status.js";
+import { renderExtensionSettings } from "./extension-settings/index.js";
 
 const RESOURCE_GROUPS = [
   ["extensions", "extensions"],
@@ -136,7 +137,7 @@ function statusRow(label, value) {
 // Wires the Settings → Extensions installed-package management UI.
 // `deps` = { control, data, notify, getWorkspaceId, getSessionId, onRestarted }.
 export function setupPackageManager(deps) {
-  const { control } = deps;
+  const { control, configGateway } = deps;
   const groupsEl = document.getElementById("pkg-manager-groups");
   if (!groupsEl) return { load() {} };
 
@@ -474,6 +475,10 @@ export function setupPackageManager(deps) {
       }
     }
     detailEl.appendChild(resourceList);
+
+    // Per-package settings (pi-fff and friends) mount last: they are the
+    // editable surface, below the read-only resource inventory.
+    renderExtensionSettings(detailEl, pkg, { control, configGateway });
   }
 
   function renderFooter() {

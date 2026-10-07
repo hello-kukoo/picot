@@ -1904,6 +1904,24 @@ fn dispatch_preference_operation(
     }
 }
 
+/// Wrap a host op payload as the response frame the control gateway resolves.
+/// The payload's own fields stay at the top level so renderers read them
+/// directly (the `ok` flag is added client-side by the gateway wrapper).
+fn host_payload_response(
+    request_id: &str,
+    operation: &str,
+    mut payload: Value,
+) -> Result<Value, (&'static str, String)> {
+    let object = payload.as_object_mut().ok_or((
+        "host_operation_failed",
+        format!("{operation} returned a non-object payload"),
+    ))?;
+    object.insert("type".into(), Value::from("host_response"));
+    object.insert("requestId".into(), Value::from(request_id));
+    object.insert("operation".into(), Value::from(operation));
+    Ok(payload)
+}
+
 /// Host operations that reach outside Picot's own state — writing the user's
 /// shell rc or the HKCU Path value — are desktop-only: a remote browser client
 /// must not be able to edit the machine it is merely viewing.
@@ -1936,6 +1954,13 @@ async fn dispatch_host_operation(
     match operation {
         "get_preference" | "set_preference" | "remove_preference" => {
             dispatch_preference_operation(state, request_id, operation, frame)
+        }
+        // Per-package extension settings: file-backed config in the user's Pi
+        // tree, so they are desktop-only (see extension_config::handles).
+        _ if crate::extension_config::handles(operation) => {
+            ensure_desktop_client(state, client_id, operation)?;
+            let payload = crate::extension_config::dispatch(operation, frame)?;
+            host_payload_response(request_id, operation, payload)
         }
         "pi_path_status" => {
             ensure_desktop_client(state, client_id, "pi_path_status")?;

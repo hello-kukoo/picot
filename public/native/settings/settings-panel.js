@@ -84,6 +84,7 @@ export function setupSettingsPanel({
   });
   const packageManager = setupPackageManager({
     control,
+    configGateway,
     data,
     notify,
     getWorkspaceId,
