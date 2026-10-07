@@ -1057,7 +1057,10 @@
       "restartRequired": "Saved. Start a new session or restart Pi for the change to take effect.",
       "confirmationHeading": "Confirm skill installation",
       "skill": "Skill",
-      "group": "Group"
+      "group": "Group",
+      "close": "閉じる",
+      "done": "完了",
+      "projectNeedsWorkspace": "現在のプロジェクトへのインストールにはワークスペースを開く必要があります。今はグローバルにのみインストールできます。"
     },
     "packageSkills": {
       "title": "Packages skills",

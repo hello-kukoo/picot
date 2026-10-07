@@ -1057,7 +1057,10 @@
       "complete": "Installed {added} entries; {skipped} already configured.",
       "restartRequired": "Saved. Start a new session or restart Pi for the change to take effect.",
       "skill": "Skill",
-      "group": "Group"
+      "group": "Group",
+      "close": "Close",
+      "done": "Done",
+      "projectNeedsWorkspace": "Installing into the current project needs an open workspace; the global scope works now."
     },
     "packageSkills": {
       "title": "Packages skills",

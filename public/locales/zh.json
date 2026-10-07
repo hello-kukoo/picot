@@ -1057,7 +1057,10 @@
       "complete": "已安装 {added} 项；{skipped} 项已配置。",
       "restartRequired": "已保存。新建会话或重启 Pi 后生效。",
       "skill": "技能",
-      "group": "分组"
+      "group": "分组",
+      "close": "收起",
+      "done": "完成",
+      "projectNeedsWorkspace": "安装到当前项目需要先打开工作区；现在可以安装到全局。"
     },
     "packageSkills": {
       "title": "包技能",

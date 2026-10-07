@@ -1,9 +1,15 @@
-// ABOUTME: Renders the opaque native local-skills installation flow in Settings.
-// ABOUTME: Selects, scans, confirms, and installs sourceId-bound skill candidates only.
+// ABOUTME: Embeddable inline installer controller for Settings > Skills > Custom.
+// ABOUTME: Scans, selects, confirms, and installs opaque sourceId-bound candidates for one fixed scope.
 
 import { onLocaleChange, t } from "../../i18n.js";
-import { createLoadingPlaceholder } from "../../ui/loading-placeholder.js";
 import { manageModalDialog } from "./skills-modal.js";
+
+/** Stable modal owner: this controller only ever releases the dialog it opened. */
+const MODAL_OWNER = "skills-install";
+/** The only installable targets. The inventory alias "user" is never written here. */
+const SCOPES = new Set(["global", "project"]);
+/** Phases where an in-flight operation forbids scope changes, close, or re-submit. */
+const BUSY_PHASES = new Set(["scanning", "confirming", "installing"]);
 
 function el(tag, props = {}, children = []) {
   const node = document.createElement(tag);
@@ -31,28 +37,66 @@ function collectCandidates(nodes) {
   );
 }
 
-/** @param {{container:HTMLElement, transport:{pickSkillSource:(workspaceId?:string|null)=>Promise<object|null>,scanSkillInstallSource:(sourceId:string)=>Promise<object>,installSkillLinks:(request:object)=>Promise<object>}, getWorkspaceId?:()=>string|null, isProjectTrusted:()=>boolean, showSuccess?:(message:string)=>void, showError?:(message:string)=>void}} opts */
+/**
+ * Embeddable inline install controller. The host opens it with a fixed scope;
+ * this controller owns only its own container and only its own modal dialog.
+ *
+ * @param {Object} opts
+ * @param {HTMLElement} opts.container - the inline install container (owned by this controller).
+ * @param {{pickSkillSource:()=>Promise<object|null>,scanSkillInstallSource:(sourceId:string)=>Promise<object>,installSkillLinks:(request:object)=>Promise<object>}} opts.transport
+ * @param {()=>boolean} [opts.isProjectTrusted] - project skills load only in a trusted workspace.
+ * @param {()=>boolean} [opts.hasWorkspace] - false at landing: the project target is refused there.
+ * @param {(message:string)=>void} [opts.showSuccess]
+ * @param {(message:string)=>void} [opts.showError]
+ * @param {(state:string)=>void} [opts.onStateChange] - fires on every phase change.
+ * @param {(event:{scope:string,result:object})=>void} [opts.onInstalled] - a successful install only.
+ * @param {()=>void} [opts.onClose] - the user closed the install area.
+ * @returns {{open:(scope:string, opts?:{trigger?:HTMLElement|null})=>boolean, close:()=>void, destroy:()=>void, isOpen:()=>boolean, isBusy:()=>boolean}}
+ */
 export function setupSkillsInstallTab({
   container,
   transport,
-  getWorkspaceId,
-  isProjectTrusted,
+  isProjectTrusted = () => true,
+  hasWorkspace = () => true,
   showSuccess,
   showError,
+  onStateChange,
+  onInstalled,
+  onClose,
 }) {
-  let activated = false;
   let phase = "idle";
+  /** Non-null only while the install area is open; the fixed install target. */
+  let openScope = null;
   let scan = null;
-  let scope = "global";
-  const selection = new Set();
+  let selection = new Set();
   let error = null;
-  /** Monotonic generation guard so a slow scan cannot overwrite a newer one. */
+  /** Monotonic generation guard: a slow response cannot overwrite a newer one,
+   * and close/destroy invalidate every in-flight response by bumping it. */
   let scanSeq = 0;
-  /** Frozen snapshot captured at confirmation time; install submits this. */
-  let pendingInstall = null;
+  let emittedState = null;
+  /** Control that opened the area; focus returns here on close. */
+  let triggerEl = null;
+  let destroyed = false;
   const unsubscribeLocale = onLocaleChange(() => render());
-  /** Stable resolver for the Review button after a render rebuilds the DOM. */
-  const reviewOpener = () => container.querySelector(".skills-install-review");
+  /** Stable resolver for the install area's own controls after a re-render. */
+  const focusRestoreTarget = () => triggerEl ?? container.querySelector(".skills-install-review");
+
+  function isOpen() {
+    return openScope !== null;
+  }
+
+  function isBusy() {
+    return BUSY_PHASES.has(phase);
+  }
+
+  /** Why this controller refuses a project install, or null when it is allowed. */
+  function projectBlocker() {
+    // Workspace absence is the stronger reason: without a workspace there is no
+    // project to trust yet, so the trust note alone would mislead.
+    if (!hasWorkspace()) return t("settings.installSkills.projectNeedsWorkspace");
+    if (!isProjectTrusted()) return t("settings.installSkills.projectUntrusted");
+    return null;
+  }
 
   function selectedItems() {
     if (!scan) return [];
@@ -79,6 +123,7 @@ export function setupSkillsInstallTab({
   }
 
   function toggleNode(node, checked) {
+    if (phase === "installing") return;
     const candidates = node.kind === "group" ? collectCandidates(node.children ?? []) : [node];
     for (const candidate of candidates) {
       if (checked) selection.add(candidate.id);
@@ -87,26 +132,76 @@ export function setupSkillsInstallTab({
     render();
   }
 
+  /** Release only our own dialog; other owners' dialogs stay untouched. */
+  function releaseModal() {
+    manageModalDialog(null, { owner: MODAL_OWNER });
+  }
+
+  function resetSession() {
+    openScope = null;
+    phase = "idle";
+    scan = null;
+    selection = new Set();
+    error = null;
+  }
+
+  /**
+   * Open the inline area for a fixed install target. The scope cannot change
+   * for the lifetime of the session; a second open() while open is refused.
+   * @returns {boolean} whether the area opened.
+   */
+  function open(scope, { trigger = null } = {}) {
+    if (destroyed || openScope !== null || !SCOPES.has(scope)) return false;
+    openScope = scope;
+    triggerEl = trigger ?? null;
+    scan = null;
+    selection = new Set();
+    error = null;
+    phase = "idle";
+    const blocker = scope === "project" ? projectBlocker() : null;
+    if (blocker) {
+      phase = "error";
+      error = blocker;
+      render();
+    } else {
+      // The entry button is the picker trigger: opening goes straight to the
+      // native folder picker, so the area never shows an idle "choose" step.
+      void chooseSource();
+    }
+    return true;
+  }
+
   async function chooseSource() {
+    if (destroyed || openScope === null || isBusy()) return;
+    const blocked = openScope === "project" ? projectBlocker() : null;
+    if (blocked) {
+      phase = "error";
+      error = blocked;
+      showError?.(blocked);
+      render();
+      return;
+    }
+    // Bumping the sequence is the stale guard for a re-pick; close/destroy bump
+    // it too, so their late responses are dropped the same way.
     const seq = ++scanSeq;
     phase = "scanning";
     error = null;
     render();
     try {
-      const picked = await transport.pickSkillSource(getWorkspaceId?.());
-      if (seq !== scanSeq) return; // superseded by a newer chooseSource
+      const picked = await transport.pickSkillSource();
+      if (destroyed || seq !== scanSeq) return;
       if (!picked?.sourceId) {
-        phase = "idle";
-        render();
+        // Cancelling the picker aborts the install session entirely.
+        close();
         return;
       }
-      scan = await transport.scanSkillInstallSource(picked.sourceId, getWorkspaceId?.());
-      if (seq !== scanSeq) return; // superseded while scanning
-      selection.clear();
-      for (const item of scan.defaultSelection ?? []) selection.add(item.id);
+      const next = await transport.scanSkillInstallSource(picked.sourceId);
+      if (destroyed || seq !== scanSeq) return;
+      scan = next;
+      selection = new Set((next.defaultSelection ?? []).map((item) => item.id));
       phase = "selecting";
     } catch (cause) {
-      if (seq !== scanSeq) return;
+      if (destroyed || seq !== scanSeq) return;
       phase = "error";
       error = cause instanceof Error ? cause.message : t("settings.installSkills.scanFailed");
       showError?.(error);
@@ -115,45 +210,81 @@ export function setupSkillsInstallTab({
   }
 
   function beginConfirmation() {
-    if (!scan || selection.size === 0) return;
+    if (destroyed || !scan || selection.size === 0 || phase === "installing") return;
     phase = "confirming";
     render();
   }
 
   function cancelConfirmation() {
+    if (phase !== "confirming") return;
     phase = "selecting";
-    pendingInstall = null;
     render();
   }
 
   async function install() {
+    // Re-entrancy guard: a second submit while installing is a no-op, and the
+    // installing phase renders no confirm control at all.
+    if (destroyed || phase === "installing" || openScope === null) return;
     if (!scan || selection.size === 0) return;
-    // Freeze the request snapshot from the confirmation dialog so that any
-    // later changes to scope/selection during the in-flight install cannot
-    // desync the UI from what is actually submitted.
-    pendingInstall = {
+    // Freeze the snapshot from the confirmation dialog so a later change cannot
+    // desync what is displayed from what is submitted.
+    const request = {
       sourceId: scan.sourceId,
-      scope,
+      scope: openScope,
       scanRevision: scan.scanRevision,
       selection: selectedItems(),
     };
-    const workspaceId = getWorkspaceId?.();
-    if (workspaceId) pendingInstall.workspaceId = workspaceId;
+    const seq = scanSeq;
+    const installScope = openScope;
     phase = "installing";
     error = null;
     render();
     try {
-      const result = await transport.installSkillLinks(pendingInstall);
+      const result = await transport.installSkillLinks(request);
+      if (destroyed || seq !== scanSeq || openScope === null) return;
       phase = "done";
       scan = { ...scan, result };
       showSuccess?.(t("settings.installSkills.restartRequired"));
+      onInstalled?.({ scope: installScope, result });
     } catch (cause) {
+      if (destroyed || seq !== scanSeq || openScope === null) return;
       phase = "error";
       error = cause instanceof Error ? cause.message : t("settings.installSkills.installFailed");
       showError?.(error);
     }
-    pendingInstall = null;
     render();
+  }
+
+  /** Close the area and reset to idle. Refused while an install is in flight:
+   * there is no cancel-install affordance. Late responses are discarded. */
+  function close() {
+    if (destroyed || openScope === null || phase === "installing") return;
+    releaseModal();
+    scanSeq += 1;
+    const returnFocus = triggerEl;
+    resetSession();
+    triggerEl = null;
+    // Re-announce the closed state even when the phase was already idle, so a
+    // listener that locks on state alone reliably unlocks here.
+    emittedState = null;
+    render();
+    returnFocus?.focus?.();
+    onClose?.();
+  }
+
+  /** Tear down for good: release our dialog, drop late responses, empty our
+   * container. Idempotent; does not touch other owners' dialogs. */
+  function destroy() {
+    if (destroyed) return;
+    destroyed = true;
+    releaseModal();
+    unsubscribeLocale?.();
+    scanSeq += 1;
+    const returnFocus = triggerEl;
+    resetSession();
+    triggerEl = null;
+    container.replaceChildren();
+    returnFocus?.focus?.();
   }
 
   function renderNode(node) {
@@ -181,75 +312,83 @@ export function setupSkillsInstallTab({
     ]);
   }
 
-  function renderScope() {
-    const projectTrusted = isProjectTrusted();
-    const locked = phase === "installing";
-    const tabs = el("div", {
-      class: "skills-scope-tabs",
-      role: "group",
-      aria: { label: t("settings.installSkills.title") },
-    });
-    for (const value of ["global", "project"]) {
-      const active = value === scope;
-      const disabled = locked || (value === "project" && !projectTrusted);
-      tabs.appendChild(
-        el(
-          "button",
-          {
-            type: "button",
-            class: `skills-scope-tab${active ? " active" : ""}`,
-            "aria-pressed": String(active),
-            dataset: { scope: value },
-            disabled: disabled ? true : undefined,
-            onClick: () => {
-              if (locked || value === scope) return;
-              scope = value;
-              render();
-            },
-          },
-          [t(`settings.installSkills.${value}`)],
-        ),
-      );
-    }
-    if (!projectTrusted) {
-      tabs.appendChild(
-        el("span", {
-          class: "skills-install-untrusted",
-          text: t("settings.installSkills.projectUntrusted"),
+  function renderConfirmation() {
+    const confirmId = "skills-install-confirm";
+    return el(
+      "div",
+      {
+        class: "skills-install-confirmation",
+        role: "alertdialog",
+        "aria-modal": "true",
+        "aria-labelledby": `${confirmId}-title`,
+        "aria-describedby": `${confirmId}-desc`,
+      },
+      [
+        el("h4", {
+          id: `${confirmId}-title`,
+          class: "skills-install-confirmation-title",
+          text: t("settings.installSkills.confirmationHeading"),
         }),
-      );
-    }
-    return tabs;
-  }
-
-  function render() {
-    const content = [
-      el("div", { class: "skills-header" }, [
-        el("div", {}, [
-          el("div", {
-            class: "settings-section-title",
-            text: t("settings.installSkills.title"),
+        el("p", {
+          id: `${confirmId}-desc`,
+          text: t("settings.installSkills.confirmation", {
+            count: selection.size,
+            scope: t(`settings.installSkills.${openScope}`),
           }),
-          el("p", {
-            class: "settings-help skills-intro",
-            text: t("settings.installSkills.description"),
-          }),
-        ]),
+        }),
         el("button", {
           type: "button",
-          class: "ui-button ui-button--sm ui-button--secondary skills-rescan skills-install-choose",
-          text: t("settings.installSkills.chooseFolder"),
-          disabled: phase === "scanning" || phase === "installing" ? "disabled" : undefined,
-          onClick: () => void chooseSource(),
+          class: "skills-install-confirm",
+          text: t("settings.installSkills.confirm"),
+          onClick: () => void install(),
+        }),
+        el("button", {
+          type: "button",
+          class: "skills-install-cancel",
+          text: t("settings.installSkills.cancel"),
+          onClick: cancelConfirmation,
+        }),
+      ],
+    );
+  }
+
+  function renderContent() {
+    const installing = phase === "installing";
+    const content = [
+      el("div", { class: "skills-install-header" }, [
+        el("div", { class: "skills-install-header-text" }, [
+          el("h3", { class: "settings-section-title", text: t("settings.installSkills.title") }),
+          el("p", { class: "skills-intro", text: t("settings.installSkills.description") }),
+        ]),
+        // Read-only target badge: the scope is fixed at open, never a control.
+        el("span", {
+          class: "skills-install-target",
+          text: t(`settings.installSkills.${openScope}`),
+        }),
+        el("button", {
+          type: "button",
+          class: "skills-install-close",
+          text: t("settings.installSkills.close"),
+          disabled: installing ? true : undefined,
+          onClick: close,
         }),
       ]),
     ];
+    // The re-pick affordance only exists once a scan landed (selecting) or
+    // failed (error): the initial pick is triggered by the entry button.
+    if (phase === "error" || phase === "selecting") {
+      content.push(
+        el("button", {
+          type: "button",
+          class: "skills-rescan skills-install-choose",
+          text: t("settings.installSkills.chooseFolder"),
+          onClick: () => void chooseSource(),
+        }),
+      );
+    }
     if (phase === "scanning")
       content.push(
-        createLoadingPlaceholder({
-          className: "skills-install-loading",
-          label: t("settings.installSkills.scanning"),
-        }),
+        el("div", { class: "skills-install-loading", text: t("settings.installSkills.scanning") }),
       );
     if (phase === "error")
       content.push(
@@ -258,14 +397,7 @@ export function setupSkillsInstallTab({
           text: error || t("settings.installSkills.scanFailed"),
         }),
       );
-    if (
-      scan &&
-      (phase === "selecting" ||
-        phase === "confirming" ||
-        phase === "installing" ||
-        phase === "done")
-    ) {
-      content.push(renderScope());
+    if (scan && phase !== "idle" && phase !== "scanning") {
       content.push(el("div", { class: "skills-install-tree" }, (scan.tree ?? []).map(renderNode)));
       if (phase === "done") {
         const result = scan.result ?? {};
@@ -278,86 +410,56 @@ export function setupSkillsInstallTab({
             }),
           }),
         );
-      } else if (phase === "confirming") {
-        const confirmId = "skills-install-confirm";
         content.push(
-          el(
-            "div",
-            {
-              class: "skills-install-confirmation",
-              role: "alertdialog",
-              "aria-modal": "true",
-              "aria-labelledby": `${confirmId}-title`,
-              "aria-describedby": `${confirmId}-desc`,
-            },
-            [
-              el("h4", {
-                id: `${confirmId}-title`,
-                class: "skills-install-confirmation-title",
-                text: t("settings.installSkills.confirmationHeading"),
-              }),
-              el("p", {
-                id: `${confirmId}-desc`,
-                text: t("settings.installSkills.confirmation", {
-                  count: selection.size,
-                  scope: t(`settings.installSkills.${scope}`),
-                }),
-              }),
-              el("button", {
-                type: "button",
-                class: "ui-button ui-button--sm ui-button--primary skills-install-confirm",
-                text: t("settings.installSkills.confirm"),
-                onClick: () => void install(),
-              }),
-              el("button", {
-                type: "button",
-                class: "ui-button ui-button--sm ui-button--secondary skills-install-cancel",
-                text: t("settings.installSkills.cancel"),
-                onClick: cancelConfirmation,
-              }),
-            ],
-          ),
+          el("button", {
+            type: "button",
+            class: "skills-install-done",
+            text: t("settings.installSkills.done"),
+            onClick: close,
+          }),
         );
+      } else if (phase === "confirming") {
+        content.push(renderConfirmation());
       } else {
         content.push(
           el("button", {
             type: "button",
-            class: "ui-button ui-button--sm ui-button--primary skills-install-review",
-            text:
-              phase === "installing"
-                ? t("settings.installSkills.installing")
-                : t("settings.installSkills.review"),
-            disabled: selection.size === 0 || phase === "installing" ? "disabled" : undefined,
+            class: "skills-install-review",
+            text: installing
+              ? t("settings.installSkills.installing")
+              : t("settings.installSkills.review"),
+            disabled: selection.size === 0 || installing ? "disabled" : undefined,
             onClick: beginConfirmation,
           }),
         );
       }
     }
-    container.replaceChildren(...content);
+    return content;
+  }
+
+  function render() {
+    if (destroyed) return;
+    if (openScope === null) {
+      container.replaceChildren();
+    } else {
+      container.replaceChildren(...renderContent());
+    }
     if (phase === "confirming") {
       manageModalDialog(container.querySelector(".skills-install-confirmation"), {
         initialFocus: container.querySelector(".skills-install-confirm"),
-        restoreFocusTo: reviewOpener,
+        restoreFocusTo: focusRestoreTarget,
         inertRoot: document.body,
-        owner: "skills-install",
+        owner: MODAL_OWNER,
         onCancel: cancelConfirmation,
       });
     } else {
-      manageModalDialog(null, { owner: "skills-install" });
+      releaseModal();
+    }
+    if (phase !== emittedState) {
+      emittedState = phase;
+      onStateChange?.(phase);
     }
   }
 
-  async function activate() {
-    if (activated) return;
-    activated = true;
-    render();
-  }
-
-  function destroy() {
-    unsubscribeLocale?.();
-    container.replaceChildren();
-  }
-
-  render();
-  return { activate, destroy };
+  return { open, close, destroy, isOpen, isBusy };
 }

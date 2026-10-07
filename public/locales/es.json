@@ -1057,7 +1057,10 @@
       "restartRequired": "Saved. Start a new session or restart Pi for the change to take effect.",
       "confirmationHeading": "Confirm skill installation",
       "skill": "Skill",
-      "group": "Group"
+      "group": "Group",
+      "close": "Cerrar",
+      "done": "Listo",
+      "projectNeedsWorkspace": "Instalar en el proyecto actual requiere un espacio de trabajo abierto; ahora solo funciona el ámbito global."
     },
     "packageSkills": {
       "title": "Packages skills",

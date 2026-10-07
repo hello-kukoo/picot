@@ -126,20 +126,28 @@ export function setupSettingsPanel({
     ? (message) => notify({ type: "error", title: t("settings.skills.saveFailed"), message })
     : (message) => onError?.(message);
 
+  const installContainer = document.getElementById("settings-install-skills");
   const discoveredTab = setupDiscoveredSkillsTab({
     container: document.getElementById("settings-skills"),
     rpcCommand: skillsRpc,
     showSuccess: showSkillsSuccess,
     showError: showSkillsError,
+    onInstallRequest: (scope, trigger) => {
+      if (installTab?.open(scope, { trigger })) syncSkillsInstallArea();
+    },
   });
   const installTab = control
     ? setupSkillsInstallTab({
-        container: document.getElementById("settings-install-skills"),
+        container: installContainer,
         transport: control,
-        getWorkspaceId,
+        // Project installs need an open workspace; the trust gate stays as it
+        // was (the page does not yet surface pi's trust state).
+        hasWorkspace: () => Boolean(getWorkspaceId?.()),
         isProjectTrusted: () => true,
         showSuccess: showSkillsSuccess,
         showError: showSkillsError,
+        onStateChange: () => syncSkillsInstallArea(),
+        onClose: () => syncSkillsInstallArea(),
       })
     : null;
   const remoteAccess = setupRemoteAccessPanel();
@@ -148,19 +156,31 @@ export function setupSettingsPanel({
     rpcCommand: skillsRpc,
   });
 
+  // The install area is not a tab target: the discovered tab's install entry
+  // reveals it below the skill list for the scope being displayed, and the
+  // discovered tab locks its own controls while the flow is open.
+  let skillsDiscoveredActive = true;
+  function syncSkillsInstallArea() {
+    const open = installTab?.isOpen?.() ?? false;
+    discoveredTab.setInstallLocked?.(open);
+    if (skillsDiscoveredActive && installContainer) {
+      installContainer.classList.toggle("hidden", !open);
+    }
+  }
+
   const skillsTabs = Array.from(document.querySelectorAll("[data-skills-page-tab]"));
   const skillsPanels = {
     discovered: document.getElementById("settings-skills"),
-    install: document.getElementById("settings-install-skills"),
     packages: document.getElementById("settings-package-skills"),
   };
   const skillsShell = setupSkillsTabShell({
     tabs: skillsTabs,
     panels: skillsPanels,
     activate: (name) => {
+      skillsDiscoveredActive = name === "discovered";
       if (name === "discovered") discoveredTab.activate?.();
-      else if (name === "install") installTab?.activate?.();
       else if (name === "packages") packageTab.activate?.();
+      syncSkillsInstallArea();
     },
   });
 
