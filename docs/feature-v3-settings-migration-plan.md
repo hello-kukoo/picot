@@ -44,7 +44,7 @@
 
 > 状态：**已完成实施**（2026-10-06）——影响记录 `docs/pi-1.0.4-upgrade-impact.md`，契约决策 `docs/adr/0004-embedded-pi-1.0.4-upgrade.md`。目标版本由计划初稿的 1.0.2 上调为 1.0.4（1.0.2→1.0.4 无 breaking changes；1.0.4 修复 `#10493` MCP OAuth native client 注册，为 Phase 6 所依赖）。
 
-**动机**：MCP 原生两层配置是 pi 1.0+ 硬依赖；pi-subagents 0.75.0 需 pi 1.0（Phase 4 spawn）；此后所有 Phase 单一版本基线，无双版本兼容成本。
+**动机**：MCP 原生两层配置是 pi 1.0+ 硬依赖；此后所有 Phase 单一版本基线，无双版本兼容成本。
 
 **步骤**（参照 picot-v3 `pi-upgrade-impact` 流程：评估与升级动作分离）：
 
@@ -95,7 +95,7 @@
 
 **基建核心（随 #1 一并移植）**：v3 的 per-package renderer map + 双通道路由（`{ configGateway, transport }`）+ host 侧 `fff_config.rs` 控制模式（`require_native_owner` + `host_config::write_json` + 每包独立 Rust 模块）。bridge 三项（#7/#8/#12）依赖模型目录（plan-mode/safety-guard 复用 advisor model-picker 机制）。
 
-1. **差异审计（第一个 commit）**：v3.3 `RoutedAction::Host` 的注册/门禁模式 vs v3 `operation_registry.rs`，输出 host op 挂载方式结论（后续 Phase 4/5/6 复用）
+1. **差异审计（第一个 commit）**：v3.3 `RoutedAction::Host` 的注册/门禁模式 vs v3 `operation_registry.rs`，输出 host op 挂载方式结论（后续 Phase 5/6 复用）
 2. 首页（advisor 或 fff）趟通通道：后端 op + `renderXxxSettings` 前端 + 包名映射 + 未安装降级态 + i18n ×4 + vitest
 3. 其余按上表批量：host 通道 8 项、bridge 通道 3 项（#7/#8/#12 保持 bridge，勿迁 host——v3 已拍板模型目录依赖项留 bridge）
 4. **未安装降级态一等公民**——公司扩展在部分环境缺失，页面必须可开、可读、不可写
@@ -116,7 +116,23 @@
 
 **验收**：解析器纯函数单测（mock 响应）+ 真实凭据手测 7 provider（Codex plan/GLM/Opencode Go/DeepSeek/MiniMax/Moonshot/Ollama Cloud 含 CN 站）+ Codex 重置幂等/重启清扫走查（v3 spec 留存的人工走查项，移植后同样执行）。
 
-## Phase 4：Subagents 设置页（M–L）
+## Phase 4：Subagents 设置页 —— 已取消（Dr. Lin 2026-10-07）
+
+> **决定**：不移植。本 phase 实施期间写下的代码已全部回退，工作树回到 Phase 3 的 HEAD（`d032f0b`）。
+>
+> **实施时发现的阻塞（供将来重新评估，勿重复踩坑）**：`subagents_settings.rs` 的 `authorize_scope` 依赖
+> 「该客户端当前绑定哪个工作区 + generation」，而 v3.3 的 `WindowOwnerRegistry`（748 行，实现与测试完整）
+> **生产代码从未实例化**——`default()` 的命中全在测试模块，且无任何生产调用 `create_owner` /
+> `begin_workspace_transition` / `commit_workspace_transition`；`HostState` 亦无 `owner_registry` 字段。
+> v3.3 既有的 owner-scoped 先例是句柄注册表（`SkillSourceRegistry`，其 `resolve` 本身也标着
+> `#[allow(dead_code)]`，同样未启用），而 subagents 的 op 由前端直接传 `workspaceId/workspaceGeneration`，
+> 没有句柄可校验。故忠实移植需先激活 owner registry（触及窗口生命周期与 capability 分发），
+> 或放弃 v3 明确建立的 `stale_generation` 保护。
+>
+> **当时已完成并验证过、随后回退的部分**：`project_trust.rs` 只读子集（`is_project_trusted`，2 测试；
+> 有意不移植写路径，避免 Picot 成为 pi `trust.json` 的第二个写入者）、`subagents_inventory.rs` verbatim
+> （2091 行 + 21 测试）、`subagents_settings.rs` 适配版（2341 行 + 22 测试）、`window_owner` 的
+> `OwnerWorkspaceSnapshot` 两态枚举、`percent-encoding` 依赖（inventory 的百分号解码安全检查所需）。
 
 **v3 提交链**：`d343d97`(盘点页+host 四 op) → `508f178`(名字级覆盖+四字段) → `c91e325`(双级子页签+覆盖编辑器+模型下拉) → `d057775`/`df6449c`(停用开关位置定稿：detail 名字行右对齐) → `a0f09bf`/`b22bd87`(scope 描述+分段圆角样式) → `233947e`/`d758079`(回归+i18n)。移植取终态，历史链仅作理解。
 
@@ -165,12 +181,12 @@
 
 ```text
 Phase 0（Pi 升级,全局前置）
-  └→ Phase 1（小开关）→ Phase 2（14 扩展页,趟通 host op）→ Phase 4（Subagents）→ Phase 6（MCP）
+  └→ Phase 1（小开关）→ Phase 2（13 扩展页,趟通 host op）→ Phase 6（MCP）
   └→ Phase 3（quota,独立,可插在 2 后任意点）
   └→ Phase 5（技能 scope,依赖 Phase 2 结论,可提前）
 ```
 
-规模估计：P0 中 / P1 小 / P2 中（拆 PR）/ P3 中 / P4 中大 / P5 小中 / P6 大。
+规模估计：P0 中 / P1 小 / P2 中（拆 PR）/ P3 中 / P4 已取消 / P5 小中 / P6 大。
 
 ## 风险
 
