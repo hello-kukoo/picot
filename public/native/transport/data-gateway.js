@@ -1,3 +1,6 @@
+// The data plane is otherwise read-only; the two reset-credit ledger
+// operations (spec 2026-09-22) are the deliberate exception: they only write
+// Picot's own idempotency ledger, never the user's files.
 const READ_OPERATIONS = new Set([
   "list_files",
   "list_sessions",
@@ -8,6 +11,8 @@ const READ_OPERATIONS = new Set([
   "workspace_info",
   "read_session_messages",
   "read_session_tree",
+  "reset_credit_open",
+  "reset_credit_settle",
 ]);
 
 const DEFAULT_SESSION_LIST_HTTP_TIMEOUT_MS = 1500;
@@ -137,6 +142,17 @@ export class HostDataGateway {
 
   costDashboard(workspaceId) {
     return this.request("cost_dashboard", { workspaceId });
+  }
+
+  /** Codex reset-credit ledger: the returned id doubles as the upstream
+   * idempotency key, so it is opened before the upstream call and settled
+   * afterwards (`ambiguous` when the response was lost mid-flight). */
+  resetCreditOpen() {
+    return this.request("reset_credit_open");
+  }
+
+  resetCreditSettle({ operationId, ambiguous }) {
+    return this.request("reset_credit_settle", { operationId, ambiguous });
   }
 
   workspaceInfo(workspaceId) {

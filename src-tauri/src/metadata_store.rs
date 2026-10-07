@@ -34,8 +34,111 @@ impl MetadataStore {
             path: path.to_path_buf(),
         };
         store.migrate()?;
+        // Public-owned additive table: existence-based, so it applies to every
+        // accepted schema level without a version bump (same discipline the
+        // workspace-session bucket column follows).
+        store.ensure_reset_credit_operations_table()?;
+        store.sweep_abandoned_reset_credits()?;
         store.restrict_permissions()?;
         Ok(store)
+    }
+
+    /// Codex reset-credit ledger (spec 2026-09-22). One row per attempted
+    /// upstream reset; the id doubles as the upstream idempotency key, so it
+    /// must survive a crash to prevent a double spend.
+    fn ensure_reset_credit_operations_table(&self) -> Result<(), String> {
+        self.connection
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS reset_credit_operations (
+                    id TEXT PRIMARY KEY,
+                    opened_at INTEGER NOT NULL,
+                    settled_at INTEGER,
+                    status TEXT NOT NULL
+                );",
+            )
+            .map_err(|error| format!("Cannot create Picot reset-credit ledger: {error}"))?;
+        Ok(())
+    }
+
+    fn now_secs() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs() as i64)
+            .unwrap_or(0)
+    }
+
+    /// Open (or reuse) the one unresolved reset-credit operation.
+    pub fn reset_credit_open(&self) -> Result<String, String> {
+        // One conditional INSERT instead of read-then-insert: two concurrent
+        // opens must never leave two unresolved rows behind (an orphan row
+        // would let a later session replay a credit this one already used).
+        // SQLite serializes writers, so the second statement observes the
+        // first row and inserts nothing.
+        let candidate = uuid::Uuid::new_v4().to_string();
+        let inserted = self
+            .connection
+            .execute(
+                "INSERT INTO reset_credit_operations (id, opened_at, settled_at, status)
+                 SELECT ?1, ?2, NULL, 'pending'
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM reset_credit_operations
+                     WHERE status IN ('pending', 'ambiguous')
+                 )",
+                rusqlite::params![candidate, Self::now_secs()],
+            )
+            .map_err(|error| format!("Cannot write Picot reset-credit ledger: {error}"))?;
+        if inserted == 1 {
+            return Ok(candidate);
+        }
+        // An unresolved row already exists: reuse it (the id doubles as the
+        // upstream idempotency key, so a fresh uuid would double-spend).
+        self.connection
+            .query_row(
+                "SELECT id FROM reset_credit_operations
+                 WHERE status IN ('pending', 'ambiguous')
+                 ORDER BY opened_at DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("Cannot read Picot reset-credit ledger: {error}"))
+    }
+
+    /// Settle an operation as `settled` or mark it `ambiguous` (response lost
+    /// mid-flight; recovery re-checks before replaying the same id).
+    pub fn reset_credit_settle(&self, operation_id: &str, status: &str) -> Result<(), String> {
+        if !matches!(status, "settled" | "ambiguous") {
+            return Err(format!("Invalid reset-credit settle status: {status}"));
+        }
+        let settled_at = if status == "settled" {
+            Self::now_secs()
+        } else {
+            0
+        };
+        let changed = self
+            .connection
+            .execute(
+                "UPDATE reset_credit_operations SET status = ?2, settled_at = ?3 WHERE id = ?1",
+                rusqlite::params![operation_id, status, settled_at],
+            )
+            .map_err(|error| format!("Cannot update Picot reset-credit ledger: {error}"))?;
+        if changed == 0 {
+            return Err("Unknown reset-credit operation".to_owned());
+        }
+        Ok(())
+    }
+
+    /// Startup sweep: a pending row whose opener process is long gone can
+    /// never be settled — mark it abandoned so the next open proceeds.
+    pub fn sweep_abandoned_reset_credits(&self) -> Result<u64, String> {
+        let swept = self
+            .connection
+            .execute(
+                "UPDATE reset_credit_operations SET status = 'abandoned'
+                 WHERE status = 'pending' AND opened_at < ?1",
+                rusqlite::params![Self::now_secs() - 60],
+            )
+            .map_err(|error| format!("Cannot sweep Picot reset-credit ledger: {error}"))?;
+        Ok(swept as u64)
     }
 
     fn migrate(&mut self) -> Result<(), String> {

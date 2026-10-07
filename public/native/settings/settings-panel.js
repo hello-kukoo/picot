@@ -11,6 +11,8 @@ import { setupPackageBrowse } from "./package-browse.js";
 import { setupPackageManager } from "./package-manager.js";
 import { setupPackageSkillsTab } from "./package-skills-tab.js";
 import { setupPiPathToggle } from "./pi-path-toggle.js";
+import { createProviderQuotaPanel } from "./provider-quota-panel.js";
+import { quotaLocaleBundle } from "./quota-locale.js";
 import { setupRemoteAccessPanel } from "./remote-access.js";
 import { setupSettingsConfig } from "./settings-config.js";
 import { setupSettingsToggles } from "./settings-toggles.js";
@@ -183,12 +185,26 @@ export function setupSettingsPanel({
     preferences,
     terminal: terminal ?? null,
   });
+
+  // Provider quota is a sibling section of the Usage page (spec 2026-09-22):
+  // the report comes over the bridge config gateway, while the reset-credit
+  // ledger rides the host data plane.
+  const quotaContainer = document.getElementById("settings-provider-quota");
+  const quotaPanel =
+    quotaContainer && configGateway
+      ? createProviderQuotaPanel(
+          { container: () => quotaContainer, gateway: configGateway, dataTransport: data },
+          { locale: quotaLocaleBundle() },
+        )
+      : null;
+  window.addEventListener("localechange", () => quotaPanel?.render());
   let usageLoaded = false;
 
   function loadUsage() {
     if (usageLoaded || !costDashboard || !data || !getWorkspaceId) return;
     usageLoaded = true;
     void loadCostDashboard(costDashboard, { data, getWorkspaceId });
+    void quotaPanel?.loadReports();
   }
 
   function loadConfiguration() {

@@ -1735,6 +1735,57 @@ async fn dispatch(
                     "dashboard": dashboard,
                 }))
             }
+            Some("reset_credit_open") => {
+                // Codex reset-credit ledger (spec 2026-09-22). The ledger is
+                // global (not workspace-scoped) and lives in the shared
+                // metadata store; the operation id doubles as the upstream
+                // redeem_request_id idempotency key.
+                let operation_id = state
+                    .metadata
+                    .as_ref()
+                    .ok_or((
+                        "host_operation_failed",
+                        "Metadata store is not available".into(),
+                    ))?
+                    .lock()
+                    .map_err(|_| ("host_operation_failed", "Metadata store is poisoned".into()))?
+                    .reset_credit_open()
+                    .map_err(|message| ("reset_credit_failed", message))?;
+                Ok(json!({
+                    "type": "data_response",
+                    "requestId": request_id,
+                    "operation": "reset_credit_open",
+                    "operationId": operation_id,
+                }))
+            }
+            Some("reset_credit_settle") => {
+                let operation_id = frame
+                    .get("operationId")
+                    .and_then(Value::as_str)
+                    .ok_or(("invalid_operation", "operationId is required".into()))?;
+                // A lost response is `ambiguous`: recovery re-checks upstream
+                // before replaying the same id, so it must not read as settled.
+                let ambiguous = frame.get("ambiguous") == Some(&Value::Bool(true));
+                state
+                    .metadata
+                    .as_ref()
+                    .ok_or((
+                        "host_operation_failed",
+                        "Metadata store is not available".into(),
+                    ))?
+                    .lock()
+                    .map_err(|_| ("host_operation_failed", "Metadata store is poisoned".into()))?
+                    .reset_credit_settle(
+                        operation_id,
+                        if ambiguous { "ambiguous" } else { "settled" },
+                    )
+                    .map_err(|message| ("reset_credit_failed", message))?;
+                Ok(json!({
+                    "type": "data_response",
+                    "requestId": request_id,
+                    "operation": "reset_credit_settle",
+                }))
+            }
             Some("read_session_messages") => {
                 let workspace_id = frame
                     .get("workspaceId")
