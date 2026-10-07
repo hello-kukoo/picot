@@ -1683,6 +1683,13 @@
         </button>
         <button
           class="settings-nav-item"
+          data-settings-tab="mcp"
+          data-i18n="settings.mcp.title"
+        >
+          MCP
+        </button>
+        <button
+          class="settings-nav-item"
           data-settings-tab="usage"
           data-i18n="settings.usage"
         >
@@ -2737,6 +2744,54 @@
                 aria-live="polite"
               ></section>
             </div>
+          </div>
+        </div>
+
+        <div class="settings-tab" data-settings-panel="mcp">
+          <div class="settings-header">
+            <h3 data-i18n="settings.mcp.title">MCP</h3>
+          </div>
+          <div class="settings-body">
+            <div
+              class="extensions-page-tabs"
+              role="tablist"
+              data-i18n-aria-label="settings.mcp.sectionsAriaLabel"
+              aria-label="MCP layers"
+            >
+              <button
+                type="button"
+                class="extensions-page-tab"
+                role="tab"
+                data-mcp-tab="piGlobal"
+                aria-selected="true"
+                data-i18n="settings.mcp.groups.piGlobal"
+              >
+                Global
+              </button>
+              <button
+                type="button"
+                class="extensions-page-tab"
+                role="tab"
+                data-mcp-tab="project"
+                aria-selected="false"
+                data-i18n="settings.mcp.groups.project"
+              >
+                Current project
+              </button>
+            </div>
+            <p class="skills-intro" data-i18n="settings.mcp.description">
+              Manage servers for all workspaces or just this one. Their settings are stored on your
+              computer or in this workspace, respectively.
+            </p>
+            <p class="settings-help" id="mcp-tab-caption" aria-live="polite"></p>
+            <div class="pkg-manager-layout">
+              <div id="mcp-master" class="pkg-manager-groups"></div>
+              <div id="mcp-detail" class="pkg-manager-detail" aria-live="polite"></div>
+            </div>
+            <p class="settings-help" data-i18n="settings.mcp.effectHint">
+              Changes apply to new sessions (or after /reload).
+            </p>
+            <div id="mcp-migrations"></div>
           </div>
         </div>
 

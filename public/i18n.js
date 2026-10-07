@@ -17,6 +17,16 @@ const BCP47_TAG = { en: "en", zh: "zh-CN", ja: "ja", es: "es" };
 let enMessages = {};
 /** Active locale messages — may be the same object as enMessages. */
 let activeMessages = {};
+
+/**
+ * Install a message catalog directly, bypassing the locale fetch. The test
+ * seam (features-v3 ships the same helper): a suite that asserts on rendered
+ * copy injects exactly the keys it exercises instead of fetching locales.
+ */
+export function setMessages(messages) {
+  enMessages = messages;
+  activeMessages = messages;
+}
 let currentLocale = "en";
 let currentPreference = "system";
 let initialized = false;

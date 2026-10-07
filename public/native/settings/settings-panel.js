@@ -6,6 +6,7 @@ import { setupUpdateIndicator } from "../workspace/update-indicator.js";
 import { setupAppearanceSettings } from "./appearance-settings.js";
 import { loadCostDashboard } from "./cost-dashboard.js";
 import { setupLanguageSelector } from "./language-selector.js";
+import { createMcpHostOps, setupMcpPage } from "./mcp-page.js";
 import { setupModelsPage } from "./models-page.js";
 import { setupPackageBrowse } from "./package-browse.js";
 import { setupPackageManager } from "./package-manager.js";
@@ -218,6 +219,24 @@ export function setupSettingsPanel({
         )
       : null;
   window.addEventListener("localechange", () => quotaPanel?.render());
+
+  // MCP servers (Phase 6): config ops ride the bridge config gateway, sign-in
+  // rides the host control plane (the Rust host spawns `pi mcp login|logout|list`).
+  const mcpPage = configGateway
+    ? setupMcpPage({
+        masterEl: document.getElementById("mcp-master"),
+        detailEl: document.getElementById("mcp-detail"),
+        tabs: document.querySelectorAll("[data-mcp-tab]"),
+        navItem: document.querySelector('[data-settings-tab="mcp"]'),
+        configGateway,
+        mcpLogin: control ? createMcpHostOps(control, () => getWorkspaceId?.() ?? null) : null,
+        openExternal: control ? (url) => control.openExternal(url) : null,
+        captionEl: document.getElementById("mcp-tab-caption"),
+        migrationsEl: document.getElementById("mcp-migrations"),
+        getContextKey: () => String(getWorkspaceId?.() ?? "no-workspace"),
+        getRuntimeTarget: getTarget ?? null,
+      })
+    : null;
   let usageLoaded = false;
 
   function loadUsage() {
@@ -280,6 +299,7 @@ export function setupSettingsPanel({
     if (target === "configuration") loadConfiguration();
     if (target === "models") loadModels();
     if (target === "remote-access") void remoteAccess.load();
+    if (target === "mcp") void mcpPage?.activate();
   }
 
   function buildThemeGrid() {

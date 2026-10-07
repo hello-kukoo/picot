@@ -116,6 +116,10 @@ struct HostState {
     terminal_events: tokio::sync::broadcast::Sender<(OwnerId, Value)>,
     git_service: Arc<crate::git_service::GitService>,
     git_events: tokio::sync::broadcast::Sender<(String, Value)>,
+    /// MCP login/logout progress. `Some(owner)` is owner-scoped, `None` is a
+    /// broadcast; the runner owns the sink and pushes through it.
+    mcp_events: tokio::sync::broadcast::Sender<crate::host_control::OwnerEvent>,
+    mcp_login: crate::mcp_login_runner::McpLoginRunner,
     // Skill source handle registry: pick_skill_source registers an opaque
     // sourceId for a chosen directory; scan/install resolve it by owner before
     // forwarding to the pi process. Paths never leave the host.
@@ -198,6 +202,13 @@ impl HostServer {
         let loopback_origin = format!("http://127.0.0.1:{}", address.port());
         let (terminal_events, _) = tokio::sync::broadcast::channel(256);
         let (git_events, _) = tokio::sync::broadcast::channel(256);
+        let (mcp_events, _) = tokio::sync::broadcast::channel(256);
+        let host_events = crate::host_control::HostEventSink::new(mcp_events.clone());
+        // pi owns MCP credentials; this manager only tracks the interactive
+        // login flow's state, so it holds no secrets of its own.
+        let mcp_oauth = Arc::new(Mutex::new(crate::oauth_manager::OAuthManager::default()));
+        let mcp_login =
+            crate::mcp_login_runner::McpLoginRunner::new(mcp_oauth, host_events.clone());
         let git_service = Arc::new(crate::git_service::GitService::new());
         let skill_registry = Arc::new(crate::skill_source_registry::SkillSourceRegistry::new());
         // Persistent per-session UI profile (provider/modelId/thinkingLevel).
@@ -244,6 +255,8 @@ impl HostServer {
             terminal_events,
             git_service,
             git_events,
+            mcp_events,
+            mcp_login,
             skill_registry,
             session_ui_profiles,
             metadata,
@@ -449,6 +462,8 @@ impl HostServer {
 
 impl Drop for HostServer {
     fn drop(&mut self) {
+        // Cancel in-flight MCP logins before the process tree goes away.
+        self.state.mcp_login.abort_all();
         self.state.terminal_manager.kill_all();
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
@@ -1080,6 +1095,7 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>, loopback
     let mut acp_events = state.acp.subscribe();
     let mut terminal_events = state.terminal_events.subscribe();
     let mut git_events = state.git_events.subscribe();
+    let mut mcp_events = state.mcp_events.subscribe();
     let mut subscriptions = HashSet::new();
 
     // Writing goes through a channel so this loop never blocks on the socket,
@@ -1251,6 +1267,24 @@ async fn handle_websocket(mut socket: WebSocket, state: Arc<HostState>, loopback
                 match event {
                     Ok((owner, outgoing)) if owner == client_id => {
                         if send_frame(outgoing).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            event = mcp_events.recv() => {
+                match event {
+                    // Owner-scoped events reach only that owner; a broadcast
+                    // (no owner) reaches every desktop client.
+                    Ok(owner_event)
+                        if owner_event
+                            .owner
+                            .as_ref()
+                            .is_none_or(|o| o == &terminal_owner) =>
+                    {
+                        if send_frame(owner_event.value).is_err() {
                             break;
                         }
                     }
@@ -2005,6 +2039,142 @@ async fn dispatch_host_operation(
     match operation {
         "get_preference" | "set_preference" | "remove_preference" => {
             dispatch_preference_operation(state, request_id, operation, frame)
+        }
+        // MCP login/logout (Phase 6). features-v3 gates these on the live
+        // owner registry's workspace generation; v3.3 has no activated owner
+        // registry, so the gate is the desktop-client check plus the frame's
+        // own workspace binding. Known consequence: a login started for a
+        // workspace that the client then switched away from is not rejected as
+        // stale (documented in the Phase 6 record).
+        operation
+            if matches!(
+                operation,
+                "mcp_login_start"
+                    | "mcp_login_status"
+                    | "mcp_login_cancel"
+                    | "mcp_logout"
+                    | "mcp_server_status"
+            ) =>
+        {
+            ensure_desktop_client(state, client_id, operation)?;
+            let owner = OwnerId::from_client_id(client_id);
+            let workspace_id = frame
+                .get("workspaceId")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or(("invalid_workspace", "workspaceId is required".into()))?;
+            let cwd = state
+                .data
+                .workspace_root_path(workspace_id)
+                .map_err(host_data_error)?;
+            let args = frame.get("args").cloned().unwrap_or(Value::Null);
+            let runner = state.mcp_login.clone();
+            let response = match operation {
+                "mcp_login_status" | "mcp_login_cancel" => {
+                    let id = args
+                        .get("operationId")
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty())
+                        .ok_or(("invalid_operation", "operationId is required".into()))?;
+                    if operation == "mcp_login_cancel" {
+                        runner
+                            .cancel(&owner, id)
+                            .map(|()| json!({ "ok": true, "cancelled": true }))
+                    } else {
+                        runner.status(&owner, id)
+                    }
+                }
+                "mcp_login_start" => {
+                    let result = args
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .filter(|name| {
+                            !name.is_empty()
+                                && name.len() <= 256
+                                && !name.chars().any(char::is_control)
+                        })
+                        .ok_or_else(|| "Valid MCP server name is required".to_owned())
+                        .and_then(|name| {
+                            state
+                                .pi_launch
+                                .bundled_pi_path()
+                                .and_then(|binary| runner.start(&binary, &cwd, name, &owner))
+                        });
+                    Ok(match result {
+                        Ok(id) => json!({ "ok": true, "operationId": id }),
+                        Err(error) => json!({ "ok": false, "error": error }),
+                    })
+                }
+                "mcp_logout" => {
+                    let name = args
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .filter(|name| {
+                            !name.is_empty()
+                                && name.len() <= 256
+                                && !name.chars().any(char::is_control)
+                        })
+                        .ok_or((
+                            "invalid_mcp_name",
+                            "Valid MCP server name is required".into(),
+                        ))?;
+                    let binary = state
+                        .pi_launch
+                        .bundled_pi_path()
+                        .map_err(|error| ("mcp_unavailable", error))?;
+                    let name = name.to_owned();
+                    tokio::task::spawn_blocking(move || runner.logout(&binary, &cwd, &name))
+                        .await
+                        .map_err(|e| e.to_string())
+                        .and_then(|result| result.map(|()| json!({ "ok": true })))
+                }
+                "mcp_server_status" => {
+                    // `refresh: true` drops the 60s host cache after a
+                    // configuration write; an invalid value is a caller error,
+                    // not a silent no-op.
+                    let refresh = match args.get("refresh") {
+                        None => false,
+                        Some(Value::Bool(flag)) => *flag,
+                        Some(_) => {
+                            return Err(("invalid_refresh", "refresh must be a boolean".into()));
+                        }
+                    };
+                    let binary = state
+                        .pi_launch
+                        .bundled_pi_path()
+                        .map_err(|error| ("mcp_unavailable", error))?;
+                    tokio::task::spawn_blocking(move || {
+                        if refresh {
+                            runner.invalidate();
+                        }
+                        runner.list(&binary, &cwd)
+                    })
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|result| {
+                        // The runner already validated and projected the report:
+                        // only safe fields and fixed diagnostic text leave here.
+                        result.map(|report| {
+                            let mut response = json!({
+                                "ok": true,
+                                "servers": report.get("servers").cloned().unwrap_or(Value::Array(Vec::new())),
+                                "errors": report.get("errors").cloned().unwrap_or(Value::Array(Vec::new())),
+                            });
+                            if let Some(note) = report.get("note") {
+                                response["note"] = note.clone();
+                            }
+                            response
+                        })
+                    })
+                }
+                _ => unreachable!(),
+            };
+            Ok(json!({
+                "type": "host_response",
+                "requestId": request_id,
+                "operation": operation,
+                "response": response.map_err(|error| ("mcp_operation_failed", error))?,
+            }))
         }
         // Per-package extension settings: file-backed config in the user's Pi
         // tree, so they are desktop-only (see extension_config::handles).

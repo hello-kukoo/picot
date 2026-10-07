@@ -1,0 +1,171 @@
+/* ABOUTME: MCP settings page styles (Global/Current project tabs, entry rows, legacy notice). */
+/* ABOUTME: Ported with the MCP page; classes are used only by public/native/settings/mcp-*.js. */
+
+.extensions-page-tab {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0.5rem 0.75rem;
+}
+
+.extensions-page-tab[aria-selected="true"] {
+  border-bottom-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.mcp-legacy-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.mcp-legacy-migrate {
+  flex: none;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-glass);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.mcp-legacy-migrate:hover {
+  background: var(--bg-glass-hover);
+}
+
+.mcp-group-error {
+  font-size: var(--font-size-xs);
+  color: var(--danger, #c0392b);
+  padding: var(--space-1) var(--space-2);
+}
+
+.mcp-detail-body {
+  padding: var(--space-3);
+  min-width: 0;
+}
+
+.mcp-detail-status {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  min-height: 1.2em;
+  margin-bottom: var(--space-2);
+}
+
+.mcp-entry-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.mcp-badge {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-2);
+}
+
+.mcp-source {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  margin-bottom: var(--space-3);
+  word-break: break-all;
+}
+
+.mcp-entry-raw {
+  margin: 0 0 var(--space-3) 0;
+  padding: var(--space-3);
+  background: var(--bg-secondary, rgba(127, 127, 127, 0.08));
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  font-size: var(--font-size-sm);
+}
+
+.mcp-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  max-width: 560px;
+}
+
+.mcp-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.mcp-field > span {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+.mcp-field input,
+.mcp-field select,
+.mcp-field textarea {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary, transparent);
+  color: inherit;
+  font-size: var(--font-size-md);
+}
+
+.mcp-btn {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: var(--font-size-md);
+  align-self: flex-start;
+}
+
+.mcp-btn:hover {
+  background: var(--bg-secondary, rgba(127, 127, 127, 0.12));
+}
+
+.mcp-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.mcp-btn-danger {
+  color: var(--danger, #c0392b);
+  margin-bottom: var(--space-3);
+}
+
+/* Package extension settings (advisor, fff) — mounted under the package detail's resources block. Field styles mirror .mcp-field. */ .pkg-ext-settings {
+  margin-top: var(--space-4);
+}
+
+.mcp-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.mcp-toggle-label {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
+.mcp-form-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}

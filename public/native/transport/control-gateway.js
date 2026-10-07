@@ -10,6 +10,7 @@ export class HostControlGateway {
   #generation = 0;
   #nextRequestId = 1;
   #pending = new Map();
+  #mcpLoginListeners = new Set();
 
   constructor(adapter) {
     this.#adapter = adapter;
@@ -61,6 +62,36 @@ export class HostControlGateway {
   }
   // Per-package extension settings ride the same host plane: the Rust host owns
   // the config file, the renderer only reads state and requests a change.
+  // MCP login/logout (Phase 6): the host spawns `pi mcp login|logout|list` for
+  // the workspace the client names. These are slow (the CLI connects to every
+  // server) and the gateway has no per-call timeout, so the adapter's
+  // connection handling is the only bound.
+  async mcpLoginStart(name, workspaceId) {
+    return this.#request("mcp_login_start", { name, workspaceId });
+  }
+
+  async mcpLoginCancel(operationId, workspaceId) {
+    return this.#request("mcp_login_cancel", { operationId, workspaceId });
+  }
+
+  async mcpLoginStatus(operationId, workspaceId) {
+    return this.#request("mcp_login_status", { operationId, workspaceId });
+  }
+
+  async mcpLogout(name, workspaceId) {
+    return this.#request("mcp_logout", { name, workspaceId });
+  }
+
+  async mcpServerStatus({ refresh = false } = {}, workspaceId) {
+    return this.#request("mcp_server_status", { refresh, workspaceId });
+  }
+
+  /** Owner-scoped login progress. Returns an unsubscribe function. */
+  onMcpLoginUpdate(listener) {
+    this.#mcpLoginListeners.add(listener);
+    return () => this.#mcpLoginListeners.delete(listener);
+  }
+
   async getFffConfig() {
     return this.#request("get_fff_config");
   }
@@ -231,6 +262,14 @@ export class HostControlGateway {
   }
 
   #receive(frame) {
+    // Owner-scoped broadcast from the host's MCP login runner: it carries no
+    // requestId, so it reaches listeners instead of the pending map.
+    if (frame?.type === "mcpLoginUpdate") {
+      // Listeners receive the payload (features-v3's transport contract), not
+      // the envelope: the page's dialog reads {operationId, status, authUrl}.
+      for (const listener of this.#mcpLoginListeners) listener(frame.payload ?? null);
+      return;
+    }
     const pending = this.#pending.get(frame?.requestId);
     if (!pending || pending.generation !== this.#generation) return;
     this.#pending.delete(frame.requestId);
