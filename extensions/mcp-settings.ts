@@ -844,7 +844,10 @@ function projectEntry(
     // compatibility gap instead of pretending native Pi reads these entries.
     const error = strictError ?? "project MCP config is unreadable";
     const kind = isRecord(raw) && !isMcpOverride(raw) ? "definition" : "invalid";
-    return { ...base, kind, validationError: error };
+    // `raw` is a record here (the non-record case returned above), so the row's
+    // enabled state still comes from the entry itself: an unreadable file must
+    // not silently flip a disabled server back on.
+    return { ...base, kind, enabled: raw.enabled !== false, validationError: error };
   }
   const classified = classifyProjectEntry(name, raw, globals, filePath);
   return {

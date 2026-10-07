@@ -86,9 +86,22 @@ function namespaceKey(name: string): string {
   return name.replace(/[-_]/g, "_");
 }
 
+/**
+ * `new URL` throws on malformed input. Every call site in this module is a
+ * validator whose contract is to *return* a diagnostic, so parsing goes through
+ * here: an unparseable value is reported the same way as a non-http one.
+ */
+function tryUrl(value: unknown): URL | null {
+  try {
+    return new URL(String(value));
+  } catch {
+    return null;
+  }
+}
+
 function isLoopbackRedirectUri(value: string): boolean {
-  if (!URL.canParse(value)) return false;
-  const url = new URL(value);
+  const url = tryUrl(value);
+  if (!url) return false;
   return (
     url.protocol === "http:" &&
     LOOPBACK_HOSTS.includes(url.hostname) &&
@@ -118,7 +131,7 @@ function validateOAuth(value: unknown): string | undefined {
     if (typeof value.callbackUrl !== "string" || !isLoopbackRedirectUri(value.callbackUrl)) {
       return "oauth.callbackUrl must be an http URI on localhost, 127.0.0.1, or [::1] without query or fragment";
     }
-    const urlPort = new URL(value.callbackUrl).port;
+    const urlPort = tryUrl(value.callbackUrl)?.port;
     if (urlPort && port !== undefined && Number(urlPort) !== port) {
       return "oauth.callbackUrl and oauth.callbackPort name different ports";
     }
@@ -137,17 +150,15 @@ function validateOAuth(value: unknown): string | undefined {
     if (value.clientId !== undefined || value.clientName !== undefined) {
       return 'oauth.clientRegistration "cimd" cannot be combined with oauth.clientId or oauth.clientName';
     }
-    const callback = typeof value.callbackUrl === "string" ? new URL(value.callbackUrl) : undefined;
+    const callback =
+      typeof value.callbackUrl === "string" ? (tryUrl(value.callbackUrl) ?? undefined) : undefined;
     if (callback && (callback.hostname === "[::1]" || callback.pathname !== "/callback")) {
       return 'oauth.clientRegistration "cimd" requires oauth.callbackUrl on localhost or 127.0.0.1 with path /callback';
     }
   }
   const metadataUrl = value.authServerMetadataUrl;
   if (metadataUrl !== undefined) {
-    const url =
-      typeof metadataUrl === "string" && URL.canParse(metadataUrl)
-        ? new URL(metadataUrl)
-        : undefined;
+    const url = typeof metadataUrl === "string" ? (tryUrl(metadataUrl) ?? undefined) : undefined;
     if (
       !url ||
       !(
@@ -221,7 +232,8 @@ export function validateNativeMcpEntry(
     typeof value.url === "string" &&
     (type === undefined || type === "http" || type === "streamable-http")
   ) {
-    if (!URL.canParse(value.url) || !/^https?:$/.test(new URL(value.url).protocol)) {
+    const parsedUrl = tryUrl(value.url);
+    if (!parsedUrl || !/^https?:$/.test(parsedUrl.protocol)) {
       return `server "${name}": url must be an http or https URL`;
     }
     if (value.headers !== undefined && !isStringRecord(value.headers)) {
@@ -237,8 +249,8 @@ export function validateNativeMcpEntry(
       ) {
         return `server "${name}": auth.provider must be a provider name`;
       }
-      const url = new URL(value.url);
-      if (url.protocol !== "https:" && !LOOPBACK_HOSTS.includes(url.hostname)) {
+      const url = tryUrl(value.url);
+      if (!url || (url.protocol !== "https:" && !LOOPBACK_HOSTS.includes(url.hostname))) {
         return `server "${name}": auth requires an https URL, or http on localhost, 127.0.0.1, or [::1]`;
       }
     }
